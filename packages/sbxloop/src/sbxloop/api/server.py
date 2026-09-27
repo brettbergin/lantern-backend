@@ -85,6 +85,12 @@ class ApiServer:
             SteeringStore(self.ctx.loop.dstore).settle_orphans(live, self.ctx.clock())
         except Exception:
             log.warning("api.steering_settle_failed", exc_info=True)
+        # A capability a release added to a role reaches the members who
+        # registered before it.
+        try:
+            self.ctx.collaboration.sync_role_grants()
+        except Exception:
+            log.warning("api.role_grants_sync_failed", exc_info=True)
         self.ctx.projector.start()
         # Started whether or not push is on, so switching it on later needs
         # no restart; while it is off the dispatcher only moves its cursor.

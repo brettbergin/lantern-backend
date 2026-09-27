@@ -1669,6 +1669,11 @@ Rules a client can rely on:
 A refusal names the capability it needed (`403 forbidden` with
 `"capability"`), before the target is looked at.
 
+A workspace member's client holds exactly what their role grants. When a
+release adds a capability to a role, the API grants it to every active
+member's client as it starts; the member's next token refresh (or sign-in)
+carries it.
+
 ## Capability discovery
 
 `GET /v1/capabilities` (any token) says what this installation serves:
