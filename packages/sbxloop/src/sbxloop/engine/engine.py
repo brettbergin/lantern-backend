@@ -342,7 +342,8 @@ _PROMPT_BY_RECORDED_PHASE: dict[str, str] = {
     "judge": "operator_judge",
     "review": "review",
     "steer": "steer",
-    # A plan run's proposal: the planner's one turn.
+    # A plan run's turns: its clarifying questions and its proposal.
+    "clarify": "plan",
     "propose": "plan",
 }
 
@@ -383,6 +384,9 @@ class LoopEngine:
         # its proposal to; None for every other kind, and a `plan` run
         # refuses to start without one.
         self.plan_desk = plan_desk
+        # The checkouts a plan run cut into its pair's data directory, by
+        # run: its clarifying turn and its proposal read the same tree.
+        self._plan_cut: dict[str, tuple[list[tuple[str, str]], Path | None]] = {}
         self.bus = bus or EventBus()
         self.sbx = sbx or SbxCLI(app_name=self.config.app_name or None)
         self.worker_python = (
@@ -988,8 +992,13 @@ class LoopEngine:
                     self._plan_failed(run_id, str(exc))
                 raise
         # A plan run that ends any way but with its proposal delivered tells
-        # the plan so; a provider hold is a pause, not an end.
-        if kind == "plan" and result.state not in ("completed", "provider_held"):
+        # the plan so; a provider hold is a pause, not an end, and neither is
+        # the wait for a person's answers.
+        if kind == "plan" and result.state not in (
+            "completed",
+            "provider_held",
+            "awaiting_answers",
+        ):
             self._plan_failed(run_id, result.reason or f"the run ended {result.state}")
         return result
 
@@ -1255,6 +1264,7 @@ class LoopEngine:
                     "gated",
                     "awaiting_review",
                     "held",
+                    "awaiting_answers",
                 ):
                     self._keep_on_failure(run_id, pair)
         except SbxloopError:
@@ -2156,21 +2166,136 @@ class LoopEngine:
     # -- a plan run -------------------------------------------------------
 
     def _plan_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
-        """A ``plan`` run's life: the planner proposes one level from a
-        read-only checkout, and the proposal is delivered to the plan
-        record — never to the forge; the run has no github sandbox and no
-        write credential to reach it with.
+        """A ``plan`` run's life: the planner reads a read-only checkout,
+        asks what it needs to know, and proposes one level; the proposal is
+        delivered to the plan record — never to the forge; the run has no
+        github sandbox and no write credential to reach it with.
 
-        One stage today, ``proposing``. The clarifying turn and the wait
-        for a person's answers are the stages that go in front of it when a
-        plan run asks questions; ``stage`` is where a resume re-enters, and
-        a proposal already validated and persisted is delivered without a
-        second turn.
+        ``clarifying`` → (``awaiting_answers``) → ``proposing`` (#2345). A
+        run with questions parks ``awaiting_answers`` with nothing kept; the
+        answer is a resume, which re-enters ``clarifying``, finds the
+        questions settled on the plan record and goes on to propose with
+        the answers — no second clarifying turn. ``stage`` is where a resume
+        re-enters, and a proposal already validated and persisted is
+        delivered without a second turn.
         """
-        reason = self._stage_propose(p)
+        try:
+            if stage != "proposing":
+                parked = self._stage_clarify(p)
+                if parked is not None:
+                    return parked
+            reason = self._stage_propose(p)
+        finally:
+            self._plan_cut.pop(p.run_id, None)
         if reason is not None:
             return "failed", reason
         return "completed", None
+
+    def _stage_clarify(self, p: Pipeline) -> tuple[RunState, str] | None:
+        """Ask the planner whether it knows enough to propose, and park the
+        run on its questions when it does not. None to go on and propose;
+        otherwise the state the run ends in and why.
+
+        The plan record is the source of truth: questions this run already
+        asked are not asked again — settled, the run goes on; still open (a
+        resume that was not an answer), it parks again without a turn. A
+        node's earlier answers ride into the turn so they are not re-asked,
+        and ``max_questions = 0`` skips the turn altogether."""
+        run_id = p.run_id
+        desk = self.plan_desk
+        if desk is None:
+            return (
+                "failed",
+                "a `plan` run delivers to a plan record, and this engine was given none",
+            )
+        try:
+            brief = desk.brief()
+        except PlanDeliveryError as exc:
+            return "failed", str(exc)
+        mine = brief.clarification_for(run_id)
+        if mine is not None:
+            if mine.settled or mine.status == "withdrawn":
+                return None
+            return "awaiting_answers", _awaiting_reason(len(mine.questions))
+        if brief.max_questions <= 0:
+            return None
+        self._set_run_state(run_id, "clarifying")
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        reason, checkouts, home = self._plan_checkouts(p, brief)
+        if reason is not None:
+            return "failed", reason
+        self._process_chat(run_id, p.phases, None, stage="reading the repository")
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        started = time.time()
+        try:
+            answer = p.phases.clarify_plan(brief, checkouts=checkouts, home=home)
+        except InvalidOutputTwice as exc:
+            spend = p.phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "clarify",
+                task_id=PROPOSE_TASK_ID,
+                attempt=1,
+                status="failed",
+                output_json=json.dumps({"error": str(exc)}),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            why = _invalid_twice_reason(exc, "questions")
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=PROPOSE_TASK_ID,
+                phase="clarify",
+                status="failed",
+                message=why,
+            )
+            return "failed", why
+        spend = p.phases.drain_spend()
+        self._record_phase(
+            run_id,
+            "clarify",
+            task_id=PROPOSE_TASK_ID,
+            attempt=1,
+            status="ok",
+            output_json=answer.model_dump_json(),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        if answer.ready:
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=PROPOSE_TASK_ID,
+                phase="clarify",
+                status="ok",
+                message="the planner has what it needs to propose",
+            )
+            return None
+        count = len(answer.questions)
+        try:
+            desk.ask(run_id, answer.questions)
+        except PlanDeliveryError as exc:
+            return "failed", f"the plan would not take the planner's questions: {exc}"
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=PROPOSE_TASK_ID,
+            phase="clarify",
+            status="ok",
+            message=f"asked {count} question{'s' if count != 1 else ''} before proposing",
+        )
+        self.bus.emit(
+            HostEventTypes.RUN_AWAITING_ANSWERS,
+            run_id,
+            plan_id=brief.plan_id,
+            node_id=brief.node_id,
+            questions=[q.model_dump(mode="json") for q in answer.questions],
+        )
+        log.info("run.awaiting_answers", run=run_id, questions=count)
+        return "awaiting_answers", _awaiting_reason(count)
 
     def _stage_propose(self, p: Pipeline) -> str | None:
         """Read the brief, cut the checkouts, ask the planner once (with the
@@ -2308,7 +2433,11 @@ class LoopEngine:
         run's is; the other repositories an initiative's epics target are
         named to the planner by the brief, not checked out. Returns the
         reason the run cannot read, the (repository, in-sandbox path)
-        pairs, and the host path of the checkout."""
+        pairs, and the host path of the checkout. The clarifying turn and
+        the proposal of one segment read the same cut."""
+        cut = self._plan_cut.get(p.run_id)
+        if cut is not None:
+            return None, list(cut[0]), cut[1]
         if not p.pair.mounted:
             return (
                 "the data directory is not mounted in the agent sandbox, so a checkout "
@@ -2325,6 +2454,7 @@ class LoopEngine:
         except ProvisionError as exc:
             return str(exc), [], None
         where = str(PurePosixPath(p.pair.agent_workdir) / path.relative_to(p.pair.workspace))
+        self._plan_cut[p.run_id] = ([(repo, where)], path)
         return None, [(repo, where)], path
 
     def _workload_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
@@ -5869,7 +5999,7 @@ def _last_line(output: str, limit: int = 300) -> str:
     return f" — {line}"
 
 
-def _invalid_twice_reason(exc: InvalidOutputTwice) -> str:
+def _invalid_twice_reason(exc: InvalidOutputTwice, what: str = "proposal") -> str:
     """One line on why the planner's answers were refused: the last
     validation error, whitespace-folded and clipped, under a sentence a
     person reads."""
@@ -5877,7 +6007,18 @@ def _invalid_twice_reason(exc: InvalidOutputTwice) -> str:
     folded = " ".join(detail.split())
     if len(folded) > 400:
         folded = folded[:399] + "…"
-    return f"the planner's proposal was invalid twice: {folded}"
+    verb = "was" if what == "proposal" else "were"
+    return f"the planner's {what} {verb} invalid twice: {folded}"
+
+
+def _awaiting_reason(count: int) -> str:
+    """Why a plan run parked: how many questions wait, and where they are
+    answered."""
+    noun = "question" if count == 1 else "questions"
+    return (
+        f"waiting for a person to answer {count} clarifying {noun} — answer or skip "
+        "them in the plan, or in the run's thread"
+    )
 
 
 def run_outcome(outcome: str, config: Config | None = None) -> RunResult:

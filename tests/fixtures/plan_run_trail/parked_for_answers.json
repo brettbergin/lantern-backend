@@ -1,0 +1,80 @@
+{
+ "events": [
+  {
+   "kind": "plan",
+   "type": "run.start"
+  },
+  {
+   "state": "provisioning",
+   "type": "run.state"
+  },
+  {
+   "state": "clarifying",
+   "type": "run.state"
+  },
+  {
+   "kind": "agent.session",
+   "type": "worker.start"
+  },
+  {
+   "status": "ok",
+   "type": "worker.result"
+  },
+  {
+   "type": "worker.end"
+  },
+  {
+   "phase": "clarify",
+   "status": "ok",
+   "task_id": "propose",
+   "type": "phase.end"
+  },
+  {
+   "type": "run.awaiting_answers"
+  },
+  {
+   "state": "awaiting_answers",
+   "type": "run.state"
+  },
+  {
+   "exhausted": null,
+   "pr": null,
+   "state": "awaiting_answers",
+   "type": "run.end"
+  }
+ ],
+ "sandbox_events": [
+  {
+   "delivery": "env-file",
+   "name": "sbxloop-<run>-agent",
+   "type": "sandbox.secret_env_fallback"
+  },
+  {
+   "mounted": true,
+   "name": "sbxloop-<run>-agent",
+   "type": "sandbox.workspace_mount"
+  },
+  {
+   "name": "sbxloop-<run>-agent",
+   "role": "agent",
+   "type": "sandbox.provision_start"
+  },
+  {
+   "name": "sbxloop-<run>-agent",
+   "role": "agent",
+   "type": "sandbox.ready"
+  },
+  {
+   "target": "<tmp>/state/runs/<run>/workspace/app",
+   "type": "sandbox.workspace_clone"
+  },
+  {
+   "type": "sandbox.languages"
+  }
+ ],
+ "states": [
+  "provisioning",
+  "clarifying",
+  "awaiting_answers"
+ ]
+}

@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+**The planner asks before it proposes, and takes the answers.** A `plan`
+run now starts with a clarifying turn over the same read-only checkout
+(`plan_clarify.md`): it says it is ready, or asks up to `[planning] max_questions` questions (`0` never asks) in the chat choice question's
+shape — two to five choices, free text unless ruled out — validated with
+one retry. The questions go on the plan node's new `generation` field (run
+id, questions, answers, status; migration 0045) as
+`plan.generation.questions`, and the run parks `awaiting_answers` — a
+`held`-shaped park that keeps no sandbox, spends nothing and survives a
+restart; its item waits `awaiting_answers` too. `POST /v1/plans/{id}/nodes/{node_id}/answers` (`plans:create`, `{expected_revision?, answers: {id: {value?, text?}}, skip?}`) answers or skips them, emits
+`plan.generation.answered` and puts the run back in the queue; it resumes
+without asking again and proposes with the answers in its prompt. In the
+run's chat thread the questions are posted as clickable choices on every
+bridge, and a click or a reply (a number, a choice, the person's own words,
+or `skip`) answers through the same path; a channel's chronicle posts them
+as a notice. Abandoning a waiting item withdraws its questions.
+`GET /v1/capabilities` advertises `planning.clarify` with `planning`.
+(#2345)
+
 **The planner proposes a plan's next level from a read-only checkout.**
 `POST /v1/plans/{id}/nodes/{node_id}/breakdown` (`plans:create`, `{expected_revision, note?, channel_id?}`) queues a run of a fourth run kind,
 `plan`, and answers `202` with its work item: it is in the queue and

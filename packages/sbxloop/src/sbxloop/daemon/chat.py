@@ -96,6 +96,7 @@ from sbxloop.daemon.discord_format import (
 from sbxloop.daemon.model import TERMINAL_NOTICE_KINDS, DaemonNotice, RunReport, WorkItem
 from sbxloop.daemon.store import ChatThread, DaemonStore, MergeGate, PendingClarification
 from sbxloop.engine.engine import LoopEngine
+from sbxloop.engine.planning import PlanAnswer, PlanQuestion
 from sbxloop.events import Event, EventBus, HostEventTypes
 from sbxloop.ghids import normalize_item_id
 from sbxloop.log import get_logger
@@ -293,6 +294,35 @@ class _OutstandingQuestion:
         return self.msg.author_id
 
 
+class _PlanQuestionPost(NamedTuple):
+    """One of a parked plan run's clarifying questions, posted in its
+    thread with clickable choices (#2345). A click resolves through this;
+    a typed reply is matched against the plan record itself, so it still
+    answers after a restart has emptied this registry."""
+
+    run_id: str
+    plan_id: str
+    node_id: str
+    question_id: str
+    question: ChoiceQuestion
+
+
+#: Plan questions remembered for clicks; the oldest go first past this.
+PLAN_QUESTION_CAP = 256
+#: What a person types in a run's thread to let the planner decide alone.
+PLAN_SKIP_WORDS = frozenset({"skip", "/skip"})
+
+
+def plan_choice_question(question: PlanQuestion, prefix: str = "") -> ChoiceQuestion:
+    """A plan question as the transport-free chat choice question every
+    bridge renders — buttons where it can, numbered prose where not."""
+    return ChoiceQuestion(
+        prompt=f"{prefix}{question.prompt}",
+        choices=tuple(Choice(c.value, c.label, c.description) for c in question.choices),
+        allow_free_text=question.allow_free_text,
+    )
+
+
 class AgentIdent(NamedTuple):
     """Which agent served a run: the backend name and the model, both already
     normalised to ``unknown`` rather than left empty."""
@@ -416,6 +446,12 @@ class ChatBridge(ABC):
         # One knob times the whole ask: the clickable choices, the typed
         # match window and the auto-file sweep expire together.
         self._question_ttl_s = float(config.concierge.clarify_ttl_s)
+        # A parked plan run's questions (#2345): posted message id (or the
+        # provisional key a click may beat the post with) -> the question,
+        # for clicks; and the questions a run asked, held until its finish
+        # card is out so they are the thread's last word.
+        self._plan_questions: dict[str, _PlanQuestionPost] = {}
+        self._plan_asks: dict[str, Event] = {}
         # Message id -> the last ack mark put on it (see ``_ack``).
         self._acks: dict[str, str] = {}
 
@@ -1095,6 +1131,8 @@ class ChatBridge(ABC):
             return
         with self._lock:
             live = self._live.get(run_id)
+        if live is None and self._plan_reply(msg, run_id, text):
+            return
         if live is None:
             self.log.info(
                 "chat.steer_rejected",
@@ -1540,6 +1578,225 @@ class ChatBridge(ABC):
             return
         self._rekey_question(provisional, message_id)
 
+    # -- a parked plan run's questions (#2345) ----------------------------------------
+
+    async def _post_plan_questions(self, run_id: str, thread: Any, event: Event) -> None:
+        """Post a parked plan run's questions in its thread, one message per
+        question with a button per choice (numbered prose where the service
+        has no components), each remembered so a click answers the plan."""
+        data = event.data
+        plan_id, node_id = str(data.get("plan_id") or ""), str(data.get("node_id") or "")
+        raw = data.get("questions")
+        questions: list[PlanQuestion] = []
+        for entry in raw if isinstance(raw, list) else []:
+            try:
+                questions.append(PlanQuestion.model_validate(entry))
+            except ValueError:
+                self.log.warning("chat.plan_question_unreadable", run=run_id)
+        if not questions or not plan_id or not node_id:
+            return
+        count = len(questions)
+        await self._send(
+            thread,
+            f"❓ **The planner asks {count} question{'s' if count != 1 else ''} before it "
+            "proposes.** Click a choice, or reply to a question with a number, a choice or "
+            "your own words; reply `skip` to let the planner decide. The questions are in "
+            "the plan too.",
+        )
+        for index, question in enumerate(questions, start=1):
+            prefix = f"{index}/{count} · " if count > 1 else ""
+            choice = plan_choice_question(question, prefix)
+            post = _PlanQuestionPost(run_id, plan_id, node_id, question.id, choice)
+            provisional = f"plan:{uuid.uuid4()}"
+            self._remember_plan_question(provisional, post)
+            posted = await self._send_choices(thread, "", choice, pending_key=provisional)
+            if posted is None:
+                with self._lock:
+                    self._plan_questions.pop(provisional, None)
+                await self._send(thread, render_prose(choice))
+                continue
+            try:
+                message_id = self._message_id(posted)
+            except Exception:  # pragma: no cover - a transport that cannot id its post
+                message_id = ""
+            if message_id:
+                with self._lock:
+                    moved = self._plan_questions.pop(provisional, None)
+                    if moved is not None:
+                        self._plan_questions[message_id] = moved
+        self.log.info("chat.plan_questions_posted", run=run_id, questions=count)
+
+    def _remember_plan_question(self, key: str, post: _PlanQuestionPost) -> None:
+        with self._lock:
+            self._plan_questions[key] = post
+            while len(self._plan_questions) > PLAN_QUESTION_CAP:
+                self._plan_questions.pop(next(iter(self._plan_questions)))
+
+    def _plan_click(
+        self, message_id: str, value: str, by: str | None, *, author_id: str | None = None
+    ) -> bool | None:
+        """A click on a plan question's choice: the answer to that question,
+        recorded on the plan. None when the message is no plan question."""
+        with self._lock:
+            post = self._plan_questions.get(message_id)
+        if post is None:
+            return None
+        if value not in post.question.values:
+            return False
+        ok, reply = self._answer_plan(
+            post.run_id,
+            post.plan_id,
+            post.node_id,
+            {post.question_id: PlanAnswer(value=value)},
+            skip=False,
+            by=by,
+            author_id=author_id,
+        )
+        if ok:
+            with self._lock:
+                self._plan_questions.pop(message_id, None)
+        self._schedule(self._say_in_thread(post.run_id, reply))
+        return ok
+
+    def _plan_reply(self, msg: Inbound, run_id: str, text: str) -> bool:
+        """A message in the thread of a plan run parked on its questions: an
+        answer — to the question it replies to, or to the one question
+        still open — a choice's number or name, or the person's own words
+        where the question takes them; ``skip`` lets the planner decide.
+        Read against the plan record, so it works after a restart. False
+        when the run is not waiting on a person (the caller says it
+        finished)."""
+        lookup = getattr(self.loop_ref, "plan_questions_for_run", None)
+        if not callable(lookup):
+            return False
+        try:
+            waiting = lookup(run_id)
+        except Exception:
+            self.log.warning("chat.plan_questions_lookup_failed", run=run_id, exc_info=True)
+            return False
+        if waiting is None:
+            return False
+        by = msg.author_name or None
+        words = text.strip()
+        clarification = waiting.clarification
+        if words.casefold() in PLAN_SKIP_WORDS:
+            ok, reply = self._answer_plan(
+                run_id,
+                waiting.plan_id,
+                waiting.node_id,
+                {},
+                skip=True,
+                by=by,
+                author_id=msg.author_id,
+            )
+        else:
+            target: PlanQuestion | None = None
+            if msg.reply_to_id:
+                with self._lock:
+                    post = self._plan_questions.get(str(msg.reply_to_id))
+                if post is not None and post.run_id == run_id:
+                    target = next(
+                        (q for q in clarification.questions if q.id == post.question_id), None
+                    )
+            if target is None:
+                still = clarification.unanswered()
+                if len(still) != 1:
+                    self._schedule(
+                        self._send(
+                            msg.channel,
+                            f"{len(still)} questions are still open — reply to the one you are "
+                            "answering, or click a choice; `skip` lets the planner decide.",
+                        )
+                    )
+                    self._ack(msg, ACK_FAILED)
+                    return True
+                target = still[0]
+            choice = plan_choice_question(target)
+            value = match_free_text(choice, words)
+            if value is not None:
+                answer = PlanAnswer(value=value)
+            elif target.allow_free_text and words:
+                answer = PlanAnswer(text=words)
+            else:
+                self._schedule(
+                    self._send(
+                        msg.channel,
+                        "that question takes one of its choices: "
+                        + ", ".join(f"{i}. {c.label}" for i, c in enumerate(choice.choices, 1)),
+                    )
+                )
+                self._ack(msg, ACK_FAILED)
+                return True
+            ok, reply = self._answer_plan(
+                run_id,
+                waiting.plan_id,
+                waiting.node_id,
+                {target.id: answer},
+                skip=False,
+                by=by,
+                author_id=msg.author_id,
+            )
+        self._schedule(self._send(msg.channel, reply))
+        self._ack(msg, ACK_ANSWERED if ok else ACK_FAILED)
+        return True
+
+    def _answer_plan(
+        self,
+        run_id: str,
+        plan_id: str,
+        node_id: str,
+        answers: dict[str, PlanAnswer],
+        *,
+        skip: bool,
+        by: str | None,
+        author_id: str | None = None,
+    ) -> tuple[bool, str]:
+        """Hand an answer from chat to the loop — the same path the API's
+        answers route takes — and say in a line what came of it."""
+        answer = getattr(self.loop_ref, "answer_plan_questions", None)
+        if not callable(answer):
+            return False, "this daemon cannot take answers from chat; answer in the plan"
+        who = by or f"a {self.label} user"
+        actor = {
+            "kind": "chat",
+            "id": author_id or who,
+            "display": who,
+            "via": self.backend,
+        }
+        try:
+            outcome = answer(
+                plan_id,
+                node_id,
+                answers=answers,
+                skip=skip,
+                actor=actor,
+                settle=False,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            detail = getattr(exc, "detail", None) or str(exc)
+            self.log.info("chat.plan_answer_refused", run=run_id, reason=detail)
+            return False, f"⚠ not recorded: {detail}"
+        self.log.info(
+            "chat.plan_answered", run=run_id, by=who, skipped=skip, resumed=outcome.resumed
+        )
+        clarification = outcome.clarification
+        if clarification.status == "skipped":
+            return True, f"⏭ {who} skipped the questions — the planner decides on its own."
+        if clarification.settled:
+            with self._lock:
+                self._plan_questions = {
+                    k: v for k, v in self._plan_questions.items() if v.run_id != run_id
+                }
+            return True, f"✅ all answered (last by {who}) — the planner proposes next."
+        left = len(clarification.unanswered())
+        return True, f"✅ noted — {left} question{'s' if left != 1 else ''} still open."
+
+    async def _say_in_thread(self, run_id: str, text: str) -> None:
+        thread = await self._ensure_thread(run_id)
+        if thread is not None:
+            await self._send(thread, text)
+
     def _split_choice_preamble(self, text: str, question: ChoiceQuestion) -> tuple[str, list[str]]:
         """Return the preamble to post with the components, plus any leading
         chunks to post before it.
@@ -1790,7 +2047,13 @@ class ChatBridge(ABC):
 
         Returns False when the question is unknown or expired — the caller
         tells the user to answer in words; nothing here blocks or waits.
+
+        A click on a parked plan run's question (#2345) answers the plan
+        instead, the way a reply in the run's thread does.
         """
+        planned = self._plan_click(message_id, value, author_name or author, author_id=author_id)
+        if planned is not None:
+            return planned
         resolved = self._resolve_choice(message_id, value)
         if resolved is None:
             self.log.info("chat.choice_unknown", message=message_id, value=value)
@@ -1998,6 +2261,11 @@ class ChatBridge(ABC):
                     await self._update_gate_prompt(payload[1], payload[2], payload[3], payload[4])
                     continue
                 event: Event = payload
+                if event.type == HostEventTypes.RUN_AWAITING_ANSWERS:
+                    # Posted after the finish card (see ``_finish``): the
+                    # questions are what a person acts on next.
+                    self._plan_asks[run_id] = event
+                    continue
                 if event.type == HostEventTypes.CHAT_MESSAGE:
                     await self._steer_picked_up(event)
                 if event.type == HostEventTypes.CHAT_REPLY:
@@ -2455,6 +2723,9 @@ class ChatBridge(ABC):
         if report.pr:
             facts["pr"] = report.pr
         facts["summary"] = report.task_summary
+        asked = self._plan_asks.pop(run_id, None)
+        if asked is not None and thread is not None and state == "awaiting_answers":
+            await self._post_plan_questions(run_id, thread, asked)
         await self._refresh_headline(run_id, item=item, state=state)
         await self._post_watch_notice(run_id, state, report)
         # Per-run render state is no longer needed.

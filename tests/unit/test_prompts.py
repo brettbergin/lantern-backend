@@ -337,6 +337,20 @@ RENDER_CONTEXTS: dict[str, dict[str, str]] = {
         "profiles": "- `research` — reads the web",
         "checkouts": "- `/data/app` — o/app, the repository this level lives in",
         "note": "CSV only",
+        "answers": "- **Which format?**\n  Answer: CSV (`csv`)",
+        "work_dir": "`/data`",
+        "user_guidance": "(none)",
+    },
+    # A plan run's clarifying turn before it proposes (#2345).
+    "plan_clarify": {
+        "level": "epic",
+        "children": "tasks",
+        "node": "**Epic:** Export reports\n\n**Repository:** o/app",
+        "note": "CSV only",
+        "kept": "- Person's task",
+        "checkouts": "- `/data/app` — o/app, the repository this level lives in",
+        "answers": "(no questions were asked)",
+        "max_questions": "3",
         "work_dir": "`/data`",
         "user_guidance": "(none)",
     },
@@ -920,4 +934,56 @@ def test_plan_propose_carries_the_repository_conventions_and_guidance() -> None:
         retry_context="## Previous attempt was invalid",
     )
     assert "run make check" in text and "- keep it small" in text
+    assert text.rstrip().endswith("## Previous attempt was invalid")
+
+
+def test_plan_propose_follows_the_answers() -> None:
+    """A person's answers are decisions the proposal follows; a question
+    they skipped is an assumption the proposal states."""
+    text = render("plan_propose", **RENDER_CONTEXTS["plan_propose"])
+    plain = " ".join(text.split())
+    assert "## What the person answered" in text
+    assert "Answer: CSV (`csv`)" in text
+    assert "Their answers are decisions: follow them." in plain
+    assert "say what you assumed in the `context`" in plain
+
+
+# -- a plan run's clarifying turn (#2345) ----------------------------------------
+
+
+def test_plan_clarify_asks_only_what_changes_the_proposal() -> None:
+    """The planner asks a person only what the repository cannot tell it,
+    reads before it asks, never re-asks an answered question, and changes
+    nothing while it reads."""
+    text = render("plan_clarify", **RENDER_CONTEXTS["plan_clarify"])
+    plain = " ".join(text.split())
+    assert text.startswith("# Before you propose the tasks of one epic")
+    assert "**at most 3** questions" in plain
+    assert "**would change what you propose**" in plain
+    assert "Read first; ask second." in plain
+    assert "Never ask again what is answered here" in plain
+    assert "**changes nothing**" in plain
+    assert "Prefer being ready." in plain
+    assert "- `/data/app` — o/app, the repository this level lives in" in text
+
+
+def test_plan_clarify_answers_in_the_choice_shape() -> None:
+    """The questions are chat choice questions: two to five choices, free
+    text unless ruled out — or the one word that says there is nothing to
+    ask."""
+    plain = " ".join(render("plan_clarify", **RENDER_CONTEXTS["plan_clarify"]).split())
+    assert "**two to five** concrete choices" in plain
+    assert "`allow_free_text: false`" in plain
+    assert '{"ready": true}' in plain
+    assert '"questions": [' in plain and '"choices": [' in plain
+
+
+def test_plan_clarify_carries_the_answers_and_retry() -> None:
+    text = render(
+        "plan_clarify",
+        **{**RENDER_CONTEXTS["plan_clarify"], "answers": "- **Which readers?**\n  Answer: x"},
+        repo_conventions="## Repository conventions\n\nrun make check",
+        retry_context="## Previous attempt was invalid",
+    )
+    assert "- **Which readers?**" in text and "run make check" in text
     assert text.rstrip().endswith("## Previous attempt was invalid")

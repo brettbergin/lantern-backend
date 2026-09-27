@@ -946,9 +946,28 @@ node's previous `proposed` children are replaced, a person's drafts and
 approvals stay, and each proposed task names its `kind`, acceptance
 criteria, verify commands (code) or workload profile (workload) and what it
 depends on. It is ordinary work otherwise: in the queue and History as
-`kind: plan`, one stage (`proposing`), cancellable, resumable (a proposal
-already made is delivered without a second turn), steerable from the channel
-it was started in, metered to the usage pool, and run on `[agent.models] plan`. A person still reviews, edits and publishes the level.
+`kind: plan`, cancellable, resumable (a proposal already made is delivered
+without a second turn), steerable from the channel it was started in,
+metered to the usage pool, and run on `[agent.models] plan`. A person still
+reviews, edits and publishes the level.
+
+Before it proposes, the planner may ask. Its first turn (`clarifying`)
+reads the same checkout and either says it is ready or asks up to
+`[planning] max_questions` questions (`0` never asks; narrow it per
+repository under `[vcs.repos.planning]`) — each a choice between two to
+five answers, with free text unless the choices are the only sensible
+ones. The questions go on the plan node, and the run parks
+`awaiting_answers`: no sandbox is kept and nothing is spent while it waits,
+the item shows as waiting on you, and a daemon restart leaves the wait
+where it was. Answer them in the app (Angie or Lantern render a questions
+card from the node's `generation`; the route is
+`POST /v1/plans/{id}/nodes/{node_id}/answers`) or in the run's thread on
+your chat service: click a choice, or reply to a question with its number,
+a choice's name or your own words — `skip` lets the planner decide. Once
+they are settled the run resumes, never asks them again, and proposes
+with your answers as decisions (a skipped question becomes an assumption
+it states). A later breakdown of the same node sees those answers too.
+Abandoning a waiting item withdraws its questions.
 
 **Workloads on a cadence** (#761) are the third way in: **schedules**,
 which live in the daemon's database (#818), not in the config file. Create

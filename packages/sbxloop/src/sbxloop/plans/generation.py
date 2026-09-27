@@ -2,18 +2,19 @@
 
 The engine knows a plan only as a :class:`~sbxloop.engine.planning.PlanDesk`;
 this is the daemon's, one per plan work item: the brief is read from the
-plan service as the plan is when the run proposes, the proposal is written
-through the service's rules, and the generation's start and failure are
+plan service as the plan is when the run proposes, the planner's
+clarifying questions and its proposal are written through the service's
+rules, and the generation's start and failure are
 recorded as ``plan.generation.*`` events scoped to the run, its item and its
 channel. Nothing here reaches the forge.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from sbxloop.daemon.model import WorkItem
-from sbxloop.engine.planning import PlanBrief, PlanDelivery, PlanProposal
+from sbxloop.engine.planning import PlanBrief, PlanDelivery, PlanProposal, PlanQuestion
 from sbxloop.errors import PlanDeliveryError
 from sbxloop.log import get_logger
 from sbxloop.plans.service import PlanRefusal, PlanService
@@ -41,6 +42,20 @@ class PlanGeneration:
 
     def started(self, run_id: str) -> None:
         self._notice("plan.generation.started", run_id)
+
+    def ask(self, run_id: str, questions: Sequence[PlanQuestion]) -> None:
+        try:
+            self.service.ask_questions(
+                self.plan_id,
+                self.node_id,
+                questions,
+                run_id=run_id,
+                now=self.clock(),
+                item_id=self.item.item_id,
+                channel_id=self.item.channel_id,
+            )
+        except PlanRefusal as exc:
+            raise PlanDeliveryError(exc.detail) from exc
 
     def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery:
         try:

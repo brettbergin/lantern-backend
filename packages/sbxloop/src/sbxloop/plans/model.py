@@ -20,6 +20,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
+from sbxloop.engine.planning import Clarification
+
 Level = Literal["initiative", "epic", "task"]
 LEVELS: tuple[Level, ...] = get_args(Level)
 
@@ -124,6 +126,9 @@ class PlanNode:
     updated_at: float = 0.0
     #: What the forge changed that nobody has marked seen, oldest first.
     drift: tuple[Drift, ...] = ()
+    #: The latest clarifying questions a breakdown of this node asked, and
+    #: what a person answered (#2345); None until one asks.
+    generation: Clarification | None = None
 
     @property
     def followed(self) -> bool:

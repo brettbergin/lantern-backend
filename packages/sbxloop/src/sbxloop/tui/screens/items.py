@@ -60,7 +60,7 @@ SECTIONS: tuple[Section, ...] = (
     Section(
         "waiting",
         "waiting on you",
-        ("gated", "awaiting_review", "paused_review"),
+        ("gated", "awaiting_review", "paused_review", "awaiting_answers"),
         ("item", "repo", "blocked on", "title", "waiting", "press"),
     ),
     Section("running", "running now", ("running",), ("item", "repo", "run", "title", "updated")),
@@ -86,7 +86,15 @@ VERB_STATES: dict[str, tuple[str, ...]] = {
     # `running` belongs here: a run pinned by a daemon that died is the
     # thing you requeue, and unsticking it is what this screen is for.
     "requeue": ("failed", "blocked", "cancelled", "running"),
-    "abandon": ("queued", "running", "failed", "blocked", "gated", "awaiting_review"),
+    "abandon": (
+        "queued",
+        "running",
+        "failed",
+        "blocked",
+        "gated",
+        "awaiting_review",
+        "awaiting_answers",
+    ),
     "resume_review": ("awaiting_review", "paused_review"),
 }
 

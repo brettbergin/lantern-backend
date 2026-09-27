@@ -87,6 +87,7 @@ class TestWhoMay:
         body = api.client.get("/v1/capabilities", headers=api.bearer(READ)).json()
         assert {"plans:create", "plans:publish"} <= set(body["capabilities"])
         assert "planning" in body["features"]
+        assert "planning.clarify" in body["features"]
 
 
 class TestTheTree:
@@ -456,6 +457,7 @@ class TestSwitchedOff:
                 "features"
             ]
             assert "planning" not in features
+            assert "planning.clarify" not in features
         built.ctx.close()
 
 
@@ -572,3 +574,157 @@ class TestBreakdown:
         refused = self._breakdown(api, api.bearer(), plan, plan["root_id"], channel_id="chan_x")
         assert refused.status_code == 404 and refused.json()["code"] == "channel_not_found"
         assert [i for i in api.loop.dstore.items() if i.kind == "plan"] == []
+
+
+class TestAnswers:
+    """``POST .../nodes/{node_id}/answers`` answers or skips the questions a
+    breakdown asked before it proposes, and resumes its run (#2345)."""
+
+    QUESTIONS: tuple[dict[str, Any], ...] = (
+        {
+            "id": "fmt",
+            "prompt": "Which formats?",
+            "choices": [
+                {"value": "csv", "label": "CSV", "description": "a spreadsheet"},
+                {"value": "pdf", "label": "PDF"},
+            ],
+        },
+        {
+            "id": "who",
+            "prompt": "Who downloads them?",
+            "choices": ["staff", "public"],
+            "allow_free_text": False,
+        },
+    )
+
+    def _parked(self, api: Api) -> tuple[dict[str, Any], str, str]:
+        """A plan whose breakdown is parked on two questions, as the daemon
+        leaves it: the item waiting, its run pinned, the questions on the
+        node. The plan as read, the item id and the run id."""
+        from sbxloop.engine.planning import PlanQuestion
+
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, level="epic", title="Export reports")
+        accepted = api.client.post(
+            f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/breakdown",
+            json={"expected_revision": plan["revision"]},
+            headers=headers,
+        )
+        assert accepted.status_code == 202, accepted.text
+        (item,) = [i for i in api.loop.dstore.items() if i.kind == "plan"]
+        run_id = "rparked01"
+        api.loop.dstore._update(item.item_id, 5.0, state="awaiting_answers", run_id=run_id)
+        api.ctx.plans.ask_questions(
+            plan["id"],
+            plan["root_id"],
+            [PlanQuestion.model_validate(q) for q in self.QUESTIONS],
+            run_id=run_id,
+            now=6.0,
+            item_id=item.item_id,
+        )
+        current = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        return current, item.item_id, run_id
+
+    def _answer(self, api: Api, plan: dict[str, Any], headers: dict[str, str], **body: Any) -> Any:
+        return api.client.post(
+            f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/answers", json=body, headers=headers
+        )
+
+    def test_the_questions_are_read_from_the_plan(self, api: Api) -> None:
+        plan, _item, run_id = self._parked(api)
+        root = plan["nodes"][0]
+        generation = root["generation"]
+        assert generation["run_id"] == f"run_{run_id}"
+        assert generation["status"] == "awaiting_answers"
+        assert generation["answers"] == {} and generation["answered_at"] is None
+        fmt, who = generation["questions"]
+        assert fmt == {
+            "id": "fmt",
+            "prompt": "Which formats?",
+            "choices": [
+                {"value": "csv", "label": "CSV", "description": "a spreadsheet"},
+                {"value": "pdf", "label": "PDF", "description": None},
+            ],
+            "allow_free_text": True,
+        }
+        assert who["allow_free_text"] is False
+        assert [c["label"] for c in who["choices"]] == ["staff", "public"]
+        (asked,) = _events(api, "plan.generation.questions")
+        assert asked["run_id"] == f"run_{run_id}" and len(asked["questions"]) == 2
+
+    def test_reading_alone_does_not_answer(self, api: Api) -> None:
+        plan, _item, _run = self._parked(api)
+        refused = self._answer(api, plan, api.bearer(READ), skip=True)
+        assert refused.status_code == 403
+        assert refused.json()["capability"] == "plans:create"
+
+    def test_answers_resume_the_run(self, api: Api) -> None:
+        plan, item_id, run_id = self._parked(api)
+        headers = api.bearer(DRAFT)
+        answered = self._answer(
+            api,
+            plan,
+            headers,
+            expected_revision=plan["revision"],
+            answers={
+                "fmt": {"value": "pdf", "text": "and keep the logo"},
+                "who": {"value": "staff"},
+            },
+        )
+        assert answered.status_code == 200, answered.text
+        body = answered.json()
+        assert body["resumed"] is True and body["run_id"] == f"run_{run_id}"
+        generation = body["plan"]["nodes"][0]["generation"]
+        assert generation["status"] == "answered"
+        assert generation["answers"] == {
+            "fmt": {"value": "pdf", "text": "and keep the logo"},
+            "who": {"value": "staff", "text": ""},
+        }
+        assert generation["answered_at"] is not None and generation["answered_by"]
+        assert body["plan"]["revision"] == plan["revision"] + 1
+        item = api.loop.dstore.get(item_id)
+        assert item is not None and item.state == "queued" and item.run_id == run_id
+        (event,) = _events(api, "plan.generation.answered")
+        assert event["skipped"] is False and event["answers"]["who"] == {"value": "staff"}
+        # Once is enough: the questions are settled.
+        again = self._answer(api, body["plan"], headers, skip=True)
+        assert again.status_code == 409 and again.json()["code"] == "already_answered"
+
+    def test_a_skip_resumes_the_run_with_no_answers(self, api: Api) -> None:
+        plan, item_id, _run = self._parked(api)
+        skipped = self._answer(api, plan, api.bearer(DRAFT), skip=True)
+        assert skipped.status_code == 200, skipped.text
+        assert skipped.json()["plan"]["nodes"][0]["generation"]["status"] == "skipped"
+        item = api.loop.dstore.get(item_id)
+        assert item is not None and item.state == "queued"
+
+    def test_answers_are_held_to_the_questions(self, api: Api) -> None:
+        plan, item_id, _run = self._parked(api)
+        headers = api.bearer(DRAFT)
+        for body, detail in (
+            ({"answers": {"nope": {"value": "csv"}}}, "no question 'nope'"),
+            ({"answers": {"fmt": {"value": "xml"}}}, "'xml' is not a choice"),
+            ({"answers": {"who": {"text": "everyone"}}}, "takes one of its choices"),
+            ({"answers": {"fmt": {"value": "csv"}}, "skip": True}, "not both"),
+            ({}, "answer at least one question"),
+        ):
+            refused = self._answer(api, plan, headers, **body)
+            assert refused.status_code == 422, (body, refused.text)
+            assert detail in refused.json()["detail"], refused.json()
+        stale = self._answer(api, plan, headers, expected_revision=plan["revision"] - 1, skip=True)
+        assert stale.status_code == 409 and stale.json()["code"] == "stale_revision"
+        item = api.loop.dstore.get(item_id)
+        assert item is not None and item.state == "awaiting_answers", "nothing was resumed"
+
+    def test_nothing_waiting_is_refused_by_name(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers)
+        refused = self._answer(api, plan, headers, skip=True)
+        assert refused.status_code == 409 and refused.json()["code"] == "no_questions"
+        assert plan["nodes"][0]["generation"] is None
+
+    def test_questions_whose_run_stopped_waiting_are_refused(self, api: Api) -> None:
+        plan, item_id, _run = self._parked(api)
+        api.loop.dstore._update(item_id, 7.0, state="failed")
+        refused = self._answer(api, plan, api.bearer(DRAFT), skip=True)
+        assert refused.status_code == 409 and refused.json()["code"] == "not_awaiting_answers"

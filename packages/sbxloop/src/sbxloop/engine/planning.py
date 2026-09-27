@@ -14,6 +14,14 @@ a code task's verify commands are authored the way the in-run decompose
 authors them), and to the level's cap, before anything is written: an
 answer that breaks one is sent back once with the problems quoted, the way
 ``decompose`` retries, and a second bad answer fails the run named.
+
+Before it proposes, the planner may ask (#2345): given the node, the
+answers a person already gave and the checkout, it says it is ``ready`` or
+asks up to ``[planning] max_questions`` questions, each in the shape a chat
+choice question has (two to five choices, and free text unless it says
+otherwise), so every client renders them the way chat already does. The
+questions go to the plan record, the run parks ``awaiting_answers``, and a
+person's answers — or their skip — ride into the proposal's prompt.
 """
 
 from __future__ import annotations
@@ -36,6 +44,17 @@ PROPOSE_TASK_ID = "propose"
 #: The sink a plan run's result goes to: the plan record.
 PLAN_SINK = "plan"
 
+#: A clarifying question's choices: at least two, at most five — the bounds
+#: of a chat choice question (``daemon.chat_choices``), so every bridge can
+#: render one as buttons.
+MIN_CHOICES = 2
+MAX_CHOICES = 5
+
+#: Where a clarification stands on the plan record: asked and waiting, or
+#: settled by a person's answers, by their skip, or withdrawn because the
+#: run that asked was given up before anyone answered.
+ClarificationStatus = Literal["awaiting_answers", "answered", "skipped", "withdrawn"]
+
 ParentLevel = Literal["initiative", "epic"]
 ChildLevel = Literal["epic", "task"]
 
@@ -54,6 +73,134 @@ class ProfileRef(_Model):
 
     name: str
     description: str = ""
+
+
+def _fold(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+class QuestionChoice(_Model):
+    """One answer a person may pick: its ``value`` is what is recorded, its
+    ``label`` what the button says."""
+
+    value: str = Field(max_length=200)
+    label: str = Field(default="", max_length=200)
+    description: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_text(cls, data: object) -> object:
+        # A bare string is a choice whose value and label are the same; so
+        # is a choice that names only one of the two.
+        if isinstance(data, str):
+            return {"value": data}
+        if isinstance(data, dict) and data.get("value") is None and data.get("label"):
+            return {**data, "value": data["label"]}
+        return data
+
+    @model_validator(mode="after")
+    def _folded(self) -> QuestionChoice:
+        self.value = _fold(self.value)
+        self.label = _fold(self.label) or self.value
+        self.description = _fold(self.description) or None
+        if not self.value:
+            raise ValueError("every choice needs a value")
+        return self
+
+
+class PlanQuestion(_Model):
+    """One clarifying question, in the chat choice question's shape."""
+
+    id: str = Field(default="", max_length=40)
+    prompt: str = Field(max_length=1000)
+    choices: list[QuestionChoice]
+    allow_free_text: bool = True
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt(cls, value: str) -> str:
+        folded = " ".join(value.split())
+        if not folded:
+            raise ValueError("every question needs a prompt")
+        return folded
+
+    @model_validator(mode="after")
+    def _choices(self) -> PlanQuestion:
+        values = [choice.value for choice in self.choices]
+        if len(set(values)) != len(values):
+            raise ValueError(f"question {self.id or self.prompt!r} repeats a choice: {values}")
+        if not MIN_CHOICES <= len(self.choices) <= MAX_CHOICES:
+            raise ValueError(
+                f"question {self.id or self.prompt!r} has {len(self.choices)} choices; "
+                f"give {MIN_CHOICES} to {MAX_CHOICES}"
+            )
+        return self
+
+    def choice(self, value: str) -> QuestionChoice | None:
+        return next((c for c in self.choices if c.value == value), None)
+
+
+class PlanClarification(_Model):
+    """The planner's clarifying answer: ``ready``, or the questions it needs
+    a person to answer before it proposes."""
+
+    ready: bool = False
+    questions: list[PlanQuestion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _one_or_the_other(self) -> PlanClarification:
+        if self.ready and self.questions:
+            raise ValueError("answer `ready` or ask questions, not both")
+        if not self.ready and not self.questions:
+            raise ValueError("answer `ready: true`, or ask at least one question")
+        seen: set[str] = set()
+        for index, question in enumerate(self.questions, start=1):
+            question.id = _fold(question.id) or f"q{index}"
+            if question.id in seen:
+                raise ValueError(f"question ids must be unique: {question.id!r} repeats")
+            seen.add(question.id)
+        return self
+
+
+class PlanAnswer(_Model):
+    """A person's answer to one question: the ``value`` of a choice they
+    picked, or ``text`` in their own words (a question that allows it)."""
+
+    value: str | None = None
+    text: str = ""
+
+
+class Clarification(_Model):
+    """What the plan record holds of one generation's questions: which run
+    asked them, what was asked, and what a person answered. The engine
+    reads it from the brief; the plan service writes it."""
+
+    run_id: str
+    questions: list[PlanQuestion]
+    answers: dict[str, PlanAnswer] = Field(default_factory=dict)
+    status: ClarificationStatus = "awaiting_answers"
+    asked_at: float = 0.0
+    answered_at: float | None = None
+    #: Who answered or skipped, as a person reads it.
+    answered_by: str | None = None
+
+    @property
+    def settled(self) -> bool:
+        """A person answered or skipped: the planner may go on."""
+        return self.status in ("answered", "skipped")
+
+    def unanswered(self) -> list[PlanQuestion]:
+        return [q for q in self.questions if q.id not in self.answers]
+
+
+def clarification_problems(answer: PlanClarification, brief: PlanBrief) -> list[str]:
+    """Every rule the clarifying answer breaks, fed back verbatim; empty
+    when it may be recorded."""
+    count = len(answer.questions)
+    if count > brief.max_questions:
+        cap = brief.max_questions
+        return [f"ask at most {cap} question{'s' if cap != 1 else ''}; this answer asks {count}"]
+    return []
 
 
 class PlanBrief(_Model):
@@ -92,6 +239,18 @@ class PlanBrief(_Model):
     repositories: list[str] = Field(default_factory=list)
     #: The person's note for this breakdown, when they wrote one.
     note: str = ""
+    #: How many clarifying questions the planner may ask before it
+    #: proposes (`[planning] max_questions` for the node's repository); 0
+    #: skips the clarifying turn.
+    max_questions: int = Field(default=0, ge=0)
+    #: The node's latest clarifying questions and a person's answers — this
+    #: run's, or an earlier generation's the planner should not ask again.
+    clarification: Clarification | None = None
+
+    def clarification_for(self, run_id: str) -> Clarification | None:
+        """The questions ``run_id`` itself asked, when it asked any."""
+        found = self.clarification
+        return found if found is not None and found.run_id == run_id else None
 
     @property
     def child_noun(self) -> str:
@@ -304,8 +463,8 @@ class PlanDelivery:
 class PlanDesk(Protocol):
     """The plan record one plan run reads its brief from and delivers to.
 
-    Every method answers for the run's own node. ``brief`` and ``deliver``
-    raise :class:`~sbxloop.errors.PlanDeliveryError` with a sentence a
+    Every method answers for the run's own node. ``brief``, ``ask`` and
+    ``deliver`` raise :class:`~sbxloop.errors.PlanDeliveryError` with a sentence a
     person reads when the record will not serve (the plan was deleted, the
     node was published under the run); ``started`` and ``failed`` are
     notices and never fail the run.
@@ -314,6 +473,13 @@ class PlanDesk(Protocol):
     def brief(self) -> PlanBrief: ...
 
     def started(self, run_id: str) -> None: ...
+
+    def ask(self, run_id: str, questions: Sequence[PlanQuestion]) -> None:
+        """Record the planner's questions for a person to answer; the run
+        parks until they do. Raises
+        :class:`~sbxloop.errors.PlanDeliveryError` when the record will not
+        take them."""
+        ...
 
     def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery: ...
 

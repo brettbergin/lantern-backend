@@ -709,30 +709,32 @@ the file still spells differently). The socket takes the same commands:
 
 Planning turns a larger effort into issues the loop can work (see the
 [spike](spikes/work-planning.md)). It is advertised as `planning` when a
-configured forge can hold a plan. A **plan** is a tree of **nodes**: an
+configured forge can hold a plan, together with `planning.clarify` (the
+planner's clarifying questions and the answers route). A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
 and owners) publishes to the forge and edits, attaches and detaches its issues.
 
-| Route                                           | Body                                                         | Result                                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `GET /v1/plans`                                 | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first                         |
-| `POST /v1/plans`                                | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node                                      |
-| `GET /v1/plans/{id}`                            | none                                                         | `200`, the plan and every node                                          |
-| `PATCH /v1/plans/{id}`                          | `{expected_revision, …sections}`                             | `200`, the root node's sections edited                                  |
-| `DELETE /v1/plans/{id}`                         | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`                                |
-| `POST /v1/plans/{id}/nodes`                     | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node                          |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`          | `{expected_revision, position?, forge_version?, …sections}`  | `200`, the plan (a published node: its issue written)                   |
-| `DELETE /v1/plans/{id}/nodes/{node_id}`         | `?expected_revision=`                                        | `200`, the plan without the node and its subtree                        |
-| `POST /v1/plans/{id}/nodes/{node_id}/breakdown` | `{expected_revision, note?, channel_id?}`                    | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve`   | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved                            |
-| `POST /v1/plans/{id}/nodes/{node_id}/publish`   | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`                           |
-| `POST /v1/plans/{id}/nodes/{node_id}/attach`    | `{expected_revision, repository?, number?, url?}`            | `200 {plan, node_id, linked, reason}`                                   |
-| `POST /v1/plans/{id}/nodes/{node_id}/detach`    | `{expected_revision}`                                        | `200`, the plan with the child detached                                 |
-| `POST /v1/plans/{id}/sync`                      | none                                                         | `200`, the plan reconciled from the forge now                           |
-| `POST /v1/plans/{id}/drift/ack`                 | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen                             |
+| Route                                           | Body                                                          | Result                                                                  |
+| ----------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `GET /v1/plans`                                 | `?repository=&level=&state=`                                  | `200 {data: [plan summary]}`, most recent first                         |
+| `POST /v1/plans`                                | `{level, repository, title, goal?, acceptance_criteria?, …}`  | `201`, the plan with its root node                                      |
+| `GET /v1/plans/{id}`                            | none                                                          | `200`, the plan and every node                                          |
+| `PATCH /v1/plans/{id}`                          | `{expected_revision, …sections}`                              | `200`, the root node's sections edited                                  |
+| `DELETE /v1/plans/{id}`                         | `?expected_revision=`                                         | `200 {id, outcome: deleted \| archived}`                                |
+| `POST /v1/plans/{id}/nodes`                     | `{expected_revision, parent_id, title, repository?, …}`       | `201`, the plan; `Location` names the new node                          |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`          | `{expected_revision, position?, forge_version?, …sections}`   | `200`, the plan (a published node: its issue written)                   |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`         | `?expected_revision=`                                         | `200`, the plan without the node and its subtree                        |
+| `POST /v1/plans/{id}/nodes/{node_id}/breakdown` | `{expected_revision, note?, channel_id?}`                     | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
+| `POST /v1/plans/{id}/nodes/{node_id}/answers`   | `{expected_revision?, answers: {id: {value?, text?}}, skip?}` | `200 {plan, run_id, resumed}`, the waiting run back in the queue        |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve`   | `{expected_revision, node_ids?}`                              | `200`, the plan with those children approved                            |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish`   | `{expected_revision}` and an `Idempotency-Key` header         | `200 {plan, results, operation_id, replayed}`                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/attach`    | `{expected_revision, repository?, number?, url?}`             | `200 {plan, node_id, linked, reason}`                                   |
+| `POST /v1/plans/{id}/nodes/{node_id}/detach`    | `{expected_revision}`                                         | `200`, the plan with the child detached                                 |
+| `POST /v1/plans/{id}/sync`                      | none                                                          | `200`, the plan reconciled from the forge now                           |
+| `POST /v1/plans/{id}/drift/ack`                 | `{expected_revision, node_ids?}`                              | `200`, the plan with that drift marked seen                             |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -889,6 +891,32 @@ generation emits `plan.generation.started` `{plan_id, node_id, run_id}` when
 the run starts, then `plan.generation.proposed` `{plan_id, node_id, run_id, count}` when the plan holds the proposal, or `plan.generation.failed`
 `{plan_id, node_id, run_id, reason}` when the run ends without one; each is
 scoped to the run, its item and its channel.
+
+**Clarifying questions** (feature `planning.clarify`, advertised with
+`planning`). Before it proposes, the planner reads the checkout and either
+says it is ready or asks up to `[planning] max_questions` questions (the
+repository's own under `[vcs.repos.planning]`; `0` never asks). Each
+question has the chat choice question's shape: `{id, prompt, choices: [{value, label, description?}], allow_free_text}`, two to five choices and
+free text unless `allow_free_text` is false. The questions are written to
+the node's `generation` — `{run_id, status, questions, answers, asked_at, answered_at?, answered_by?}`, `status` `awaiting_answers` while the run
+waits, then `answered`, `skipped`, or `withdrawn` when the item was
+abandoned first — and emitted as `plan.generation.questions` `{plan_id, node_id, run_id, questions}`, scoped to the run, its item and its channel.
+The run parks `awaiting_answers` (its item too): no sandbox is kept and
+nothing is spent while it waits, and it survives a daemon restart.
+`POST /v1/plans/{id}/nodes/{node_id}/answers` (`plans:create`) answers
+them, keyed by question id — a choice's `value`, `text` in the person's own
+words where the question allows it, or both — or `{"skip": true}` lets the
+planner decide; a question left out goes to the planner unanswered. The
+answers are recorded on the node, `plan.generation.answered` `{plan_id, node_id, run_id, skipped, answers}` is emitted, and the run goes back to
+the queue: it resumes without asking again and proposes with the answers
+in its prompt. The same questions can be answered from the run's chat
+thread (a click on a choice, or a reply), one question at a time; the run
+resumes once every one has an answer. Refused: nothing waiting on the node
+(`409 no_questions`); questions already answered, skipped or withdrawn
+(`409 already_answered`); the run that asked them no longer waiting (`409 not_awaiting_answers`); an unknown question id, a value that is not one of
+the question's choices, text for a question that takes only its choices,
+answers together with `skip`, or neither (`422`); a stale
+`expected_revision` (optional here).
 
 **Editing a published plan, attaching and detaching (#2350).** After
 publish sbxloop writes to a plan's issues only when a person asks, and
@@ -1526,6 +1554,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/plans/{id}/sync`                        | `plans:create`         | Reconcile the plan from the forge now                                 |
 | `POST`   | `/v1/plans/{id}/drift/ack`                   | `plans:create`         | Mark the forge's changes to a plan seen                               |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/breakdown`   | `plans:create`         | Queue a `plan` run proposing the node's next level                    |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/answers`     | `plans:create`         | Answer or skip a breakdown's clarifying questions; resumes its run    |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

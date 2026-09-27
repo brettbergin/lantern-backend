@@ -17,11 +17,15 @@ from typing import Any
 import pytest
 
 from sbxloop import hostgit
-from sbxloop.engine.model import PLAN_STAGES, RESUMABLE_RUN_STATES
+from sbxloop.engine.model import PLAN_STAGES, RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES
 from sbxloop.engine.planning import (
+    Clarification,
+    PlanAnswer,
     PlanBrief,
+    PlanClarification,
     PlanDelivery,
     PlanProposal,
+    PlanQuestion,
     ProfileRef,
     proposal_problems,
 )
@@ -82,6 +86,22 @@ def answer(*children: dict[str, Any]) -> dict[str, Any]:
     return {"json": {"children": list(children)}}
 
 
+READY: dict[str, Any] = {"json": {"ready": True}}
+
+
+def question(id: str, prompt: str, *values: str, free: bool = True) -> dict[str, Any]:
+    return {
+        "id": id,
+        "prompt": prompt,
+        "choices": [{"value": v, "label": v.upper(), "description": f"about {v}"} for v in values],
+        "allow_free_text": free,
+    }
+
+
+def asks(*questions: dict[str, Any]) -> dict[str, Any]:
+    return {"json": {"questions": list(questions)}}
+
+
 @dataclass
 class RecordingDesk:
     """A plan record that remembers what it was told."""
@@ -91,12 +111,28 @@ class RecordingDesk:
     delivered: list[tuple[str, PlanProposal]] = field(default_factory=list)
     failures: list[tuple[str, str]] = field(default_factory=list)
     refuse: str | None = None
+    #: The node's clarification as the record holds it, and every ask.
+    clarification: Clarification | None = None
+    asked: list[tuple[str, list[PlanQuestion]]] = field(default_factory=list)
 
     def brief(self) -> PlanBrief:
-        return self.plan_brief
+        return self.plan_brief.model_copy(update={"clarification": self.clarification})
 
     def started(self, run_id: str) -> None:
         self.started_runs.append(run_id)
+
+    def ask(self, run_id: str, questions: Any) -> None:
+        if self.refuse is not None:
+            raise PlanDeliveryError(self.refuse)
+        self.asked.append((run_id, list(questions)))
+        self.clarification = Clarification(run_id=run_id, questions=list(questions))
+
+    def answer(self, skip: bool = False, **answers: PlanAnswer) -> None:
+        """A person settles the questions on the record."""
+        assert self.clarification is not None
+        self.clarification = self.clarification.model_copy(
+            update={"answers": answers, "status": "skipped" if skip else "answered"}
+        )
 
     def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery:
         if self.refuse is not None:
@@ -193,9 +229,11 @@ class TestPlanRun:
         rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
         assert rows == [("propose", "ok")]
 
-    def test_the_stage_is_resumable_and_named(self) -> None:
-        assert PLAN_STAGES == ("proposing",)
-        assert "proposing" in RESUMABLE_RUN_STATES
+    def test_the_stages_are_resumable_and_named(self) -> None:
+        assert PLAN_STAGES == ("clarifying", "awaiting_answers", "proposing")
+        assert set(PLAN_STAGES) <= RESUMABLE_RUN_STATES
+        # The park is terminal for liveness, like a held workload.
+        assert "awaiting_answers" in TERMINAL_RUN_STATES
 
     def test_an_invalid_answer_is_sent_back_once_with_the_problems(
         self, harness: Harness, upstream: list[tuple[str, str]]
@@ -314,6 +352,220 @@ class TestPlanRun:
         planner = next(p for p in prompts if "Propose the tasks" in p and "steering stage" not in p)
         assert "keep it to CSV; no PDF export" in planner
         assert any(e.type == HostEventTypes.CHAT_REPLY for e in harness.events)
+
+
+def sessions(harness: Harness, run_id: str) -> list[str]:
+    """Every agent session's prompt, oldest first (keep_sandboxes runs)."""
+    jobs = [j for j in harness.agent_jobs(run_id) if j["kind"] == "agent.session"]
+    return [j["prompt"] for j in sorted(jobs, key=lambda j: j.get("created_at", 0))]
+
+
+class TestClarify:
+    """The clarifying turn in front of the proposal (#2345)."""
+
+    def test_ready_goes_straight_to_proposing(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=3))
+        harness.script([READY, answer(code_task("c1"))])
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.run_states() == ["provisioning", "clarifying", "proposing", "completed"]
+        assert harness.consumed() == 2
+        assert desk.asked == [] and len(desk.delivered) == 1
+        rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
+        assert rows == [("clarify", "ok"), ("propose", "ok")]
+        prompts = [
+            j["prompt"] for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"
+        ]
+        clarify = next(p for p in prompts if p.startswith("# Before you propose"))
+        assert "**at most 3** questions" in " ".join(clarify.split())
+        assert "Run make test before a PR." in clarify, "the repository's own conventions"
+        propose = next(p for p in prompts if p.startswith("# Propose"))
+        assert "(no questions were asked)" in propose
+        # One checkout serves both turns.
+        assert len(upstream) == 1
+
+    def test_questions_park_the_run_and_the_answers_reach_the_proposal(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=3))
+        harness.script(
+            [
+                asks(
+                    question("fmt", "Which formats?", "csv", "pdf"),
+                    question("who", "Who downloads them?", "staff", "public"),
+                )
+            ]
+        )
+        parked = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+
+        # Parked, holding nothing: no sandbox kept, no failure told.
+        assert parked.state == "awaiting_answers", parked.reason
+        assert parked.reason is not None and "answer or skip them" in parked.reason
+        assert harness.run_states() == ["provisioning", "clarifying", "awaiting_answers"]
+        assert harness.sandboxes_left() == []
+        assert desk.failures == [] and desk.delivered == []
+        ((run_id, questions),) = desk.asked
+        assert run_id == parked.run_id
+        assert [q.id for q in questions] == ["fmt", "who"]
+        assert questions[0].choices[1].label == "PDF"
+        (waiting,) = [e for e in harness.events if e.type == HostEventTypes.RUN_AWAITING_ANSWERS]
+        assert waiting.data["plan_id"] == "plan_1" and waiting.data["node_id"] == "node_epic"
+        assert [q["prompt"] for q in waiting.data["questions"]] == [
+            "Which formats?",
+            "Who downloads them?",
+        ]
+        record = harness.engine().store.get_run(parked.run_id)
+        assert record.state == "awaiting_answers" and record.stage == "clarifying"
+
+        # A person answers: a choice, and their own words.
+        desk.answer(fmt=PlanAnswer(value="pdf"), who=PlanAnswer(text="the finance team"))
+        harness.script([answer(code_task("c1"))])
+        harness.events.clear()
+        resumed = engine(harness, desk, keep_sandboxes=True).resume(parked.run_id)
+
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 1, "the questions are not asked a second time"
+        # Re-entered where it parked, it finds its questions settled on the
+        # record and goes straight to the proposal.
+        assert harness.run_states() == ["provisioning", "proposing", "completed"]
+        (prompt,) = [
+            j["prompt"] for j in harness.agent_jobs(parked.run_id) if j["kind"] == "agent.session"
+        ]
+        assert "- **Which formats?**\n  Answer: PDF (`pdf`)" in prompt
+        assert "- **Who downloads them?**\n  Answer: in their words: the finance team" in prompt
+        assert len(desk.delivered) == 1 and len(desk.asked) == 1
+        assert upstream and len(upstream) == 1, "the parked run's checkout is reused"
+
+    def test_a_skip_proposes_with_no_answers(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=2))
+        harness.script([asks(question("fmt", "Which formats?", "csv", "pdf"))])
+        parked = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert parked.state == "awaiting_answers"
+        desk.answer(skip=True)
+        harness.script([answer(code_task("c1"))])
+        resumed = engine(harness, desk, keep_sandboxes=True).resume(parked.run_id)
+        assert resumed.state == "completed", resumed.reason
+        (prompt,) = [
+            j["prompt"] for j in harness.agent_jobs(parked.run_id) if j["kind"] == "agent.session"
+        ]
+        assert "The person skipped these questions" in prompt
+        assert "Answer: not answered" in prompt
+
+    def test_a_resume_that_is_no_answer_parks_again_without_a_turn(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=2))
+        harness.script([asks(question("fmt", "Which formats?", "csv", "pdf"))])
+        parked = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        harness.script([])
+        again = engine(harness, desk).resume(parked.run_id)
+        assert again.state == "awaiting_answers"
+        assert harness.consumed() == 0 and len(desk.asked) == 1
+        assert desk.failures == []
+
+    def test_the_cap_is_held_with_one_retry(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=1))
+        two = asks(question("a", "A?", "x", "y"), question("b", "B?", "x", "y"))
+        harness.script([two, asks(question("a", "A?", "x", "y"))])
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "awaiting_answers", result.reason
+        retried = max(sessions(harness, result.run_id), key=len)
+        assert "ask at most 1 question; this answer asks 2" in retried
+        ((_, questions),) = desk.asked
+        assert [q.id for q in questions] == ["a"]
+
+    def test_questions_invalid_twice_fail_the_run_named(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=2))
+        one_choice = asks(question("a", "A?", "only"))
+        harness.script([one_choice, one_choice])
+        result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert result.state == "failed"
+        assert (result.reason or "").startswith("the planner's questions were invalid twice:")
+        assert "give 2 to 5" in (result.reason or "")
+        assert desk.failures == [(result.run_id, result.reason)] and desk.asked == []
+
+    def test_no_questions_allowed_means_no_clarifying_turn(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=0))
+        harness.script([answer(code_task("c1"))])
+        result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert "clarifying" not in harness.run_states()
+        assert harness.consumed() == 1
+
+    def test_an_earlier_generations_answers_are_not_asked_again(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        earlier = Clarification(
+            run_id="an-earlier-run",
+            questions=[
+                PlanQuestion.model_validate(question("fmt", "Which formats?", "csv", "pdf"))
+            ],
+            answers={"fmt": PlanAnswer(value="csv")},
+            status="answered",
+        )
+        desk = RecordingDesk(plan_brief=epic_brief(max_questions=2), clarification=earlier)
+        harness.script([READY, answer(code_task("c1"))])
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        prompts = sessions(harness, result.run_id)
+        clarify = next(p for p in prompts if p.startswith("# Before you propose"))
+        propose = next(p for p in prompts if p.startswith("# Propose"))
+        for prompt in (clarify, propose):
+            assert "- **Which formats?**\n  Answer: CSV (`csv`)" in prompt
+
+
+class TestClarificationShape:
+    def test_questions_take_the_chat_choice_shape(self) -> None:
+        parsed = PlanClarification.model_validate(
+            {
+                "questions": [
+                    {"prompt": " Which\nformat? ", "choices": ["csv", {"label": "PDF"}]},
+                    {"prompt": "Who?", "choices": [{"value": "a"}, {"value": "b"}]},
+                ]
+            }
+        )
+        first, second = parsed.questions
+        assert (first.id, second.id) == ("q1", "q2"), "ids are minted in order"
+        assert first.prompt == "Which format?"
+        assert [(c.value, c.label) for c in first.choices] == [("csv", "csv"), ("PDF", "PDF")]
+        assert first.allow_free_text is True
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"ready": True, "questions": [question("a", "A?", "x", "y")]},
+            {"questions": [question("a", "A?", "x")]},
+            {"questions": [question("a", "A?", *"abcdef")]},
+            {"questions": [question("a", "A?", "x", "x")]},
+            {"questions": [question("a", "A?", "x", "y"), question("a", "B?", "x", "y")]},
+        ],
+    )
+    def test_malformed_answers_are_refused(self, body: dict[str, Any]) -> None:
+        with pytest.raises(ValueError):
+            PlanClarification.model_validate(body)
+
+    def test_the_bounds_are_the_chat_choice_questions(self) -> None:
+        from sbxloop.daemon import chat_choices
+        from sbxloop.engine import planning
+
+        assert (planning.MIN_CHOICES, planning.MAX_CHOICES) == (
+            chat_choices.MIN_CHOICES,
+            chat_choices.MAX_CHOICES,
+        )
 
 
 class TestThePrompt:

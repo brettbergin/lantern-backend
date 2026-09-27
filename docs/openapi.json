@@ -5625,6 +5625,120 @@
         "title": "ParticipantOut",
         "type": "object"
       },
+      "PlanAnswerIn": {
+        "additionalProperties": false,
+        "description": "An answer to one question: a choice's ``value``, or ``text`` in the\nperson's own words where the question allows it (both is a choice with\na remark).",
+        "properties": {
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "PlanAnswerIn",
+        "type": "object"
+      },
+      "PlanAnswerOut": {
+        "additionalProperties": false,
+        "description": "A person's answer to one question: the ``value`` of the choice\npicked, or ``text`` in their own words.",
+        "properties": {
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "PlanAnswerOut",
+        "type": "object"
+      },
+      "PlanAnswers": {
+        "additionalProperties": false,
+        "description": "Answer the questions a breakdown of the node is waiting on, keyed by\nquestion id, or ``skip`` them to let the planner decide; either\nresumes the run. A question left out goes to the planner unanswered.",
+        "properties": {
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlanAnswerIn"
+            },
+            "maxProperties": 10,
+            "title": "Answers",
+            "type": "object"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "skip": {
+            "default": false,
+            "title": "Skip",
+            "type": "boolean"
+          }
+        },
+        "title": "PlanAnswers",
+        "type": "object"
+      },
+      "PlanAnswersAccepted": {
+        "additionalProperties": false,
+        "description": "The answers were recorded: the plan as it now is, and whether the\nrun waiting on them went back to the queue (it does once they are\nsettled, which an answer through this route always does).",
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "resumed": {
+            "title": "Resumed",
+            "type": "boolean"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan",
+          "run_id",
+          "resumed"
+        ],
+        "title": "PlanAnswersAccepted",
+        "type": "object"
+      },
       "PlanApprove": {
         "additionalProperties": false,
         "description": "Approve a node's draft and proposed children: every one, or the ones\n``node_ids`` names.",
@@ -5820,6 +5934,37 @@
           "created"
         ],
         "title": "PlanBreakdownAccepted",
+        "type": "object"
+      },
+      "PlanChoiceOut": {
+        "additionalProperties": false,
+        "description": "One answer a person may pick: ``value`` is what is recorded,\n``label`` what the button says.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "PlanChoiceOut",
         "type": "object"
       },
       "PlanCreate": {
@@ -6124,6 +6269,74 @@
         "title": "PlanForge",
         "type": "object"
       },
+      "PlanGenerationOut": {
+        "additionalProperties": false,
+        "description": "The node's latest clarifying questions (#2345): the run that asked,\nwhat it asked, and where they stand \u2014 ``awaiting_answers`` while the\nrun waits (a client shows the questions card), then ``answered``,\n``skipped``, or ``withdrawn`` when the run was given up first.\n``answers`` is keyed by question id.",
+        "properties": {
+          "answered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "answered_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered By"
+          },
+          "answers": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PlanAnswerOut"
+            },
+            "title": "Answers",
+            "type": "object"
+          },
+          "asked_at": {
+            "title": "Asked At",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/PlanQuestionOut"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "awaiting_answers",
+              "answered",
+              "skipped",
+              "withdrawn"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "questions",
+          "asked_at"
+        ],
+        "title": "PlanGenerationOut",
+        "type": "object"
+      },
       "PlanNodeCreate": {
         "additionalProperties": false,
         "description": "A new child one level under ``parent_id``. ``repository`` is for an\nepic under an initiative (the initiative's home by default); a task\nalways lives in its epic's repository. ``position`` places it among its\nsiblings (last by default).",
@@ -6341,6 +6554,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/PlanForge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "generation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanGenerationOut"
               },
               {
                 "type": "null"
@@ -6899,6 +7122,39 @@
           "results"
         ],
         "title": "PlanPublished",
+        "type": "object"
+      },
+      "PlanQuestionOut": {
+        "additionalProperties": false,
+        "description": "A clarifying question in the chat choice question's shape: two to\nfive choices, and free text unless ``allow_free_text`` is false.",
+        "properties": {
+          "allow_free_text": {
+            "default": true,
+            "title": "Allow Free Text",
+            "type": "boolean"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/PlanChoiceOut"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "prompt",
+          "choices"
+        ],
+        "title": "PlanQuestionOut",
         "type": "object"
       },
       "PlanRollup": {
@@ -15327,6 +15583,70 @@
           }
         },
         "summary": "Edit or move a node",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/answers": {
+      "post": {
+        "description": "Feature ``planning.clarify``. Answer the questions a breakdown of\nthe node asked before it proposes (the node's ``generation``, while its\n``status`` is ``awaiting_answers``), keyed by question id \u2014 each a\nchoice's ``value``, or ``text`` in the person's own words where the\nquestion allows it \u2014 or ``skip`` them to let the planner decide. The\nanswers are recorded on the plan (``plan.generation.answered``) and\nthe run waiting on them goes back to the queue: it proposes with the\nanswers in its prompt. The same questions can be answered from the\nrun's chat thread; whichever answer settles them first wins.\n\nRefused: nothing waiting on the node (``409 no_questions``); questions\nalready answered or skipped (``409 already_answered``); the run that\nasked them no longer waiting (``409 not_awaiting_answers``); an answer\nto a question that was not asked, a value that is not one of its\nchoices, text for a question that takes only its choices, answers and\n``skip`` together, or neither (``422``); a stale ``expected_revision``.",
+        "operationId": "answer_node_v1_plans__plan_id__nodes__node_id__answers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanAnswers"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanAnswersAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Answer or skip a breakdown's clarifying questions",
         "tags": [
           "plans"
         ]

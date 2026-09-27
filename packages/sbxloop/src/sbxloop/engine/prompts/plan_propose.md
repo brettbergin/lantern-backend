@@ -22,7 +22,8 @@ hold), $kept (the children that stay, by title), $profiles (the configured
 workload profiles a workload task may name), $checkouts (where the node's
 repository was checked out, and the other repositories kept children
 already target), $note (the person's note for this breakdown),
-$work_dir, $user_guidance (steering from chat); $repo_conventions
+$answers (the clarifying questions a person answered or skipped, with
+their answers), $work_dir, $user_guidance (steering from chat); $repo_conventions
 (engine.repocontext — defaulted to "" by render(), the planned repository's
 own instruction files under a heading when it has any); $retry_context
 (defaulted to "" by render()).
@@ -41,6 +42,8 @@ Section rules:
 - The verify-command authoring rules shared with decompose ("workspace
   root", "no shell variables", no `sh -c` wrapper) must stay
   (test_plan_propose_carries_verify_authoring_rules).
+- The rule that answers are decisions ("follow them") and a skip is an
+  assumption to state must stay (test_plan_propose_follows_the_answers).
 -->
 
 # Propose the $children of one $level
@@ -59,6 +62,14 @@ $node
 ## The person's note for this breakdown
 
 $note
+
+## What the person answered
+
+$answers
+
+Their answers are decisions: follow them. Where they skipped a question or
+left one unanswered, choose what the repository supports and say what you
+assumed in the `context` of the children it touches.
 
 ## What already stays
 

@@ -120,6 +120,7 @@ from sbxloop.engine.model import (
     TaskRecord,
     run_summary,
 )
+from sbxloop.engine.planning import Clarification, PlanAnswer
 from sbxloop.engine.reconcile import acknowledge_human_threads
 from sbxloop.engine.sinks import published_line
 from sbxloop.engine.store import StateStore
@@ -146,7 +147,8 @@ from sbxloop.ghids import (
 from sbxloop.ids import new_run_id
 from sbxloop.log import bind_run, clear_run, get_logger
 from sbxloop.plans.generation import PlanGeneration
-from sbxloop.plans.service import PlanService
+from sbxloop.plans.model import Plan
+from sbxloop.plans.service import PlanRefusal, PlanService
 from sbxloop.plans.store import PlanStore
 from sbxloop.provider import ProviderHeldError, ProviderRecovery
 from sbxloop.recipes import get_recipe
@@ -262,6 +264,27 @@ class Frontend(Protocol):
         by: str | None,
         detail: str | None = None,
     ) -> None: ...
+
+
+class PlanQuestionsWaiting(NamedTuple):
+    """The clarifying questions a parked plan run waits on (#2345), and
+    where they live on the plan record."""
+
+    plan_id: str
+    node_id: str
+    run_id: str
+    clarification: Clarification
+
+
+class PlanAnswered(NamedTuple):
+    """What an answer to a plan run's questions did: the plan as it now
+    is, the questions as recorded, and whether the run went back to the
+    queue (it does once the questions are settled)."""
+
+    plan: Plan
+    clarification: Clarification
+    resumed: bool
+    item_id: str | None
 
 
 class CancelRequest(NamedTuple):
@@ -1340,6 +1363,8 @@ class DaemonLoop:
                     item=item_id,
                     run=hold.run_id,
                 )
+        if before is not None and before.state == "awaiting_answers" and before.run_id:
+            self._withdraw_questions(before, why, now)
         if self._cancel_if_current(item_id):
             self._notice(
                 "item.abandon_cancelling",
@@ -1356,6 +1381,25 @@ class DaemonLoop:
             self._close_dead_run(fresh.run_id, "abandoned", now, repo=fresh.repo)
         self._deliver_report(fresh)
         return fresh
+
+    def _withdraw_questions(self, item: WorkItem, why: str, now: float) -> None:
+        """An abandoned plan run was parked on its questions (#2345): take
+        them off the plan so no client keeps offering them. Best-effort —
+        the abandon itself has already happened."""
+        if item.plan_id is None or item.plan_node_id is None or item.run_id is None:
+            return
+        try:
+            self._plans().withdraw_questions(
+                item.plan_id,
+                item.plan_node_id,
+                run_id=item.run_id,
+                reason=f"abandoned while waiting for answers: {why}",
+                now=now,
+                item_id=item.item_id,
+                channel_id=item.channel_id,
+            )
+        except Exception:
+            log.warning("plan.withdraw_failed", item=item.item_id, exc_info=True)
 
     def retry_item(self, item_id: str, by: str | None = None) -> WorkItem:
         """Put a settled (failed/blocked/cancelled) item back in the queue
@@ -2164,6 +2208,18 @@ class DaemonLoop:
                 run=run_id,
             )
             return self._dispatch(item, resume_run_id=run_id)
+        if item.kind == "plan" and self._run_state(run_id) == "awaiting_answers":
+            # Not an interruption either (#2345): a person answered or
+            # skipped the planner's questions and the run resumes to
+            # propose with them. One stage, then done.
+            self._remove_stale_run_sandboxes(run_id, repo=item.repo)
+            self._notice(
+                "run.resuming",
+                f"resuming {run_id} for {item.item_id} with the answers to its questions",
+                item=item.item_id,
+                run=run_id,
+            )
+            return self._dispatch(item, resume_run_id=run_id)
         hold = self.dstore.review_hold_for(run_id)
         if hold is not None and hold.state == "fixing":
             # Not an interruption either (#675): a reviewer asked for
@@ -2229,6 +2285,12 @@ class DaemonLoop:
             budget=budget,
         )
         return self._dispatch(item, resume_run_id=run_id)
+
+    def _run_state(self, run_id: str) -> str | None:
+        try:
+            return self.store.get_run(run_id).state
+        except SbxloopError:
+            return None
 
     def _granted_retry(self, run_id: str) -> RunRecord | None:
         """The run record when the pinned run is a *granted* continuation: it
@@ -3451,6 +3513,8 @@ class DaemonLoop:
             return self._settle_gated(item, run_id, report, now)
         if state == "held":
             return self._settle_held(item, run_id, report, now)
+        if state == "awaiting_answers":
+            return self._settle_awaiting_answers(item, run_id, report, now)
         if state == "awaiting_review":
             return self._settle_awaiting_review(item, run_id, report, now)
         hold = self.dstore.review_hold_for(run_id)
@@ -3769,6 +3833,142 @@ class DaemonLoop:
             tasks=report.task_summary,
         )
         return "held"
+
+    def _settle_awaiting_answers(
+        self, item: WorkItem, run_id: str, report: RunReport, now: float
+    ) -> TickOutcome:
+        """A plan run parked on its clarifying questions (#2345): the
+        questions are on the plan record, the machinery is freed, and the
+        item waits ``awaiting_answers`` (invisible to dispatch) until a
+        person answers or skips them — from the app or the run's thread —
+        which puts it back in the queue with its run pinned. Like a gate,
+        not a failure: the breaker resets."""
+        self.dstore.finish_ledger(run_id, "awaiting_answers", now)
+        if self._consecutive_failures:
+            log.info("breaker.reset", after_failures=self._consecutive_failures)
+        self._set_breaker(None, 0)
+        self.dstore.mark_awaiting_answers(item.item_id, now)
+        self._frontend_finished(item, report)
+        waiting = self._waiting_questions(item, run_id)
+        count = len(waiting.questions) if waiting is not None else 0
+        noun = "question" if count == 1 else "questions"
+        notify: list[str] = []
+        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
+            if who and who not in notify:
+                notify.append(who)
+        self._notice(
+            "run.awaiting_answers",
+            f"❓ {item.item_id}: the planner asks {count} {noun} before it proposes — "
+            "answer or skip them in the plan, or in the run's thread",
+            item=item.item_id,
+            run=run_id,
+            questions=count,
+            mention_ids=notify,
+        )
+        return "awaiting_answers"
+
+    def _plans(self) -> PlanService:
+        return PlanService(PlanStore(self.dstore), lambda: self.config)
+
+    def _waiting_questions(self, item: WorkItem, run_id: str) -> Clarification | None:
+        """The clarifying questions ``item``'s run ``run_id`` is parked on,
+        as the plan record holds them; None when it is not parked on any."""
+        if item.kind != "plan" or item.plan_id is None or item.plan_node_id is None:
+            return None
+        try:
+            waiting = self._plans().pending_questions(item.plan_id, item.plan_node_id)
+        except PlanRefusal:
+            return None
+        if waiting is None or waiting.run_id != run_id:
+            return None
+        return waiting
+
+    def plan_questions_for_run(self, run_id: str) -> PlanQuestionsWaiting | None:
+        """The clarifying questions ``run_id`` is parked on, with the plan
+        and node they belong to — what a reply in the run's thread answers.
+        None when the run is not waiting on a person."""
+        item_id = self.dstore.item_for_run(run_id)
+        item = self.dstore.get(item_id) if item_id else None
+        if item is None or item.state != "awaiting_answers" or item.run_id != run_id:
+            return None
+        waiting = self._waiting_questions(item, run_id)
+        if waiting is None or item.plan_id is None or item.plan_node_id is None:
+            return None
+        return PlanQuestionsWaiting(item.plan_id, item.plan_node_id, run_id, waiting)
+
+    def answer_plan_questions(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        answers: Mapping[str, PlanAnswer],
+        skip: bool,
+        actor: Mapping[str, Any],
+        settle: bool = True,
+        expected_revision: int | None = None,
+        run_id: str | None = None,
+    ) -> PlanAnswered:
+        """A person's answers to a parked plan run's questions, or their
+        skip (#2345) — the one path the API and a chat click or reply share.
+
+        The answers are recorded on the plan (``PlanService.answer_questions``
+        holds them to the questions), and once they settle the questions the
+        item waiting on them goes back to the queue with its run pinned: the
+        next tick resumes it, and the planner proposes with the answers in
+        its prompt. Refused, as :class:`PlanRefusal`, when nothing waits:
+        the questions were settled already, or the run that asked them is
+        no longer waiting (abandoned, or superseded)."""
+        plans = self._plans()
+        waiting = plans.waiting_questions(plan_id, node_id)
+        parked = next(
+            (
+                item
+                for item in self.dstore.plan_generations(node_id)
+                if item.state == "awaiting_answers" and item.run_id == waiting.run_id
+            ),
+            None,
+        )
+        if parked is None or (run_id is not None and run_id != waiting.run_id):
+            raise PlanRefusal(
+                409,
+                "not_awaiting_answers",
+                "the run that asked these questions is no longer waiting for them",
+                node_id=node_id,
+            )
+        now = self.clock()
+        plan, settled = plans.answer_questions(
+            plan_id,
+            node_id,
+            answers=answers,
+            skip=skip,
+            settle=settle,
+            now=now,
+            actor=actor,
+            expected_revision=expected_revision,
+            run_id=waiting.run_id,
+            item_id=parked.item_id,
+            channel_id=parked.channel_id,
+        )
+        if not settled.settled:
+            return PlanAnswered(plan, settled, resumed=False, item_id=parked.item_id)
+        who = str(actor.get("display") or actor.get("id") or "someone")
+        try:
+            self.dstore.resume_for_answers(parked.item_id, waiting.run_id, now, who)
+        except (KeyError, ValueError) as exc:
+            # The item moved between the read and the write (an abandon won):
+            # the answers are on the plan, and there is no run to resume.
+            log.warning("plan.answers_unresumed", item=parked.item_id, error=str(exc))
+            return PlanAnswered(plan, settled, resumed=False, item_id=parked.item_id)
+        what = "skipped the questions" if settled.status == "skipped" else "answered"
+        self._notice(
+            "run.answered",
+            f"▶ {parked.item_id}: {who} {what} — the planner proposes on the next tick",
+            item=parked.item_id,
+            run=waiting.run_id,
+            by=who,
+            skipped=settled.status == "skipped",
+        )
+        return PlanAnswered(plan, settled, resumed=True, item_id=parked.item_id)
 
     def _resolve_publish_gate(
         self, item: WorkItem, run_id: str, *, released: bool, now: float, state: str | None
@@ -5374,6 +5574,7 @@ class DaemonLoop:
                 "gated",
                 "awaiting_review",
                 "held",
+                "awaiting_answers",
             ):
                 self._notice(
                     "recovery.settling",

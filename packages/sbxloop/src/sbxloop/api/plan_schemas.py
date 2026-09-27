@@ -57,6 +57,49 @@ class PlanDrift(ApiModel):
     reason: str | None = None
 
 
+class PlanChoiceOut(ApiModel):
+    """One answer a person may pick: ``value`` is what is recorded,
+    ``label`` what the button says."""
+
+    value: str
+    label: str
+    description: str | None = None
+
+
+class PlanQuestionOut(ApiModel):
+    """A clarifying question in the chat choice question's shape: two to
+    five choices, and free text unless ``allow_free_text`` is false."""
+
+    id: str
+    prompt: str
+    choices: list[PlanChoiceOut]
+    allow_free_text: bool = True
+
+
+class PlanAnswerOut(ApiModel):
+    """A person's answer to one question: the ``value`` of the choice
+    picked, or ``text`` in their own words."""
+
+    value: str | None = None
+    text: str = ""
+
+
+class PlanGenerationOut(ApiModel):
+    """The node's latest clarifying questions (#2345): the run that asked,
+    what it asked, and where they stand — ``awaiting_answers`` while the
+    run waits (a client shows the questions card), then ``answered``,
+    ``skipped``, or ``withdrawn`` when the run was given up first.
+    ``answers`` is keyed by question id."""
+
+    run_id: str
+    status: Literal["awaiting_answers", "answered", "skipped", "withdrawn"]
+    questions: list[PlanQuestionOut]
+    answers: dict[str, PlanAnswerOut] = Field(default_factory=dict)
+    asked_at: str
+    answered_at: str | None = None
+    answered_by: str | None = None
+
+
 class PlanNodeOut(ApiModel):
     id: str
     parent_id: str | None = None
@@ -76,6 +119,9 @@ class PlanNodeOut(ApiModel):
     non_goals: str = ""
     constraints: str = ""
     forge: PlanForge | None = None
+    #: The node's latest clarifying questions and their answers; null until
+    #: a breakdown of the node asks something.
+    generation: PlanGenerationOut | None = None
     created_at: str
     updated_at: str
     #: What the forge changed that nobody has marked seen, oldest first.
@@ -287,3 +333,34 @@ class PlanBreakdownAccepted(ApiModel):
     operation: OperationOut
     #: ``False`` when the same request had already queued it.
     created: bool
+
+
+class PlanAnswerIn(ApiModel):
+    """An answer to one question: a choice's ``value``, or ``text`` in the
+    person's own words where the question allows it (both is a choice with
+    a remark)."""
+
+    value: str | None = Field(default=None, min_length=1, max_length=200)
+    text: str | None = Field(default=None, max_length=4000)
+
+
+class PlanAnswers(ApiModel):
+    """Answer the questions a breakdown of the node is waiting on, keyed by
+    question id, or ``skip`` them to let the planner decide; either
+    resumes the run. A question left out goes to the planner unanswered."""
+
+    #: The plan revision the answers were read against; a stale one is
+    #: ``409 stale_revision``. Optional: the questions are what is answered.
+    expected_revision: int | None = Field(default=None, ge=1)
+    answers: dict[str, PlanAnswerIn] = Field(default_factory=dict, max_length=10)
+    skip: bool = False
+
+
+class PlanAnswersAccepted(ApiModel):
+    """The answers were recorded: the plan as it now is, and whether the
+    run waiting on them went back to the queue (it does once they are
+    settled, which an answer through this route always does)."""
+
+    plan: PlanOut
+    run_id: str
+    resumed: bool

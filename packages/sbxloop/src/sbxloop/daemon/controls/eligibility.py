@@ -41,7 +41,15 @@ _FORGE_ACTIONS: frozenset[Action] = frozenset({"gate_approve", "review_wait_resu
 #: ``retry`` / ``requeue``), mirrored so a surface can answer before asking.
 _ITEM_TRANSITIONS: dict[Action, frozenset[str]] = {
     "abandon": frozenset(
-        {"queued", "running", "blocked", "gated", "awaiting_review", "paused_review"}
+        {
+            "queued",
+            "running",
+            "blocked",
+            "gated",
+            "awaiting_review",
+            "paused_review",
+            "awaiting_answers",
+        }
     ),
     "retry": frozenset({"failed", "blocked", "cancelled", "queued"}),
     "requeue": frozenset({"running", "queued"}),

@@ -2,8 +2,9 @@
 forge one level at a time (#2334).
 
 Feature ``planning``. Every plan, drafts included, is readable by anyone
-holding ``runs:read``; drafting, editing and asking the planner for a
-breakdown need ``plans:create``. Every mutation names the
+holding ``runs:read``; drafting, editing, asking the planner for a
+breakdown and answering its clarifying questions (feature
+``planning.clarify``) need ``plans:create``. Every mutation names the
 ``expected_revision`` it read; a stale one is ``409 stale_revision`` with
 the plan's current revision.
 
@@ -28,17 +29,22 @@ from sbxloop.api.errors import Problem
 from sbxloop.api.models import rfc3339
 from sbxloop.api.pagination import Page
 from sbxloop.api.plan_schemas import (
+    PlanAnswerOut,
+    PlanAnswers,
+    PlanAnswersAccepted,
     PlanApprove,
     PlanAttach,
     PlanAttached,
     PlanBreakdown,
     PlanBreakdownAccepted,
+    PlanChoiceOut,
     PlanCreate,
     PlanDeleted,
     PlanDetach,
     PlanDrift,
     PlanDriftAck,
     PlanForge,
+    PlanGenerationOut,
     PlanNodeCreate,
     PlanNodeOut,
     PlanNodeUpdate,
@@ -46,10 +52,12 @@ from sbxloop.api.plan_schemas import (
     PlanPublish,
     PlanPublished,
     PlanPublishResult,
+    PlanQuestionOut,
     PlanRollup,
     PlanSummary,
     PlanUpdate,
 )
+from sbxloop.api.publicids import run_public_id
 from sbxloop.daemon.controls.intake import PlanAdmission
 from sbxloop.daemon.controls.operations import (
     IdempotencyConflict,
@@ -57,6 +65,7 @@ from sbxloop.daemon.controls.operations import (
     OperationSpec,
     OperationStore,
 )
+from sbxloop.engine.planning import Clarification, PlanAnswer
 from sbxloop.plans import Plan, PlanNode, PlanRefusal
 from sbxloop.plans.model import content_version
 from sbxloop.plans.reconcile import Reconciliation
@@ -119,6 +128,7 @@ def node_out(node: PlanNode) -> PlanNodeOut:
                 checklist_error=node.forge.checklist_error,
             )
         ),
+        generation=None if node.generation is None else generation_out(node.generation),
         created_at=rfc3339(node.created_at) or "",
         updated_at=rfc3339(node.updated_at) or "",
         drift=[
@@ -131,6 +141,31 @@ def node_out(node: PlanNode) -> PlanNodeOut:
             )
             for entry in node.drift
         ],
+    )
+
+
+def generation_out(found: Clarification) -> PlanGenerationOut:
+    return PlanGenerationOut(
+        run_id=run_public_id(found.run_id),
+        status=found.status,
+        questions=[
+            PlanQuestionOut(
+                id=q.id,
+                prompt=q.prompt,
+                choices=[
+                    PlanChoiceOut(value=c.value, label=c.label, description=c.description)
+                    for c in q.choices
+                ],
+                allow_free_text=q.allow_free_text,
+            )
+            for q in found.questions
+        ],
+        answers={
+            qid: PlanAnswerOut(value=a.value, text=a.text) for qid, a in found.answers.items()
+        },
+        asked_at=rfc3339(found.asked_at) or "",
+        answered_at=rfc3339(found.answered_at) if found.answered_at is not None else None,
+        answered_by=found.answered_by,
     )
 
 
@@ -823,4 +858,61 @@ async def breakdown_node(
         item=admitted.item,
         operation=admitted.operation,
         created=admitted.created,
+    )
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/answers",
+    response_model=PlanAnswersAccepted,
+    summary="Answer or skip a breakdown's clarifying questions",
+    responses={403: _PROBLEM, 404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+)
+async def answer_node(
+    plan_id: str,
+    node_id: str,
+    body: PlanAnswers,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanAnswersAccepted:
+    """Feature ``planning.clarify``. Answer the questions a breakdown of
+    the node asked before it proposes (the node's ``generation``, while its
+    ``status`` is ``awaiting_answers``), keyed by question id — each a
+    choice's ``value``, or ``text`` in the person's own words where the
+    question allows it — or ``skip`` them to let the planner decide. The
+    answers are recorded on the plan (``plan.generation.answered``) and
+    the run waiting on them goes back to the queue: it proposes with the
+    answers in its prompt. The same questions can be answered from the
+    run's chat thread; whichever answer settles them first wins.
+
+    Refused: nothing waiting on the node (``409 no_questions``); questions
+    already answered or skipped (``409 already_answered``); the run that
+    asked them no longer waiting (``409 not_awaiting_answers``); an answer
+    to a question that was not asked, a value that is not one of its
+    choices, text for a question that takes only its choices, answers and
+    ``skip`` together, or neither (``422``); a stale ``expected_revision``."""
+    answers = {
+        qid: PlanAnswer(value=answer.value, text=answer.text or "")
+        for qid, answer in body.answers.items()
+    }
+
+    def apply() -> Any:
+        return ctx.loop.answer_plan_questions(
+            plan_id,
+            node_id,
+            answers=answers,
+            skip=body.skip,
+            actor=_actor(auth),
+            settle=True,
+            expected_revision=body.expected_revision,
+        )
+
+    try:
+        outcome = await ctx.call(apply)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    ctx.hub.notify()
+    return PlanAnswersAccepted(
+        plan=plan_out(outcome.plan),
+        run_id=run_public_id(outcome.clarification.run_id),
+        resumed=outcome.resumed,
     )

@@ -1,0 +1,126 @@
+{
+ "events": [
+  {
+   "kind": "plan",
+   "type": "run.start"
+  },
+  {
+   "state": "provisioning",
+   "type": "run.state"
+  },
+  {
+   "state": "clarifying",
+   "type": "run.state"
+  },
+  {
+   "kind": "agent.session",
+   "type": "worker.start"
+  },
+  {
+   "status": "ok",
+   "type": "worker.result"
+  },
+  {
+   "type": "worker.end"
+  },
+  {
+   "phase": "clarify",
+   "status": "ok",
+   "task_id": "propose",
+   "type": "phase.end"
+  },
+  {
+   "state": "proposing",
+   "type": "run.state"
+  },
+  {
+   "state": "executing",
+   "task_id": "propose",
+   "type": "task.state"
+  },
+  {
+   "task_id": "propose",
+   "type": "task.start"
+  },
+  {
+   "kind": "agent.session",
+   "type": "worker.start"
+  },
+  {
+   "status": "ok",
+   "type": "worker.result"
+  },
+  {
+   "type": "worker.end"
+  },
+  {
+   "phase": "propose",
+   "status": "ok",
+   "task_id": "propose",
+   "type": "phase.end"
+  },
+  {
+   "state": "done",
+   "task_id": "propose",
+   "type": "task.state"
+  },
+  {
+   "attempt": 1,
+   "task_id": "propose",
+   "type": "task.output"
+  },
+  {
+   "state": "done",
+   "task_id": "propose",
+   "type": "task.end"
+  },
+  {
+   "type": "run.published"
+  },
+  {
+   "state": "completed",
+   "type": "run.state"
+  },
+  {
+   "exhausted": null,
+   "pr": null,
+   "state": "completed",
+   "type": "run.end"
+  }
+ ],
+ "sandbox_events": [
+  {
+   "delivery": "env-file",
+   "name": "sbxloop-<run>-agent",
+   "type": "sandbox.secret_env_fallback"
+  },
+  {
+   "mounted": true,
+   "name": "sbxloop-<run>-agent",
+   "type": "sandbox.workspace_mount"
+  },
+  {
+   "name": "sbxloop-<run>-agent",
+   "role": "agent",
+   "type": "sandbox.provision_start"
+  },
+  {
+   "name": "sbxloop-<run>-agent",
+   "role": "agent",
+   "type": "sandbox.ready"
+  },
+  {
+   "target": "<tmp>/state/runs/<run>/workspace/app",
+   "type": "sandbox.workspace_clone"
+  },
+  {
+   "type": "sandbox.languages"
+  }
+ ],
+ "states": [
+  "provisioning",
+  "clarifying",
+  "proposing",
+  "completed"
+ ]
+}

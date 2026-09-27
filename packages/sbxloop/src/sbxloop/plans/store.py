@@ -20,6 +20,7 @@ from sqlalchemy import delete, insert, select
 from sbxloop.daemon.store import DaemonStore
 from sbxloop.db.api_models import ApiEventRow
 from sbxloop.db.daemon_models import PlanNodeRow, PlanRow
+from sbxloop.engine.planning import Clarification
 from sbxloop.plans.model import (
     Drift,
     DriftChange,
@@ -131,7 +132,19 @@ def _node(row: PlanNodeRow) -> PlanNode:
         created_at=float(row.created_at),
         updated_at=float(row.updated_at),
         drift=_drift(row.drift_json),
+        generation=_generation(row.generation_json),
     )
+
+
+def _generation(raw: str | None) -> Clarification | None:
+    """A node's clarification as stored; one a later build wrote in a shape
+    this one cannot read is treated as none, never as a crash of the plan."""
+    if not raw:
+        return None
+    try:
+        return Clarification.model_validate_json(raw)
+    except ValueError:
+        return None
 
 
 def _columns(node: PlanNode) -> dict[str, Any]:
@@ -164,6 +177,7 @@ def _columns(node: PlanNode) -> dict[str, Any]:
         "drift_json": json.dumps([d.as_dict() for d in node.drift], default=str),
         "created_at": node.created_at,
         "updated_at": node.updated_at,
+        "generation_json": (None if node.generation is None else node.generation.model_dump_json()),
     }
 
 
