@@ -4360,7 +4360,9 @@
                 "diagnostics:read",
                 "collaboration:read",
                 "collaboration:write",
-                "collaboration:delegate"
+                "collaboration:delegate",
+                "plans:create",
+                "plans:publish"
               ],
               "type": "string"
             },
@@ -5309,6 +5311,38 @@
         "title": "Page[OperationOut]",
         "type": "object"
       },
+      "Page_PlanSummary_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSummary"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[PlanSummary]",
+        "type": "object"
+      },
       "Page_Profile_": {
         "properties": {
           "data": {
@@ -5589,6 +5623,971 @@
           "status"
         ],
         "title": "ParticipantOut",
+        "type": "object"
+      },
+      "PlanCreate": {
+        "additionalProperties": false,
+        "description": "A new draft plan from the form: an initiative (its home repository)\nor a lone epic (the repository it targets).",
+        "properties": {
+          "acceptance_criteria": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Criteria"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "level": {
+            "enum": [
+              "initiative",
+              "epic"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "non_goals": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Goals"
+          },
+          "repository": {
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Repository",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "level",
+          "repository"
+        ],
+        "title": "PlanCreate",
+        "type": "object"
+      },
+      "PlanDeleted": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "deleted",
+              "archived"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "outcome"
+        ],
+        "title": "PlanDeleted",
+        "type": "object"
+      },
+      "PlanForge": {
+        "additionalProperties": false,
+        "description": "The issue a published node became, as the forge last said.",
+        "properties": {
+          "number": {
+            "title": "Number",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "closed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "url"
+        ],
+        "title": "PlanForge",
+        "type": "object"
+      },
+      "PlanNodeCreate": {
+        "additionalProperties": false,
+        "description": "A new child one level under ``parent_id``. ``repository`` is for an\nepic under an initiative (the initiative's home by default); a task\nalways lives in its epic's repository. ``position`` places it among its\nsiblings (last by default).",
+        "properties": {
+          "acceptance_criteria": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Criteria"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "code",
+                  "workload"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "non_goals": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Goals"
+          },
+          "parent_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Parent Id",
+            "type": "string"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 3,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "title": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "verify_commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 30,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verify Commands"
+          },
+          "workload_profile": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload Profile"
+          }
+        },
+        "required": [
+          "title",
+          "expected_revision",
+          "parent_id"
+        ],
+        "title": "PlanNodeCreate",
+        "type": "object"
+      },
+      "PlanNodeOut": {
+        "additionalProperties": false,
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "constraints": {
+            "default": "",
+            "title": "Constraints",
+            "type": "string"
+          },
+          "context": {
+            "default": "",
+            "title": "Context",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "forge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanForge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "goal": {
+            "default": "",
+            "title": "Goal",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "code",
+                  "workload"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "level": {
+            "enum": [
+              "initiative",
+              "epic",
+              "task"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "non_goals": {
+            "default": "",
+            "title": "Non Goals",
+            "type": "string"
+          },
+          "origin": {
+            "enum": [
+              "person",
+              "planner",
+              "forge"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "proposed",
+              "approved",
+              "published"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "verify_commands": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Verify Commands",
+            "type": "array"
+          },
+          "workload_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload Profile"
+          }
+        },
+        "required": [
+          "id",
+          "position",
+          "level",
+          "repository",
+          "state",
+          "origin",
+          "title",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PlanNodeOut",
+        "type": "object"
+      },
+      "PlanNodeUpdate": {
+        "additionalProperties": false,
+        "description": "Edit a node's sections, or move it among its siblings.",
+        "properties": {
+          "acceptance_criteria": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Criteria"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "depends_on": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "code",
+                  "workload"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "non_goals": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Goals"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "verify_commands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 30,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verify Commands"
+          },
+          "workload_profile": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload Profile"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanNodeUpdate",
+        "type": "object"
+      },
+      "PlanOut": {
+        "additionalProperties": false,
+        "description": "The whole tree: the root first, then each parent's children in\norder.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Display"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "initiative",
+              "epic"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PlanNodeOut"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "rollup": {
+            "$ref": "#/components/schemas/PlanRollup"
+          },
+          "root_id": {
+            "title": "Root Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "level",
+          "repository",
+          "state",
+          "revision",
+          "root_id",
+          "created_at",
+          "updated_at",
+          "rollup",
+          "nodes"
+        ],
+        "title": "PlanOut",
+        "type": "object"
+      },
+      "PlanRollup": {
+        "additionalProperties": false,
+        "description": "How far the plan has got: its epics and tasks, how many tasks the\nforge has closed, and how many nodes are published.",
+        "properties": {
+          "epics": {
+            "default": 0,
+            "title": "Epics",
+            "type": "integer"
+          },
+          "published": {
+            "default": 0,
+            "title": "Published",
+            "type": "integer"
+          },
+          "tasks": {
+            "default": 0,
+            "title": "Tasks",
+            "type": "integer"
+          },
+          "tasks_closed": {
+            "default": 0,
+            "title": "Tasks Closed",
+            "type": "integer"
+          }
+        },
+        "title": "PlanRollup",
+        "type": "object"
+      },
+      "PlanSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Display"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "initiative",
+              "epic"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "rollup": {
+            "$ref": "#/components/schemas/PlanRollup"
+          },
+          "root_id": {
+            "title": "Root Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "level",
+          "repository",
+          "state",
+          "revision",
+          "root_id",
+          "created_at",
+          "updated_at",
+          "rollup"
+        ],
+        "title": "PlanSummary",
+        "type": "object"
+      },
+      "PlanUpdate": {
+        "additionalProperties": false,
+        "description": "Edit the plan's own sections (its root node's).",
+        "properties": {
+          "acceptance_criteria": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acceptance Criteria"
+          },
+          "constraints": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraints"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "maxLength": 16000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "non_goals": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Non Goals"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanUpdate",
         "type": "object"
       },
       "PreferenceDefinitionOut": {
@@ -6148,6 +7147,9 @@
           "labels": {
             "$ref": "#/components/schemas/RepositoryLabels"
           },
+          "planning": {
+            "$ref": "#/components/schemas/RepositoryPlanning"
+          },
           "repository": {
             "title": "Repository",
             "type": "string"
@@ -6188,7 +7190,8 @@
           "forge",
           "trigger_label",
           "workload_label",
-          "labels"
+          "labels",
+          "planning"
         ],
         "title": "Repository",
         "type": "object"
@@ -6410,6 +7413,37 @@
           "state"
         ],
         "title": "RepositoryLabels",
+        "type": "object"
+      },
+      "RepositoryPlanning": {
+        "additionalProperties": false,
+        "description": "What a plan looks like on this repository's forge (#2340):\n``native`` sub-issues, a managed ``checklist`` in the parent, or\n``unsupported`` with the reason a person reads.",
+        "properties": {
+          "hierarchy": {
+            "enum": [
+              "native",
+              "checklist",
+              "unsupported"
+            ],
+            "title": "Hierarchy",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "hierarchy"
+        ],
+        "title": "RepositoryPlanning",
         "type": "object"
       },
       "RepositoryResult": {
@@ -13229,6 +14263,458 @@
         "summary": "Get Operation",
         "tags": [
           "operations"
+        ]
+      }
+    },
+    "/v1/plans": {
+      "get": {
+        "description": "Every plan in the workspace, drafts included, most recently changed\nfirst. ``repository`` matches a plan any of whose nodes targets it.",
+        "operationId": "list_plans_v1_plans_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "repository",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repository"
+            }
+          },
+          {
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "initiative",
+                    "epic"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Level"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "draft",
+                    "published",
+                    "archived"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PlanSummary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List plans",
+        "tags": [
+          "plans"
+        ]
+      },
+      "post": {
+        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.",
+        "operationId": "create_plan_v1_plans_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Draft a plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}": {
+      "delete": {
+        "description": "A plan with nothing on the forge is deleted; one with anything\npublished is archived (its issues stay where they are).",
+        "operationId": "delete_plan_v1_plans__plan_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanDeleted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete a draft plan or archive a published one",
+        "tags": [
+          "plans"
+        ]
+      },
+      "get": {
+        "operationId": "get_plan_v1_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a plan",
+        "tags": [
+          "plans"
+        ]
+      },
+      "patch": {
+        "description": "Edit the plan's own sections (its root node's).",
+        "operationId": "update_plan_v1_plans__plan_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Edit a plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes": {
+      "post": {
+        "description": "A new child one level under ``parent_id``; the plan as it now is,\nwith the new node's id in the ``Location`` header.",
+        "operationId": "add_node_v1_plans__plan_id__nodes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanNodeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Add a node to a plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}": {
+      "delete": {
+        "description": "Remove an unpublished node and everything under it.",
+        "operationId": "remove_node_v1_plans__plan_id__nodes__node_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_revision",
+            "required": true,
+            "schema": {
+              "minimum": 1,
+              "title": "Expected Revision",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Remove a node",
+        "tags": [
+          "plans"
+        ]
+      },
+      "patch": {
+        "description": "Edit a node's sections or move it among its siblings. Editing a\nproposed or approved node makes it a draft again; a published node is\n``409 node_published``.",
+        "operationId": "update_node_v1_plans__plan_id__nodes__node_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanNodeUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Edit or move a node",
+        "tags": [
+          "plans"
         ]
       }
     },

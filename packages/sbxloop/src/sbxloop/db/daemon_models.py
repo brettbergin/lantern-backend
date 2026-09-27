@@ -526,3 +526,73 @@ class WorkspaceUsageRow(Base):
 attach_revision_trigger(WorkItemRow.__table__, "item_id")
 attach_revision_trigger(MergeGateRow.__table__, "run_id")
 attach_revision_trigger(ReviewHoldRow.__table__, "run_id")
+
+
+class PlanRow(Base):
+    """One plan (#2340): an initiative or a lone epic being broken down
+    into issues. The tree's nodes are ``daemon_plan_nodes``; the root node
+    carries the plan's own sections. Every plan is visible to the whole
+    workspace, drafts included.
+
+    ``revision`` is the plan's one counter: every write to the plan or any
+    of its nodes bumps it, and every mutating call names the revision it
+    read, so an edit made against a tree someone else has since changed is
+    refused rather than merged blind.
+    """
+
+    __tablename__ = "daemon_plans"
+    __table_args__ = (Index("idx_daemon_plans_updated", "updated_at"),)
+
+    plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
+    root_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # "active" or "archived"; a draft is a plan with nothing published.
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_by_display: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+
+
+class PlanNodeRow(Base):
+    """One node of a plan: an initiative, an epic or a task, with the
+    named sections both the forge rendering and a run's decompose read.
+    Lists (acceptance criteria, verify commands, dependencies) are JSON
+    arrays in TEXT. ``forge_*`` stay NULL until the node is published."""
+
+    __tablename__ = "daemon_plan_nodes"
+    __table_args__ = (Index("idx_daemon_plan_nodes_plan", "plan_id", "parent_id", "position"),)
+
+    node_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    plan_id: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("0"))
+    level: Mapped[str] = mapped_column(Text, nullable=False)
+    repository: Mapped[str] = mapped_column(Text, nullable=False)
+    # draft, proposed, approved or published.
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    # person, planner or forge.
+    origin: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    goal: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("''"))
+    context: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("''"))
+    acceptance_criteria_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=sql_text("'[]'")
+    )
+    kind: Mapped[str | None] = mapped_column(Text)
+    workload_profile: Mapped[str | None] = mapped_column(Text)
+    verify_commands_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=sql_text("'[]'")
+    )
+    depends_on_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=sql_text("'[]'")
+    )
+    non_goals: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("''"))
+    constraints: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("''"))
+    forge_number: Mapped[int | None] = mapped_column(Integer)
+    forge_url: Mapped[str | None] = mapped_column(Text)
+    # open or closed, as the forge last said.
+    forge_state: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)

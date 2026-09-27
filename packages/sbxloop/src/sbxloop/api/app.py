@@ -41,6 +41,7 @@ from sbxloop.api.routes import (
     items,
     meta,
     operations,
+    plans,
     push,
     runs,
     status,
@@ -192,4 +193,5 @@ def create_app(ctx: ApiContext) -> FastAPI:
     app.include_router(connections.router)
     app.include_router(workspace.router)
     app.include_router(push.router)
+    app.include_router(plans.router)
     return app

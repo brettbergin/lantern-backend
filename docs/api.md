@@ -704,6 +704,52 @@ the file still spells differently). The socket takes the same commands:
 `repository.add` (params), `repository.update` and `repository.remove`
 (target `repo_…`).
 
+### Plans
+
+Planning turns a larger effort into issues the loop can work (see the
+[spike](spikes/work-planning.md)). It is advertised as `planning` when a
+configured forge can hold a plan. A **plan** is a tree of **nodes**: an
+initiative breaks into epics, an epic into tasks. A plan starts at an
+initiative (its home repository) or at a lone epic. Every plan, drafts
+included, is shared across the workspace: `runs:read` reads every one.
+`plans:create` (members hold it) drafts and edits; `plans:publish` (admins
+and owners) publishes to the forge.
+
+| Route                                   | Body                                                         | Result                                           |
+| --------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
+| `GET /v1/plans`                         | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first  |
+| `POST /v1/plans`                        | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node               |
+| `GET /v1/plans/{id}`                    | none                                                         | `200`, the plan and every node                   |
+| `PATCH /v1/plans/{id}`                  | `{expected_revision, …sections}`                             | `200`, the root node's sections edited           |
+| `DELETE /v1/plans/{id}`                 | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`         |
+| `POST /v1/plans/{id}/nodes`             | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node   |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`  | `{expected_revision, position?, …sections}`                  | `200`, the plan                                  |
+| `DELETE /v1/plans/{id}/nodes/{node_id}` | `?expected_revision=`                                        | `200`, the plan without the node and its subtree |
+
+A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
+list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
+`workload`), `workload_profile` (a configured profile, workload tasks only),
+`verify_commands` (code tasks only) and `depends_on` (sibling task ids, never
+a cycle). A child is always one level down; an epic may target any
+plannable repository (its initiative's home by default), and a task lives in
+its epic's. A node's `state` is `draft`, `proposed` (the planner wrote it
+and nobody has touched it), `approved` or `published`; editing a proposed or
+approved node makes it a draft again, and a published node carries `forge: {number, url, state}` and is `409 node_published` here. A plan's `state` is
+`draft` until something of it is published, then `published`; deleting a
+published plan archives it (its issues stay) rather than deleting it. Every
+summary carries a `rollup`: epics, tasks, tasks the forge has closed, and
+published nodes.
+
+Every mutation names the plan's `revision` it read as `expected_revision`;
+any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
+says that before anyone types: `planning: {hierarchy, reason}`, where
+`hierarchy` is `native` (GitHub sub-issues), `checklist` (GitLab: level
+labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
+repository's forge can't hold plans: Gitea is not supported"). Changes emit
+`plan.created` `{plan_id, level, repository}` and `plan.node.changed`
+`{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
+`deleted`).
+
 ### Workspace people
 
 A workspace holds owners, admins and members. These routes are advertised as
@@ -1148,6 +1194,8 @@ Rules a client can rely on:
 | `collaboration:read`     | Local profile, agent/team catalogs, channels, messages, preferences, workflows, connections |
 | `collaboration:write`    | Local profile, teams, channels, preferences, and workflow mutations                         |
 | `collaboration:delegate` | Accept a conversational or delegated channel turn                                           |
+| `plans:create`           | Draft plans and edit their unpublished nodes                                                |
+| `plans:publish`          | Publish a plan level to the forge, edit published nodes, run an epic                        |
 
 A refusal names the capability it needed (`403 forbidden` with
 `"capability"`), before the target is looked at.
@@ -1178,7 +1226,8 @@ not remove them within a contract version.
 Every id is opaque and stable; none is an issue number, a host path or an
 `owner/name`. `itm_…` a work item, `run_…` a run, `repo_…` a configured
 repository, `gate_…` a merge or publication gate, `op_…` an operation,
-`str_…` a steering record, `art_…` an artifact, `evt_<n>` an event (and the
+`str_…` a steering record, `art_…` an artifact, `plan_…` a plan and
+`node_…` one of its nodes, `evt_<n>` an event (and the
 cursor into the chronology), `cli_…` a client. An unknown id of any kind is
 a plain `404 not_found`. Each resource carries `workspace_id` (`"local"` on
 a single installation), RFC 3339 UTC timestamps, `available_actions` (what
@@ -1252,6 +1301,8 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | \`/v1/schedules\[/{name}/pause               | resume\]\`             | `daemon:manage`                                                       |
 | `DELETE` | `/v1/schedules/{name}`                       | `daemon:manage`        | Remove                                                                |
 | `GET`    | `/v1/logs`, `/v1/configuration`              | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance |
+| `GET`    | `/v1/plans[/{id}]`                           | `runs:read`            | Plans and their nodes, drafts included                                |
+| CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`       | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes               |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

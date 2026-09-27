@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+**Plans can be drafted and read over the API.** `/v1/plans` stores an
+initiative or a lone epic as a tree of nodes in the daemon's store (a new
+migration) and serves list, create, read, edit and delete, with node add,
+edit, move and remove. Every plan, drafts included, is readable with
+`runs:read`; two new principal capabilities gate the rest: `plans:create`
+(members hold it) and `plans:publish` (admins and owners). Every mutation
+takes `expected_revision` and a stale one is refused. `GET /v1/capabilities`
+lists `planning` when a configured forge can hold a plan, and every
+repository says how: `planning.hierarchy` is `native`, `checklist` or
+`unsupported` with the reason. (#2340)
+
 **The forge layer can rewrite an issue and link a child under a parent.**
 Both backends answer `issue_update` (title and/or body, only the fields
 given). GitHub gains `sub_issue_add`, `sub_issue_remove` and

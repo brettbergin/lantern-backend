@@ -78,6 +78,8 @@ from sbxloop.daemon.controls.service import ControlService
 from sbxloop.daemon.controls.steering import stop_command
 from sbxloop.errors import ToolRejectedError
 from sbxloop.log import get_logger
+from sbxloop.plans import PlanService
+from sbxloop.plans.store import PlanStore
 
 if TYPE_CHECKING:
     from sbxloop.api.auth.oidc import OidcProvider
@@ -384,6 +386,7 @@ class ApiContext:
         self._oidc: tuple[Any, Any] | None = None
         self._guardrails: Guardrails | None = None
         self._push: PushService | None = None
+        self._plans: PlanService | None = None
         #: The HTTP transport the push relay is reached through; ``None``
         #: is the network. A test mounts its fake relay here.
         self.relay_transport: Any = None
@@ -637,6 +640,13 @@ class ApiContext:
                 pool=getattr(self.loop, "usage_pool", None),
             )
         return self._guardrails
+
+    @property
+    def plans(self) -> PlanService:
+        """Plans and their nodes (#2340), over the daemon's store."""
+        if self._plans is None:
+            self._plans = PlanService(PlanStore(self.loop.dstore), lambda: self.config)
+        return self._plans
 
     @property
     def push(self) -> PushService:

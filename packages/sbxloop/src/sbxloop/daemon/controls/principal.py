@@ -39,6 +39,8 @@ Capability = Literal[
     "collaboration:read",
     "collaboration:write",
     "collaboration:delegate",
+    "plans:create",
+    "plans:publish",
 ]
 
 #: Every capability, in the order the spike lists them.
@@ -55,9 +57,10 @@ ROLES: tuple[Role, ...] = get_args(Role)
 
 #: What an API client holds by virtue of its user's workspace role. An
 #: owner holds everything. An admin holds everything except managing
-#: credentials. A member may read and steer runs, ask for new work and take
-#: part in collaboration; run artifacts, controls, gates, budgets, daemon
-#: management, credentials, audit and diagnostics stay with admins. (The
+#: credentials. A member may read and steer runs, ask for new work, take
+#: part in collaboration and draft plans (``plans:create``); run artifacts,
+#: controls, gates, budgets, daemon management, credentials, audit,
+#: diagnostics and publishing plans to the forge stay with admins. (The
 #: artifact routes still let a member read the files of a run a channel
 #: they can read asked for: see ``api/routes/artifacts.py``.)
 ROLE_CAPABILITIES: dict[Role, frozenset[Capability]] = {
@@ -71,6 +74,7 @@ ROLE_CAPABILITIES: dict[Role, frozenset[Capability]] = {
             "collaboration:read",
             "collaboration:write",
             "collaboration:delegate",
+            "plans:create",
         }
     ),
 }

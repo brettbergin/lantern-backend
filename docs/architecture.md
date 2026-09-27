@@ -2474,6 +2474,19 @@ right to approve a gate. Delivery never runs on a request thread; retries
 back off exponentially (honouring `Retry-After`), a `410` forgets the
 device and a `400` drops the push. The relay only ever sees references.
 
+**Plans (#2340).** `plans/` holds planning's domain: `model.py` the plan
+and node shapes, `store.py` the `daemon_plans` / `daemon_plan_nodes` rows
+beside items and runs, `hierarchy.py` what each forge can hold (from the
+backend's `sub_issues` capability, so it is a policy per forge, never a
+probe), and `service.py` the rules every surface goes through: one level at
+a time, a task in its epic's repository, dependencies between siblings
+without a cycle, published nodes left to the forge. A write is one
+transaction that checks the plan's single `revision`, applies the node
+upserts and deletes, bumps the revision and records its `plan.*` events in
+`api_events`, so a client that sees the event reads the change. The API
+routes (`api/routes/plans.py`) only translate; the planner, publishing and
+epic runs call the same service.
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

@@ -11,6 +11,7 @@ from sbxloop.api.context import PAGE_DEFAULT, PAGE_MAX, ApiContext
 from sbxloop.api.models import Capabilities, Limits, Me, Retention, rfc3339
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import CAPABILITIES
+from sbxloop.plans.hierarchy import planning_available
 
 router = APIRouter(prefix="/v1", tags=["meta"])
 
@@ -91,6 +92,8 @@ def features(config: Config) -> list[str]:
             served.append("auth.oidc.native")
     if config.push.available:
         served.append("push.apns_relay")
+    if planning_available(config):
+        served.append("planning")
     return served
 
 
