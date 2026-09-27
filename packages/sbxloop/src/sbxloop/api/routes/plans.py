@@ -11,14 +11,16 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from sbxloop.api.auth.deps import Authenticated, get_ctx, require
+from sbxloop.api.commands import idempotency, replayed_problem
 from sbxloop.api.context import ApiContext
 from sbxloop.api.errors import Problem
 from sbxloop.api.models import rfc3339
 from sbxloop.api.pagination import Page
 from sbxloop.api.plan_schemas import (
+    PlanApprove,
     PlanCreate,
     PlanDeleted,
     PlanForge,
@@ -26,9 +28,18 @@ from sbxloop.api.plan_schemas import (
     PlanNodeOut,
     PlanNodeUpdate,
     PlanOut,
+    PlanPublish,
+    PlanPublished,
+    PlanPublishResult,
     PlanRollup,
     PlanSummary,
     PlanUpdate,
+)
+from sbxloop.daemon.controls.operations import (
+    IdempotencyConflict,
+    Operation,
+    OperationSpec,
+    OperationStore,
 )
 from sbxloop.plans import Plan, PlanNode, PlanRefusal
 from sbxloop.plans.service import SECTIONS
@@ -326,3 +337,173 @@ async def remove_node(
         raise _problem(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/approve",
+    response_model=PlanOut,
+    summary="Approve a node's children",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+)
+async def approve_children(
+    plan_id: str,
+    node_id: str,
+    body: PlanApprove,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanOut:
+    """A person's "this is right": the node's draft and proposed children —
+    every one, or those ``node_ids`` names — become ``approved``, ready to
+    publish."""
+    try:
+        plan = await ctx.call(
+            ctx.plans.approve,
+            plan_id,
+            node_id,
+            expected_revision=body.expected_revision,
+            node_ids=body.node_ids,
+            now=ctx.clock(),
+            actor=_actor(auth),
+        )
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    ctx.hub.notify()
+    return plan_out(plan)
+
+
+PUBLISH_ACTION = "plan.publish"
+
+
+def _published(
+    plan: Plan, results: list[dict[str, Any]], op_id: str, *, replayed: bool
+) -> PlanPublished:
+    return PlanPublished(
+        plan=plan_out(plan),
+        results=[PlanPublishResult(**r) for r in results],
+        operation_id=op_id,
+        replayed=replayed,
+    )
+
+
+def _replay(ctx: ApiContext, plan_id: str, op: Operation) -> PlanPublished:
+    """An earlier call under the same key: its results and the plan as it
+    is now, or the refusal it recorded, or ``409`` while it still runs."""
+    if op.state == "failed" and op.result and "status" in op.result:
+        raise Problem(
+            int(op.result["status"]),
+            op.error_code or "failed",
+            op.error_detail or "the earlier attempt was refused",
+            **dict(op.result.get("extra") or {}),
+            operation_id=op.id,
+        )
+    problem = replayed_problem(op)
+    if problem is not None:
+        raise problem
+    try:
+        plan = ctx.plans.get(plan_id)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    return _published(plan, list((op.result or {}).get("results") or []), op.id, replayed=True)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/publish",
+    response_model=PlanPublished,
+    summary="Publish a node's level to the forge",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
+)
+async def publish_children(
+    plan_id: str,
+    node_id: str,
+    body: PlanPublish,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> PlanPublished:
+    """Write the node's approved children — and the node itself first when
+    it is not on the forge yet — as issues with their level label and the
+    ``sbx-plan`` marker, linked under their parent. Never the trigger or
+    the workload label. A node that fails is reported and left as it was;
+    repeating the call resumes and duplicates nothing. The
+    ``Idempotency-Key`` header is required: a replay answers the same
+    results, a different body under the same key is ``409
+    idempotency_conflict``."""
+    principal = auth.principal
+    pair = idempotency(
+        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/publish", required=True
+    )
+    actor = _actor(auth)
+
+    def run() -> PlanPublished:
+        store = getattr(ctx.loop, "operations", None)
+        if not isinstance(store, OperationStore):
+            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+        spec = OperationSpec(
+            action=PUBLISH_ACTION,
+            target_kind="plan",
+            target_key=plan_id,
+            principal=principal,
+            request={
+                "plan_id": plan_id,
+                "node_id": node_id,
+                "expected_revision": body.expected_revision,
+            },
+            idempotency=pair,
+            expected_revision=body.expected_revision,
+        )
+        try:
+            op, created = store.accept(spec, ctx.clock())
+        except IdempotencyConflict as exc:
+            raise Problem(
+                409,
+                "idempotency_conflict",
+                "the idempotency key was already used with a different request",
+                operation_id=exc.existing.id,
+            ) from exc
+        if not created:
+            return _replay(ctx, plan_id, op)
+        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
+        forge = ctx.loop.github
+        try:
+            level = ctx.plans.publish(
+                plan_id,
+                node_id,
+                expected_revision=body.expected_revision,
+                forge_kind=None if forge is None else str(forge.kind),
+                connect=lambda: forge.call(lambda ops: ops),
+                clock=ctx.clock,
+                actor=actor,
+            )
+        except PlanRefusal as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                result={"status": exc.status, "extra": exc.extra},
+                error_code=exc.code,
+                error_detail=exc.detail,
+            )
+            raise Problem(
+                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
+            ) from exc
+        except Exception as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                error_code="crashed",
+                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+            )
+            raise
+        results = [r.as_dict() for r in level.results]
+        store.finish(
+            op.id,
+            ctx.clock(),
+            state="succeeded",
+            result={"results": results, "revision": level.plan.revision},
+        )
+        return _published(level.plan, results, op.id, replayed=False)
+
+    published = await ctx.call(run)
+    ctx.hub.notify()
+    return published

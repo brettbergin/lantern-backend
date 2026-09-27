@@ -7,7 +7,9 @@ after publish the forge is the record. Every plan, drafts included, is
 visible to anyone in the workspace who may read runs.
 
 :mod:`~sbxloop.plans.model` holds the shapes, :mod:`~sbxloop.plans.store`
-the rows, :mod:`~sbxloop.plans.hierarchy` what each forge can hold, and
+the rows, :mod:`~sbxloop.plans.hierarchy` what each forge can hold,
+:mod:`~sbxloop.plans.render` a node as its issue body,
+:mod:`~sbxloop.plans.publish` the walk that writes a level to the forge, and
 :mod:`~sbxloop.plans.service` the rules every surface goes through.
 """
 

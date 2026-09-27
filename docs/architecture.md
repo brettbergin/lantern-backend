@@ -2494,6 +2494,26 @@ upserts and deletes, bumps the revision and records its `plan.*` events in
 routes (`api/routes/plans.py`) only translate; the planner, publishing and
 epic runs call the same service.
 
+Publishing a level (#2341) is split three ways. `render.py` turns a node
+into its issue body — the sections as markdown headings, then the
+`<!-- sbx-plan: <plan_id>/<node_id> -->` marker — and is pure.
+`publish.py` walks the level through `IssueOps`: the node first when it is
+not on the forge, then its approved children in dependency order; each is
+looked for by marker among the repository's issues under its level label,
+created with that label on the create (so an issue of ours is never
+unlabelled, and the lookup always finds it), linked by sub-issue or by the
+managed checklist (`vcs/checklist.py`) as `hierarchy.py` says, and recorded
+`published` in its own store write, so a walk that dies part-way resumes
+where it stopped and duplicates nothing. A failure is reported per node
+and stops only what hangs off it. `PlanService.publish` holds the refusals
+(cap, dependencies, repository enabled, forge able and matching the
+daemon's connection) checked before the forge is touched, allows one walk
+per plan at a time, and records `plan.published` with the result. The
+route records the call as a `plan.publish` operation, so its
+`Idempotency-Key` replays the recorded results and `reconcile_operations`
+settles one the daemon died during as `failed` — safe, since publishing
+again resumes it.
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

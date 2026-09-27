@@ -716,16 +716,18 @@ included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
 and owners) publishes to the forge.
 
-| Route                                   | Body                                                         | Result                                           |
-| --------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
-| `GET /v1/plans`                         | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first  |
-| `POST /v1/plans`                        | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node               |
-| `GET /v1/plans/{id}`                    | none                                                         | `200`, the plan and every node                   |
-| `PATCH /v1/plans/{id}`                  | `{expected_revision, …sections}`                             | `200`, the root node's sections edited           |
-| `DELETE /v1/plans/{id}`                 | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`         |
-| `POST /v1/plans/{id}/nodes`             | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node   |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`  | `{expected_revision, position?, …sections}`                  | `200`, the plan                                  |
-| `DELETE /v1/plans/{id}/nodes/{node_id}` | `?expected_revision=`                                        | `200`, the plan without the node and its subtree |
+| Route                                         | Body                                                         | Result                                           |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
+| `GET /v1/plans`                               | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first  |
+| `POST /v1/plans`                              | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node               |
+| `GET /v1/plans/{id}`                          | none                                                         | `200`, the plan and every node                   |
+| `PATCH /v1/plans/{id}`                        | `{expected_revision, …sections}`                             | `200`, the root node's sections edited           |
+| `DELETE /v1/plans/{id}`                       | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`         |
+| `POST /v1/plans/{id}/nodes`                   | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node   |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`        | `{expected_revision, position?, …sections}`                  | `200`, the plan                                  |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`       | `?expected_revision=`                                        | `200`, the plan without the node and its subtree |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve` | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved     |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish` | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`    |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -749,7 +751,53 @@ labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
 repository's forge can't hold plans: Gitea is not supported"; or `[planning] enabled = false` for it: "planning is off for this repository"). Changes emit
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
-`deleted`).
+`deleted`, `approved` with `node_ids`, `published` with `number`).
+
+**Approving and publishing a level (#2341).** `approve` (`plans:create`) is
+a person's "this is right": the node's `draft` and `proposed` children —
+every one, or those `node_ids` names (a name that is not a child is `422`) —
+become `approved`; with none left to approve it is `422`. `publish`
+(`plans:publish`) writes one level to the forge: the node's `approved`
+children, and the node itself first when it is not on the forge yet (the
+root of a fresh plan). Children that are not approved are not published.
+Each node, in dependency order, is looked for by its marker
+`<!-- sbx-plan: <plan_id>/<node_id> -->` among the repository's issues
+carrying its level label (open or closed, every page), created when absent
+with its sections rendered as markdown headings (Goal, Context, Acceptance
+criteria as a checkbox list, Kind, Verify commands as a code block, Depends
+on as issue references, Non-goals, Constraints) and the marker at the foot,
+with its level label (`sbx:initiative`, `sbx:epic`, `sbx:task`) on the
+create itself — never the trigger or the workload label, so a published
+task is inert until a person starts it. It is linked under its parent: a
+native sub-issue on GitHub (one already linked is not linked twice), a line
+in the parent's managed checklist on GitLab. A cross-repository sub-issue
+GitHub refuses falls back to the checklist, and the node's result names why
+in `reason` (**field-unverified**: whether a GitHub App installation that
+does not cover both repositories refuses). Then the node is recorded
+`published` with `forge: {number, url, state}` — one write per node, so a
+walk that dies part-way resumes where it stopped.
+
+Each result is `{node_id, outcome, number?, url?, linked, error?, reason?}`:
+`outcome` is `created`, `found` (an earlier, interrupted attempt created
+it) or `failed` with the forge's words in `error`; `linked` is `native`,
+`checklist` or `none` (the root). A failed node stays as it was, and the
+nodes under it or depending on it are reported failed without being
+attempted; repeating the call resumes and duplicates nothing. The level is
+refused before the forge is touched when the node is a task (`422`), is
+not the root and not yet on the forge (`409 parent_unpublished`), has no
+approved children left and is already published (`409 nothing_to_publish`),
+would hold more children than `[planning] max_epics_per_initiative` or
+`max_tasks_per_epic` (`409 too_many_children` with `cap`), or has a child
+depending on a sibling that is neither published nor approved (`409 dependency_unpublished` naming them, with `node_ids`); when a repository
+involved is disabled (`409 repository_disabled`), cannot hold a plan (`409 planning_unsupported` with the reason — Gitea), or lives on another forge
+than the daemon's connection (`409 forge_mismatch`); and with no forge
+connection at all (`503 source_unavailable`). One plan publishes one level
+at a time (`409 already_in_progress`). The `Idempotency-Key` header is
+required (`422 idempotency_key_required`): a replay answers the recorded
+results with the plan as it is now and `replayed: true`, or the refusal it
+recorded; a different body under the same key is `409 idempotency_conflict`. A publish the daemon died during is settled `failed`
+(`interrupted_before_effect`) at the next start; publishing again resumes
+it. Each call records `plan.published` `{plan_id, node_id, published, failed}` (node ids) with its result.
 
 ### Workspace people
 
@@ -1304,6 +1352,8 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/logs`, `/v1/configuration`              | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance |
 | `GET`    | `/v1/plans[/{id}]`                           | `runs:read`            | Plans and their nodes, drafts included                                |
 | CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`       | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes               |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`     | `plans:create`         | Approve a node's draft and proposed children                          |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`     | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required            |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

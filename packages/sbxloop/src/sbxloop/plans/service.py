@@ -10,15 +10,19 @@ edited here, and every mutation names the revision it read.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
-from sbxloop.plans.hierarchy import repository_planning_for
+from sbxloop.errors import SbxloopError
+from sbxloop.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from sbxloop.plans.model import Level, Plan, PlanNode, child_level
+from sbxloop.plans.publish import LevelResult, level_targets, publish_level
 from sbxloop.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision, new_id
+from sbxloop.vcs.protocol import IssueOps
 
 #: The sections a person may set on a node, as the API and the store name
 #: them. ``title`` is required on create.
@@ -66,6 +70,10 @@ class PlanService:
     def __init__(self, store: PlanStore, config: Callable[[], Config]) -> None:
         self.store = store
         self._config = config
+        # Plans being published now: two walks of one plan at once would
+        # both miss the other's issues and create them twice.
+        self._publishing: set[str] = set()
+        self._publishing_lock = threading.Lock()
 
     # -- reads ----------------------------------------------------------------
 
@@ -356,7 +364,249 @@ class PlanService:
             )
         return "archived"
 
+    def approve(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        node_ids: Sequence[str] | None,
+        now: float,
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """A person's "this is right": ``node_id``'s draft and proposed
+        children — all of them, or the ones named — become ``approved``,
+        ready to publish."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._node(plan, node_id)
+        children = plan.children(node.id)
+        chosen = children
+        if node_ids is not None:
+            wanted = set(node_ids)
+            unknown = sorted(wanted - {c.id for c in children})
+            if unknown:
+                raise PlanRefusal(
+                    422,
+                    "invalid_argument",
+                    f"not children of {node.id}: {', '.join(unknown)}",
+                    node_ids=unknown,
+                )
+            chosen = [c for c in children if c.id in wanted]
+        approved = [
+            replace(c, state="approved", updated_at=now)
+            for c in chosen
+            if c.state in ("draft", "proposed")
+        ]
+        if not approved:
+            raise PlanRefusal(
+                422,
+                "invalid_argument",
+                f"nothing to approve: no draft or proposed children of {node.id}",
+            )
+        return self._write(
+            plan,
+            expected_revision,
+            now,
+            upsert=approved,
+            events=[
+                PlanEvent(
+                    "plan.node.changed",
+                    {
+                        "plan_id": plan.id,
+                        "node_id": node.id,
+                        "change": "approved",
+                        "node_ids": [c.id for c in approved],
+                    },
+                )
+            ],
+            actor=actor,
+        )
+
+    def publish(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> LevelResult:
+        """Publish ``node_id``'s level: its approved children, and the node
+        first when it is not on the forge yet (see
+        :mod:`~sbxloop.plans.publish`). Everything that would refuse the
+        level is checked before the forge is touched; ``forge_kind`` is the
+        forge the daemon's connection speaks (``None``: it has none), and
+        ``connect`` opens it. Records ``plan.published`` with the result."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._node(plan, node_id)
+        self._check_level(plan, node)
+        targets = level_targets(plan, node.id)
+        repos = list(dict.fromkeys([node.repository, *(t.repository for t in targets)]))
+        for repo in repos:
+            self._check_publishable(repo, forge_kind)
+        self._check_cap(plan, node, targets)
+        self._check_dependencies_published(plan, node, targets)
+        if forge_kind is None:
+            raise PlanRefusal(503, "source_unavailable", "the daemon has no forge connection")
+        with self._publishing_lock:
+            if plan.id in self._publishing:
+                raise PlanRefusal(
+                    409, "already_in_progress", "this plan is being published right now"
+                )
+            self._publishing.add(plan.id)
+        try:
+            try:
+                ops = connect()
+            except SbxloopError as exc:
+                raise PlanRefusal(
+                    503, "source_unavailable", f"could not reach the forge: {exc}"
+                ) from exc
+            result = publish_level(
+                ops,
+                store=self.store,
+                config=self._config(),
+                plan=plan,
+                node_id=node.id,
+                clock=clock,
+                actor=actor,
+            )
+            self.store.note(
+                plan.id,
+                now=clock(),
+                events=[
+                    PlanEvent(
+                        "plan.published",
+                        {
+                            "plan_id": plan.id,
+                            "node_id": node.id,
+                            "published": result.published,
+                            "failed": result.failed,
+                        },
+                    )
+                ],
+                actor=dict(actor),
+            )
+            return result
+        finally:
+            with self._publishing_lock:
+                self._publishing.discard(plan.id)
+
     # -- the rules ------------------------------------------------------------
+
+    @staticmethod
+    def _check_level(plan: Plan, node: PlanNode) -> None:
+        """A level publishes under a node that is on the forge, or is the
+        plan's root; there must be something to write."""
+        if node.level == "task":
+            raise PlanRefusal(422, "invalid_argument", "a task has no children to publish")
+        if node.state != "published" and node.parent_id is not None:
+            parent = plan.node(node.parent_id)
+            raise PlanRefusal(
+                409,
+                "parent_unpublished",
+                f"{node.title} is not on the forge yet: publish "
+                f"{parent.title if parent else node.parent_id}'s level first",
+                parent_id=node.parent_id,
+            )
+        if node.state == "published" and not any(
+            c.state == "approved" for c in plan.children(node.id)
+        ):
+            raise PlanRefusal(
+                409,
+                "nothing_to_publish",
+                f"no approved children of {node.title} are waiting to be published",
+            )
+
+    def _check_publishable(self, repo: str, forge_kind: str | None) -> None:
+        """``repo`` is configured, enabled, can hold a plan, and lives on
+        the forge the daemon's connection speaks."""
+        config = self._config()
+        entry = config.find_repo(repo)
+        if entry is None:
+            raise PlanRefusal(
+                422,
+                "unknown_repository",
+                f"{repo} is not a repository configured on this server",
+                repository=repo,
+            )
+        if not entry.enabled:
+            raise PlanRefusal(
+                409,
+                "repository_disabled",
+                f"{entry.repo} is disabled on this server",
+                repository=entry.repo,
+            )
+        planning = repository_planning_for(config, entry.repo)
+        if not planning.supported:
+            raise PlanRefusal(
+                409,
+                "planning_unsupported",
+                planning.reason or "this repository's forge can't hold plans",
+                repository=entry.repo,
+            )
+        kind = str(config.vcs_kind_for(entry.repo))
+        if forge_kind is not None and kind != forge_kind:
+            raise PlanRefusal(
+                409,
+                "forge_mismatch",
+                f"{entry.repo} is on {FORGE_NAMES.get(kind, kind)}, but this server's forge "
+                f"connection speaks {FORGE_NAMES.get(forge_kind, forge_kind)}",
+                repository=entry.repo,
+            )
+
+    def _check_cap(self, plan: Plan, node: PlanNode, targets: Sequence[PlanNode]) -> None:
+        """The level stays within ``[planning]``'s cap on one parent."""
+        planning = self._config().planning_for(node.repository)
+        cap, key = (
+            (planning.max_epics_per_initiative, "max_epics_per_initiative")
+            if node.level == "initiative"
+            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
+        )
+        going = {t.id for t in targets}
+        children = [c for c in plan.children(node.id) if c.state == "published" or c.id in going]
+        if len(children) > cap:
+            raise PlanRefusal(
+                409,
+                "too_many_children",
+                f"{node.title} would have {len(children)} children on the forge; "
+                f"[planning] {key} is {cap}",
+                cap=cap,
+                children=len(children),
+            )
+
+    @staticmethod
+    def _check_dependencies_published(
+        plan: Plan, node: PlanNode, targets: Sequence[PlanNode]
+    ) -> None:
+        """Every dependency of a child being published is on the forge or
+        published now, so its reference can be written."""
+        going = {t.id for t in targets}
+        missing: dict[str, list[str]] = {}
+        for child in targets:
+            if child.id == node.id:
+                continue
+            for dep in child.depends_on:
+                sibling = plan.node(dep)
+                if dep in going or (sibling is not None and sibling.state == "published"):
+                    continue
+                missing.setdefault(child.id, []).append(dep)
+        if missing:
+            named = "; ".join(
+                f"{_title(plan, child)} depends on " + ", ".join(_title(plan, dep) for dep in deps)
+                for child, deps in missing.items()
+            )
+            raise PlanRefusal(
+                409,
+                "dependency_unpublished",
+                f"approve what these depend on, or leave them out: {named}",
+                node_ids=sorted(missing),
+            )
 
     def _repository(self, name: str) -> str:
         """The configured spelling of ``name``, refused when it is not a
@@ -520,6 +770,11 @@ def _node_changed(plan_id: str, node_id: str, change: str) -> PlanEvent:
     return PlanEvent(
         "plan.node.changed", {"plan_id": plan_id, "node_id": node_id, "change": change}
     )
+
+
+def _title(plan: Plan, node_id: str) -> str:
+    node = plan.node(node_id)
+    return node.title if node is not None else node_id
 
 
 def _deleted(plan_id: str) -> dict[str, Any]:

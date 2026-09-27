@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+**An approved plan level can be published to the forge, and publishing it
+again never duplicates an issue.** `POST /v1/plans/{id}/nodes/{node_id}/approve`
+(`plans:create`) marks a node's draft and proposed children approved.
+`POST .../publish` (`plans:publish`, `Idempotency-Key` required) writes the
+approved children — and a fresh plan's root first — as issues: the node's
+sections rendered as markdown headings, the level label (never the trigger
+or workload label, so a published task waits for a person), the
+`<!-- sbx-plan: plan/node -->` marker, and a link under the parent (a
+GitHub sub-issue, or a line in the GitLab parent's managed checklist; a
+cross-repository sub-issue GitHub refuses falls back to the checklist and
+says why). Each node is recorded as it lands and looked for by its marker
+before it is created, so an interrupted publish resumes where it stopped.
+The answer carries the plan and a result per node (`created`, `found` or
+`failed` with the forge's words). A level with more children than
+`[planning]` allows, a dependency that is not being published, a disabled
+repository, a forge that cannot hold a plan (Gitea, named) or a repository
+on another forge than the daemon's connection is refused before anything
+is written. Each publish records `plan.published`. (#2341)
+
 **A parent issue on GitLab can list its children in a managed checklist.**
 `vcs/checklist.py` keeps one block between `<!-- sbx-plan:children -->`
 markers in a parent's description, one `- [ ] group/project#N title` line
