@@ -132,3 +132,45 @@ class PlanNodeUpdate(TaskSections):
 class PlanDeleted(ApiModel):
     id: str
     outcome: Literal["deleted", "archived"]
+
+
+class PlanApprove(ApiModel):
+    """Approve a node's draft and proposed children: every one, or the ones
+    ``node_ids`` names."""
+
+    expected_revision: int = Field(ge=1)
+    node_ids: list[str] | None = Field(default=None, max_length=100)
+
+
+class PlanPublish(ApiModel):
+    """Publish a node's level. The ``Idempotency-Key`` header is required."""
+
+    expected_revision: int = Field(ge=1)
+
+
+class PlanPublishResult(ApiModel):
+    """What publishing did with one node: ``created`` its issue, ``found``
+    the one an earlier attempt created (by its marker), or ``failed`` with
+    the forge's words in ``error`` (the node stays as it was, and repeating
+    the publish resumes it). ``linked`` is how it sits under its parent;
+    ``reason`` says why a native link became a checklist line."""
+
+    node_id: str
+    outcome: Literal["created", "found", "failed"]
+    number: int | None = None
+    url: str | None = None
+    linked: Literal["native", "checklist", "none"] = "none"
+    error: str | None = None
+    reason: str | None = None
+
+
+class PlanPublished(ApiModel):
+    """The plan as it now is, and what happened to each node published.
+    ``replayed`` is true when the answer is a replay of an earlier call
+    under the same ``Idempotency-Key`` (its results, the plan as it is
+    now)."""
+
+    plan: PlanOut
+    results: list[PlanPublishResult]
+    operation_id: str | None = None
+    replayed: bool = False

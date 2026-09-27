@@ -68,6 +68,7 @@ EFFECTS: dict[str, str] = {
     "schedule.resume": "the schedule fires again",
     "daemon.stop": "the graceful stop is committed and signalled",
     "daemon.restart": "the restart is committed and signalled",
+    "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
 }
 
 
@@ -599,6 +600,15 @@ def _judge(
         if (op.action == "daemon.pause") == held:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the hold did not survive the restart"
+    if op.action == "plan.publish":
+        # Each node is recorded as it lands and found again by its marker,
+        # so what the walk left is safe to repeat under a new key.
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the publish was interrupted; publishing the level again resumes it "
+            "without duplicating an issue",
+        )
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:

@@ -289,6 +289,10 @@ class FakeGithub(GithubOps):
         # parent, as GitHub allows only one.
         self.sub_issues: dict[tuple[str, int], list[tuple[str, int]]] = {}
         self.sub_issue_parent: dict[tuple[str, int], tuple[str, int]] = {}
+        # A credential that cannot link across repositories (#2341): a
+        # GitHub App installation covering only one of the two answers a
+        # cross-repository sub-issue with a 403 (field-unverified shape).
+        self.refuse_cross_repo_sub_issues = False
         self.resolved: list[str] = []
         self._comment_id = 0
         self._commits = 0
@@ -922,6 +926,16 @@ class FakeGithub(GithubOps):
             )
         child = (located[0], int(located[1]["number"]))
         if method == "POST" and path.endswith("/sub_issues"):
+            self._maybe_fail("sub_issue_add")
+            if self.refuse_cross_repo_sub_issues and child[0].casefold() != repo.casefold():
+                raise self._failed(
+                    "raw.api",
+                    method,
+                    path,
+                    403,
+                    f"github op raw.api failed: GithubOpError: gh api POST {path} failed (rc=1): "
+                    "Resource not accessible by integration (HTTP 403)",
+                )
             if child in self.sub_issue_parent:
                 raise self._failed(
                     "raw.api",

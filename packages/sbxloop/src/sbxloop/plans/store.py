@@ -269,6 +269,23 @@ class PlanStore:
             raise PlanGone(plan_id)
         return changed
 
+    def note(
+        self,
+        plan_id: str,
+        *,
+        now: float,
+        events: Sequence[PlanEvent],
+        actor: dict[str, Any] | None = None,
+    ) -> None:
+        """Record events about a plan that change none of its rows (a
+        level's publish summary, after each node was written as it
+        landed): the revision stays where it is."""
+        with self.dstore.transaction() as session:
+            if session.get(PlanRow, plan_id) is None:
+                raise PlanGone(plan_id)
+            for event in events:
+                _event(session, event, now, actor)
+
     def delete(
         self,
         plan_id: str,

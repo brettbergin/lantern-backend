@@ -5625,6 +5625,37 @@
         "title": "ParticipantOut",
         "type": "object"
       },
+      "PlanApprove": {
+        "additionalProperties": false,
+        "description": "Approve a node's draft and proposed children: every one, or the ones\n``node_ids`` names.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "node_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Ids"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanApprove",
+        "type": "object"
+      },
       "PlanCreate": {
         "additionalProperties": false,
         "description": "A new draft plan from the form: an initiative (its home repository)\nor a lone epic (the repository it targets).",
@@ -6374,6 +6405,139 @@
           "nodes"
         ],
         "title": "PlanOut",
+        "type": "object"
+      },
+      "PlanPublish": {
+        "additionalProperties": false,
+        "description": "Publish a node's level. The ``Idempotency-Key`` header is required.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanPublish",
+        "type": "object"
+      },
+      "PlanPublishResult": {
+        "additionalProperties": false,
+        "description": "What publishing did with one node: ``created`` its issue, ``found``\nthe one an earlier attempt created (by its marker), or ``failed`` with\nthe forge's words in ``error`` (the node stays as it was, and repeating\nthe publish resumes it). ``linked`` is how it sits under its parent;\n``reason`` says why a native link became a checklist line.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "linked": {
+            "default": "none",
+            "enum": [
+              "native",
+              "checklist",
+              "none"
+            ],
+            "title": "Linked",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "outcome": {
+            "enum": [
+              "created",
+              "found",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "node_id",
+          "outcome"
+        ],
+        "title": "PlanPublishResult",
+        "type": "object"
+      },
+      "PlanPublished": {
+        "additionalProperties": false,
+        "description": "The plan as it now is, and what happened to each node published.\n``replayed`` is true when the answer is a replay of an earlier call\nunder the same ``Idempotency-Key`` (its results, the plan as it is\nnow).",
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/PlanPublishResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan",
+          "results"
+        ],
+        "title": "PlanPublished",
         "type": "object"
       },
       "PlanRollup": {
@@ -14713,6 +14877,131 @@
           }
         },
         "summary": "Edit or move a node",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/approve": {
+      "post": {
+        "description": "A person's \"this is right\": the node's draft and proposed children \u2014\nevery one, or those ``node_ids`` names \u2014 become ``approved``, ready to\npublish.",
+        "operationId": "approve_children_v1_plans__plan_id__nodes__node_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanApprove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Approve a node's children",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/publish": {
+      "post": {
+        "description": "Write the node's approved children \u2014 and the node itself first when\nit is not on the forge yet \u2014 as issues with their level label and the\n``sbx-plan`` marker, linked under their parent. Never the trigger or\nthe workload label. A node that fails is reported and left as it was;\nrepeating the call resumes and duplicates nothing. The\n``Idempotency-Key`` header is required: a replay answers the same\nresults, a different body under the same key is ``409\nidempotency_conflict``.",
+        "operationId": "publish_children_v1_plans__plan_id__nodes__node_id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanPublish"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanPublished"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Publish a node's level to the forge",
         "tags": [
           "plans"
         ]
