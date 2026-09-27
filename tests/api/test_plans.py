@@ -8,6 +8,7 @@ Every mutation names the revision it read, and a stale one is refused.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,7 +17,7 @@ from sqlalchemy import select
 from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Capability
 from sbxloop.db.api_models import ApiEventRow
 from sbxloop.plans.model import PlanNode
-from tests.api.conftest import Api
+from tests.api.conftest import Api, build
 
 READ: frozenset[Capability] = frozenset({"runs:read"})
 DRAFT: frozenset[Capability] = frozenset({"runs:read", "plans:create"})
@@ -407,3 +408,45 @@ class TestEvents:
             "node_id": _node(plan, "An epic")["id"],
             "change": "added",
         }
+
+
+class TestSwitchedOff:
+    def test_a_repository_with_planning_off_says_so_and_refuses_a_plan(
+        self, tmp_path: Path
+    ) -> None:
+        built = build(
+            tmp_path,
+            config={
+                "github": {
+                    "repos": [{"repo": "o/r"}, {"repo": "o/quiet", "planning": {"enabled": False}}]
+                }
+            },
+        )
+        with built.client:
+            headers = built.bearer(DRAFT)
+            listed = {
+                r["repository"]: r["planning"]
+                for r in built.client.get("/v1/repositories", headers=headers).json()["data"]
+            }
+            assert listed["o/quiet"] == {
+                "hierarchy": "unsupported",
+                "reason": "planning is off for this repository ([planning] enabled = false)",
+            }
+            refused = built.client.post(
+                "/v1/plans",
+                json={"level": "epic", "repository": "o/quiet", "title": "x"},
+                headers=headers,
+            )
+            assert refused.status_code == 409 and refused.json()["code"] == "planning_unsupported"
+            features = built.client.get("/v1/capabilities", headers=headers).json()["features"]
+            assert "planning" in features
+        built.ctx.close()
+
+    def test_planning_off_everywhere_is_not_offered(self, tmp_path: Path) -> None:
+        built = build(tmp_path, config={"planning": {"enabled": False}})
+        with built.client:
+            features = built.client.get("/v1/capabilities", headers=built.bearer(READ)).json()[
+                "features"
+            ]
+            assert "planning" not in features
+        built.ctx.close()

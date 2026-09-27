@@ -51,6 +51,8 @@ ROLE_BY_PHASE: dict[str, Role] = {
     # Judging a check rather than the work, and modifying neither: the
     # critic's briefing is the one that says so.
     "reauthor_verify": "critic",
+    # Reads the repository and proposes a breakdown; writes nothing.
+    "plan": "planner",
 }
 
 _HEAD = """\

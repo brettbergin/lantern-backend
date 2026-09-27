@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+**`[planning]` configures planning, per repository where it matters.**
+`enabled` (on), `max_epics_per_initiative` (8), `max_tasks_per_epic` (12),
+`max_questions` (5) and `close_completed` (on), each narrowable under
+`[vcs.repos.planning]`; `[agent.models] plan` names the planner's model.
+Where planning is on, a repository's label set carries the level labels
+`sbx:initiative`, `sbx:epic` and `sbx:task`, so label sync creates them with
+the lifecycle labels and the label check expects them. (#2343)
+
 **Plans can be drafted and read over the API.** `/v1/plans` stores an
 initiative or a lone epic as a tree of nodes in the daemon's store (a new
 migration) and serves list, create, read, edit and delete, with node add,

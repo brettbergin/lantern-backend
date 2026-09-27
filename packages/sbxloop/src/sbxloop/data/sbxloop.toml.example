@@ -123,6 +123,7 @@ secret_strategy = "proxy"
 # operator_plan = "auto"
 # operator_execute = "auto"
 # operator_judge = "auto"
+# plan = "auto"                  # the planner that breaks a plan into its next level
 
 [sandbox]
 # Per-VM allocations: always passed to sbx create, including on old configs
@@ -598,7 +599,7 @@ service_memory = "2g"
 # verify_mode = "advisory"         # "full" | "advisory" | "ci-only"; unset uses [sandbox]'s
 # [vcs.repos.agent_models]
 # Sparse per-key overrides over [agent.models]; omit to inherit. The same
-# eight phase keys are supported. `list-models --repo you/your-repo` shows them.
+# nine phase keys are supported. `list-models --repo you/your-repo` shows them.
 # decompose = "auto"           # the planner's model for this repository
 # build = "auto"               # the builder's
 # review = "auto"              # the self-review's
@@ -607,6 +608,14 @@ service_memory = "2g"
 # operator_plan = "auto"       # the workload planner's
 # operator_execute = "auto"    # the workload executor's
 # operator_judge = "auto"      # the workload judge's
+# plan = "auto"                # the planner's, breaking a plan into its next level
+# [vcs.repos.planning]
+# Sparse per-repository overrides over [planning]; omit a key to inherit.
+# enabled = false              # no planning on this repository
+# max_epics_per_initiative = 4 # unset uses [planning]'s
+# max_tasks_per_epic = 6       # unset uses [planning]'s
+# max_questions = 3            # unset uses [planning]'s
+# close_completed = false      # leave finished epics here open for a person
 # [vcs.repos.openai]
 # Sparse per-repository overrides over [agent.openai] for a repository whose
 # code must stay on a private endpoint; omit a key to inherit. The endpoint
@@ -1053,6 +1062,19 @@ service_memory = "2g"
 # backoff_s = 2.0                  # the first retry's delay; doubled each time
 # backoff_max_s = 300.0            # the longest a retry waits, Retry-After included
 # max_devices_per_user = 20        # devices one person may register
+
+# [planning]
+# Planning work into the forge: a person describes an initiative or an epic
+# in Angie or Lantern, the planner proposes its next level from a read-only
+# checkout, and a person edits, approves and publishes each level as linked
+# issues, then starts an epic run. Nothing reaches the forge or the queue
+# without a person. Offered on every forge that can hold a plan (GitHub
+# natively, GitLab as labels and a checklist; Gitea cannot).
+# enabled = true
+# max_epics_per_initiative = 8     # the most epics one initiative may hold
+# max_tasks_per_epic = 12          # the most tasks one epic may hold
+# max_questions = 5                # clarifying questions per generation; 0 = never ask
+# close_completed = true           # summarise and close a finished epic or initiative
 
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask

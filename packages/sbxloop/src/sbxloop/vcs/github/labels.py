@@ -59,16 +59,26 @@ LIFECYCLE_DESCRIPTORS: dict[str, tuple[str, str]] = {
     "workload": ("0052cc", "queued for sbxloop as a workload: the result comes back as a comment"),
 }
 FOLLOWUP_DESCRIPTOR = ("c5def5", "filed by sbxloop after a merge")
+# The planning level labels (#2343): what a published plan node is.
+LEVEL_DESCRIPTORS: dict[str, tuple[str, str]] = {
+    "initiative": ("5319e7", "an initiative planned with sbxloop: its epics are its sub-issues"),
+    "epic": ("0075ca", "an epic planned with sbxloop: its tasks are its sub-issues"),
+    "task": ("bfdadc", "a task planned with sbxloop: one run, started by a person"),
+}
 
 EnsureResult = Literal["created", "present", "failed"]
 
 
 def lifecycle_specs(labels: LabelSet, followup: str | None = None) -> list[LabelSpec]:
     """The labels ``init-repo`` creates for one repository: the seven
-    lifecycle labels and, when given, the follow-up label."""
+    lifecycle labels, the planning level labels where planning is on, and,
+    when given, the follow-up label."""
     specs = [
         LabelSpec(getattr(labels, kind), *LIFECYCLE_DESCRIPTORS[kind], kind=kind)
         for kind in LABEL_KINDS
+    ]
+    specs += [
+        LabelSpec(name, *LEVEL_DESCRIPTORS[kind], kind=kind) for kind, name in labels.levels.items()
     ]
     if followup:
         specs.append(LabelSpec(followup, *FOLLOWUP_DESCRIPTOR))

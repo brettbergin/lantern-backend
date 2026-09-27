@@ -53,8 +53,23 @@ def repository_planning(kind: str) -> RepositoryPlanning:
     )
 
 
+def repository_planning_for(config: Config, repo: str) -> RepositoryPlanning:
+    """How ``repo`` holds a plan on this server: its forge's answer, unless
+    ``[planning] enabled`` (or its ``[vcs.repos.planning]`` override) is
+    off, which is named as the reason."""
+    if not config.planning_for(repo).enabled:
+        return RepositoryPlanning(
+            "unsupported",
+            "planning is off for this repository ([planning] enabled = false)",
+        )
+    return repository_planning(str(config.vcs_kind_for(repo)))
+
+
 def planning_available(config: Config) -> bool:
-    """Whether this server offers planning: a configured forge that can
-    hold a plan (``[vcs] kind``, or any repository's own ``kind``)."""
-    kinds = {str(config.vcs.kind)} | {str(config.vcs_kind_for(r.repo)) for r in config.repo_list()}
-    return any(repository_planning(kind).supported for kind in kinds)
+    """Whether this server offers planning: a configured repository that
+    can hold a plan, or, with none configured, ``[vcs] kind`` with
+    ``[planning]`` on."""
+    repos = config.repo_list()
+    if not repos:
+        return config.planning.enabled and repository_planning(str(config.vcs.kind)).supported
+    return any(repository_planning_for(config, entry.repo).supported for entry in repos)

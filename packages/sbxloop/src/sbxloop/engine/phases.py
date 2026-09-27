@@ -253,6 +253,9 @@ AGENT_NAMES = {
     "operator_judge": "judge",
     # The one actor allowed to change the exam rather than the work.
     "reauthor_verify": "verify editor",
+    # Breaking an initiative or an epic into its next level (#2343), from a
+    # read-only checkout: it proposes, a person publishes.
+    "plan": "planner",
 }
 # The phases whose session gets the run's host tools: the one doing the
 # work that may need a service. Planners and critics read and judge.
