@@ -28,7 +28,7 @@ from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 from sbxloop.config import MergeMethod
-from sbxloop.errors import GithubOpsError, RoleNotImplemented
+from sbxloop.errors import CapabilityUnsupported, GithubOpsError, RoleNotImplemented
 from sbxloop.log import get_logger
 from sbxloop.vcs.github.ops import fold_review_verdicts, fold_reviews, user_identity
 from sbxloop.vcs.github.review_locations import right_side_ranges
@@ -186,6 +186,10 @@ class GitlabOps(JobBackend):
         "required_checks_introspection": Capability.SUPPORTED,
         "bot_identity": Capability.SUPPORTED,
         "signed_api_commits": Capability.UNSUPPORTED,
+        # A policy, not a detection (#2338): even a tier with native epics
+        # or a work-item hierarchy is not used, so a plan has one shape on
+        # GitLab — level labels plus a managed checklist in the parent.
+        "sub_issues": Capability.UNSUPPORTED,
     }
     CAPABILITY_NOTE: ClassVar[str] = (
         "merge trains and blocking reviews depend on the project; "
@@ -585,6 +589,46 @@ class GitlabOps(JobBackend):
     def labels_list(self, repo: str) -> list[Any]:
         rows = self.raw_pages(f"{self._project(repo)}/labels")
         return [label_record(row) for row in rows if isinstance(row, dict)]
+
+    def issue_update(
+        self,
+        repo: str,
+        number: int | str,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]:
+        """Rewrite the issue's title and/or description; the issue record
+        as it now is. Only the fields given are sent."""
+        request: dict[str, Any] = {}
+        if title is not None:
+            request["title"] = title
+        if body is not None:
+            request["description"] = body
+        if not request:
+            raise ValueError("issue_update needs a title or a body to write")
+        path = self._issue_path(repo, number)
+        return issue_record(self._dict(f"PUT {path}", self.raw("PUT", path, request)))
+
+    def _no_sub_issues(self) -> CapabilityUnsupported:
+        return CapabilityUnsupported(
+            self.KIND,
+            "sub_issues",
+            "a plan keeps a parent's children in a managed checklist in its description",
+        )
+
+    def sub_issue_add(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None:
+        raise self._no_sub_issues()
+
+    def sub_issue_remove(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None:
+        raise self._no_sub_issues()
+
+    def sub_issues_list(self, repo: str, number: int | str) -> list[Any]:
+        raise self._no_sub_issues()
 
     # -- ChecksOps -------------------------------------------------------------
 

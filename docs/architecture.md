@@ -80,7 +80,8 @@ descriptor the worker needs.
   of `vcs.protocol.CAPABILITIES` (a merge queue, resolvable review threads,
   draft changes, a request-changes review the forge enforces, a
   host-minted short-lived token, a remote commit, required-checks
-  introspection, a bot-identity signal, signed API commits) as `SUPPORTED`,
+  introspection, a bot-identity signal, signed API commits, native
+  sub-issues) as `SUPPORTED`,
   `UNSUPPORTED` or `UNKNOWN`. `UNSUPPORTED` is a real answer and a design
   input — a forge with no merge queue lands by merging directly. `UNKNOWN`
   is a halt: the backend could not decide, and the caller names what it
@@ -88,6 +89,14 @@ descriptor the worker needs.
   already follows. GitHub reports everything `SUPPORTED` except signed API
   commits, which depend on the credential (a GitHub App's arrive signed, a
   PAT's do not) and so are the doctor's to answer, not the transport's.
+  `sub_issues` is a policy rather than a detection (#2338): GitHub links a
+  child under its parent natively, across repositories, addressing the
+  child by its issue id; GitLab answers `UNSUPPORTED` whatever its tier, so
+  a plan has one shape there — level labels and a managed checklist in the
+  parent's description — and its sub-issue operations raise
+  `CapabilityUnsupported` by name. Cross-repository sub-issues are verified
+  for a personal account's token; under a GitHub App installation that
+  does not cover both repositories they are **field-unverified**.
 
 - **The generic transport is private to the backend package.** `GithubOps.raw`,
   `raw_lookup` and the `raw_pages` walker spell a path by hand, and fifty

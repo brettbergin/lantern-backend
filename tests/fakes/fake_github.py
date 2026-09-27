@@ -282,6 +282,13 @@ class FakeGithub(GithubOps):
         self.comments_deleted: list[int] = []
         self.issues_closed: list[tuple[int, str]] = []
         self.labels_removed: list[tuple[int, str]] = []
+        # Titles and bodies rewritten after creation (#2338), by number.
+        self.issues_updated: list[tuple[int, dict[str, Any]]] = []
+        # Native sub-issues (#2338): each parent's children, as
+        # ``(repo, number)`` in the parent's order, and each child's one
+        # parent, as GitHub allows only one.
+        self.sub_issues: dict[tuple[str, int], list[tuple[str, int]]] = {}
+        self.sub_issue_parent: dict[tuple[str, int], tuple[str, int]] = {}
         self.resolved: list[str] = []
         self._comment_id = 0
         self._commits = 0
@@ -608,10 +615,12 @@ class FakeGithub(GithubOps):
             }
         if method == "GET" and re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", path):
             self._maybe_fail("issue_read")
-            for issue in self.existing_issues:
-                if str(issue.get("number")) == path.rsplit("/", 1)[1]:
-                    return dict(issue)
+            issue = self._issue_at(path)
+            if issue is not None:
+                return dict(issue)
             raise GithubOpsError("issue not found", http_status=404)
+        if match := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)/sub_issues?", path):
+            return self._sub_issue_route(method, path, match.group(1), int(match.group(2)), body)
         if method == "GET" and int(parse_qs(query).get("page", ["1"])[0]) > 1:
             return []
         if method == "GET" and path == "/user":
@@ -830,13 +839,18 @@ class FakeGithub(GithubOps):
                     ]
             return []
         if method == "PATCH" and re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", path):
-            assert body is not None and body.get("state") == "closed"
+            assert body is not None
             number = int(path.rsplit("/", 1)[1])
-            self.issues_closed.append((number, str(body.get("state_reason") or "")))
-            for issue in self.existing_issues:
-                if issue.get("number") == number:
-                    issue.update(body)
-                    return dict(issue)
+            if body.get("state") == "closed":
+                self.issues_closed.append((number, str(body.get("state_reason") or "")))
+            else:
+                # A title or body rewritten after creation (#2338).
+                assert set(body) <= {"title", "body"}, body
+                self.issues_updated.append((number, dict(body)))
+            issue = self._issue_at(path)
+            if issue is not None:
+                issue.update(body)
+                return dict(issue)
             return {"number": number, **body}
         if method == "GET" and re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+/events", path):
             return list(self.issue_events_payload)
@@ -858,6 +872,75 @@ class FakeGithub(GithubOps):
             return {"resources": {"core": {"limit": 5000, "remaining": 4999}}}
         raise AssertionError(f"FakeGithub: unexpected raw call {method} {path}")
 
+    # -- issues and their sub-issues -----------------------------------------
+
+    def _issue_at(self, path: str) -> dict[str, Any] | None:
+        """The seeded or created issue a ``/repos/{o}/{r}/issues/{n}`` path
+        names: the one in that repository when its ``html_url`` says so,
+        else the first with that number (older seeds carry no url)."""
+        match = re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)", path)
+        assert match, path
+        repo, number = match.group(1), match.group(2)
+        numbered = [i for i in self.existing_issues if str(i.get("number")) == number]
+        for issue in numbered:
+            if f"/{repo}/issues/" in str(issue.get("html_url", "")):
+                return issue
+        return numbered[0] if numbered else None
+
+    def _issue_by_id(self, issue_id: Any) -> tuple[str, dict[str, Any]] | None:
+        for issue in self.existing_issues:
+            if issue.get("id") == issue_id:
+                url = str(issue.get("html_url", ""))
+                repo = url.removeprefix("https://github.com/").split("/issues/", 1)[0]
+                return repo, issue
+        return None
+
+    def _sub_issue_route(
+        self, method: str, path: str, repo: str, number: int, body: dict[str, Any] | None
+    ) -> Any:
+        """GitHub's sub-issue endpoints: ``POST .../sub_issues`` and
+        ``DELETE .../sub_issue`` name the child by its id, and a child
+        already under a parent is a 422 (no ``replace_parent`` here)."""
+        parent = (repo, number)
+        if self._issue_at(f"/repos/{repo}/issues/{number}") is None:
+            raise self._failed(
+                "raw.api", method, path, 404, f"gh api {method} {path}: Not Found (HTTP 404)"
+            )
+        children = self.sub_issues.setdefault(parent, [])
+        if method == "GET" and path.endswith("/sub_issues"):
+            found = []
+            for child_repo, child_number in children:
+                issue = self._issue_at(f"/repos/{child_repo}/issues/{child_number}")
+                if issue is not None:
+                    found.append(dict(issue))
+            return found
+        assert body is not None and isinstance(body.get("sub_issue_id"), int), body
+        located = self._issue_by_id(body["sub_issue_id"])
+        if located is None:
+            raise self._failed(
+                "raw.api", method, path, 404, f"gh api {method} {path}: Not Found (HTTP 404)"
+            )
+        child = (located[0], int(located[1]["number"]))
+        if method == "POST" and path.endswith("/sub_issues"):
+            if child in self.sub_issue_parent:
+                raise self._failed(
+                    "raw.api",
+                    method,
+                    path,
+                    422,
+                    f"github op raw.api failed: GithubOpError: gh api POST {path} failed (rc=1): "
+                    "Validation Failed: sub-issue already has a parent (HTTP 422)",
+                )
+            children.append(child)
+            self.sub_issue_parent[child] = parent
+            return dict(located[1])
+        if method == "DELETE" and path.endswith("/sub_issue"):
+            if child in children:
+                children.remove(child)
+                self.sub_issue_parent.pop(child, None)
+            return dict(located[1])
+        raise AssertionError(f"FakeGithub: unexpected sub-issue call {method} {path}")
+
     # -- the pull request ----------------------------------------------------
 
     def issue_create(
@@ -876,6 +959,9 @@ class FakeGithub(GithubOps):
         self.existing_issues.append(
             {
                 "number": number,
+                # The database id, which sub-issue links address; never
+                # the number, so a test that confuses the two fails.
+                "id": 70000 + number,
                 "title": title,
                 "body": body,
                 "state": "open",

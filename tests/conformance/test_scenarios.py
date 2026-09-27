@@ -74,6 +74,41 @@ class TestIssues:
         assert any(entry.get("number") == number for entry in listed)
         assert all("pull_request" not in entry for entry in listed if isinstance(entry, dict))
 
+    def test_update_a_title_and_a_body(self, subject: Subject) -> None:
+        ops, repo = subject.ops, subject.repo
+        ref = ops.issue_create(repo, "a draft title", "the first body")
+        updated = ops.issue_update(repo, ref.number, title="the settled title", body="a new body")
+        assert updated["title"] == "the settled title" and updated["body"] == "a new body"
+        issue = ops.issue_get(repo, ref.number)
+        assert issue["title"] == "the settled title" and issue["body"] == "a new body"
+        ops.issue_update(repo, ref.number, body="only the body")
+        issue = ops.issue_get(repo, ref.number)
+        assert issue["title"] == "the settled title" and issue["body"] == "only the body"
+
+
+class TestSubIssues:
+    @pytest.mark.needs("sub_issues")
+    def test_add_list_and_remove_a_child(self, subject: Subject) -> None:
+        ops, repo = subject.ops, subject.repo
+        parent = ops.issue_create(repo, "an epic")
+        child = ops.issue_create(repo, "a task")
+        assert ops.sub_issues_list(repo, parent.number) == []
+        ops.sub_issue_add(repo, parent.number, child_repo=repo, child_number=child.number)
+        (listed,) = ops.sub_issues_list(repo, parent.number)
+        assert listed["number"] == child.number and listed["html_url"] == child.url
+        ops.sub_issue_remove(repo, parent.number, child_repo=repo, child_number=child.number)
+        assert ops.sub_issues_list(repo, parent.number) == []
+
+    @pytest.mark.needs("sub_issues")
+    def test_a_child_in_another_repository(self, subject: Subject) -> None:
+        ops, repo = subject.ops, subject.repo
+        other = f"{repo}-elsewhere"
+        parent = ops.issue_create(repo, "an initiative")
+        child = ops.issue_create(other, "an epic in another repository")
+        ops.sub_issue_add(repo, parent.number, child_repo=other, child_number=child.number)
+        (listed,) = ops.sub_issues_list(repo, parent.number)
+        assert listed["html_url"] == child.url
+
 
 class TestChange:
     @pytest.mark.needs("draft_changes")

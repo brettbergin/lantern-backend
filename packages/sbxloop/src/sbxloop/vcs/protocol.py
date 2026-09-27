@@ -91,6 +91,11 @@ CAPABILITIES: tuple[str, ...] = (
     "bot_identity",
     # Commits created through the API arrive signed.
     "signed_api_commits",
+    # An issue can be linked under a parent issue natively, across
+    # repositories. Where it cannot, a plan keeps a parent's children in a
+    # managed checklist in the parent's body instead (a policy per forge,
+    # not a detection).
+    "sub_issues",
 )
 
 
@@ -130,6 +135,14 @@ class IssueOps(Protocol):
         labels: list[str] | None = None,
     ) -> IssueRef: ...
     def issue_get(self, repo: str, number: int | str) -> dict[str, Any]: ...
+    def issue_update(
+        self,
+        repo: str,
+        number: int | str,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]: ...
     def issue_comment(self, repo: str, number: int, body: str) -> str: ...
     def issue_comments(self, repo: str, number: int | str) -> list[Any]: ...
     def issue_comment_delete(
@@ -159,6 +172,13 @@ class IssueOps(Protocol):
         self, repo: str, *, name: str, color: str, description: str
     ) -> dict[str, Any]: ...
     def labels_list(self, repo: str) -> list[Any]: ...
+    def sub_issue_add(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None: ...
+    def sub_issue_remove(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None: ...
+    def sub_issues_list(self, repo: str, number: int | str) -> list[Any]: ...
 
 
 @runtime_checkable

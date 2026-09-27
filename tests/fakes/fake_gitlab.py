@@ -1309,6 +1309,11 @@ class FakeGitlab(GitlabOps):
                 if body.get("state_event") == "close":
                     issue["state"] = "closed"
                     self.issues_closed.append(iid)
+                # A title or description rewritten after creation (#2338).
+                if "title" in body:
+                    issue["title"] = str(body["title"])
+                if "description" in body:
+                    issue["description"] = str(body["description"])
                 return self._issue_payload(issue)
             if tail == "/notes" and method == "POST":
                 assert body is not None

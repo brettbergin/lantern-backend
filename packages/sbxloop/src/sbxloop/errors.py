@@ -149,6 +149,19 @@ class RoleNotImplemented(GithubOpsError):
         self.operation = operation
 
 
+class CapabilityUnsupported(GithubOpsError):
+    """A backend was asked for an operation behind a capability it reports
+    ``UNSUPPORTED`` (#2338): a real answer about the forge, not a missing
+    implementation. The caller should have read the capability and taken
+    the other path; reaching the operation anyway refuses by name rather
+    than sending the forge a request it cannot serve."""
+
+    def __init__(self, kind: str, capability: str, instead: str) -> None:
+        super().__init__(f"the {kind} backend does not support {capability}; {instead}")
+        self.kind = kind
+        self.capability = capability
+
+
 class DeliveryError(SbxloopError):
     """Delivering a run's workspace as a GitHub PR failed."""
 
