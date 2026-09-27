@@ -10,25 +10,38 @@ pass:
    merge report closed the issue; a workload delivered, and the source's
    completed report closed it), a failed, blocked or cancelled item is
    ``failed``;
-2. admits every task whose dependencies are all ``landed`` or ``closed``
+2. admits every task whose dependencies are all ``landed``, ``closed`` or ``skipped``
    through the same issue admission ``POST /v1/items`` uses
    (:func:`~sbxloop.daemon.controls.intake.admit_issue`) — but with no
    queueing label, so no poll-driven path is added — with
    ``parent_item_id`` naming the epic run, a code task as a code run and a
    workload task as a workload run under its ``workload_profile``. A task
-   whose dependency failed is ``blocked`` and never admitted;
-3. completes the run when every task is ``landed`` or ``closed``.
+   whose dependency failed or is blocked is ``blocked`` (the reason names
+   which) and is not admitted; every task it does not lead to goes on;
+3. completes the run when every task is ``landed``, ``closed`` or
+   ``skipped``.
+
+Every task's move records one ``plan.run.task_*`` event, and a task that
+fails records ``plan.run.paused`` with ``reason: "task_failed"``: the run
+goes on for everything else, but cannot complete until a person acts.
+
+A person controls the run (#2348, each a ``plans:publish`` route):
+``pause`` stops admission (what is queued or running goes on, followed);
+``resume`` admits the ready set again; ``cancel`` stops it for good —
+nothing more is admitted, an item still waiting in the queue is withdrawn
+through the item abandon, and a run under way is left to finish and
+followed; ``retry`` re-queues a failed task's item through the item retry
+(or admits it afresh when it has none) and its dependents wait on it again;
+``skip`` treats a task as done without touching its issue.
 
 Nothing here decides how many run at once: an admitted task is a queued
 item like any other, held back by the queue, the holds and the usage pool.
-Pausing, retrying, skipping and stopping belong to #2348; a failed task
-already stops its dependents here.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -40,10 +53,15 @@ from sbxloop.errors import ConfigError
 from sbxloop.log import get_logger
 from sbxloop.plans.epicrun import (
     DONE,
+    LIVE_RUN_STATES,
+    SETTLED,
     EpicRun,
     EpicRunState,
     EpicRunStore,
     EpicRunTask,
+    TaskState,
+    blocked_by,
+    dependents,
     from_item,
     new_epic_run_id,
     readiness,
@@ -125,12 +143,9 @@ class EpicRunDriver:
                 tasks=len(tasks),
                 by=run.started_by_display,
             )
-            try:
-                self._drive(run.id, now)
-            except Exception:
-                # Recorded is started: the loop's next pass admits what
-                # this one could not.
-                log.warning("epic_run.drive_failed", epic_run=run.id, exc_info=True)
+            # Recorded is started: the loop's next pass admits what this
+            # one could not.
+            self._drive_quietly(run.id, now)
         started = self.runs.get(run.id)
         assert started is not None  # nosec B101 - written above
         return started
@@ -198,9 +213,9 @@ class EpicRunDriver:
     # -- the pass --------------------------------------------------------------
 
     def tick(self, now: float) -> None:
-        """Drive every running epic run once. Skipped while a start holds
-        the pass (the next tick catches up); one run that fails is logged
-        and the others still move."""
+        """Pass over every live epic run once. Skipped while a start or a
+        control holds the pass (the next tick catches up); one run that
+        fails is logged and the others still move."""
         if not self._lock.acquire(blocking=False):
             return
         try:
@@ -212,18 +227,29 @@ class EpicRunDriver:
         finally:
             self._lock.release()
 
+    def _drive_quietly(self, epic_run_id: str, now: float) -> None:
+        """A pass right after a start or a control. The change is recorded
+        already: a pass that fails here is the loop's next tick's to make."""
+        try:
+            self._drive(epic_run_id, now)
+        except Exception:
+            log.warning("epic_run.drive_failed", epic_run=epic_run_id, exc_info=True)
+
     def _drive(self, epic_run_id: str, now: float) -> None:
+        """One pass: follow what was admitted; while the run is running,
+        admit what is ready; while it is paused, only say what is ready; a
+        stopped run's in-flight tasks are followed to their end."""
         run = self.runs.get(epic_run_id)
-        if run is None or run.state != "running":
+        if run is None or run.state == "completed":
             return
         plan = self.plans.get(run.plan_id)
         if plan is None or plan.node(run.node_id) is None:
             log.warning("epic_run.plan_gone", epic_run=run.id, plan=run.plan_id)
             return
         order = [n for n in plan.children(run.node_id) if run.task(n.id) is not None]
-        tasks = {t.node_id: t for t in run.tasks}
+        before = {t.node_id: t for t in run.tasks}
+        tasks = dict(before)
         changed: dict[str, EpicRunTask] = {}
-        events: list[PlanEvent] = []
 
         def put(task: EpicRunTask) -> None:
             if tasks.get(task.node_id) != task:
@@ -232,58 +258,20 @@ class EpicRunDriver:
 
         for task in list(tasks.values()):
             put(self._follow(task))
-        # Admit in the plan's order until a pass changes nothing: a task
-        # found closed can make its dependents ready, and a failure blocks
-        # its dependents' dependents, within the one pass.
-        tried: set[str] = set()
-        for _ in range(len(order) + 1):
-            moved = False
-            states = {k: t.state for k, t in tasks.items()}
-            for node in order:
-                task = tasks[node.id]
-                if task.item_id is not None or task.state in DONE or task.state == "failed":
-                    continue
-                if node.forge is not None and node.forge.state == "closed":
-                    put(replace(task, state="closed", reason=None))
-                    moved = True
-                    continue
-                wanted = readiness(node, states)
-                if wanted != "ready" or node.id in tried:
-                    if wanted != "ready" and wanted != task.state:
-                        put(replace(task, state=wanted, reason=None))
-                        moved = True
-                    continue
-                tried.add(node.id)
-                admitted = self._admit(run, node, task, now)
-                put(admitted)
-                if admitted.item_id is not None:
-                    events.append(
-                        PlanEvent(
-                            "plan.run.task_admitted",
-                            {
-                                "plan_id": run.plan_id,
-                                "node_id": run.node_id,
-                                "epic_run_id": run.id,
-                                "task_node_id": node.id,
-                                "item_id": admitted.item_id,
-                            },
-                        )
-                    )
-                moved = moved or admitted.state != task.state
-            if not moved:
-                break
+        if run.state in LIVE_RUN_STATES:
+            self._place(run, plan, order, tasks, put, now, admit=run.state == "running")
+        events = self._events(run, order, before, tasks, changed)
         state: EpicRunState | None = None
-        if all(t.state in DONE for t in tasks.values()):
+        if run.state in LIVE_RUN_STATES and all(t.state in DONE for t in tasks.values()):
             state = "completed"
             events.append(
                 PlanEvent(
                     "plan.run.completed",
                     {
-                        "plan_id": run.plan_id,
-                        "node_id": run.node_id,
-                        "epic_run_id": run.id,
+                        **_ids(run),
                         "landed": [k for k, t in tasks.items() if t.state == "landed"],
                         "closed": [k for k, t in tasks.items() if t.state == "closed"],
+                        "skipped": [k for k, t in tasks.items() if t.state == "skipped"],
                     },
                 )
             )
@@ -297,11 +285,112 @@ class EpicRunDriver:
                 events=events,
             )
 
+    def _place(
+        self,
+        run: EpicRun,
+        plan: Plan,
+        order: list[PlanNode],
+        tasks: dict[str, EpicRunTask],
+        put: Callable[[EpicRunTask], None],
+        now: float,
+        *,
+        admit: bool,
+    ) -> None:
+        """Where each task not yet admitted stands — and, when ``admit``,
+        the ready ones admitted — in the plan's order until nothing moves:
+        a task found closed can make its dependents ready, and a failure
+        blocks its dependents' dependents, within the one pass. Only a
+        failed or blocked task's dependents are held back: a sibling it
+        does not lead to is admitted as usual."""
+        tried: set[str] = set()
+        for _ in range(len(order) + 1):
+            moved = False
+            states = {k: t.state for k, t in tasks.items()}
+            for node in order:
+                task = tasks[node.id]
+                if task.item_id is not None or task.state in SETTLED or task.state == "failed":
+                    continue
+                if node.forge is not None and node.forge.state == "closed":
+                    put(replace(task, state="closed", reason=None))
+                    moved = True
+                    continue
+                wanted = readiness(node, states)
+                if wanted == "ready" and node.id in tried:
+                    # Tried on this pass: its answer (the forge could not
+                    # be read, say) stands until the next one.
+                    continue
+                if wanted == "ready" and admit:
+                    tried.add(node.id)
+                    admitted = self._admit(run, node, task, now)
+                    put(admitted)
+                    moved = moved or admitted.state != task.state
+                    continue
+                reason = _blocked_reason(plan, node, states) if wanted == "blocked" else None
+                if (wanted, reason) != (task.state, task.reason):
+                    put(replace(task, state=wanted, reason=reason))
+                    moved = True
+            if not moved:
+                break
+
+    def _events(
+        self,
+        run: EpicRun,
+        order: list[PlanNode],
+        before: Mapping[str, EpicRunTask],
+        tasks: Mapping[str, EpicRunTask],
+        changed: Mapping[str, EpicRunTask],
+    ) -> list[PlanEvent]:
+        """One event per task whose state moved, in the plan's order, and a
+        ``plan.run.paused`` notice for each task that newly failed while
+        the run is live: the run cannot complete until a person retries or
+        skips it, and its dependents wait for that."""
+        states = {k: t.state for k, t in tasks.items()}
+        nodes = {n.id: n for n in order}
+        events: list[PlanEvent] = []
+        failed: list[EpicRunTask] = []
+        for key in sorted(changed, key=lambda k: (changed[k].position, k)):
+            task = changed[key]
+            prior = before.get(key)
+            if prior is not None and (prior.state, prior.admitted_at) == (
+                task.state,
+                task.admitted_at,
+            ):
+                continue  # a reason or a run id moved, not the state
+            node = nodes.get(key)
+            extra: dict[str, Any] = {}
+            if task.state == "blocked" and node is not None:
+                extra["blocked_by"] = blocked_by(node, states)
+            events.append(_task_event(run, prior, task, **extra))
+            if task.state == "failed" and (prior is None or prior.state != "failed"):
+                failed.append(task)
+        if run.state in LIVE_RUN_STATES:
+            for task in failed:
+                events.append(
+                    PlanEvent(
+                        "plan.run.paused",
+                        {
+                            **_ids(run),
+                            "reason": "task_failed",
+                            "state": run.state,
+                            "task_node_id": task.node_id,
+                            "item_id": task.item_id,
+                            "error": task.reason,
+                            "blocked": [
+                                k
+                                for k in dependents(order, task.node_id)
+                                if states.get(k) == "blocked"
+                            ],
+                        },
+                    )
+                )
+        return events
+
     def _follow(self, task: EpicRunTask) -> EpicRunTask:
-        """``task`` as its item now stands. ``landed`` and ``closed`` are
-        final; an item that left the queue (a claim that failed forgets
-        its row) makes the task ready to be admitted again."""
-        if task.item_id is None or task.state in DONE:
+        """``task`` as its item now stands. ``landed``, ``closed``,
+        ``skipped`` and ``cancelled`` are final; an item that left the
+        queue (a claim that failed forgets its row) makes the task ready to
+        be admitted again."""
+        if task.item_id is None or task.state in SETTLED:
             return task
         item = self.loop.dstore.get(task.item_id)
         seen = from_item(item)
@@ -311,6 +400,307 @@ class EpicRunDriver:
             )
         state, reason = seen
         return replace(task, state=state, reason=reason, run_id=item.run_id or task.run_id)
+
+    # -- controls (#2348) ------------------------------------------------------
+
+    def run_for(self, plan_id: str, node_id: str) -> EpicRun:
+        """The run a control on ``node_id`` addressed: the epic's latest, or
+        the latest that holds the task."""
+        run = self.runs.latest(plan_id, node_id) or self.runs.for_task(plan_id, node_id)
+        if run is None:
+            raise PlanRefusal(404, "not_found", f"{node_id} of plan {plan_id} has not been run")
+        return run
+
+    def pause(self, plan_id: str, node_id: str, *, actor: Mapping[str, Any], now: float) -> EpicRun:
+        """Stop admitting: what is queued or running goes on and is still
+        followed; nothing new is admitted until the run is resumed."""
+        with self._lock:
+            run = self._epic_run(plan_id, node_id)
+            _refuse_ended(run)
+            if run.state == "paused":
+                raise PlanRefusal(
+                    409,
+                    "already_paused",
+                    f"epic run {run.id} is already paused",
+                    epic_run_id=run.id,
+                )
+            self.runs.save(
+                run,
+                tasks=[],
+                now=now,
+                state="paused",
+                events=[
+                    PlanEvent(
+                        "plan.run.paused",
+                        {**_ids(run), "reason": "person", "state": "paused", "by": _who(actor)},
+                    )
+                ],
+                actor=actor,
+            )
+            log.info("epic_run.paused", epic_run=run.id, by=_who(actor))
+        return self._read(run.id)
+
+    def resume(
+        self, plan_id: str, node_id: str, *, actor: Mapping[str, Any], now: float
+    ) -> EpicRun:
+        """Admit again: the pass made here admits the ready set at once."""
+        with self._lock:
+            run = self._epic_run(plan_id, node_id)
+            _refuse_ended(run)
+            if run.state != "paused":
+                raise PlanRefusal(
+                    409, "not_paused", f"epic run {run.id} is {run.state}", epic_run_id=run.id
+                )
+            self.runs.save(
+                run,
+                tasks=[],
+                now=now,
+                state="running",
+                events=[PlanEvent("plan.run.resumed", {**_ids(run), "by": _who(actor)})],
+                actor=actor,
+            )
+            log.info("epic_run.resumed", epic_run=run.id, by=_who(actor))
+            self._drive_quietly(run.id, now)
+        return self._read(run.id)
+
+    def cancel(
+        self, plan_id: str, node_id: str, *, actor: Mapping[str, Any], now: float
+    ) -> EpicRun:
+        """Stop the run for good. A task not yet admitted never is; a task
+        whose item is still waiting in the queue (no run started or
+        pinned) has the item withdrawn through the item abandon; a task
+        whose run is under way is left to finish — a person cancels that
+        run through the run controls — and is followed to its end."""
+        with self._lock:
+            run = self._epic_run(plan_id, node_id)
+            _refuse_ended(run)
+            who = _who(actor)
+            why = f"the epic run {run.id} was stopped by {who}"
+            plan = self.plans.get(run.plan_id)
+            order = [] if plan is None else list(plan.children(run.node_id))
+            before = {t.node_id: t for t in run.tasks}
+            tasks = dict(before)
+            changed: dict[str, EpicRunTask] = {}
+            withdrawn: list[str] = []
+            running: list[str] = []
+            for task in run.tasks:
+                now_task = self._follow(task)
+                if now_task.state in ("waiting", "ready", "blocked"):
+                    now_task = replace(now_task, state="cancelled", reason=f"never admitted: {why}")
+                elif (
+                    now_task.state == "queued"
+                    and now_task.item_id is not None
+                    and self._withdraw(now_task.item_id, why)
+                ):
+                    withdrawn.append(task.node_id)
+                    now_task = replace(now_task, state="cancelled", reason=f"withdrawn: {why}")
+                elif now_task.state in ("queued", "running"):
+                    running.append(task.node_id)
+                if now_task != task:
+                    tasks[task.node_id] = now_task
+                    changed[task.node_id] = now_task
+            events = self._events(
+                replace(run, state="cancelled"),
+                [n for n in order if n.id in tasks],
+                before,
+                tasks,
+                changed,
+            )
+            events.append(
+                PlanEvent(
+                    "plan.run.cancelled",
+                    {**_ids(run), "by": who, "withdrawn": withdrawn, "running": running},
+                )
+            )
+            self.runs.save(
+                run,
+                tasks=list(changed.values()),
+                now=now,
+                state="cancelled",
+                events=events,
+                actor=actor,
+            )
+            log.info(
+                "epic_run.cancelled",
+                epic_run=run.id,
+                by=who,
+                withdrawn=len(withdrawn),
+                running=len(running),
+            )
+        return self._read(run.id)
+
+    def retry(self, plan_id: str, node_id: str, *, actor: Mapping[str, Any], now: float) -> EpicRun:
+        """Run a failed task again. An item that failed, was blocked or was
+        cancelled is re-queued through the item retry — attempts start
+        over, the run is unpinned, the issue hears who asked — and a task
+        with no item (its admission was refused, or the row is gone) is
+        admitted afresh. Either way its dependents wait on it again. A
+        person's retry is theirs to make while the run is paused, too."""
+        with self._lock:
+            run, node = self._task_run(plan_id, node_id)
+            _refuse_ended(run)
+            self._drive(run.id, now)
+            run = self._read(run.id)
+            task = run.task(node.id)
+            assert task is not None  # nosec B101 - found by the task above
+            if task.state == "blocked":
+                plan = self.plans.get(run.plan_id)
+                deps = blocked_by(node, {t.node_id: t.state for t in run.tasks})
+                names = ", ".join(_title(plan, d) for d in deps)
+                raise PlanRefusal(
+                    409,
+                    "task_blocked",
+                    f"{node.title} is blocked by {names}: retry or skip that first",
+                    blocked_by=deps,
+                )
+            if task.state != "failed":
+                raise PlanRefusal(
+                    409,
+                    "task_not_failed",
+                    f"{node.title} is {task.state}; only a failed task is retried",
+                    state=task.state,
+                )
+            who = _who(actor)
+            item = self.loop.dstore.get(task.item_id) if task.item_id else None
+            if item is not None and item.state in ("failed", "blocked", "cancelled"):
+                try:
+                    fresh: WorkItem = self.loop.retry_item(
+                        item.item_id, by=f"{who} (epic run {run.id})"
+                    )
+                except (KeyError, ValueError) as exc:
+                    raise PlanRefusal(409, "not_eligible", str(exc)) from exc
+                seen = from_item(fresh)
+                state, reason = seen if seen is not None else ("queued", None)
+                retried = replace(task, state=state, reason=reason, run_id=fresh.run_id)
+                via = "item"
+            else:
+                retried = self._admit(
+                    run, node, replace(task, state="ready", item_id=None, reason=None), now
+                )
+                via = "admission"
+            events = [
+                PlanEvent(
+                    "plan.run.task_retried",
+                    {
+                        **_ids(run),
+                        "task_node_id": node.id,
+                        "from": task.state,
+                        "state": retried.state,
+                        "item_id": retried.item_id,
+                        "via": via,
+                        "by": who,
+                    },
+                )
+            ]
+            if via == "admission":
+                # What the fresh admission came to: admitted, or refused
+                # again (failed, with the notice that says so).
+                events += self._events(
+                    run, [node], {node.id: task}, {node.id: retried}, {node.id: retried}
+                )
+            self.runs.save(run, tasks=[retried], now=now, events=events, actor=actor)
+            log.info("epic_run.task_retried", epic_run=run.id, task=node.id, via=via, by=who)
+            self._drive_quietly(run.id, now)
+        return self._read(run.id)
+
+    def skip(self, plan_id: str, node_id: str, *, actor: Mapping[str, Any], now: float) -> EpicRun:
+        """Treat a task that is not under way as done, so its dependents
+        become ready. Its issue is left exactly as it is — open, and with
+        whatever label its last run left — and its item is not touched."""
+        with self._lock:
+            run, node = self._task_run(plan_id, node_id)
+            _refuse_ended(run)
+            self._drive(run.id, now)
+            run = self._read(run.id)
+            task = run.task(node.id)
+            assert task is not None  # nosec B101 - found by the task above
+            if task.state in ("queued", "running"):
+                raise PlanRefusal(
+                    409,
+                    "task_in_progress",
+                    f"{node.title} is {task.state}: let it finish, or abandon its item first",
+                    state=task.state,
+                    item_id=task.item_id,
+                )
+            if task.state in SETTLED:
+                raise PlanRefusal(
+                    409, "task_settled", f"{node.title} is already {task.state}", state=task.state
+                )
+            who = _who(actor)
+            skipped = replace(task, state="skipped", reason=f"skipped by {who}")
+            self.runs.save(
+                run,
+                tasks=[skipped],
+                now=now,
+                events=[
+                    PlanEvent(
+                        "plan.run.task_skipped",
+                        {
+                            **_ids(run),
+                            "task_node_id": node.id,
+                            "from": task.state,
+                            "state": "skipped",
+                            "item_id": task.item_id,
+                            "by": who,
+                        },
+                    )
+                ],
+                actor=actor,
+            )
+            log.info("epic_run.task_skipped", epic_run=run.id, task=node.id, by=who)
+            self._drive_quietly(run.id, now)
+        return self._read(run.id)
+
+    def _read(self, epic_run_id: str) -> EpicRun:
+        run = self.runs.get(epic_run_id)
+        assert run is not None  # nosec B101 - runs are never deleted
+        return run
+
+    def _epic_run(self, plan_id: str, node_id: str) -> EpicRun:
+        plan = self.plans.get(plan_id)
+        if plan is None:
+            raise PlanRefusal(404, "not_found", f"no plan {plan_id}")
+        node = plan.node(node_id)
+        if node is None:
+            raise PlanRefusal(404, "not_found", f"no node {node_id} in plan {plan_id}")
+        if node.level != "epic":
+            raise PlanRefusal(
+                422,
+                "invalid_argument",
+                f"an epic's run is paused, resumed or stopped; {node.title} is a {node.level}",
+            )
+        return self.latest(plan_id, node_id)
+
+    def _task_run(self, plan_id: str, node_id: str) -> tuple[EpicRun, PlanNode]:
+        plan = self.plans.get(plan_id)
+        if plan is None:
+            raise PlanRefusal(404, "not_found", f"no plan {plan_id}")
+        node = plan.node(node_id)
+        if node is None:
+            raise PlanRefusal(404, "not_found", f"no node {node_id} in plan {plan_id}")
+        if node.level != "task":
+            raise PlanRefusal(
+                422,
+                "invalid_argument",
+                f"a task is retried or skipped; {node.title} is a {node.level}",
+            )
+        run = self.runs.for_task(plan_id, node_id)
+        if run is None:
+            raise PlanRefusal(404, "not_found", f"{node.title} is not a task of any epic run")
+        return run, node
+
+    def _withdraw(self, item_id: str, why: str) -> bool:
+        """Abandon an item still waiting in the queue — no run started or
+        pinned — through the item abandon; ``False`` when it is not (a
+        dispatch took it: its run is left to finish)."""
+        item = self.loop.dstore.get(item_id)
+        if item is None or item.state != "queued" or item.run_id is not None:
+            return False
+        try:
+            self.loop.abandon_item(item_id, why, queued_only=True)
+        except (KeyError, ValueError):
+            return False
+        return True
 
     def _admit(self, run: EpicRun, node: PlanNode, task: EpicRunTask, now: float) -> EpicRunTask:
         """Admit one ready task; the task as it then stands."""
@@ -382,6 +772,67 @@ class EpicRunDriver:
             ):
                 return item
         return None
+
+
+def _ids(run: EpicRun) -> dict[str, Any]:
+    return {"plan_id": run.plan_id, "node_id": run.node_id, "epic_run_id": run.id}
+
+
+def _who(actor: Mapping[str, Any]) -> str:
+    return str(actor.get("display") or actor.get("id") or "a person")
+
+
+def _title(plan: Plan | None, node_id: str) -> str:
+    node = plan.node(node_id) if plan is not None else None
+    return node.title if node is not None else node_id
+
+
+def _blocked_reason(plan: Plan, node: PlanNode, states: Mapping[str, TaskState]) -> str:
+    deps = blocked_by(node, states)
+    return "blocked by " + ", ".join(f"{_title(plan, d)} ({states[d]})" for d in deps)
+
+
+def _refuse_ended(run: EpicRun) -> None:
+    if run.state in ("completed", "cancelled"):
+        raise PlanRefusal(
+            409,
+            "run_ended",
+            f"epic run {run.id} is {run.state}",
+            epic_run_id=run.id,
+            state=run.state,
+        )
+
+
+def _task_event(
+    run: EpicRun, prior: EpicRunTask | None, task: EpicRunTask, **extra: Any
+) -> PlanEvent:
+    """The event for one task's move: ``task_admitted`` when it was
+    admitted (a new item), ``task_retried`` when a failed task's item was
+    re-queued (by a person's retry through the item controls), else
+    ``task_<state>``."""
+    if (
+        task.item_id is not None
+        and task.admitted_at is not None
+        and (prior is None or prior.admitted_at != task.admitted_at)
+    ):
+        kind = "task_admitted"
+    elif prior is not None and prior.state == "failed" and task.state in ("queued", "running"):
+        kind = "task_retried"
+    else:
+        kind = f"task_{task.state}"
+    return PlanEvent(
+        f"plan.run.{kind}",
+        {
+            **_ids(run),
+            "task_node_id": task.node_id,
+            "from": None if prior is None else prior.state,
+            "state": task.state,
+            "item_id": task.item_id,
+            "run_id": task.run_id,
+            "reason": task.reason,
+            **extra,
+        },
+    )
 
 
 def _by(run: EpicRun) -> str:

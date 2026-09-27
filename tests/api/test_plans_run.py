@@ -194,3 +194,204 @@ class TestAdvertised:
         ]
         assert settled.state == "failed"
         assert settled.error_code == "interrupted_before_effect"
+
+
+# -- controls (#2348) -------------------------------------------------------------
+
+EPIC_CONTROLS = ("pause", "resume", "cancel")
+TASK_CONTROLS = ("retry", "skip")
+
+
+def _control(
+    api: Api,
+    headers: dict[str, str],
+    plan: dict[str, Any],
+    verb: str,
+    node_id: str | None = None,
+    key: str | None = "c1",
+) -> Any:
+    extra = {} if key is None else {"Idempotency-Key": key}
+    return api.client.post(
+        f"/v1/plans/{plan['id']}/nodes/{node_id or plan['root_id']}/run/{verb}",
+        headers={**headers, **extra},
+    )
+
+
+def _started(api: Api) -> tuple[FakeGithub, dict[str, str], dict[str, Any], dict[str, Any]]:
+    fake, headers, plan = _published(api)
+    run = _run(api, headers, plan)
+    assert run.status_code == 201, run.text
+    return fake, headers, plan, run.json()
+
+
+def _task(body: dict[str, Any], title: str) -> dict[str, Any]:
+    return next(t for t in body["tasks"] if t["title"] == title)
+
+
+class TestControllingARun:
+    def test_pause_and_resume(self, api: Api) -> None:
+        _, headers, plan, run = _started(api)
+        paused = _control(api, headers, plan, "pause")
+        assert paused.status_code == 200, paused.text
+        body = paused.json()
+        assert body["id"] == run["id"] and body["state"] == "paused"
+        assert body["replayed"] is False and body["operation_id"]
+        replay = _control(api, headers, plan, "pause")
+        assert replay.status_code == 200 and replay.json()["replayed"] is True
+        assert replay.json()["operation_id"] == body["operation_id"]
+        twice = _control(api, headers, plan, "pause", key="c2")
+        assert twice.status_code == 409 and twice.json()["code"] == "already_paused"
+        (event,) = _events(api, "plan.run.paused")
+        assert event["reason"] == "person" and event["epic_run_id"] == run["id"]
+        resumed = _control(api, headers, plan, "resume", key="c3")
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["state"] == "running"
+        assert _events(api, "plan.run.resumed") == [
+            {
+                "plan_id": plan["id"],
+                "node_id": plan["root_id"],
+                "epic_run_id": run["id"],
+                "by": body["started_by_display"],
+            }
+        ]
+
+    def test_cancel_withdraws_the_queued_task(self, api: Api) -> None:
+        fake, headers, plan, _ = _started(api)
+        before = len(fake.raw_calls)
+        cancelled = _control(api, headers, plan, "cancel")
+        assert cancelled.status_code == 200, cancelled.text
+        body = cancelled.json()
+        assert body["state"] == "cancelled" and body["completed_at"]
+        assert _task(body, "A")["state"] == "cancelled"
+        assert _task(body, "A")["reason"].startswith("withdrawn: ")
+        assert _task(body, "B")["state"] == "cancelled"
+        (item,) = api.loop.dstore.items()
+        assert item.state == "failed"
+        # The withdrawn issue was never claimed: nothing is written to it.
+        assert [(m, p) for m, p, _ in fake.raw_calls[before:] if m != "GET"] == []
+        (event,) = _events(api, "plan.run.cancelled")
+        assert event["withdrawn"] == [_node(plan, "A")["id"]] and event["running"] == []
+        ended = _control(api, headers, plan, "resume", key="c2")
+        assert ended.status_code == 409 and ended.json()["code"] == "run_ended"
+
+    def test_retry_a_failed_task_and_skip_another(self, api: Api) -> None:
+        _, headers, plan, run = _started(api)
+        a, b = _node(plan, "A")["id"], _node(plan, "B")["id"]
+        early = _control(api, headers, plan, "retry", a)
+        assert early.status_code == 409 and early.json()["code"] == "task_not_failed"
+        # The refusal is what the key replays.
+        replay = _control(api, headers, plan, "retry", a)
+        assert replay.status_code == 409 and replay.json()["code"] == "task_not_failed"
+        assert replay.json()["operation_id"] == early.json()["operation_id"]
+        item_id = _task(run, "A")["item_id"]
+        api.loop.dstore.abandon(item_id, "the tests failed", api.clock())
+        api.loop.epic_runs.tick(api.clock())
+        read = api.client.get(
+            f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/run", headers=api.bearer(READ)
+        ).json()
+        assert _task(read, "A")["state"] == "failed"
+        assert _task(read, "B")["state"] == "blocked"
+        retried = _control(api, headers, plan, "retry", a, key="c2")
+        assert retried.status_code == 200, retried.text
+        assert _task(retried.json(), "A")["state"] == "queued"
+        assert _task(retried.json(), "B")["state"] == "waiting"
+        item = api.loop.dstore.get(item_id)
+        assert item is not None and item.state == "queued" and item.attempts == 0
+        (event,) = _events(api, "plan.run.task_retried")
+        assert event["task_node_id"] == a and event["via"] == "item"
+        skipped = _control(api, headers, plan, "skip", b, key="c3")
+        assert skipped.status_code == 200, skipped.text
+        assert _task(skipped.json(), "B")["state"] == "skipped"
+        (event,) = _events(api, "plan.run.task_skipped")
+        assert event["task_node_id"] == b and event["from"] == "waiting"
+
+    def test_an_epic_control_on_a_task_is_refused(self, api: Api) -> None:
+        _, headers, plan, _ = _started(api)
+        refused = _control(api, headers, plan, "pause", _node(plan, "A")["id"])
+        assert refused.status_code == 422, refused.text
+        refused = _control(api, headers, plan, "skip", key="c2")
+        assert refused.status_code == 422, refused.text
+
+
+class TestControlGuards:
+    def test_every_control_needs_plans_publish(self, api: Api) -> None:
+        _, _, plan, _ = _started(api)
+        draft = api.bearer(DRAFT)
+        for verb in (*EPIC_CONTROLS, *TASK_CONTROLS):
+            node = _node(plan, "A")["id"] if verb in TASK_CONTROLS else None
+            refused = _control(api, draft, plan, verb, node)
+            assert refused.status_code == 403, (verb, refused.text)
+            assert refused.json()["capability"] == "plans:publish"
+
+    def test_every_control_needs_an_idempotency_key(self, api: Api) -> None:
+        _, headers, plan, _ = _started(api)
+        for verb in (*EPIC_CONTROLS, *TASK_CONTROLS):
+            node = _node(plan, "A")["id"] if verb in TASK_CONTROLS else None
+            refused = _control(api, headers, plan, verb, node, key=None)
+            assert refused.status_code == 422, (verb, refused.text)
+            assert refused.json()["code"] == "idempotency_key_required"
+        assert _events(api, "plan.run.paused") == []
+
+    def test_a_control_the_daemon_died_during_is_settled_from_the_record(self, api: Api) -> None:
+        from sbxloop.daemon.controls.principal import Principal
+
+        _, _, plan, _ = _started(api)
+        store = api.loop.operations
+        ops = []
+        for verb, node in (("pause", plan["root_id"]), ("skip", _node(plan, "A")["id"])):
+            op, _ = store.accept(
+                OperationSpec(
+                    action=f"plan.run.{verb}",
+                    target_kind="plan",
+                    target_key=plan["id"],
+                    principal=Principal.trusted("tester", "test"),
+                    request={"plan_id": plan["id"], "node_id": node},
+                    idempotency=("scope", f"key-{verb}"),
+                ),
+                api.clock(),
+            )
+            store.claim(op.id, "an-earlier-generation", api.clock())
+            ops.append(op.id)
+        # The pause happened before the crash; the skip did not.
+        api.loop.epic_runs.pause(plan["id"], plan["root_id"], actor={"id": "x"}, now=api.clock())
+        settled = {
+            o.id: o
+            for o in reconcile_operations(api.loop, generation="now", now=api.clock())
+            if o.id in ops
+        }
+        assert settled[ops[0]].state == "succeeded"
+        assert settled[ops[1]].state == "failed"
+        assert settled[ops[1]].error_code == "interrupted_before_effect"
+
+    def test_a_retry_that_requeued_the_item_before_dying_is_settled_done(self, api: Api) -> None:
+        from sbxloop.daemon.controls.principal import Principal
+
+        _, _, plan, run = _started(api)
+        a = _node(plan, "A")["id"]
+        item_id = _task(run, "A")["item_id"]
+        api.loop.dstore.abandon(item_id, "the tests failed", api.clock())
+        api.loop.epic_runs.tick(api.clock())
+        store = api.loop.operations
+        op, _ = store.accept(
+            OperationSpec(
+                action="plan.run.retry",
+                target_kind="plan",
+                target_key=plan["id"],
+                principal=Principal.trusted("tester", "test"),
+                request={"plan_id": plan["id"], "node_id": a},
+                idempotency=("scope", "key-retry"),
+            ),
+            api.clock(),
+        )
+        store.claim(op.id, "an-earlier-generation", api.clock())
+        # The item was re-queued; the task row was not written yet.
+        api.loop.retry_item(item_id, by="Ada")
+        (settled,) = [
+            o
+            for o in reconcile_operations(api.loop, generation="now", now=api.clock())
+            if o.id == op.id
+        ]
+        assert settled.state == "succeeded"
+        api.loop.epic_runs.tick(api.clock())
+        (event,) = _events(api, "plan.run.task_retried")
+        assert event["task_node_id"] == a and event["from"] == "failed"

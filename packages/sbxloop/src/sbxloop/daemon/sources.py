@@ -801,7 +801,18 @@ class GitHubIssueSource:
         # can hand-label an issue `sbxloop:failed` and calling its first-ever
         # claim a restart would be a false trail. The labels only name what
         # this claim cleared.
-        if item is not None and item.restarted:
+        if item is not None and item.from_epic_run:
+            # An epic run's task (#2348): the plan, not a label, starts it
+            # and starts it again.
+            lines.append(
+                f"{'Restarted' if item.restarted else 'Started'} as a task of epic run "
+                f"`{item.parent_item_id}`"
+                + (f" (clearing {marks} from the previous attempt)" if marks else "")
+                + "; retry or skip it from its plan."
+            )
+            if item.restarted:
+                lines.append(self._reuse_line(item))
+        elif item is not None and item.restarted:
             lines.append(
                 f"Restarted by re-adding `{self.labels.trigger_for(item)}`"
                 + (f" (clearing {marks} from the previous attempt)" if marks else "")
@@ -975,7 +986,9 @@ class GitHubIssueSource:
 
         def go(ops: IssueOps) -> bool:
             n = item.source_key
-            if pr_number is None:
+            if item.from_epic_run:
+                what = self._epic_blocked_line(item, pr_number, pr_url)
+            elif pr_number is None:
                 # Blocked before anything reached GitHub (#752): there is no
                 # pull request to merge by hand, only a cause to remove.
                 what = (
@@ -1004,6 +1017,26 @@ class GitHubIssueSource:
             return True
 
         return bool(self._guard("blocked report", go))
+
+    def _epic_blocked_line(self, item: WorkItem, pr_number: int | None, pr_url: str) -> str:
+        """What a blocked epic-run task's issue tells a person (#2348): the
+        plan, not a label, runs it again."""
+        where = (
+            f"This issue is a task of epic run `{item.parent_item_id}`: once the cause is dealt "
+            "with, retry it from its plan"
+        )
+        if pr_number is None:
+            return (
+                "Nothing was delivered. A human needs to act on the cause named above. "
+                f"{where} — `{self.labels.blocked}` does not need removing by hand (the retry "
+                "clears it)."
+            )
+        return (
+            f"{_pr_ref(pr_number, pr_url)} passed the loop's own review and checks but GitHub "
+            "would not let the loop land it. A human needs to look: merge or fix it by hand, "
+            "close this issue and skip the task in its plan so the tasks that depend on it go "
+            f"on — or {where[0].lower()}{where[1:]}."
+        )
 
     def report_gated(self, item: WorkItem, pr_number: int | None, pr_url: str) -> bool:
         """The run parked behind the opt-in merge gate ([landing]
@@ -1075,17 +1108,30 @@ class GitHubIssueSource:
         )
 
     def report_abandoned(self, item: WorkItem, error: str) -> None:
+        if item.from_epic_run and not item.claimed:
+            # Withdrawn from the queue before anything ran (an epic run's
+            # stop, #2348): nothing was ever written to the issue, so
+            # nothing is said on it now.
+            log.info("github.withdrawn", item=item.item_id, epic_run=item.parent_item_id)
+            return
+
         def go(ops: IssueOps) -> None:
             n = item.source_key
-            self._comment(
-                ops,
-                n,
-                f"Abandoned after retries: {error}\n\nRe-add "
-                f"`{self.labels.trigger_for(item)}` to run it again — the issue does not need "
-                f"to be edited and `{self.labels.failed}` does not need to be removed by hand "
-                "(the claim clears it), and the restart continues from any branch or "
-                "PR a previous attempt pushed.",
-            )
+            if item.from_epic_run:
+                again = (
+                    f"This issue is a task of epic run `{item.parent_item_id}`: retry it "
+                    "from its plan to run it again, or skip it there so the tasks that "
+                    f"depend on it go on — `{self.labels.failed}` does not need to be "
+                    "removed by hand (the retry clears it)."
+                )
+            else:
+                again = (
+                    f"Re-add `{self.labels.trigger_for(item)}` to run it again — the issue "
+                    f"does not need to be edited and `{self.labels.failed}` does not need to "
+                    "be removed by hand (the claim clears it), and the restart continues "
+                    "from any branch or PR a previous attempt pushed."
+                )
+            self._comment(ops, n, f"Abandoned after retries: {error}\n\n{again}")
             self._remove_label(ops, n, self.labels.in_progress)
             # Always clear the trigger, claimed or not: left on the issue it
             # keeps the item polling as work, and it makes the human's
@@ -1100,7 +1146,14 @@ class GitHubIssueSource:
         def go(ops: IssueOps) -> None:
             n = item.source_key
             lines = _cancel_lines(report)
-            if not report.requeued:
+            if not report.requeued and item.from_epic_run:
+                # An epic run's task (#2348): its plan is the way back.
+                lines.append(
+                    f"To continue it: this issue is a task of epic run "
+                    f"`{item.parent_item_id}` — retry it from its plan (a fresh run), or "
+                    "skip it there so the tasks that depend on it go on."
+                )
+            elif not report.requeued:
                 # Neither failed nor triggered: the human decides what
                 # happens next, so no label speaks for them. Re-adding the
                 # trigger label is the self-service way back — the store

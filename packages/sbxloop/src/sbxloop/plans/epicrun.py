@@ -17,12 +17,24 @@ A task is:
   delivered. The source closed the issue on the way;
 * ``closed`` — its issue was already closed when the run reached it;
 * ``failed`` — its item gave up, was blocked or was cancelled, or the
-  admission was refused by rule; the reason says which;
-* ``blocked`` — a dependency failed or is blocked, so it is not admitted.
+  admission was refused by rule; the reason says why. A person retries it
+  (its item re-queued, or a fresh admission) or skips it (#2348);
+* ``blocked`` — a dependency failed or is blocked, so it is not admitted;
+  the reason names which. Only the failed task's dependents are blocked,
+  transitively: every other task goes on;
+* ``skipped`` — a person chose to treat it as done (#2348). Its issue is
+  left as it is: sbxloop does not close it;
+* ``cancelled`` — the run was stopped before it was admitted, or while its
+  item was still queued and the stop withdrew it (#2348).
 
-``landed`` and ``closed`` are what make a dependent ready. Everything else
-is re-read from the item on every pass, so an operator's retry of a failed
-item (``queued`` again) is followed, not fought.
+``landed``, ``closed`` and ``skipped`` are what make a dependent ready.
+Everything else is re-read from the item on every pass, so an operator's
+retry of a failed item (``queued`` again) is followed, not fought.
+
+The run is ``running`` (admitting), ``paused`` by a person (following what
+it admitted, admitting nothing new), ``completed`` (every task done) or
+``cancelled`` (stopped: nothing more is admitted, and what was already
+running is followed to its end).
 """
 
 from __future__ import annotations
@@ -31,7 +43,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 
 from sbxloop.daemon.model import EPIC_RUN_PREFIX, WorkItem
 from sbxloop.daemon.store import DaemonStore
@@ -41,11 +53,24 @@ from sbxloop.plans.store import PlanEvent, _event, new_id
 
 EpicRunState = Literal["running", "paused", "completed", "cancelled"]
 TaskState = Literal[
-    "waiting", "ready", "queued", "running", "landed", "closed", "failed", "blocked"
+    "waiting",
+    "ready",
+    "queued",
+    "running",
+    "landed",
+    "closed",
+    "failed",
+    "blocked",
+    "skipped",
+    "cancelled",
 ]
 
 #: What makes a dependent ready.
-DONE: frozenset[str] = frozenset({"landed", "closed"})
+DONE: frozenset[str] = frozenset({"landed", "closed", "skipped"})
+#: A task nothing moves any more: done, or withdrawn by a stop.
+SETTLED: frozenset[str] = DONE | {"cancelled"}
+#: A run the driver still passes over: admitting, or holding admission.
+LIVE_RUN_STATES: frozenset[str] = frozenset({"running", "paused"})
 #: What keeps a dependent from ever being admitted until a person acts.
 STUCK: frozenset[str] = frozenset({"failed", "blocked"})
 #: A task whose item the driver still follows.
@@ -126,6 +151,26 @@ def readiness(node: PlanNode, states: Mapping[str, TaskState]) -> TaskState:
     return "waiting" if waiting else "ready"
 
 
+def blocked_by(node: PlanNode, states: Mapping[str, TaskState]) -> list[str]:
+    """The dependencies of ``node`` that failed or are blocked themselves:
+    what a ``blocked`` task waits on a person for."""
+    return [dep for dep in node.depends_on if states.get(dep) in STUCK]
+
+
+def dependents(nodes: Sequence[PlanNode], node_id: str) -> list[str]:
+    """Every task that depends on ``node_id``, directly or through another
+    task, in the plan's order: what a failure of ``node_id`` holds back."""
+    held: set[str] = {node_id}
+    moved = True
+    while moved:
+        moved = False
+        for node in nodes:
+            if node.id not in held and held.intersection(node.depends_on):
+                held.add(node.id)
+                moved = True
+    return [n.id for n in nodes if n.id in held and n.id != node_id]
+
+
 def _task(row: PlanEpicRunTaskRow) -> EpicRunTask:
     return EpicRunTask(
         node_id=str(row.node_id),
@@ -203,9 +248,32 @@ class EpicRunStore:
         ids = self._ids(PlanEpicRunRow.plan_id == plan_id, PlanEpicRunRow.node_id == node_id)
         return self.get(ids[0]) if ids else None
 
+    def for_task(self, plan_id: str, node_id: str) -> EpicRun | None:
+        """The most recent epic run of ``plan_id`` that holds task ``node_id``."""
+        ids = self._ids(
+            PlanEpicRunRow.plan_id == plan_id,
+            PlanEpicRunRow.epic_run_id.in_(
+                select(PlanEpicRunTaskRow.epic_run_id).where(PlanEpicRunTaskRow.node_id == node_id)
+            ),
+        )
+        return self.get(ids[0]) if ids else None
+
     def active(self) -> list[EpicRun]:
-        """Every epic run the daemon is driving, oldest first."""
-        ids = self._ids(PlanEpicRunRow.state == "running")
+        """Every epic run the daemon passes over, oldest first: running or
+        paused ones, and a stopped one while a task it admitted is still
+        queued or running (followed to its end, never admitted anew)."""
+        in_flight = select(PlanEpicRunTaskRow.epic_run_id).where(
+            PlanEpicRunTaskRow.state.in_(("queued", "running"))
+        )
+        ids = self._ids(
+            or_(
+                PlanEpicRunRow.state.in_(tuple(LIVE_RUN_STATES)),
+                and_(
+                    PlanEpicRunRow.state == "cancelled",
+                    PlanEpicRunRow.epic_run_id.in_(in_flight),
+                ),
+            )
+        )
         return [run for run in (self.get(i) for i in reversed(ids)) if run is not None]
 
     def create(self, run: EpicRun, *, events: Sequence[PlanEvent], actor: dict[str, Any]) -> None:
@@ -236,9 +304,11 @@ class EpicRunStore:
         now: float,
         state: EpicRunState | None = None,
         events: Sequence[PlanEvent] = (),
+        actor: Mapping[str, Any] | None = None,
     ) -> None:
         """Write the tasks that changed, the run's state when it moves, and
-        the events that say so."""
+        the events that say so — attributed to ``actor`` when a person's
+        control made the change, to nobody when the daemon's pass did."""
         with self.dstore.transaction() as session:
             row = session.get(PlanEpicRunRow, run.id)
             if row is None:
@@ -257,7 +327,7 @@ class EpicRunStore:
                     row.completed_at = now
             row.updated_at = now
             for event in events:
-                _event(session, event, now, None)
+                _event(session, event, now, None if actor is None else dict(actor))
 
     def adopt(self, item_id: str, epic_run_id: str, profile: str | None) -> bool:
         """Name ``epic_run_id`` as the parent of a queued, unclaimed item

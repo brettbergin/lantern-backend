@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+**A failed task of an epic run holds back only what depends on it, and a
+person can pause, resume, stop, retry and skip.** A task that fails blocks
+its dependents, directly or through another task, each naming the
+dependency it waits on; every other task is still admitted and run. Five
+new `plans:publish` routes steer the run, each taking a required
+`Idempotency-Key`: `POST /v1/plans/{id}/nodes/{epic_id}/run/pause` stops
+admission (what is queued or running goes on), `/resume` admits the ready
+set again, `/cancel` stops the run for good (tasks not yet admitted never
+are, an item still waiting in the queue is withdrawn through the item
+abandon, and a run already under way is left to finish rather than
+killed); `POST .../nodes/{task_id}/run/retry` re-queues a failed task's item
+through the item retry (or admits it afresh) and its dependents wait on it
+again, and `.../run/skip` treats a task as done without closing its issue.
+Every move of the run and of each task records a `plan.run.*` event, and a
+task failure records `plan.run.paused` with `reason: "task_failed"` while
+its siblings go on. The issue comments of an epic run's task now point at
+the plan's retry and skip instead of the trigger label. (#2348)
+
 **A published epic can be run: its tasks become issue runs in dependency
 order.** `POST /v1/plans/{id}/nodes/{epic_id}/run` (`plans:publish`,
 `Idempotency-Key` required, feature `planning.run`) starts a daemon-owned

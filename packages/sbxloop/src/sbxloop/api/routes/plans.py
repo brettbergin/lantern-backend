@@ -18,6 +18,7 @@ read; ``POST .../attach`` and ``.../detach`` link and unlink a child.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -29,6 +30,7 @@ from sbxloop.api.errors import Problem
 from sbxloop.api.models import rfc3339
 from sbxloop.api.pagination import Page
 from sbxloop.api.plan_schemas import (
+    EpicRunChanged,
     EpicRunOut,
     EpicRunStart,
     EpicRunStarted,
@@ -1340,3 +1342,227 @@ async def run_epic(
         response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}/run"
     ctx.hub.notify()
     return started
+
+
+# -- epic run controls (#2348) ----------------------------------------------------
+
+ControlVerb = Literal["pause", "resume", "cancel", "retry", "skip"]
+
+
+async def _control(
+    verb: ControlVerb,
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext,
+    auth: Authenticated,
+) -> EpicRunChanged:
+    """One control on an epic run, recorded as a ``plan.run.<verb>``
+    operation: the ``Idempotency-Key`` header is required, a replay answers
+    the run as it is now (or the refusal it recorded), and a different
+    request under the same key is ``409 idempotency_conflict``."""
+    principal = auth.principal
+    pair = idempotency(
+        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run/{verb}", required=True
+    )
+    actor = _actor(auth)
+
+    def replay(op: Operation) -> EpicRunChanged:
+        if op.state == "failed" and op.result and "status" in op.result:
+            raise Problem(
+                int(op.result["status"]),
+                op.error_code or "failed",
+                op.error_detail or "the earlier attempt was refused",
+                **dict(op.result.get("extra") or {}),
+                operation_id=op.id,
+            )
+        problem = replayed_problem(op)
+        if problem is not None:
+            raise problem
+        driver = _driver(ctx)
+        run = driver.runs.get(str((op.result or {}).get("epic_run_id") or ""))
+        if run is None:
+            run = driver.run_for(plan_id, node_id)
+        return EpicRunChanged(
+            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=True
+        )
+
+    def apply() -> EpicRunChanged:
+        store = getattr(ctx.loop, "operations", None)
+        if not isinstance(store, OperationStore):
+            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+        driver = _driver(ctx)
+        spec = OperationSpec(
+            action=f"{RUN_ACTION}.{verb}",
+            target_kind="plan",
+            target_key=plan_id,
+            principal=principal,
+            request={"plan_id": plan_id, "node_id": node_id},
+            idempotency=pair,
+        )
+        try:
+            op, created = store.accept(spec, ctx.clock())
+        except IdempotencyConflict as exc:
+            raise Problem(
+                409,
+                "idempotency_conflict",
+                "the idempotency key was already used with a different request",
+                operation_id=exc.existing.id,
+            ) from exc
+        if not created:
+            try:
+                return replay(op)
+            except PlanRefusal as exc:
+                raise _problem(exc) from exc
+        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
+        control: Callable[..., EpicRun] = getattr(driver, verb)
+        try:
+            run = control(plan_id, node_id, actor=actor, now=ctx.clock())
+        except PlanRefusal as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                result={"status": exc.status, "extra": exc.extra},
+                error_code=exc.code,
+                error_detail=exc.detail,
+            )
+            raise Problem(
+                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
+            ) from exc
+        except Exception as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                error_code="crashed",
+                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+            )
+            raise
+        store.finish(op.id, ctx.clock(), state="succeeded", result={"epic_run_id": run.id})
+        return EpicRunChanged(
+            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=False
+        )
+
+    changed = await ctx.call(apply)
+    ctx.hub.notify()
+    return changed
+
+
+_CONTROL_RESPONSES: dict[int | str, dict[str, Any]] = {
+    404: _PROBLEM,
+    409: _PROBLEM,
+    422: _PROBLEM,
+    503: _PROBLEM,
+}
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run/pause",
+    response_model=EpicRunChanged,
+    summary="Pause an epic run",
+    responses=_CONTROL_RESPONSES,
+)
+async def pause_epic_run(
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunChanged:
+    """Stop the epic's running run from admitting anything new. Tasks
+    already queued or running are not cancelled: they go on, and the run
+    still follows them. Refused when the run is already paused (``409
+    already_paused``) or has ended (``409 run_ended``). Records
+    ``plan.run.paused`` with ``reason: "person"``."""
+    return await _control("pause", plan_id, node_id, request, ctx, auth)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run/resume",
+    response_model=EpicRunChanged,
+    summary="Resume an epic run",
+    responses=_CONTROL_RESPONSES,
+)
+async def resume_epic_run(
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunChanged:
+    """Resume a paused epic run: the pass made here admits every ready
+    task at once. Refused when the run is not paused (``409 not_paused``)
+    or has ended (``409 run_ended``). Records ``plan.run.resumed``."""
+    return await _control("resume", plan_id, node_id, request, ctx, auth)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run/cancel",
+    response_model=EpicRunChanged,
+    summary="Stop an epic run",
+    responses=_CONTROL_RESPONSES,
+)
+async def cancel_epic_run(
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunChanged:
+    """Stop the epic run for good: it is ``cancelled``. A task not yet
+    admitted never is (``cancelled``); a task whose item is still waiting
+    in the queue has the item withdrawn through the item abandon
+    (``cancelled``); a task whose run is under way is not killed — it
+    finishes, the run follows it, and a person cancels that run through
+    ``POST /v1/runs/{run_id}/cancel`` if they want it down. Refused when
+    the run has ended (``409 run_ended``). Records ``plan.run.cancelled``
+    with the task node ids ``withdrawn`` and still ``running``."""
+    return await _control("cancel", plan_id, node_id, request, ctx, auth)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run/retry",
+    response_model=EpicRunChanged,
+    summary="Retry a failed task of an epic run",
+    responses=_CONTROL_RESPONSES,
+)
+async def retry_epic_run_task(
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunChanged:
+    """Run a failed task again, in the latest epic run that holds it. An
+    item that failed, was blocked or was cancelled is re-queued through the
+    item retry (attempts start over, a fresh run; the issue hears who
+    asked); a task whose admission was refused is admitted afresh. Its
+    dependents wait on it again. Allowed while the run is paused. Refused
+    when the task is blocked by another (``409 task_blocked`` with
+    ``blocked_by``), is not failed (``409 task_not_failed``), or the run
+    has ended (``409 run_ended``). Records ``plan.run.task_retried``."""
+    return await _control("retry", plan_id, node_id, request, ctx, auth)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run/skip",
+    response_model=EpicRunChanged,
+    summary="Skip a task of an epic run",
+    responses=_CONTROL_RESPONSES,
+)
+async def skip_epic_run_task(
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunChanged:
+    """Treat a task that is not under way — failed, blocked, waiting or
+    ready — as done, so its dependents become ready. The task is
+    ``skipped``; its issue is left exactly as it is (sbxloop does not
+    close it) and its item is not touched. Refused when the task is queued
+    or running (``409 task_in_progress``), already settled (``409
+    task_settled``) or the run has ended (``409 run_ended``). Records
+    ``plan.run.task_skipped``."""
+    return await _control("skip", plan_id, node_id, request, ctx, auth)

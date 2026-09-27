@@ -2802,9 +2802,112 @@
         "title": "DiscoveryCredential",
         "type": "object"
       },
+      "EpicRunChanged": {
+        "additionalProperties": false,
+        "description": "The epic run after a control \u2014 pause, resume, cancel, or a task's\nretry or skip \u2014 and the pass it made. ``replayed`` is true when the\nanswer is a replay of an earlier call under the same\n``Idempotency-Key`` (the run as it is now).",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
+          },
+          "started_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By Display"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/EpicRunTaskOut"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "node_id",
+          "state",
+          "created_at",
+          "updated_at",
+          "tasks"
+        ],
+        "title": "EpicRunChanged",
+        "type": "object"
+      },
       "EpicRunOut": {
         "additionalProperties": false,
-        "description": "An epic run: the daemon admitting an epic's ready tasks as issue\nruns, in dependency order, with ``parent_item_id`` naming it.",
+        "description": "An epic run: the daemon admitting an epic's ready tasks as issue\nruns, in dependency order, with ``parent_item_id`` naming it. ``state``\nis ``running`` (admitting), ``paused`` (a person paused it: what is\nqueued or running goes on, nothing new is admitted), ``completed``\n(every task landed, closed or skipped) or ``cancelled`` (stopped:\nnothing more is admitted; a run already under way finishes).",
         "properties": {
           "completed_at": {
             "anyOf": [
@@ -3010,7 +3113,7 @@
       },
       "EpicRunTaskOut": {
         "additionalProperties": false,
-        "description": "One task of an epic run. ``state`` is ``waiting`` (a dependency is\nnot closed yet), ``ready`` (about to be admitted, or the forge could\nnot be read), ``queued``, ``running``, ``landed`` (its code run merged\nor its workload delivered, and its issue was closed), ``closed`` (its\nissue was already closed), ``failed`` (``reason`` says why) or\n``blocked`` (a dependency failed, so it is not admitted). ``item_id``\nis the item it was admitted as and ``run_id`` the run that item last\nstarted \u2014 the run's thread.",
+        "description": "One task of an epic run. ``state`` is ``waiting`` (a dependency is\nnot closed yet), ``ready`` (about to be admitted, or the forge could\nnot be read), ``queued``, ``running``, ``landed`` (its code run merged\nor its workload delivered, and its issue was closed), ``closed`` (its\nissue was already closed), ``failed`` (``reason`` says why; retry or\nskip it), ``blocked`` (a dependency failed or is blocked, so it is not\nadmitted; ``reason`` names which), ``skipped`` (a person treated it as\ndone; its issue is left as it is) or ``cancelled`` (the run was stopped\nbefore it was admitted, or while its item was still queued). ``item_id``\nis the item it was admitted as and ``run_id`` the run that item last\nstarted \u2014 the run's thread.",
         "properties": {
           "admitted_at": {
             "anyOf": [
@@ -3101,7 +3204,9 @@
               "landed",
               "closed",
               "failed",
-              "blocked"
+              "blocked",
+              "skipped",
+              "cancelled"
             ],
             "title": "State",
             "type": "string"
@@ -16847,6 +16952,276 @@
           }
         },
         "summary": "Run an epic",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run/cancel": {
+      "post": {
+        "description": "Stop the epic run for good: it is ``cancelled``. A task not yet\nadmitted never is (``cancelled``); a task whose item is still waiting\nin the queue has the item withdrawn through the item abandon\n(``cancelled``); a task whose run is under way is not killed \u2014 it\nfinishes, the run follows it, and a person cancels that run through\n``POST /v1/runs/{run_id}/cancel`` if they want it down. Refused when\nthe run has ended (``409 run_ended``). Records ``plan.run.cancelled``\nwith the task node ids ``withdrawn`` and still ``running``.",
+        "operationId": "cancel_epic_run_v1_plans__plan_id__nodes__node_id__run_cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Stop an epic run",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run/pause": {
+      "post": {
+        "description": "Stop the epic's running run from admitting anything new. Tasks\nalready queued or running are not cancelled: they go on, and the run\nstill follows them. Refused when the run is already paused (``409\nalready_paused``) or has ended (``409 run_ended``). Records\n``plan.run.paused`` with ``reason: \"person\"``.",
+        "operationId": "pause_epic_run_v1_plans__plan_id__nodes__node_id__run_pause_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Pause an epic run",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run/resume": {
+      "post": {
+        "description": "Resume a paused epic run: the pass made here admits every ready\ntask at once. Refused when the run is not paused (``409 not_paused``)\nor has ended (``409 run_ended``). Records ``plan.run.resumed``.",
+        "operationId": "resume_epic_run_v1_plans__plan_id__nodes__node_id__run_resume_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Resume an epic run",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run/retry": {
+      "post": {
+        "description": "Run a failed task again, in the latest epic run that holds it. An\nitem that failed, was blocked or was cancelled is re-queued through the\nitem retry (attempts start over, a fresh run; the issue hears who\nasked); a task whose admission was refused is admitted afresh. Its\ndependents wait on it again. Allowed while the run is paused. Refused\nwhen the task is blocked by another (``409 task_blocked`` with\n``blocked_by``), is not failed (``409 task_not_failed``), or the run\nhas ended (``409 run_ended``). Records ``plan.run.task_retried``.",
+        "operationId": "retry_epic_run_task_v1_plans__plan_id__nodes__node_id__run_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Retry a failed task of an epic run",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run/skip": {
+      "post": {
+        "description": "Treat a task that is not under way \u2014 failed, blocked, waiting or\nready \u2014 as done, so its dependents become ready. The task is\n``skipped``; its issue is left exactly as it is (sbxloop does not\nclose it) and its item is not touched. Refused when the task is queued\nor running (``409 task_in_progress``), already settled (``409\ntask_settled``) or the run has ended (``409 run_ended``). Records\n``plan.run.task_skipped``.",
+        "operationId": "skip_epic_run_task_v1_plans__plan_id__nodes__node_id__run_skip_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Skip a task of an epic run",
         "tags": [
           "plans"
         ]

@@ -1334,16 +1334,20 @@ class DaemonLoop:
 
     # -- operator item controls (#229) --------------------------------------------
 
-    def abandon_item(self, item_id: str, reason: str | None = None) -> WorkItem:
+    def abandon_item(
+        self, item_id: str, reason: str | None = None, *, queued_only: bool = False
+    ) -> WorkItem:
         """Give up on an item deliberately. If it is the run in flight, the
         engine is asked to cancel and the settle path reports the abandon
         (so the source hears about it exactly once, after the run is really
-        down); otherwise the source is told right here."""
+        down); otherwise the source is told right here. ``queued_only``
+        withdraws only an item still waiting in the queue (an epic run's
+        stop, #2348) and refuses one a dispatch has already taken."""
         item_id = normalize_item_id(item_id)
         why = reason or "abandoned by operator"
         now = self.clock()
         before = self.dstore.get(item_id)
-        fresh = self.dstore.abandon(item_id, why, now)
+        fresh = self.dstore.abandon(item_id, why, now, queued_only=queued_only)
         if before is not None and before.state == "gated" and before.run_id is not None:
             gate = self.dstore.merge_gate_for(before.run_id)
             if gate is not None and gate.state in ("open", "approving"):
