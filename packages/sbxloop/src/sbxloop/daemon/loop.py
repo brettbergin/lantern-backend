@@ -3220,10 +3220,14 @@ class DaemonLoop:
                 self.clock,
             ),
             # A plan item's run reads its brief from, and delivers to, the
-            # plan record — never the forge.
+            # plan record — never the forge; a re-plan's brief is read after
+            # the plan is reconciled from the forge (reading only).
             plan_desk=(
                 PlanGeneration(
-                    PlanService(PlanStore(self.dstore), lambda: self.config), item, self.clock
+                    PlanService(PlanStore(self.dstore), lambda: self.config),
+                    item,
+                    self.clock,
+                    forge=self.github,
                 )
                 if item.kind == "plan"
                 else None

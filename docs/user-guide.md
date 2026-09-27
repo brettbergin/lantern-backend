@@ -969,6 +969,18 @@ with your answers as decisions (a skipped question becomes an assumption
 it states). A later breakdown of the same node sees those answers too.
 Abandoning a waiting item withdraws its questions.
 
+Asking again once the level is on the forge is a **re-plan**: the plan is
+read from the forge first, the planner is shown every child the forge has
+now, and it answers with a diff — children to add, changes to a child's
+sections, children it would close, each with a reason — never a fresh
+level, and never a child that already exists. The diff waits on the node
+until a person approves entries of it (`plans:publish`), which writes them
+through the same publish path: new children are filed and linked like any
+published level, a change rewrites only the sections it changes and is
+refused when someone edited that child on the forge since, and a close
+closes the issue as not planned with a comment saying why. Discarding the
+diff writes nothing.
+
 **Workloads on a cadence** (#761) are the third way in: **schedules**,
 which live in the daemon's database (#818), not in the config file. Create
 one from chat — "every weekday morning, summarise what changed overnight":

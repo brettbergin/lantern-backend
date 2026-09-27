@@ -522,7 +522,28 @@ class TestBreakdown:
         refused = self._breakdown(api, headers, plan, _node(plan, "A task")["id"])
         assert refused.status_code == 422 and "no children" in refused.json()["detail"]
 
-    def test_a_published_node_with_children_is_re_planned_not_broken_down(self, api: Api) -> None:
+    def test_a_published_node_with_children_on_the_forge_is_re_planned(self, api: Api) -> None:
+        from sbxloop.plans.model import ForgeRef
+
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, level="epic", title="An epic")
+        plan = _add(api, headers, plan, plan["root_id"], title="A task", kind="code")
+        for node_id, number in ((plan["root_id"], 3), (_node(plan, "A task")["id"], 4)):
+            TestStates()._mark(
+                api,
+                plan["id"],
+                node_id,
+                state="published",
+                forge=ForgeRef(
+                    number=number, url=f"https://github.com/o/r/issues/{number}", state="open"
+                ),
+            )
+        current = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        accepted = self._breakdown(api, headers, current, current["root_id"])
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["item"]["title"] == "Re-plan the tasks of “An epic”"
+
+    def test_a_published_node_whose_children_are_drafts_is_broken_down(self, api: Api) -> None:
         from sbxloop.plans.model import ForgeRef
 
         headers = api.bearer(DRAFT)
@@ -536,8 +557,9 @@ class TestBreakdown:
             forge=ForgeRef(number=3, url="https://github.com/o/r/issues/3", state="open"),
         )
         current = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
-        refused = self._breakdown(api, headers, current, current["root_id"])
-        assert refused.status_code == 409 and refused.json()["code"] == "replan_required"
+        accepted = self._breakdown(api, headers, current, current["root_id"])
+        assert accepted.status_code == 202, accepted.text
+        assert accepted.json()["item"]["title"] == "Propose the tasks of “An epic”"
 
     def test_planning_switched_off_for_the_repository_refuses(self, api: Api) -> None:
         from sbxloop.config import PlanningConfig

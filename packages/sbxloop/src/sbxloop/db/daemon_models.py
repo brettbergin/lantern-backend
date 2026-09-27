@@ -622,3 +622,7 @@ class PlanNodeRow(Base):
     # JSON (revision 0045): which run asked, what, and what was answered or
     # skipped. NULL until a breakdown of the node asks something.
     generation_json: Mapped[str | None] = mapped_column(Text)
+    # A re-plan's diff waiting for a person (#2346, revision 0046): the run
+    # that proposed it and its entries, as a JSON object; NULL when none is
+    # waiting.
+    replan_json: Mapped[str | None] = mapped_column(Text)

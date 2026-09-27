@@ -69,6 +69,7 @@ EFFECTS: dict[str, str] = {
     "daemon.stop": "the graceful stop is committed and signalled",
     "daemon.restart": "the restart is committed and signalled",
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
+    "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
 }
 
 
@@ -608,6 +609,16 @@ def _judge(
             "interrupted_before_effect",
             "the publish was interrupted; publishing the level again resumes it "
             "without duplicating an issue",
+        )
+    if op.action == "plan.replan.approve":
+        # An addition is found again by its marker, a change is guarded
+        # against the issue having moved and a closed issue is not closed
+        # twice, so approving what is left of the diff again is safe.
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the re-plan's approval was interrupted; approving what is left of it again "
+            "resumes it without duplicating an issue",
         )
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()

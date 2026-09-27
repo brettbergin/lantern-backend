@@ -53,6 +53,12 @@ from sbxloop.api.plan_schemas import (
     PlanPublished,
     PlanPublishResult,
     PlanQuestionOut,
+    PlanReplanApplied,
+    PlanReplanApprove,
+    PlanReplanDiscard,
+    PlanReplanEntryOut,
+    PlanReplanOut,
+    PlanReplanResult,
     PlanRollup,
     PlanSummary,
     PlanUpdate,
@@ -141,6 +147,28 @@ def node_out(node: PlanNode) -> PlanNodeOut:
             )
             for entry in node.drift
         ],
+        replan=(
+            None
+            if node.replan is None
+            else PlanReplanOut(
+                id=node.replan.id,
+                run_id=node.replan.run_id,
+                proposed_at=rfc3339(node.replan.proposed_at) or "",
+                entries=[
+                    PlanReplanEntryOut(
+                        id=e.id,
+                        action=e.action,
+                        node_id=e.node_id,
+                        sections=dict(e.sections),
+                        before=dict(e.before),
+                        rationale=e.rationale,
+                        error=e.error,
+                        forge_version=e.forge_version,
+                    )
+                    for e in node.replan.entries
+                ],
+            )
+        ),
     )
 
 
@@ -824,11 +852,18 @@ async def breakdown_node(
     ``proposed`` children and arrives as ``plan.generation.proposed``; a
     run that proposes nothing ends with ``plan.generation.failed``.
 
-    Refused: a task (``422``: it has no children); a node on the forge that
-    already has children (``409 replan_required``); a repository planning
-    is off for (``409 planning_unsupported``); a level at its cap (``409
-    level_full``); a breakdown of the node already queued or running
-    (``409 already_in_progress``); a stale ``expected_revision``."""
+    A node on the forge with children there is re-planned (#2346): the
+    run is told every current child, as the forge has them when it starts,
+    and proposes a diff — children to add, to change, to close — that
+    waits on the node (``replan``) for ``.../replan/approve`` or
+    ``.../replan/discard``, and arrives as ``plan.generation.proposed``
+    with ``kind: "replan"``. Nothing reaches the forge before approval.
+
+    Refused: a task (``422``: it has no children); a repository planning
+    is off for (``409 planning_unsupported``); a level at its cap, for a
+    breakdown (``409 level_full``); a breakdown of the node already queued
+    or running (``409 already_in_progress``); a stale
+    ``expected_revision``."""
 
     def check() -> None:
         ctx.plans.breakdown_target(plan_id, node_id, expected_revision=body.expected_revision)
@@ -916,3 +951,181 @@ async def answer_node(
         run_id=run_public_id(outcome.clarification.run_id),
         resumed=outcome.resumed,
     )
+
+
+REPLAN_ACTION = "plan.replan.approve"
+
+
+def _replan_applied(
+    plan: Plan, results: list[dict[str, Any]], op_id: str, *, replayed: bool
+) -> PlanReplanApplied:
+    return PlanReplanApplied(
+        plan=plan_out(plan),
+        results=[PlanReplanResult(**r) for r in results],
+        operation_id=op_id,
+        replayed=replayed,
+    )
+
+
+def _replay_replan(ctx: ApiContext, plan_id: str, op: Operation) -> PlanReplanApplied:
+    """An earlier approval under the same key: its results and the plan as
+    it is now, or the refusal it recorded, or ``409`` while it still runs."""
+    if op.state == "failed" and op.result and "status" in op.result:
+        raise Problem(
+            int(op.result["status"]),
+            op.error_code or "failed",
+            op.error_detail or "the earlier attempt was refused",
+            **dict(op.result.get("extra") or {}),
+            operation_id=op.id,
+        )
+    problem = replayed_problem(op)
+    if problem is not None:
+        raise problem
+    try:
+        plan = ctx.plans.get(plan_id)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    return _replan_applied(plan, list((op.result or {}).get("results") or []), op.id, replayed=True)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/replan/approve",
+    response_model=PlanReplanApplied,
+    summary="Apply a re-plan's diff to the forge",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
+)
+async def approve_replan(
+    plan_id: str,
+    node_id: str,
+    body: PlanReplanApprove,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> PlanReplanApplied:
+    """Apply the node's waiting re-plan — every entry, or those
+    ``entry_ids`` names — through the publish path: an ``add`` becomes an
+    approved child published with its marker, level label and link (looked
+    for by its marker first, never filed twice); a ``modify`` rewrites the
+    child's title and the sections under the rendered headings that change,
+    refused when the child or its issue moved since; a ``suggest_close``
+    closes the issue as not planned and comments why. An entry that lands
+    leaves the diff; one that fails stays with its error. Refused before
+    the forge is touched: no re-plan waiting (``409 no_replan``), an entry
+    not in it (``422``), a disabled repository, a full level (``409
+    too_many_children``), an addition depending on one not approved with it
+    (``409 dependency_unpublished``), no forge connection (``503``). The
+    ``Idempotency-Key`` header is required: a replay answers the same
+    results."""
+    principal = auth.principal
+    pair = idempotency(
+        request,
+        principal,
+        f"/v1/plans/{plan_id}/nodes/{node_id}/replan/approve",
+        required=True,
+    )
+    actor = _actor(auth)
+
+    def run() -> PlanReplanApplied:
+        store = getattr(ctx.loop, "operations", None)
+        if not isinstance(store, OperationStore):
+            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+        spec = OperationSpec(
+            action=REPLAN_ACTION,
+            target_kind="plan",
+            target_key=plan_id,
+            principal=principal,
+            request={
+                "plan_id": plan_id,
+                "node_id": node_id,
+                "expected_revision": body.expected_revision,
+                "entry_ids": body.entry_ids,
+            },
+            idempotency=pair,
+            expected_revision=body.expected_revision,
+        )
+        try:
+            op, created = store.accept(spec, ctx.clock())
+        except IdempotencyConflict as exc:
+            raise Problem(
+                409,
+                "idempotency_conflict",
+                "the idempotency key was already used with a different request",
+                operation_id=exc.existing.id,
+            ) from exc
+        if not created:
+            return _replay_replan(ctx, plan_id, op)
+        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
+        try:
+            applied = ctx.plans.approve_replan(
+                plan_id,
+                node_id,
+                expected_revision=body.expected_revision,
+                entry_ids=body.entry_ids,
+                actor=actor,
+                **_forge_args(ctx),
+            )
+        except PlanRefusal as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                result={"status": exc.status, "extra": exc.extra},
+                error_code=exc.code,
+                error_detail=exc.detail,
+            )
+            raise Problem(
+                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
+            ) from exc
+        except Exception as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                error_code="crashed",
+                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+            )
+            raise
+        results = [r.as_dict() for r in applied.results]
+        store.finish(
+            op.id,
+            ctx.clock(),
+            state="succeeded",
+            result={"results": results, "revision": applied.plan.revision},
+        )
+        return _replan_applied(applied.plan, results, op.id, replayed=False)
+
+    applied = await ctx.call(run)
+    ctx.hub.notify()
+    return applied
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/replan/discard",
+    response_model=PlanOut,
+    summary="Discard a re-plan's diff",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+)
+async def discard_replan(
+    plan_id: str,
+    node_id: str,
+    body: PlanReplanDiscard,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanOut:
+    """Drop the node's waiting re-plan — every entry, or those
+    ``entry_ids`` names — without writing anything to the forge. No
+    re-plan waiting is ``409 no_replan``; an entry not in it is ``422``."""
+    try:
+        plan = await ctx.call(
+            ctx.plans.discard_replan,
+            plan_id,
+            node_id,
+            expected_revision=body.expected_revision,
+            entry_ids=body.entry_ids,
+            now=ctx.clock(),
+            actor=_actor(auth),
+        )
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    ctx.hub.notify()
+    return plan_out(plan)

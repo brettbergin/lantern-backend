@@ -1645,6 +1645,7 @@ provision (agent box only, data dir mounted, no toolchains)
   narrowed to that one repository, as every run's is, so the other
   repositories an initiative's kept epics target are named to the planner
   rather than checked out.
+
 - **Validated like decompose.** `PlanProposal` is checked by
   `proposal_problems` inside `_agent_json`'s retry: the level's room, a
   task's acceptance criteria and kind, a workload task's configured profile,
@@ -1652,6 +1653,7 @@ provision (agent box only, data dir mounted, no toolchains)
   under the target repository's own toolchains, read from the checkout on
   the host), and `depends_on` among siblings without a cycle. Invalid twice
   fails the run named.
+
 - **Delivered once.** The validated proposal is persisted on the task's
   output before delivery, and the delivery is recorded as a `plan`
   `Published` row, so a resume delivers without a second turn and never
@@ -1660,11 +1662,13 @@ provision (agent box only, data dir mounted, no toolchains)
   each proposed child is `proposed` with `origin = planner` and its
   dependencies mapped to the new ids, under the same section rules a
   person's edit meets.
+
 - **Events.** `plan.generation.started` when the run starts,
   `plan.generation.proposed` in the delivery's transaction, and
   `plan.generation.failed` when the run ends any other way (a provider hold
   is a pause, not an end), each scoped to the run, its item and its
   channel.
+
 - **Clarifying, and the park.** With `[planning] max_questions` above 0
   (the repository's own under `[vcs.repos.planning]`, carried on the
   brief), the planner's first turn reads the same checkout and answers
@@ -1696,6 +1700,7 @@ provision (agent box only, data dir mounted, no toolchains)
   before settling). A node's earlier answers ride into the next
   breakdown's clarifying turn so they are not asked again. Abandoning a
   waiting item withdraws its questions (`plan.generation.failed`).
+
 - **Answered from chat.** The engine emits `run.awaiting_answers` with the
   questions; each chat bridge holds it until the run's finish card is out
   and then posts the questions in the run's thread through
@@ -1711,6 +1716,26 @@ provision (agent box only, data dir mounted, no toolchains)
   choice. In a collaboration channel the run's chronicle posts the
   questions as a notice, and the channel-scoped `plan.generation.questions`
   event carries them for the client's questions card.
+
+- **Re-plans (#2346).** A node on the forge with a child followed there
+  (`plans.service.replanned`) is re-planned rather than broken down: its
+  brief has `mode = "replan"` and carries every current child
+  (`CurrentChild`: node id, issue, state, whether a diff may change or
+  close it, whether its body holds our sections) and `_stage_propose`
+  renders `plan_replan.md` instead, validated as a `PlanReplan` —
+  `add`/`modify`/`suggest_close` — by `replan_problems` (the room the cap
+  leaves, the section rules on each addition and on each changed child as
+  it would be, an addition never a current child by title or id, one entry
+  per child, only open followed children changed or closed, a person's own
+  forge issue closed but never rewritten), persisted on the task as
+  `replan` and delivered through `PlanDesk.deliver_replan`. The engine asks
+  the desk for `brief(fresh=True)` just before the turn; the daemon's desk
+  then reconciles the plan from the forge on the host (reads only) so the
+  planner sees the forge's children, and fails the run named when the
+  forge cannot be read. `PlanService.deliver_replan` keeps the diff on the
+  node (`replan_json`, migration 0046) as `ReplanEntry` rows — an
+  addition's node id minted now, a change's `before` — and changes nothing
+  else.
 
 `tests/unit/test_plan_run_trail.py` holds a plan run's chronology the way
 the code and tool trails hold theirs, and asserts no github sandbox and no
@@ -2690,6 +2715,26 @@ leaves — after removing only the `Depends on` items that name it from its
 siblings' issues (`render.drop_reference`). Because each write leaves the
 forge exactly as the node now reads, the next reconcile reports no drift
 for it.
+
+A re-plan's diff reaches the forge only on a person's approval (#2346).
+`PlanService.approve_replan` checks what publishing checks before the forge
+is touched (repositories, the cap, additions' dependencies, the
+connection), takes the same one-write-per-plan slot a direct edit takes,
+reconciles, and hands the chosen entries to `plans/replan.py`. A `modify`
+is written by `PlanService._write_published` — the one write path a
+published node's issue has, shared with `edit_published` — naming the
+child's `content_version` recorded when the diff was proposed, so a child
+whose issue a person changed since is refused with nothing written (the
+entry's `before` names what moved when the reconcile already folded it
+in), and otherwise only the changed title and sections are rewritten by
+`render.rewrite_sections`. A `suggest_close` closes the issue as not
+planned and comments why. The additions become `approved` children under
+their minted ids and are published by `publish_level` narrowed with
+`only`, so marker lookup, labels and linking are publishing's own and an
+interrupted approval finds its issues instead of filing them again. Applied
+entries leave `Replan.entries`, failed ones keep their error, and the call
+records `plan.published` (`replan: true`) and is a `plan.replan.approve`
+operation under an `Idempotency-Key`.
 
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read

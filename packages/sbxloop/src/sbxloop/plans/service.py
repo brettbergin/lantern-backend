@@ -8,8 +8,9 @@ whose forge cannot hold a plan is refused by name, and every mutation
 names the revision it read. After publish the forge wins:
 :meth:`PlanService.reconcile` folds it in (#2342), and the only writes to a
 published node are a person's direct ones — :meth:`PlanService.edit_published`,
-:meth:`~PlanService.attach` and :meth:`~PlanService.detach` (#2350) — each
-written to the forge at once and never over a forge change.
+:meth:`~PlanService.attach` and :meth:`~PlanService.detach` (#2350) — and a
+re-plan's diff a person approves entry by entry (#2346), each written to
+the forge at once and never over a forge change.
 """
 
 from __future__ import annotations
@@ -25,11 +26,14 @@ from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
 from sbxloop.engine.planning import (
     Clarification,
+    CurrentChild,
     PlanAnswer,
     PlanBrief,
     PlanProposal,
     PlanQuestion,
+    PlanReplan,
     ProfileRef,
+    fold_title,
 )
 from sbxloop.errors import SbxloopError
 from sbxloop.log import get_logger
@@ -52,6 +56,8 @@ from sbxloop.plans.model import (
     Level,
     Plan,
     PlanNode,
+    Replan,
+    ReplanEntry,
     child_level,
     content,
     content_version,
@@ -66,6 +72,7 @@ from sbxloop.plans.reconcile import (
     seen_of,
 )
 from sbxloop.plans.render import drop_reference, markers, parse_issue_url
+from sbxloop.plans.replan import AppliedReplan, EntryRefused, apply_replan
 from sbxloop.plans.store import (
     PlanEvent,
     PlanGone,
@@ -749,10 +756,11 @@ class PlanService:
     ) -> tuple[Plan, PlanNode]:
         """The plan and the node a breakdown proposes the next level of,
         refused by name when the node cannot take one: a task has no
-        children; a node on the forge that already has children is
-        re-planned, not broken down again; a repository planning is off for
-        (or no longer configured) cannot hold the level; a level at its cap
-        has no room."""
+        children; a repository planning is off for (or no longer
+        configured) cannot hold the level; a level at its cap has no room
+        for a breakdown. A node on the forge with children there is
+        re-planned (:func:`replanned`): its run proposes a diff, which a
+        full level does not stop — it may change and close children."""
         plan = self.get(plan_id)
         if expected_revision is not None:
             self._check_revision(plan, expected_revision)
@@ -762,14 +770,6 @@ class PlanService:
         if level is None:
             raise PlanRefusal(
                 422, "invalid_argument", "a task has no children to propose", node_id=node.id
-            )
-        if node.state == "published" and plan.children(node.id):
-            raise PlanRefusal(
-                409,
-                "replan_required",
-                "this node is on the forge and already has children; re-plan it rather "
-                "than breaking it down again",
-                node_id=node.id,
             )
         config = self._config()
         if config.find_repo(node.repository) is None:
@@ -789,7 +789,7 @@ class PlanService:
             )
         cap = self._cap(node)
         kept = _kept(plan, node)
-        if len(kept) >= cap:
+        if not replanned(plan, node) and len(kept) >= cap:
             raise PlanRefusal(
                 409,
                 "level_full",
@@ -800,14 +800,20 @@ class PlanService:
         return plan, node
 
     def brief(self, plan_id: str, node_id: str, *, note: str = "") -> PlanBrief:
-        """What a plan run is asked, read from the plan as it is now."""
+        """What a plan run is asked, read from the plan as it is now: a
+        breakdown, or — for a node on the forge with children there — a
+        re-plan carrying every current child."""
         plan, node = self.breakdown_target(plan_id, node_id)
         level = child_level(node.level)
         assert level is not None  # nosec B101 - breakdown_target refused a task
-        kept = _kept(plan, node)
+        replan = replanned(plan, node)
+        children = plan.children(node.id)
+        kept = children if replan else _kept(plan, node)
         parent = plan.node(node.parent_id) if node.parent_id else None
         cap = self._cap(node)
         return PlanBrief(
+            mode="replan" if replan else "breakdown",
+            current=[_current(child) for child in children] if replan else [],
             plan_id=plan.id,
             node_id=node.id,
             level=node.level,  # type: ignore[arg-type]
@@ -825,8 +831,8 @@ class PlanService:
                 if parent is not None
                 else ""
             ),
-            kept=[child.title for child in kept],
-            room=cap - len(kept),
+            kept=[] if replan else [child.title for child in kept],
+            room=max(cap - len(kept), 0),
             cap=cap,
             profiles=[
                 ProfileRef(name=profile.name, description=profile.description or "")
@@ -1091,6 +1097,14 @@ class PlanService:
         the revision it reads, and read again when another write won."""
         for _ in range(3):
             plan, node = self.breakdown_target(plan_id, node_id)
+            if replanned(plan, node):
+                raise PlanRefusal(
+                    409,
+                    "replan_required",
+                    "children of this node were published while the planner worked; "
+                    "re-plan it rather than breaking it down again",
+                    node_id=node.id,
+                )
             upsert, remove = self._proposed_children(plan, node, proposal, now)
             try:
                 changed = self.store.apply(
@@ -1106,6 +1120,7 @@ class PlanService:
                                 "plan_id": plan.id,
                                 "node_id": node.id,
                                 "run_id": run_public_id(run_id),
+                                "kind": "breakdown",
                                 "count": len(proposal.children),
                             },
                             run_id=run_id,
@@ -1123,6 +1138,416 @@ class PlanService:
         raise PlanRefusal(
             409, "stale_revision", "the plan kept changing while the proposal was written"
         )
+
+    def deliver_replan(
+        self,
+        plan_id: str,
+        node_id: str,
+        replan: PlanReplan,
+        *,
+        run_id: str,
+        now: float,
+        item_id: str | None = None,
+        channel_id: str | None = None,
+    ) -> tuple[Plan, int]:
+        """Keep a re-plan run's diff on its node, waiting for a person: it
+        replaces any diff still waiting there, and writes nothing else — no
+        child is added, changed or closed until an entry is approved. An
+        addition that repeats a child the node has (by id or title), and an
+        entry whose child left the forge while the planner worked, are left
+        out and counted as ``skipped``; an empty diff clears the node's.
+        Recorded as ``plan.generation.proposed`` with ``kind: "replan"``."""
+        for _ in range(3):
+            plan, node = self.breakdown_target(plan_id, node_id)
+            if not replanned(plan, node):
+                raise PlanRefusal(
+                    409,
+                    "replan_unavailable",
+                    "this node no longer has children on the forge; break it down instead",
+                    node_id=node.id,
+                )
+            pending, counts = self._replan_entries(plan, node, replan, run_id, now)
+            try:
+                changed = self.store.apply(
+                    plan.id,
+                    expected_revision=plan.revision,
+                    now=now,
+                    upsert=[replace(node, replan=pending, updated_at=now)],
+                    events=[
+                        PlanEvent(
+                            "plan.generation.proposed",
+                            {
+                                "plan_id": plan.id,
+                                "node_id": node.id,
+                                "run_id": run_public_id(run_id),
+                                "kind": "replan",
+                                "replan_id": None if pending is None else pending.id,
+                                "count": 0 if pending is None else len(pending.entries),
+                                **counts,
+                            },
+                            run_id=run_id,
+                            item_id=item_id,
+                            channel_id=channel_id,
+                        )
+                    ],
+                    actor=dict(PLANNER),
+                )
+            except StaleRevision:
+                continue
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+            return changed, 0 if pending is None else len(pending.entries)
+        raise PlanRefusal(
+            409, "stale_revision", "the plan kept changing while the re-plan was written"
+        )
+
+    def _replan_entries(
+        self, plan: Plan, node: PlanNode, replan: PlanReplan, run_id: str, now: float
+    ) -> tuple[Replan | None, dict[str, int]]:
+        """The diff as the entries a person approves, held to the rules a
+        person's edit is; and how many of each kind, and how many were
+        left out."""
+        level = child_level(node.level)
+        assert level is not None  # nosec B101 - breakdown_target refused a task
+        children = plan.children(node.id)
+        by_id = {c.id: c for c in children}
+        titles = {fold_title(c.title) for c in children}
+        try:
+            order = replan.add_dependencies(list(by_id))
+        except ValueError as exc:
+            raise PlanRefusal(422, "invalid_argument", str(exc)) from exc
+        skipped = 0
+        minted: dict[int, str] = {}
+        for index, child in enumerate(replan.add):
+            if fold_title(child.title) in titles or (child.id and child.id in by_id):
+                skipped += 1
+                continue
+            titles.add(fold_title(child.title))
+            minted[index] = new_id("node_")
+        room = self._cap(node) - len(children)
+        if len(minted) > room:
+            raise PlanRefusal(
+                409,
+                "level_full",
+                f"the {node.level} has room for {max(room, 0)} more {_noun(level)}, "
+                f"and the re-plan adds {len(minted)}",
+                node_id=node.id,
+            )
+        entries: list[ReplanEntry] = []
+        for index, minted_id in minted.items():
+            child = replan.add[index]
+            sections: dict[str, Any] = {
+                "title": child.title,
+                "goal": child.goal,
+                "context": child.context,
+                "acceptance_criteria": list(child.acceptance_criteria),
+                "non_goals": child.non_goals,
+                "constraints": child.constraints,
+            }
+            if level == "task":
+                sections |= {
+                    "kind": child.kind,
+                    "workload_profile": child.workload_profile,
+                    "verify_commands": list(child.verify_commands),
+                    "depends_on": [
+                        minted[d] if isinstance(d, int) else d
+                        for d in order[index]
+                        if not isinstance(d, int) or d in minted
+                    ],
+                }
+            self._check_sections(node, level, sections)
+            entries.append(
+                ReplanEntry(
+                    id=new_id("rpe_"),
+                    action="add",
+                    node_id=minted_id,
+                    sections=sections,
+                    rationale=child.rationale,
+                )
+            )
+        for change in replan.modify:
+            target = by_id.get(change.target)
+            if target is None or not _changeable(target) or target.origin == "forge":
+                skipped += 1
+                continue
+            fields = dict(change.changes())
+            if fields.get("kind") == "workload" and "verify_commands" not in fields:
+                fields["verify_commands"] = []
+            if fields.get("kind") == "code" and "workload_profile" not in fields:
+                fields["workload_profile"] = None
+            fields = {k: v for k, v in fields.items() if _plain(getattr(target, k)) != _plain(v)}
+            if not fields:
+                skipped += 1
+                continue
+            siblings = [c for c in children if c.id != target.id]
+            self._with_sections(target, fields, siblings=siblings)
+            entries.append(
+                ReplanEntry(
+                    id=new_id("rpe_"),
+                    action="modify",
+                    node_id=target.id,
+                    sections={k: _plain(v) for k, v in fields.items()},
+                    before={k: _plain(getattr(target, k)) for k in fields},
+                    rationale=change.rationale,
+                    forge_version=content_version(target),
+                )
+            )
+        for close in replan.suggest_close:
+            target = by_id.get(close.target)
+            if target is None or not _changeable(target):
+                skipped += 1
+                continue
+            entries.append(
+                ReplanEntry(
+                    id=new_id("rpe_"),
+                    action="suggest_close",
+                    node_id=target.id,
+                    rationale=close.rationale,
+                    forge_version=content_version(target),
+                )
+            )
+        counts = {
+            "add": sum(1 for e in entries if e.action == "add"),
+            "modify": sum(1 for e in entries if e.action == "modify"),
+            "suggest_close": sum(1 for e in entries if e.action == "suggest_close"),
+            "skipped": skipped,
+        }
+        if not entries:
+            return None, counts
+        pending = Replan(
+            id=new_id("replan_"),
+            run_id=run_public_id(run_id),
+            proposed_at=now,
+            entries=tuple(entries),
+        )
+        return pending, counts
+
+    def _check_sections(self, parent: PlanNode, level: Level, sections: Mapping[str, Any]) -> None:
+        """An addition's sections hold to the rules a person's child does."""
+        probe = PlanNode(
+            id="node_probe",
+            plan_id=parent.plan_id,
+            parent_id=parent.id,
+            position=0,
+            level=level,
+            repository=parent.repository,
+            state="proposed",
+            origin="planner",
+            title="",
+        )
+        self._with_sections(
+            probe, {k: v for k, v in sections.items() if k != "depends_on"}, siblings=[]
+        )
+
+    def approve_replan(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        entry_ids: Sequence[str] | None,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> AppliedReplan:
+        """Apply a pending re-plan's entries — every one, or those
+        ``entry_ids`` names — to the forge (see :mod:`~sbxloop.plans.replan`):
+        additions through the publish path, changes through the guarded
+        issue edit, closes as not planned. Everything that would refuse them
+        is checked before the forge is touched, and the plan is read from
+        the forge first so a change is judged against what it has now.
+        Records ``plan.published`` with the result."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._node(plan, node_id)
+        chosen = self._replan_chosen(node, entry_ids)
+        targets = [plan.node(e.node_id) for e in chosen if e.action != "add"]
+        repos = list(
+            dict.fromkeys([node.repository, *(t.repository for t in targets if t is not None)])
+        )
+        for repo in repos:
+            self._check_publishable(repo, forge_kind)
+        adds = [e for e in chosen if e.action == "add"]
+        self._check_replan_adds(plan, node, adds)
+        with self._forge_write(plan.id, expected_revision) as plan:
+            ops = self._connect(forge_kind, connect)
+            try:
+                reconcile_plan(
+                    ops,
+                    store=self.store,
+                    config=self._config(),
+                    plan=plan,
+                    clock=clock,
+                    actor=actor,
+                )
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+            except Exception as exc:  # a change still reads its issue before writing
+                log.warning("plans.replan_reconcile_failed", plan_id=plan_id, error=repr(exc))
+
+            def edit(entry: ReplanEntry) -> PlanNode:
+                """An approved ``modify``, through the direct edit's write:
+                refused unless the issue still reads as the child did when
+                the diff was proposed."""
+                latest = self.get(plan_id)
+                try:
+                    written = self._write_published(
+                        ops,
+                        latest,
+                        entry.node_id,
+                        forge_version=entry.forge_version or "",
+                        sections=entry.sections,
+                        position=None,
+                        clock=clock,
+                        actor=actor,
+                        via="replan",
+                    )
+                except PlanRefusal as exc:
+                    if exc.code == "forge_changed":
+                        child = latest.node(entry.node_id)
+                        raise EntryRefused(
+                            f"“{child.title if child else entry.node_id}” changed on the forge "
+                            "since the re-plan was proposed; nothing was written — discard "
+                            "this entry or re-plan again"
+                        ) from exc
+                    raise EntryRefused(exc.detail) from exc
+                return self._node(written, entry.node_id)
+
+            result = apply_replan(
+                ops,
+                store=self.store,
+                config=self._config(),
+                plan=self.get(plan_id),
+                node_id=node.id,
+                entry_ids=[e.id for e in chosen],
+                clock=clock,
+                actor=actor,
+                edit=edit,
+            )
+            self.store.note(
+                plan.id,
+                now=clock(),
+                events=[
+                    PlanEvent(
+                        "plan.published",
+                        {
+                            "plan_id": plan.id,
+                            "node_id": node.id,
+                            "replan": True,
+                            "published": result.node_ids("created", "found"),
+                            "modified": result.node_ids("updated"),
+                            "closed": result.node_ids("closed"),
+                            "failed": result.node_ids("failed"),
+                        },
+                    )
+                ],
+                actor=dict(actor),
+            )
+            return AppliedReplan(self.get(plan_id), result.results)
+
+    def discard_replan(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        entry_ids: Sequence[str] | None,
+        now: float,
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """Drop a pending re-plan's entries — every one, or those
+        ``entry_ids`` names — without writing anything to the forge."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._node(plan, node_id)
+        chosen = {e.id for e in self._replan_chosen(node, entry_ids)}
+        assert node.replan is not None  # nosec B101 - _replan_chosen checked
+        kept = tuple(e for e in node.replan.entries if e.id not in chosen)
+        replan = replace(node.replan, entries=kept) if kept else None
+        return self._write(
+            plan,
+            expected_revision,
+            now,
+            upsert=[replace(node, replan=replan, updated_at=now)],
+            events=[
+                PlanEvent(
+                    "plan.node.changed",
+                    {
+                        "plan_id": plan.id,
+                        "node_id": node.id,
+                        "change": "replan_discarded",
+                        "entry_ids": sorted(chosen),
+                    },
+                )
+            ],
+            actor=actor,
+        )
+
+    @staticmethod
+    def _replan_chosen(node: PlanNode, entry_ids: Sequence[str] | None) -> list[ReplanEntry]:
+        if node.replan is None or not node.replan.entries:
+            raise PlanRefusal(
+                409,
+                "no_replan",
+                f"no re-plan of {node.title} is waiting; ask for one with a breakdown",
+                node_id=node.id,
+            )
+        entries = list(node.replan.entries)
+        if entry_ids is None:
+            return entries
+        unknown = sorted(set(entry_ids) - {e.id for e in entries})
+        if unknown:
+            raise PlanRefusal(
+                422,
+                "invalid_argument",
+                f"not entries of the waiting re-plan: {', '.join(unknown)}",
+                entry_ids=unknown,
+            )
+        wanted = set(entry_ids)
+        return [e for e in entries if e.id in wanted]
+
+    def _check_replan_adds(self, plan: Plan, node: PlanNode, adds: Sequence[ReplanEntry]) -> None:
+        """The additions fit the level's cap, and each depends only on
+        children on the forge or additions approved with it."""
+        if not adds:
+            return
+        planning = self._config().planning_for(node.repository)
+        cap, key = (
+            (planning.max_epics_per_initiative, "max_epics_per_initiative")
+            if node.level == "initiative"
+            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
+        )
+        children = {c.id for c in plan.children(node.id)}
+        total = len(children | {e.node_id for e in adds})
+        if total > cap:
+            raise PlanRefusal(
+                409,
+                "too_many_children",
+                f"{node.title} would have {total} children; [planning] {key} is {cap}",
+                cap=cap,
+                children=total,
+            )
+        going = {e.node_id for e in adds}
+        missing: dict[str, list[str]] = {}
+        for entry in adds:
+            for dep in entry.sections.get("depends_on") or ():
+                sibling = plan.node(dep)
+                if dep in going or (sibling is not None and sibling.state == "published"):
+                    continue
+                missing.setdefault(entry.id, []).append(dep)
+        if missing:
+            named = "; ".join(
+                f"{entry} depends on {', '.join(deps)}" for entry, deps in missing.items()
+            )
+            raise PlanRefusal(
+                409,
+                "dependency_unpublished",
+                f"approve what these additions depend on with them: {named}",
+                entry_ids=sorted(missing),
+            )
 
     def generation_event(
         self,
@@ -1286,70 +1711,101 @@ class PlanService:
             plan, node, self._with_sections(node, sections, siblings=siblings)
         )
         self._check_publishable(node.repository, forge_kind)
-        assert node.forge is not None  # nosec B101 - _followed checks
-        where = f"{node.repository}#{node.forge.number}"
-        issue_url = node.forge.url
         with self._forge_write(plan.id, expected_revision) as plan:
             ops = self._connect(forge_kind, connect)
-            seen = self._read(ops, node.repository, node.forge.number, missing=409)
-            node = self._followed(plan, node_id)
-            current = as_forge_has_it(plan, node, title=seen.title, body=seen.body)
-            version = content_version(current)
-            if version != forge_version:
-                raise PlanRefusal(
-                    409,
-                    "forge_changed",
-                    f"{where} changed on the forge since it was read; nothing was written. "
-                    "Review its current version and edit again naming its forge_version",
-                    forge_version=version,
-                    current={
-                        **content(current),
-                        "forge_version": version,
-                        "number": seen.number,
-                        "url": seen.url or issue_url,
-                    },
-                )
-            edited = self._with_sections(current, sections, siblings=self._siblings(plan, node))
-            self._check_published_dependencies(plan, current, edited)
-            title, body = issue_write(plan, current, edited, title=seen.title, body=seen.body)
-            written: dict[str, Any] = {}
-            if title is not None or body is not None:
-                try:
-                    written = ops.issue_update(node.repository, seen.number, title=title, body=body)
-                except SbxloopError as exc:
-                    raise PlanRefusal(
-                        502, "forge_refused", f"could not write {where}: {say(exc)}"
-                    ) from exc
-            stamp = str(written.get("updated_at") or "") or seen.updated_at
-            fields = [k for k in CONTENT_FIELDS if getattr(node, k) != getattr(edited, k)]
-
-            def change(latest: Plan, now: float) -> list[PlanNode]:
-                base = self._node(latest, node_id)
-                assert base.forge is not None  # nosec B101 - followed above
-                new = replace(
-                    base,
-                    **{k: getattr(edited, k) for k in CONTENT_FIELDS},
-                    forge=replace(base.forge, updated_at=stamp),
-                    updated_at=now,
-                )
-                if position is None or new.parent_id is None:
-                    return [new]
-                around = [new if s.id == new.id else s for s in latest.children(new.parent_id)]
-                return self._reorder(around, new.id, position)
-
-            return self._record(
-                plan.id,
-                change,
-                event={
-                    "node_id": node.id,
-                    "change": "issue_edited",
-                    "number": seen.number,
-                    "fields": fields,
-                    "wrote": [k for k, v in (("title", title), ("body", body)) if v is not None],
-                },
+            return self._write_published(
+                ops,
+                plan,
+                node_id,
+                forge_version=forge_version,
+                sections=sections,
+                position=position,
                 clock=clock,
                 actor=actor,
             )
+
+    def _write_published(
+        self,
+        ops: IssueOps,
+        plan: Plan,
+        node_id: str,
+        *,
+        forge_version: str,
+        sections: Mapping[str, Any],
+        position: int | None,
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+        via: str | None = None,
+    ) -> Plan:
+        """The one write path to a published node's issue, under the
+        caller's :meth:`_forge_write`: read the issue, refuse ``409
+        forge_changed`` when it no longer reads as ``forge_version``, write
+        the title when it changed and in the body only the sections that
+        changed, and record the node. A person's direct edit and an approved
+        re-plan change both come here."""
+        node = self._followed(plan, node_id)
+        assert node.forge is not None  # nosec B101 - _followed checks
+        where = f"{node.repository}#{node.forge.number}"
+        issue_url = node.forge.url
+        seen = self._read(ops, node.repository, node.forge.number, missing=409)
+        current = as_forge_has_it(plan, node, title=seen.title, body=seen.body)
+        version = content_version(current)
+        if version != forge_version:
+            raise PlanRefusal(
+                409,
+                "forge_changed",
+                f"{where} changed on the forge since it was read; nothing was written. "
+                "Review its current version and edit again naming its forge_version",
+                forge_version=version,
+                current={
+                    **content(current),
+                    "forge_version": version,
+                    "number": seen.number,
+                    "url": seen.url or issue_url,
+                },
+            )
+        edited = self._with_sections(current, sections, siblings=self._siblings(plan, node))
+        self._check_published_dependencies(plan, current, edited)
+        title, body = issue_write(plan, current, edited, title=seen.title, body=seen.body)
+        written: dict[str, Any] = {}
+        if title is not None or body is not None:
+            try:
+                written = ops.issue_update(node.repository, seen.number, title=title, body=body)
+            except SbxloopError as exc:
+                raise PlanRefusal(
+                    502, "forge_refused", f"could not write {where}: {say(exc)}"
+                ) from exc
+        stamp = str(written.get("updated_at") or "") or seen.updated_at
+        fields = [k for k in CONTENT_FIELDS if getattr(node, k) != getattr(edited, k)]
+
+        def change(latest: Plan, now: float) -> list[PlanNode]:
+            base = self._node(latest, node_id)
+            assert base.forge is not None  # nosec B101 - followed above
+            new = replace(
+                base,
+                **{k: getattr(edited, k) for k in CONTENT_FIELDS},
+                forge=replace(base.forge, updated_at=stamp),
+                updated_at=now,
+            )
+            if position is None or new.parent_id is None:
+                return [new]
+            around = [new if s.id == new.id else s for s in latest.children(new.parent_id)]
+            return self._reorder(around, new.id, position)
+
+        return self._record(
+            plan.id,
+            change,
+            event={
+                "node_id": node.id,
+                "change": "issue_edited",
+                "number": seen.number,
+                "fields": fields,
+                "wrote": [k for k, v in (("title", title), ("body", body)) if v is not None],
+                **({"via": via} if via else {}),
+            },
+            clock=clock,
+            actor=actor,
+        )
 
     def attach(
         self,
@@ -2069,6 +2525,45 @@ PLANNER: Mapping[str, str] = {
     "display": "the planner",
     "via": "plan run",
 }
+
+
+def replanned(plan: Plan, node: PlanNode) -> bool:
+    """Whether a plan run for ``node`` is a re-plan (#2346): the node is on
+    the forge and so is at least one of its children, followed there. Its
+    answer is then a diff against them, never a fresh level."""
+    return node.state == "published" and any(c.followed for c in plan.children(node.id))
+
+
+def _changeable(node: PlanNode) -> bool:
+    """On the forge, followed and open: a re-plan may change or close it."""
+    return node.followed and node.forge is not None and node.forge.state != "closed"
+
+
+def _plain(value: Any) -> Any:
+    return list(value) if isinstance(value, tuple) else value
+
+
+def _current(child: PlanNode) -> CurrentChild:
+    """A child as a re-plan's brief carries it."""
+    return CurrentChild(
+        id=child.id,
+        title=child.title,
+        state=child.state,
+        origin=child.origin,
+        issue="" if child.forge is None else f"{child.repository}#{child.forge.number}",
+        forge_state=None if child.forge is None else child.forge.state,
+        changeable=_changeable(child),
+        owned=child.origin != "forge",
+        goal=child.goal,
+        context=child.context,
+        acceptance_criteria=list(child.acceptance_criteria),
+        kind=child.kind,
+        workload_profile=child.workload_profile,
+        verify_commands=list(child.verify_commands),
+        depends_on=list(child.depends_on),
+        non_goals=child.non_goals,
+        constraints=child.constraints,
+    )
 
 
 def _kept(plan: Plan, node: PlanNode) -> list[PlanNode]:

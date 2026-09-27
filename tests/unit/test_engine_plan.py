@@ -20,14 +20,17 @@ from sbxloop import hostgit
 from sbxloop.engine.model import PLAN_STAGES, RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES
 from sbxloop.engine.planning import (
     Clarification,
+    CurrentChild,
     PlanAnswer,
     PlanBrief,
     PlanClarification,
     PlanDelivery,
     PlanProposal,
     PlanQuestion,
+    PlanReplan,
     ProfileRef,
     proposal_problems,
+    replan_problems,
 )
 from sbxloop.errors import ConfigError, PlanDeliveryError
 from sbxloop.events import HostEventTypes
@@ -109,13 +112,18 @@ class RecordingDesk:
     plan_brief: PlanBrief = field(default_factory=epic_brief)
     started_runs: list[str] = field(default_factory=list)
     delivered: list[tuple[str, PlanProposal]] = field(default_factory=list)
+    replans: list[tuple[str, PlanReplan]] = field(default_factory=list)
     failures: list[tuple[str, str]] = field(default_factory=list)
     refuse: str | None = None
     #: The node's clarification as the record holds it, and every ask.
     clarification: Clarification | None = None
     asked: list[tuple[str, list[PlanQuestion]]] = field(default_factory=list)
+    #: Each brief asked for, and whether it was the fresh one the planner
+    #: is about to be given.
+    briefs: list[bool] = field(default_factory=list)
 
-    def brief(self) -> PlanBrief:
+    def brief(self, *, fresh: bool = False) -> PlanBrief:
+        self.briefs.append(fresh)
         return self.plan_brief.model_copy(update={"clarification": self.clarification})
 
     def started(self, run_id: str) -> None:
@@ -139,6 +147,12 @@ class RecordingDesk:
             raise PlanDeliveryError(self.refuse)
         self.delivered.append((run_id, proposal))
         return PlanDelivery(len(proposal.children), f"plan plan_1/{self.plan_brief.node_id}")
+
+    def deliver_replan(self, run_id: str, replan: PlanReplan) -> PlanDelivery:
+        if self.refuse is not None:
+            raise PlanDeliveryError(self.refuse)
+        self.replans.append((run_id, replan))
+        return PlanDelivery(replan.count, f"plan plan_1/{self.plan_brief.node_id} (re-plan)")
 
     def failed(self, run_id: str, reason: str) -> None:
         self.failures.append((run_id, reason))
@@ -641,3 +655,215 @@ class TestProposalRules:
             proposal, epic_brief(), lint=lambda commands: [f"`{c}` is bare" for c in commands]
         )
         assert problems == ["task a (Task a): `make test` is bare"]
+
+
+# -- a re-plan (#2346) -----------------------------------------------------------
+
+
+def current_child(id: str, **over: Any) -> CurrentChild:
+    fields: dict[str, Any] = {
+        "id": id,
+        "title": f"Current {id}",
+        "state": "published",
+        "origin": "planner",
+        "issue": f"{REPO}#{id[-1]}",
+        "forge_state": "open",
+        "changeable": True,
+        "owned": True,
+        "goal": f"goal of {id}",
+        "acceptance_criteria": [f"{id} works"],
+        "kind": "code",
+        "verify_commands": ["make test"],
+    }
+    return CurrentChild.model_validate(fields | over)
+
+
+def replan_brief(**over: Any) -> PlanBrief:
+    return epic_brief(
+        mode="replan",
+        room=2,
+        cap=4,
+        current=[
+            current_child("node_1"),
+            current_child("node_2"),
+            current_child("node_3", forge_state="closed", changeable=False),
+            current_child("node_4", origin="forge", owned=False),
+        ],
+        **over,
+    )
+
+
+def diff(**entries: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"json": {"add": [], "modify": [], "suggest_close": []} | entries}
+
+
+class TestReplanRun:
+    def test_a_replan_is_a_diff_against_the_current_children(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=replan_brief())
+        harness.script(
+            [
+                diff(
+                    add=[code_task("a1") | {"rationale": "the export needs a size limit"}],
+                    modify=[
+                        {
+                            "target": "node_1",
+                            "acceptance_criteria": ["node_1 works", "and is fast"],
+                            "rationale": "the repository times this path",
+                        }
+                    ],
+                    suggest_close=[{"target": "node_2", "rationale": "src/old.py is gone"}],
+                )
+            ]
+        )
+        fake = FakeGithub()
+        built = engine(harness, desk, keep_sandboxes=True)
+        built._github_ops = lambda client, run_id: fake
+        result = built.start("Re-plan the tasks of “Export reports”", repo=REPO, kind="plan")
+
+        assert result.state == "completed", result.reason
+        assert desk.briefs[-1] is True and desk.briefs.count(True) == 1, (
+            "the planner is given a fresh brief"
+        )
+        ((run_id, replan),) = desk.replans
+        assert run_id == result.run_id and desk.delivered == []
+        assert [c.title for c in replan.add] == ["Task a1"]
+        assert replan.modify[0].changes() == {
+            "acceptance_criteria": ["node_1 works", "and is fast"]
+        }
+        assert [c.target for c in replan.suggest_close] == ["node_2"]
+        # The planner read every current child by its id, and was told what
+        # it may do with each.
+        (job,) = [j for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"]
+        prompt = job["prompt"]
+        assert prompt.startswith("# Re-plan the tasks of one epic")
+        assert "### `node_1` — Current node_1" in prompt
+        assert f"{REPO}#1, open; may be changed or closed." in prompt
+        assert "closed or not followed: leave it" in prompt
+        assert "filed by a person in their own words: may be closed, not rewritten" in prompt
+        assert job["permission_mode"] == "read_only"
+        (task,) = result.tasks
+        assert task.output is not None
+        assert task.output.summary == (
+            "Re-planned the epic “Export reports”: 1 to add, 1 to change, 1 to close; "
+            "the diff waits in the plan for review"
+        )
+        assert task.output.data["replan"]["suggest_close"][0]["target"] == "node_2"
+        ((entry),) = result.published
+        assert entry.location == "plan plan_1/node_epic (re-plan)"
+        assert fake.issues_created == [] and fake.raw_calls == [], "nothing reached the forge"
+
+    def test_an_addition_that_repeats_a_current_child_is_sent_back(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=replan_brief())
+        repeat = code_task("a1", title="current NODE_1")
+        harness.script(
+            [
+                diff(add=[repeat]),
+                diff(modify=[{"target": "node_1", "goal": "sharper", "rationale": "r"}]),
+            ]
+        )
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 2
+        jobs = [j for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"]
+        retried = max(jobs, key=lambda j: len(j["prompt"]))["prompt"]
+        assert "repeats the current child node_1 (“Current node_1”)" in retried
+        assert "never add a child that exists" in retried
+        ((_, replan),) = desk.replans
+        assert replan.add == [] and [m.target for m in replan.modify] == ["node_1"]
+
+    def test_an_empty_diff_is_an_answer(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=replan_brief())
+        harness.script([diff()])
+        result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        ((_, replan),) = desk.replans
+        assert replan.count == 0
+        (task,) = result.tasks
+        assert task.output is not None and "nothing is proposed" in task.output.summary
+
+    def test_a_resume_after_the_turn_delivers_the_diff_without_asking_again(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=replan_brief(), refuse="the plan is busy")
+        harness.script([diff(suggest_close=[{"target": "node_1", "rationale": "done elsewhere"}])])
+        first = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert first.state == "failed"
+        desk.refuse = None
+        harness.script([])
+        resumed = engine(harness, desk).resume(first.run_id)
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 0
+        ((_, replan),) = desk.replans
+        assert [c.target for c in replan.suggest_close] == ["node_1"]
+
+
+class TestReplanRules:
+    def _problems(self, **entries: list[dict[str, Any]]) -> list[str]:
+        replan = PlanReplan.model_validate({"add": [], "modify": [], "suggest_close": []} | entries)
+        return replan_problems(replan, replan_brief())
+
+    def test_a_good_diff_has_none(self) -> None:
+        assert (
+            self._problems(
+                add=[code_task("a1", deps=["node_1"])],
+                modify=[{"target": "node_1", "title": "Sharper", "rationale": "r"}],
+                suggest_close=[{"target": "node_4", "rationale": "covered by node_1"}],
+            )
+            == []
+        )
+
+    def test_an_addition_is_never_a_child_that_exists(self) -> None:
+        (problem,) = self._problems(add=[code_task("node_2", title="Brand new")])
+        assert "`node_2` is a current child's id; `modify` it rather than add it" in problem
+        (problem,) = self._problems(add=[code_task("a1", title="  current   node_2 ")])
+        assert "repeats the current child node_2" in problem
+
+    def test_the_room_left_by_the_cap(self) -> None:
+        problems = self._problems(add=[code_task("a1"), code_task("a2"), code_task("a3")])
+        assert "add at most 2 tasks (the level's cap is 4); this answer adds 3" in problems
+
+    def test_an_entry_names_a_changeable_current_child_once(self) -> None:
+        problems = self._problems(
+            modify=[
+                {"target": "node_9", "goal": "x"},
+                {"target": "node_3", "goal": "x"},
+                {"target": "node_4", "goal": "x"},
+                {"target": "node_1"},
+            ],
+            suggest_close=[{"target": "node_1", "rationale": "gone"}],
+        )
+        assert any("modify node_9: no current child has that id" in p for p in problems)
+        assert any(
+            "modify node_3: “Current node_3” is closed or not followed" in p for p in problems
+        )
+        assert any("a person filed on the forge in their own words" in p for p in problems)
+        assert "modify node_1: name at least one section to change" in problems
+        assert any(
+            "suggest_close node_1: node_1 is already in this diff (modify)" in p for p in problems
+        )
+
+    def test_a_change_is_judged_on_the_child_it_makes(self) -> None:
+        problems = self._problems(
+            modify=[{"target": "node_1", "kind": "workload", "workload_profile": "nowhere"}]
+        )
+        assert any("workload profile `nowhere` is not configured" in p for p in problems)
+        problems = self._problems(modify=[{"target": "node_1", "depends_on": ["node_1", "a1"]}])
+        assert "modify node_1: a child cannot depend on itself" in problems
+        assert any("depends on 'a1', which is not a current child" in p for p in problems)
+
+    def test_an_addition_depends_on_an_addition_or_a_current_child(self) -> None:
+        problems = self._problems(add=[code_task("a1", deps=["a2"]), code_task("a2", deps=["a1"])])
+        assert any("those dependencies make a cycle" in p for p in problems)
+        problems = self._problems(add=[code_task("a1", deps=["node_x"])])
+        assert any("neither an addition nor a current child" in p for p in problems)
+
+    def test_a_close_says_why(self) -> None:
+        with pytest.raises(ValueError, match="say why"):
+            PlanReplan.model_validate({"suggest_close": [{"target": "node_1", "rationale": " "}]})

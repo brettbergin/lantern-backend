@@ -6632,6 +6632,16 @@
             "title": "Position",
             "type": "integer"
           },
+          "replan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanReplanOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "repository": {
             "title": "Repository",
             "type": "string"
@@ -7155,6 +7165,298 @@
           "choices"
         ],
         "title": "PlanQuestionOut",
+        "type": "object"
+      },
+      "PlanReplanApplied": {
+        "additionalProperties": false,
+        "description": "The plan as it now is, and what happened to each entry approved.\n``replayed`` is true for a replay under the same ``Idempotency-Key``.",
+        "properties": {
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReplanResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan",
+          "results"
+        ],
+        "title": "PlanReplanApplied",
+        "type": "object"
+      },
+      "PlanReplanApprove": {
+        "additionalProperties": false,
+        "description": "Apply a waiting re-plan: every entry, or the ones ``entry_ids``\nnames. The ``Idempotency-Key`` header is required.",
+        "properties": {
+          "entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Ids"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanReplanApprove",
+        "type": "object"
+      },
+      "PlanReplanDiscard": {
+        "additionalProperties": false,
+        "description": "Drop a waiting re-plan: every entry, or the ones ``entry_ids``\nnames. Nothing is written to the forge.",
+        "properties": {
+          "entry_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Ids"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanReplanDiscard",
+        "type": "object"
+      },
+      "PlanReplanEntryOut": {
+        "additionalProperties": false,
+        "description": "One entry of a re-plan's diff, waiting for a person.\n\n``add``: ``node_id`` is the id the new child will have and ``sections``\nthe whole child (``depends_on`` naming node ids). ``modify``:\n``node_id`` is the child changed, ``sections`` only what changes and\n``before`` those sections as the child had them when the diff was\nproposed. ``suggest_close``: ``node_id`` is the child the planner would\nclose. ``forge_version`` (``modify``, ``suggest_close``) is the child's\nissue version when the diff was proposed: a change is written only\nwhile the issue still reads so. ``error`` is why the last approval of\nthis entry failed.",
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "modify",
+              "suggest_close"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "before": {
+            "additionalProperties": true,
+            "title": "Before",
+            "type": "object"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "forge_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Version"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rationale": {
+            "default": "",
+            "title": "Rationale",
+            "type": "string"
+          },
+          "sections": {
+            "additionalProperties": true,
+            "title": "Sections",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "node_id"
+        ],
+        "title": "PlanReplanEntryOut",
+        "type": "object"
+      },
+      "PlanReplanOut": {
+        "additionalProperties": false,
+        "description": "A re-plan's diff waiting on a published node: the ``plan`` run that\nproposed it, when, and the entries not yet approved or discarded.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReplanEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "proposed_at": {
+            "title": "Proposed At",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "id",
+          "proposed_at",
+          "entries"
+        ],
+        "title": "PlanReplanOut",
+        "type": "object"
+      },
+      "PlanReplanResult": {
+        "additionalProperties": false,
+        "description": "What approving one entry did: an addition ``created`` (or ``found``,\nthe issue an interrupted attempt filed, by its marker), a child\n``updated`` or ``closed``, or ``failed`` with why in ``error`` \u2014 the\nentry stays in the diff. ``reason`` notes what went wrong beside a\nsuccess (a checklist fallback, a comment that could not be posted).",
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "modify",
+              "suggest_close"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "outcome": {
+            "enum": [
+              "created",
+              "found",
+              "updated",
+              "closed",
+              "failed"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "entry_id",
+          "action",
+          "outcome",
+          "node_id"
+        ],
+        "title": "PlanReplanResult",
         "type": "object"
       },
       "PlanRollup": {
@@ -15782,7 +16084,7 @@
     },
     "/v1/plans/{plan_id}/nodes/{node_id}/breakdown": {
       "post": {
-        "description": "Start a ``plan`` run that reads a read-only checkout of the node's\nrepository and proposes its next level \u2014 an initiative's epics or an\nepic's tasks, at most the level's cap. The run is queued like any work\n(it appears in the queue and History, can be cancelled, and answers to\n``channel_id`` when one is named); ``202`` names its work item, whose\n``run_id`` is set once it is dispatched. The proposal is delivered to\nthe plan, never to the forge: it replaces the node's previous\n``proposed`` children and arrives as ``plan.generation.proposed``; a\nrun that proposes nothing ends with ``plan.generation.failed``.\n\nRefused: a task (``422``: it has no children); a node on the forge that\nalready has children (``409 replan_required``); a repository planning\nis off for (``409 planning_unsupported``); a level at its cap (``409\nlevel_full``); a breakdown of the node already queued or running\n(``409 already_in_progress``); a stale ``expected_revision``.",
+        "description": "Start a ``plan`` run that reads a read-only checkout of the node's\nrepository and proposes its next level \u2014 an initiative's epics or an\nepic's tasks, at most the level's cap. The run is queued like any work\n(it appears in the queue and History, can be cancelled, and answers to\n``channel_id`` when one is named); ``202`` names its work item, whose\n``run_id`` is set once it is dispatched. The proposal is delivered to\nthe plan, never to the forge: it replaces the node's previous\n``proposed`` children and arrives as ``plan.generation.proposed``; a\nrun that proposes nothing ends with ``plan.generation.failed``.\n\nA node on the forge with children there is re-planned (#2346): the\nrun is told every current child, as the forge has them when it starts,\nand proposes a diff \u2014 children to add, to change, to close \u2014 that\nwaits on the node (``replan``) for ``.../replan/approve`` or\n``.../replan/discard``, and arrives as ``plan.generation.proposed``\nwith ``kind: \"replan\"``. Nothing reaches the forge before approval.\n\nRefused: a task (``422``: it has no children); a repository planning\nis off for (``409 planning_unsupported``); a level at its cap, for a\nbreakdown (``409 level_full``); a breakdown of the node already queued\nor running (``409 already_in_progress``); a stale\n``expected_revision``.",
         "operationId": "breakdown_node_v1_plans__plan_id__nodes__node_id__breakdown_post",
         "parameters": [
           {
@@ -15970,6 +16272,131 @@
           }
         },
         "summary": "Publish a node's level to the forge",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/replan/approve": {
+      "post": {
+        "description": "Apply the node's waiting re-plan \u2014 every entry, or those\n``entry_ids`` names \u2014 through the publish path: an ``add`` becomes an\napproved child published with its marker, level label and link (looked\nfor by its marker first, never filed twice); a ``modify`` rewrites the\nchild's title and the sections under the rendered headings that change,\nrefused when the child or its issue moved since; a ``suggest_close``\ncloses the issue as not planned and comments why. An entry that lands\nleaves the diff; one that fails stays with its error. Refused before\nthe forge is touched: no re-plan waiting (``409 no_replan``), an entry\nnot in it (``422``), a disabled repository, a full level (``409\ntoo_many_children``), an addition depending on one not approved with it\n(``409 dependency_unpublished``), no forge connection (``503``). The\n``Idempotency-Key`` header is required: a replay answers the same\nresults.",
+        "operationId": "approve_replan_v1_plans__plan_id__nodes__node_id__replan_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanReplanApprove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanReplanApplied"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Apply a re-plan's diff to the forge",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/replan/discard": {
+      "post": {
+        "description": "Drop the node's waiting re-plan \u2014 every entry, or those\n``entry_ids`` names \u2014 without writing anything to the forge. No\nre-plan waiting is ``409 no_replan``; an entry not in it is ``422``.",
+        "operationId": "discard_replan_v1_plans__plan_id__nodes__node_id__replan_discard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanReplanDiscard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Discard a re-plan's diff",
         "tags": [
           "plans"
         ]

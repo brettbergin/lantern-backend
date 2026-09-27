@@ -31,6 +31,9 @@ from sbxloop.plans.model import (
     Origin,
     Plan,
     PlanNode,
+    Replan,
+    ReplanAction,
+    ReplanEntry,
     TaskKind,
 )
 
@@ -97,6 +100,34 @@ def _drift(raw: str | None) -> tuple[Drift, ...]:
     return tuple(out)
 
 
+def _replan(raw: str | None) -> Replan | None:
+    if not raw:
+        return None
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return None
+    entries = tuple(
+        ReplanEntry(
+            id=str(entry.get("id") or ""),
+            action=cast(ReplanAction, entry.get("action")),
+            node_id=str(entry.get("node_id") or ""),
+            sections=dict(entry.get("sections") or {}),
+            before=dict(entry.get("before") or {}),
+            rationale=str(entry.get("rationale") or ""),
+            error=entry.get("error"),
+            forge_version=entry.get("forge_version"),
+        )
+        for entry in data.get("entries") or []
+        if isinstance(entry, dict)
+    )
+    return Replan(
+        id=str(data.get("id") or ""),
+        run_id=data.get("run_id"),
+        proposed_at=float(data.get("proposed_at") or 0.0),
+        entries=entries,
+    )
+
+
 def _node(row: PlanNodeRow) -> PlanNode:
     forge = None
     if row.forge_number is not None:
@@ -133,6 +164,7 @@ def _node(row: PlanNodeRow) -> PlanNode:
         updated_at=float(row.updated_at),
         drift=_drift(row.drift_json),
         generation=_generation(row.generation_json),
+        replan=_replan(row.replan_json),
     )
 
 
@@ -175,6 +207,9 @@ def _columns(node: PlanNode) -> dict[str, Any]:
         "forge_marker_missing": int(node.forge is not None and node.forge.marker_missing),
         "forge_checklist_error": None if node.forge is None else node.forge.checklist_error,
         "drift_json": json.dumps([d.as_dict() for d in node.drift], default=str),
+        "replan_json": (
+            None if node.replan is None else json.dumps(node.replan.as_dict(), default=str)
+        ),
         "created_at": node.created_at,
         "updated_at": node.updated_at,
         "generation_json": (None if node.generation is None else node.generation.model_dump_json()),
