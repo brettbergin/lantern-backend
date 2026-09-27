@@ -29,6 +29,10 @@ from sbxloop.api.errors import Problem
 from sbxloop.api.models import rfc3339
 from sbxloop.api.pagination import Page
 from sbxloop.api.plan_schemas import (
+    EpicRunOut,
+    EpicRunStart,
+    EpicRunStarted,
+    EpicRunTaskOut,
     PlanAnswerOut,
     PlanAnswers,
     PlanAnswersAccepted,
@@ -73,6 +77,7 @@ from sbxloop.daemon.controls.operations import (
 )
 from sbxloop.engine.planning import Clarification, PlanAnswer
 from sbxloop.plans import Plan, PlanNode, PlanRefusal
+from sbxloop.plans.epicrun import EpicRun
 from sbxloop.plans.model import content_version
 from sbxloop.plans.reconcile import Reconciliation
 from sbxloop.plans.service import SECTIONS
@@ -1129,3 +1134,209 @@ async def discard_replan(
         raise _problem(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
+
+
+# -- epic runs (#2347) -------------------------------------------------------------
+
+RUN_ACTION = "plan.run"
+
+
+def epic_run_out(run: EpicRun, plan: Plan | None) -> dict[str, Any]:
+    """An epic run's fields, each task named from the plan as it is now."""
+    tasks: list[EpicRunTaskOut] = []
+    for task in run.tasks:
+        node = plan.node(task.node_id) if plan is not None else None
+        tasks.append(
+            EpicRunTaskOut(
+                node_id=task.node_id,
+                title=node.title if node is not None else task.node_id,
+                kind=node.kind if node is not None else None,
+                workload_profile=node.workload_profile if node is not None else None,
+                depends_on=list(node.depends_on) if node is not None else [],
+                forge=(
+                    None
+                    if node is None or node.forge is None
+                    else PlanForge(
+                        number=node.forge.number, url=node.forge.url, state=node.forge.state
+                    )
+                ),
+                state=task.state,
+                item_id=task.item_id,
+                run_id=task.run_id,
+                reason=task.reason,
+                admitted_at=rfc3339(task.admitted_at),
+                updated_at=rfc3339(task.updated_at) or "",
+            )
+        )
+    return {
+        "id": run.id,
+        "plan_id": run.plan_id,
+        "node_id": run.node_id,
+        "state": run.state,
+        "started_by": run.started_by,
+        "started_by_display": run.started_by_display,
+        "created_at": rfc3339(run.created_at) or "",
+        "updated_at": rfc3339(run.updated_at) or "",
+        "completed_at": rfc3339(run.completed_at),
+        "tasks": tasks,
+    }
+
+
+def _driver(ctx: ApiContext) -> Any:
+    driver = getattr(ctx.loop, "epic_runs", None)
+    if driver is None:
+        raise Problem(503, "daemon_not_ready", "this daemon runs no epic runs")
+    return driver
+
+
+@router.get(
+    "/{plan_id}/nodes/{node_id}/run",
+    response_model=EpicRunOut,
+    summary="Read an epic's run",
+    responses={404: _PROBLEM},
+)
+async def get_epic_run(
+    plan_id: str,
+    node_id: str,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    _auth: Authenticated = Depends(require("runs:read")),  # noqa: B008
+) -> EpicRunOut:
+    """The epic's most recent run, each task's state and the item and run
+    it became, so a client links each task to its run's thread."""
+
+    def read() -> EpicRunOut:
+        plan = ctx.plans.get(plan_id)
+        run = _driver(ctx).latest(plan_id, node_id)
+        return EpicRunOut(**epic_run_out(run, plan))
+
+    try:
+        return await ctx.call(read)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/run",
+    response_model=EpicRunStarted,
+    status_code=201,
+    summary="Run an epic",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
+)
+async def run_epic(
+    plan_id: str,
+    node_id: str,
+    body: EpicRunStart,
+    request: Request,
+    response: Response,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> EpicRunStarted:
+    """Start an epic run on a published epic whose tasks are on the forge.
+    The daemon owns it from here: every task whose dependencies are closed
+    is admitted through the same issue admission as ``POST /v1/items``
+    (never by the trigger label) with ``parent_item_id`` naming the run — a
+    code task as a code run, a workload task as a workload run under its
+    profile — and each one that lands or delivers makes its dependents
+    ready. A failed task's dependents are not admitted. The
+    ``Idempotency-Key`` header is required: a replay answers the run as it
+    is now; a different body under the same key is ``409
+    idempotency_conflict``."""
+    principal = auth.principal
+    pair = idempotency(
+        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run", required=True
+    )
+    actor = _actor(auth)
+
+    def replay(op: Operation) -> EpicRunStarted:
+        if op.state == "failed" and op.result and "status" in op.result:
+            raise Problem(
+                int(op.result["status"]),
+                op.error_code or "failed",
+                op.error_detail or "the earlier attempt was refused",
+                **dict(op.result.get("extra") or {}),
+                operation_id=op.id,
+            )
+        problem = replayed_problem(op)
+        if problem is not None:
+            raise problem
+        driver = _driver(ctx)
+        run = driver.runs.get(str((op.result or {}).get("epic_run_id") or ""))
+        if run is None:
+            run = driver.latest(plan_id, node_id)
+        response.status_code = 200
+        return EpicRunStarted(
+            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=True
+        )
+
+    def start() -> EpicRunStarted:
+        store = getattr(ctx.loop, "operations", None)
+        if not isinstance(store, OperationStore):
+            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+        driver = _driver(ctx)
+        spec = OperationSpec(
+            action=RUN_ACTION,
+            target_kind="plan",
+            target_key=plan_id,
+            principal=principal,
+            request={
+                "plan_id": plan_id,
+                "node_id": node_id,
+                "expected_revision": body.expected_revision,
+            },
+            idempotency=pair,
+            expected_revision=body.expected_revision,
+        )
+        try:
+            op, created = store.accept(spec, ctx.clock())
+        except IdempotencyConflict as exc:
+            raise Problem(
+                409,
+                "idempotency_conflict",
+                "the idempotency key was already used with a different request",
+                operation_id=exc.existing.id,
+            ) from exc
+        if not created:
+            try:
+                return replay(op)
+            except PlanRefusal as exc:
+                raise _problem(exc) from exc
+        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
+        try:
+            run = driver.start(
+                plan_id,
+                node_id,
+                expected_revision=body.expected_revision,
+                actor=actor,
+                now=ctx.clock(),
+            )
+        except PlanRefusal as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                result={"status": exc.status, "extra": exc.extra},
+                error_code=exc.code,
+                error_detail=exc.detail,
+            )
+            raise Problem(
+                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
+            ) from exc
+        except Exception as exc:
+            store.finish(
+                op.id,
+                ctx.clock(),
+                state="failed",
+                error_code="crashed",
+                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+            )
+            raise
+        store.finish(op.id, ctx.clock(), state="succeeded", result={"epic_run_id": run.id})
+        return EpicRunStarted(
+            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=False
+        )
+
+    started = await ctx.call(start)
+    if not started.replayed:
+        response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}/run"
+    ctx.hub.notify()
+    return started

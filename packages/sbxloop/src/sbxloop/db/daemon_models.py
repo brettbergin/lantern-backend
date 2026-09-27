@@ -626,3 +626,44 @@ class PlanNodeRow(Base):
     # that proposed it and its entries, as a JSON object; NULL when none is
     # waiting.
     replan_json: Mapped[str | None] = mapped_column(Text)
+
+
+class PlanEpicRunRow(Base):
+    """One epic run (#2347): a person's "run this epic", which the daemon
+    drives by admitting the epic's ready tasks as issue runs, in dependency
+    order, each item's ``parent_item_id`` naming this row. ``state`` is
+    ``running``, ``paused``, ``completed`` or ``cancelled``; the tasks are
+    ``daemon_plan_epic_run_tasks``."""
+
+    __tablename__ = "daemon_plan_epic_runs"
+    __table_args__ = (Index("idx_daemon_plan_epic_runs_node", "plan_id", "node_id"),)
+
+    epic_run_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    plan_id: Mapped[str] = mapped_column(Text, nullable=False)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    started_by: Mapped[str | None] = mapped_column(Text)
+    started_by_display: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    completed_at: Mapped[float | None] = mapped_column(REAL)
+
+
+class PlanEpicRunTaskRow(Base):
+    """One task of an epic run: where it stands (``waiting``, ``ready``,
+    ``queued``, ``running``, ``landed``, ``closed``, ``failed`` or
+    ``blocked`` by a dependency), the item it was admitted as and the run
+    that item last started, so a client can link to the run's thread."""
+
+    __tablename__ = "daemon_plan_epic_run_tasks"
+    __table_args__ = (PrimaryKeyConstraint("epic_run_id", "node_id"),)
+
+    epic_run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("0"))
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    item_id: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    admitted_at: Mapped[float | None] = mapped_column(REAL)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)

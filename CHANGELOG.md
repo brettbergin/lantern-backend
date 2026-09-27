@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+**A published epic can be run: its tasks become issue runs in dependency
+order.** `POST /v1/plans/{id}/nodes/{epic_id}/run` (`plans:publish`,
+`Idempotency-Key` required, feature `planning.run`) starts a daemon-owned
+epic run. Every task whose dependencies are closed is admitted through the
+same issue admission as `POST /v1/items`, but without the trigger or
+workload label (so no poll-driven path starts it) and with
+`parent_item_id` naming the run: a code task as a code run, a workload task
+as a workload run under its profile. Independent tasks are queued together
+and run as the queue, holds and usage pool allow. A code task that lands or
+a workload task that delivers closes its issue as always and makes its
+dependents ready on the loop's next pass; a failed task's dependents are
+blocked and never admitted. `GET .../run` reads the run with each task's
+state, item and run. The run is kept in the daemon's store (a new
+migration) and records `plan.run.started`, `plan.run.task_admitted` and
+`plan.run.completed`. (#2347)
+
 **The concierge offers a plan when an ask is too big for one run.** Instead
 of filing or queueing work that cannot honestly end in one pull request or
 one delivery, the concierge offers a plan (Draft a plan / Run it as one

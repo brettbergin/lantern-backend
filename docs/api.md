@@ -710,7 +710,8 @@ the file still spells differently). The socket takes the same commands:
 Planning turns a larger effort into issues the loop can work (see the
 [spike](spikes/work-planning.md)). It is advertised as `planning` when a
 configured forge can hold a plan, together with `planning.clarify` (the
-planner's clarifying questions and the answers route). A **plan** is a tree of **nodes**: an
+planner's clarifying questions and the answers route), and epic runs as
+`planning.run`. A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
@@ -737,6 +738,8 @@ and owners) publishes to the forge and edits, attaches and detaches its issues.
 | `POST /v1/plans/{id}/drift/ack`                      | `{expected_revision, node_ids?}`                                  | `200`, the plan with that drift marked seen                             |
 | `POST /v1/plans/{id}/nodes/{node_id}/replan/approve` | `{expected_revision, entry_ids?}` and an `Idempotency-Key` header | `200 {plan, results, operation_id, replayed}`                           |
 | `POST /v1/plans/{id}/nodes/{node_id}/replan/discard` | `{expected_revision, entry_ids?}`                                 | `200`, the plan without those re-plan entries                           |
+| `POST /v1/plans/{id}/nodes/{epic_id}/run`            | `{expected_revision}` and an `Idempotency-Key` header             | `201`, the epic run; a replay is `200`                                  |
+| `GET /v1/plans/{id}/nodes/{epic_id}/run`             | none                                                              | `200`, the epic's most recent run                                       |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -1064,6 +1067,46 @@ resumes it. Each call records `plan.published` `{plan_id, node_id, replan: true,
 with `via: "replan"`). `POST .../replan/discard` (`plans:create`) drops entries and writes
 nothing to the forge (`plan.node.changed` `change: replan_discarded` with
 `entry_ids`).
+
+**Running an epic (#2347).** `run` (`plans:publish`, advertised as
+`planning.run`) starts an **epic run** on a published epic whose tasks are
+on the forge; the daemon owns it from there. Every task whose `depends_on`
+are all closed is admitted at once through the same issue admission as
+`POST /v1/items` — the same rules (open, an issue, not in progress, not
+queued for the other kind) — but never by applying the trigger or the
+workload label, so no poll-driven path is added, and with the item's
+`parent_item_id` naming the epic run. A code task is admitted as a code run;
+a workload task as a workload run under its `workload_profile`, the same as
+the workload-label path. Independent tasks are queued together and run as
+the queue, the holds and the usage pool allow, exactly as any other item.
+The claim puts the in-progress label on as usual; a code run that lands
+closes its issue through its pull request's `Closes` and the merge report,
+a workload run that delivers closes it with its completed report, and
+either makes its dependents ready on the daemon's next pass. A task whose
+run fails (after its attempts), is blocked or is cancelled is `failed` with
+the reason, and its dependents are `blocked` and never admitted; its
+siblings go on (pausing, retrying and skipping a task are to come). When
+every task is landed or closed the run is `completed`.
+
+The answer (and `GET .../run`) is `{id, plan_id, node_id, state, started_by, started_by_display, created_at, updated_at, completed_at, tasks}` (`erun_…`,
+`state` `running`, `paused`, `completed` or `cancelled`), each task
+`{node_id, title, kind, workload_profile, depends_on, forge, state, item_id, run_id, reason, admitted_at, updated_at}` with `state` `waiting` (a
+dependency is not closed), `ready` (the forge could not be read; tried
+again next pass), `queued`, `running` (a merge gate or review wait
+included), `landed`, `closed` (its issue was already closed), `failed` or
+`blocked` (by a dependency). `item_id` and `run_id` link a task to its item
+and its run's thread. A task already queued (a person started it alone) is
+adopted rather than admitted twice. The start is refused when the node is
+not an epic (`422`), the epic is not on the forge (`409 epic_unpublished`),
+none of its tasks is (`409 nothing_to_run`), it is already running (`409 already_running` with `epic_run_id`), its repository is unknown or disabled
+(`422 unknown_repository`, `409 repository_disabled`), the daemon polls no
+repository (`503 source_unavailable`), or on a stale revision (`409 stale_revision`). The `Idempotency-Key` header is required: a replay answers
+the run as it is now with `replayed: true`, or the refusal it recorded; a
+different body under the same key is `409 idempotency_conflict`. A start
+the daemon died during is settled at the next start from the record: the
+run is there (`succeeded`) or it never started (`failed`). It records
+`plan.run.started` `{plan_id, node_id, epic_run_id}`, one
+`plan.run.task_admitted` `{plan_id, node_id, epic_run_id, task_node_id, item_id}` per task admitted, and `plan.run.completed` `{plan_id, node_id, epic_run_id, landed, closed}` (task node ids).
 
 ### Workspace people
 
@@ -1541,8 +1584,8 @@ not remove them within a contract version.
 Every id is opaque and stable; none is an issue number, a host path or an
 `owner/name`. `itm_…` a work item, `run_…` a run, `repo_…` a configured
 repository, `gate_…` a merge or publication gate, `op_…` an operation,
-`str_…` a steering record, `art_…` an artifact, `plan_…` a plan and
-`node_…` one of its nodes, `evt_<n>` an event (and the
+`str_…` a steering record, `art_…` an artifact, `plan_…` a plan,
+`node_…` one of its nodes and `erun_…` an epic run, `evt_<n>` an event (and the
 cursor into the chronology), `cli_…` a client. An unknown id of any kind is
 a plain `404 not_found`. Each resource carries `workspace_id` (`"local"` on
 a single installation), RFC 3339 UTC timestamps, `available_actions` (what
@@ -1629,6 +1672,8 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/answers`        | `plans:create`         | Answer or skip a breakdown's clarifying questions; resumes its run          |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/replan/approve` | `plans:publish`        | Apply a re-plan's diff through the publish path; `Idempotency-Key` required |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/replan/discard` | `plans:create`         | Discard a re-plan's diff                                                    |
+| `POST`   | `/v1/plans/{id}/nodes/{epic_id}/run`            | `plans:publish`        | Run an epic: admit its ready tasks in dependency order                      |
+| `GET`    | `/v1/plans/{id}/nodes/{epic_id}/run`            | `runs:read`            | An epic's most recent run, each task's state, item and run                  |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

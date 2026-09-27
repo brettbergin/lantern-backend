@@ -2802,6 +2802,339 @@
         "title": "DiscoveryCredential",
         "type": "object"
       },
+      "EpicRunOut": {
+        "additionalProperties": false,
+        "description": "An epic run: the daemon admitting an epic's ready tasks as issue\nruns, in dependency order, with ``parent_item_id`` naming it.",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
+          },
+          "started_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By Display"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/EpicRunTaskOut"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "node_id",
+          "state",
+          "created_at",
+          "updated_at",
+          "tasks"
+        ],
+        "title": "EpicRunOut",
+        "type": "object"
+      },
+      "EpicRunStart": {
+        "additionalProperties": false,
+        "description": "Run a published epic. The ``Idempotency-Key`` header is required.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "EpicRunStart",
+        "type": "object"
+      },
+      "EpicRunStarted": {
+        "additionalProperties": false,
+        "description": "The epic run as it stands after its first pass. ``replayed`` is true\nwhen the answer is a replay of an earlier call under the same\n``Idempotency-Key`` (the run as it is now).",
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "started_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By"
+          },
+          "started_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started By Display"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "paused",
+              "completed",
+              "cancelled"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/EpicRunTaskOut"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "plan_id",
+          "node_id",
+          "state",
+          "created_at",
+          "updated_at",
+          "tasks"
+        ],
+        "title": "EpicRunStarted",
+        "type": "object"
+      },
+      "EpicRunTaskOut": {
+        "additionalProperties": false,
+        "description": "One task of an epic run. ``state`` is ``waiting`` (a dependency is\nnot closed yet), ``ready`` (about to be admitted, or the forge could\nnot be read), ``queued``, ``running``, ``landed`` (its code run merged\nor its workload delivered, and its issue was closed), ``closed`` (its\nissue was already closed), ``failed`` (``reason`` says why) or\n``blocked`` (a dependency failed, so it is not admitted). ``item_id``\nis the item it was admitted as and ``run_id`` the run that item last\nstarted \u2014 the run's thread.",
+        "properties": {
+          "admitted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admitted At"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "forge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanForge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "code",
+                  "workload"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "state": {
+            "enum": [
+              "waiting",
+              "ready",
+              "queued",
+              "running",
+              "landed",
+              "closed",
+              "failed",
+              "blocked"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workload_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workload Profile"
+          }
+        },
+        "required": [
+          "node_id",
+          "title",
+          "state",
+          "updated_at"
+        ],
+        "title": "EpicRunTaskOut",
+        "type": "object"
+      },
       "EventOut": {
         "additionalProperties": false,
         "description": "One public event. ``id`` is the replay cursor (``evt_<seq>``);\n``native_seq`` is the engine's own sequence when the event is a\nprojection of the run's chronology; ``actor`` is absent where nothing\ntruthful can be said.",
@@ -16397,6 +16730,123 @@
           }
         },
         "summary": "Discard a re-plan's diff",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/run": {
+      "get": {
+        "description": "The epic's most recent run, each task's state and the item and run\nit became, so a client links each task to its run's thread.",
+        "operationId": "get_epic_run_v1_plans__plan_id__nodes__node_id__run_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read an epic's run",
+        "tags": [
+          "plans"
+        ]
+      },
+      "post": {
+        "description": "Start an epic run on a published epic whose tasks are on the forge.\nThe daemon owns it from here: every task whose dependencies are closed\nis admitted through the same issue admission as ``POST /v1/items``\n(never by the trigger label) with ``parent_item_id`` naming the run \u2014 a\ncode task as a code run, a workload task as a workload run under its\nprofile \u2014 and each one that lands or delivers makes its dependents\nready. A failed task's dependents are not admitted. The\n``Idempotency-Key`` header is required: a replay answers the run as it\nis now; a different body under the same key is ``409\nidempotency_conflict``.",
+        "operationId": "run_epic_v1_plans__plan_id__nodes__node_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EpicRunStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EpicRunStarted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Run an epic",
         "tags": [
           "plans"
         ]

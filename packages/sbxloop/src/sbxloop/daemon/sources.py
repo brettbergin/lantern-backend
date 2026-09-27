@@ -155,6 +155,11 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+class IssueNotOpen(ValueError):
+    """An admission refused because the issue is closed: an epic run reads
+    it as a task that is already done."""
+
+
 class WorkSource(Protocol):
     name: str
 
@@ -525,7 +530,7 @@ class GitHubIssueSource:
                 rows[str(number)] = issue
         return rows
 
-    def admit(self, repo: str, number: str, kind: RunKind) -> WorkItem:
+    def admit(self, repo: str, number: str, kind: RunKind, *, label: bool = True) -> WorkItem:
         """Admit one existing issue as work of ``kind`` without waiting for
         a poll: the remote API's issue intake (#1036).
 
@@ -536,8 +541,13 @@ class GitHubIssueSource:
         already claimed (in progress) or already queued for the other kind
         is refused, named, rather than relabelled behind the person who
         labelled it. ``KeyError`` for a repository this source does not
-        tend; ``ValueError`` for an issue the rules refuse; GitHub's own
-        failures propagate (the caller decides what a 404 means).
+        tend; ``ValueError`` for an issue the rules refuse
+        (:class:`IssueNotOpen` for a closed one); GitHub's own failures
+        propagate (the caller decides what a 404 means).
+
+        ``label=False`` is an epic run's admission (#2347): the same rules,
+        but no queueing label is added, so no poll-driven path starts the
+        issue behind the run that admitted it.
         """
         if repo.casefold() != self.repo.casefold():
             raise KeyError(repo)
@@ -546,7 +556,7 @@ class GitHubIssueSource:
         if "pull_request" in issue:
             raise ValueError(f"{self.repo}#{number} is a pull request, not an issue")
         if issue.get("state") != "open":
-            raise ValueError(f"{self.repo}#{number} is not open")
+            raise IssueNotOpen(f"{self.repo}#{number} is not open")
         names = {
             str(label.get("name"))
             for label in issue.get("labels") or []
@@ -562,7 +572,7 @@ class GitHubIssueSource:
                 f"{self.repo}#{number} already carries `{other}`: it is queued as a "
                 f"{other_kind} run, not a {kind} run"
             )
-        if wanted not in names:
+        if label and wanted not in names:
             self._add_labels(ops, number, [wanted])
             log.info(
                 "github.admitted",
@@ -650,7 +660,12 @@ class GitHubIssueSource:
             names = {
                 label.get("name") for label in issue.get("labels") or [] if isinstance(label, dict)
             }
-            if trigger not in names:
+            # An epic run's item (#2347) was admitted without a queueing
+            # label: no poll can find the issue, so no other daemon races
+            # for it, and the claim comment is the trail and the
+            # half-claim evidence (#530), not a lock.
+            unlabelled = item.from_epic_run and trigger not in names
+            if trigger not in names and not unlabelled:
                 log.info(
                     "github.claim_declined",
                     item=item.item_id,
@@ -664,10 +679,10 @@ class GitHubIssueSource:
                 # rather than start whichever run the poll happened to see.
                 self._refuse_conflict(ops, number)
                 return False
-            epoch = self._trigger_epoch(ops, number, trigger)
             # The daemon persisted the token before calling (#530), so a
             # crash between the comment and the persist is recoverable.
             token = item.claim_token or uuid.uuid4().hex
+            epoch = "" if unlabelled else self._trigger_epoch(ops, number, trigger)
             self._comment(ops, number, self._claim_body(token, item, names))
             claims = self._claims(ops, number, epoch)
             mine = next((c for c in claims if c.token == token), None)
@@ -675,7 +690,7 @@ class GitHubIssueSource:
             # Earlier claims from a process that is gone are not live claims:
             # release them, then judge the race among the live ones.
             live = []
-            for claim in claims:
+            for claim in [] if unlabelled else claims:
                 if claim.token != token and self._stale(claim, claims, ops, number):
                     log.warning(
                         "github.claim_reclaimed",
@@ -688,7 +703,7 @@ class GitHubIssueSource:
                     self._delete_comment_quietly(number, claim.comment_id)
                     continue
                 live.append(claim)
-            first_token = live[0].token if live else None
+            first_token = token if unlabelled else (live[0].token if live else None)
             if first_token != token:
                 log.info(
                     "github.claim_lost_race",
@@ -714,7 +729,8 @@ class GitHubIssueSource:
                 self._remove_label(ops, number, label)
             self._add_labels(ops, number, [self.labels.in_progress, *self.extra_labels])
             added_in_progress = True
-            self._remove_label(ops, number, trigger)
+            if not unlabelled:
+                self._remove_label(ops, number, trigger)
         except (GithubOpsError, WorkerError, SbxError) as exc:
             log.warning(
                 "github.claim_failed",
@@ -1266,13 +1282,13 @@ class MultiRepoIssueSource:
             )
         return self._sources[0]
 
-    def admit(self, repo: str, number: str, kind: RunKind) -> WorkItem:
+    def admit(self, repo: str, number: str, kind: RunKind, *, label: bool = True) -> WorkItem:
         """Admit an issue through the source that tends ``repo``
         (``KeyError`` when none does)."""
         found = self._by_repo.get(repo.casefold())
         if found is None:
             raise KeyError(repo)
-        return found.admit(repo, number, kind)
+        return found.admit(repo, number, kind, label=label)
 
     # -- per-repository health ------------------------------------------------
 
