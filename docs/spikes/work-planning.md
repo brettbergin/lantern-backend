@@ -61,21 +61,26 @@ capabilities.
 
 ## Decisions
 
-| Question             | Decision                                                                                                                                                                                                                                                     |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Forge shape          | Every level is an issue. On GitHub, children are native sub-issues and a level label marks the level. On GitLab, always level labels plus a managed checklist of children in the parent's body — even on a tier with native epics, for one consistent shape. |
-| Approval             | Per level. The planner proposes one level (an initiative's epics, or an epic's tasks); a person edits and publishes that level; only then can the next level be broken down.                                                                                 |
-| Where the tree lives | An sbxloop plan record (drafts, answers, generation context, history) synced to the forge on publish. After publish **the forge wins**: sbxloop reconciles edits made there, and a re-plan proposes a diff a person approves.                                |
-| Forges               | GitHub and GitLab at launch. Gitea fails closed with `BackendNotImplemented`, as today.                                                                                                                                                                      |
-| Repositories         | An initiative lives in one home repository. Each epic targets exactly one repository, which may differ from the home. Tasks live in their epic's repository.                                                                                                 |
-| Input                | A structured form, then a clarifying interview when the planner judges the input underspecified. (Promoting an existing issue is deferred; see Non-goals.)                                                                                                   |
-| Grounding            | The planner runs as an agent job in the sandbox with a read-only checkout of the target repository, so tasks name real files and real verify commands.                                                                                                       |
-| Task size            | One task is one run and one pull request, carrying acceptance criteria, verify commands and `depends_on`. The in-run decompose still splits a task into internal steps; it never widens the PR.                                                              |
-| Execution            | "Run epic" admits the epic's tasks as issue runs in dependency order, in parallel when ready, bounded by the existing queue and usage limits. A failure pauses its dependents, not the epic. Any task can still be started alone from the issue picker.      |
-| Permissions          | Two new principal capabilities: `plans:create` (draft, generate, edit) and `plans:publish` (write to the forge, start an epic run).                                                                                                                          |
-| Entry level          | Any. A plan may start at an initiative (epics, then tasks) or at a lone epic (tasks). A lone epic can later be attached to an initiative.                                                                                                                    |
-| Guardrails           | Human publish, plus `[planning]` caps on epics per initiative and tasks per epic (defaults 8 and 12). Re-plans are diffs, deduplicated against existing children by marker.                                                                                  |
-| Client placement     | A new primary "Plans" section next to Tasks in Angie and Lantern, capability-gated.                                                                                                                                                                          |
+| Question             | Decision                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Forge shape          | Every level is an issue. On GitHub, children are native sub-issues and a level label marks the level. On GitLab, always level labels plus a managed checklist of children in the parent's body — even on a tier with native epics, for one consistent shape.                                                                       |
+| Approval             | Per level. The planner proposes one level (an initiative's epics, or an epic's tasks); a person edits and publishes that level; only then can the next level be broken down.                                                                                                                                                       |
+| Where the tree lives | An sbxloop plan record (drafts, answers, generation context, history) synced to the forge on publish. After publish **the forge wins**: sbxloop reconciles edits made there, and a re-plan proposes a diff a person approves.                                                                                                      |
+| Forges               | GitHub and GitLab at launch. Gitea fails closed with `BackendNotImplemented`, as today.                                                                                                                                                                                                                                            |
+| Repositories         | An initiative lives in one home repository. Each epic targets exactly one repository, which may differ from the home. Tasks live in their epic's repository.                                                                                                                                                                       |
+| Input                | A structured form, then a clarifying interview when the planner judges the input underspecified. (Promoting an existing issue is deferred; see Non-goals.)                                                                                                                                                                         |
+| Grounding            | The planner runs as a run of a new fourth run kind, `plan`, in the sandbox with a read-only checkout of the target repository, so tasks name real files and real verify commands. It has a chronology, steering and cancel like any run, and can belong to a channel.                                                              |
+| Task size and kind   | One task is one run. A `code` task ends in one pull request; a `workload` task ends in one delivery to a sink, under a configured workload profile. Tasks carry acceptance criteria and `depends_on`; code tasks also carry verify commands. The in-run decompose still splits a task into internal steps; it never widens the PR. |
+| Execution            | "Run epic" admits the epic's tasks as issue runs in dependency order, in parallel when ready, bounded by the existing queue and usage limits. A failure pauses its dependents, not the epic. Any task can still be started alone from the issue picker.                                                                            |
+| Permissions          | Two new principal capabilities: `plans:create` (draft, generate, edit drafts) and `plans:publish` (write to the forge, edit published issues, start an epic run).                                                                                                                                                                  |
+| Visibility           | Plans are shared across the workspace, drafts included: anyone with `runs:read` reads every plan, so teammates can review a breakdown before it is published.                                                                                                                                                                      |
+| Editing published    | A person can edit a published node's title and sections from the app; sbxloop writes it to the issue at once and refuses if the issue changed since it was read. A person can also attach an existing issue as a child or detach one.                                                                                              |
+| Chat                 | A plan run can post to a channel, where its questions appear as clickable choices and a person can steer it. When a chat ask is too big for one run, the concierge offers a plan and, on the person's yes, opens a pre-filled draft in Plans. It never publishes.                                                                  |
+| Completion           | When every task is closed, sbxloop comments a summary on the epic and closes it; when every epic is closed, it does the same for the initiative. Both sit behind `close_completed`.                                                                                                                                                |
+| Client timing        | Angie and Lantern build now, alongside the server epics, behind the `planning` capability.                                                                                                                                                                                                                                         |
+| Entry level          | Any. A plan may start at an initiative (epics, then tasks) or at a lone epic (tasks). A lone epic can later be attached to an initiative.                                                                                                                                                                                          |
+| Guardrails           | Human publish, plus `[planning]` caps on epics per initiative and tasks per epic (defaults 8 and 12). Re-plans are diffs, deduplicated against existing children by marker.                                                                                                                                                        |
+| Client placement     | A new primary "Plans" section next to Tasks in Angie and Lantern, capability-gated.                                                                                                                                                                                                                                                |
 
 ## Model
 
@@ -88,7 +93,9 @@ read it:
 - `goal` — the outcome, in the reader's words
 - `context` — what the planner found in the repository that matters
 - `acceptance_criteria` — list; required on tasks
-- `verify_commands` — list; tasks only, authored under the same rules
+- `kind` — `code` or `workload`; tasks only. A workload task names the
+  configured workload profile it runs under.
+- `verify_commands` — list; code tasks only, authored under the same rules
   `decompose.md` already enforces (workspace root, no shell variables)
 - `depends_on` — sibling node ids; tasks only
 - `non_goals`, `constraints` — optional
@@ -109,7 +116,8 @@ Every write bumps a `revision`; every mutating call takes
 `expected_revision`, as runs and gates already do.
 
 Plans are stored in the daemon's state store, beside items and runs (a new
-migration). Angie and Lantern hold no plan state of their own.
+migration). Angie and Lantern hold no plan state of their own. Every plan,
+drafts included, is visible to the whole workspace.
 
 ## Forge representation
 
@@ -168,8 +176,8 @@ each a named operation (no `raw()` use outside the backend):
 
 ## The planner
 
-A plan generation is an agent job in the sandbox pair with a read-only
-checkout of the node's repository (for an initiative, a shallow read of the
+A plan generation is a run of a new fourth run kind, `plan`, in the sandbox
+pair with a read-only checkout of the node's repository (for an initiative, a shallow read of the
 home repository plus the README and instruction files of each repository an
 epic targets). It never gets write credentials and never touches the forge;
 publishing is a separate host action.
@@ -180,8 +188,8 @@ pydantic model with the same retry `decompose()` uses:
 1. **Clarify.** Given the node and any prior answers, return either `ready`
    or up to `max_questions` questions in the `ChoiceQuestion` shape (two to
    five choices plus free text), so every client renders them the way chat
-   already does. The plan parks in `awaiting_answers` until a person answers
-   or skips.
+   already does. The run parks in `awaiting_answers` until a person answers
+   or skips, in the app or, when the run belongs to a channel, in chat.
 2. **Propose.** Return the node's children as `proposed` nodes, at most the
    level's cap, each with the sections above. For a re-plan of a published
    node, the input includes its current children and the output is a diff —
@@ -193,11 +201,19 @@ under the existing template contract and the domain-neutrality gate. The
 model is a new `AgentModels.plan` entry. Generation spend is metered to the
 usage pool and shows in Usage like any run.
 
-**Open question for step 1 of the build:** whether a generation is a fourth
-`RunKind` (gaining the chronology, steering and cancel for free, at the cost
-of touching the run shape the trail fixture pins) or an operation under
-`/v1/operations` with its own events. This spike leans to an operation: a
-generation delivers nothing and has no stages, and cancel is all it needs.
+**Why a run kind.** A generation is a `plan` run, not an operation, so it
+gets what every run has: a place in the queue and History, a chronology, a
+channel, steering from chat, and cancel. Its stages are `clarifying`,
+`awaiting_answers` and `proposing`, and it delivers to the plan record, never
+to the forge. Adding the kind must leave the code-run trail fixture
+(`tests/unit/test_code_run_trail.py`) byte-identical, as the workload and
+tool kinds did.
+
+**From chat.** When an ask in a channel is too large for one run, the
+concierge may offer a plan. On the asker's yes it creates a draft plan,
+pre-filled from the conversation, with the asker's own `plans:create`, and
+replies with a link that opens it in Plans. It never publishes and never
+starts an epic run.
 
 ## Publishing
 
@@ -230,8 +246,11 @@ forge's title, body sections, state and children:
   marker) is reported, not repaired silently.
 
 sbxloop never writes over a forge edit. The only writes after publish are a
-person's approved re-plan diff, the managed checklist block on GitLab, and
-the epic's completion comment.
+person's direct edit from the app, a person's approved re-plan diff, attach
+and detach, the managed checklist block on GitLab, and the completion
+comments. A direct edit carries the version of the issue the client read;
+if the issue changed on the forge since, the write is refused and the client
+is shown the current version.
 
 ## Running an epic
 
@@ -242,16 +261,19 @@ the daemon:
 - Each ready task is admitted through the existing issue admission
   (`IssueAdmission`, item `gh:issue:<n>`, or the GitLab equivalent) with
   `parent_item_id` naming the epic run — not by applying the trigger label,
-  so no poll-driven path is added. The usual lifecycle labels follow from
-  the claim.
+  so no poll-driven path is added. A code task is admitted as a code run and
+  a workload task as a workload run under its profile, the same as the
+  workload-label path. The usual lifecycle labels follow from the claim.
 - Independent tasks run concurrently, bounded by the queue, holds and the
   usage pool exactly as any other item is.
-- A run that lands closes its issue through the normal "Closes" path, which
-  makes its dependents ready.
+- A code run that lands closes its issue through the normal "Closes" path;
+  a workload run that delivers closes its issue the way the workload path
+  already does. Either makes its dependents ready.
 - A failed or blocked task pauses its dependents; siblings continue. A
   person can retry the task, skip it (treat as done), or stop the epic run.
 - When every task is closed, sbxloop comments a summary on the epic issue
-  and closes it.
+  and closes it. When every epic of an initiative is closed, it comments a
+  rollup on the initiative and closes that too.
 
 Epic runs require `plans:publish` — they are the one path that turns plan
 content into queued work, so they sit with publishing, not with
@@ -271,25 +293,26 @@ backends configured:
 
 The principal `Capability` literal gains `plans:create` and
 `plans:publish`. Defaults: members hold `plans:create`; admins and owners
-hold both. Reading plans needs `runs:read`.
+hold both. Reading plans, drafts included, needs `runs:read`.
 
 Each repository in `/v1/repositories` gains `planning: {hierarchy: "native" | "checklist" | "unsupported", reason}` so a client can say, before
 anyone types, what the plan will look like on that forge.
 
 ### Routes
 
-| Route                                                                 | Purpose                                                         |
-| --------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `GET /v1/plans`, `POST /v1/plans`                                     | List (filter by repository, level, state); create from the form |
-| `GET`, `PATCH`, `DELETE /v1/plans/{id}`                               | Read the tree; edit; delete a draft or archive a published plan |
-| `POST /v1/plans/{id}/nodes`, `PATCH`, `DELETE .../nodes/{node_id}`    | Add, edit, reorder, remove unpublished nodes                    |
-| `POST .../nodes/{node_id}/breakdown`                                  | Start a generation (clarify, then propose) for a node           |
-| `POST .../nodes/{node_id}/answers`                                    | Answer or skip clarifying questions                             |
-| `POST .../nodes/{node_id}/approve`                                    | Mark proposed or draft children approved                        |
-| `POST .../nodes/{node_id}/publish`                                    | Publish one level                                               |
-| `POST /v1/plans/{id}/sync`                                            | Reconcile now                                                   |
-| `POST .../nodes/{epic_id}/run`, `.../run/pause`, `/resume`, `/cancel` | Epic run control                                                |
-| `POST .../nodes/{task_id}/run/retry`, `.../run/skip`                  | Per-task recovery in an epic run                                |
+| Route                                                                 | Purpose                                                                           |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `GET /v1/plans`, `POST /v1/plans`                                     | List (filter by repository, level, state); create from the form                   |
+| `GET`, `PATCH`, `DELETE /v1/plans/{id}`                               | Read the tree; edit; delete a draft or archive a published plan                   |
+| `POST /v1/plans/{id}/nodes`, `PATCH`, `DELETE .../nodes/{node_id}`    | Add, edit, reorder, remove nodes; `PATCH` on a published node writes to its issue |
+| `POST .../nodes/{node_id}/attach`, `.../detach`                       | Adopt an existing issue as a child; unlink a child                                |
+| `POST .../nodes/{node_id}/breakdown`                                  | Start a `plan` run (clarify, then propose) for a node, optionally in a channel    |
+| `POST .../nodes/{node_id}/answers`                                    | Answer or skip clarifying questions                                               |
+| `POST .../nodes/{node_id}/approve`                                    | Mark proposed or draft children approved                                          |
+| `POST .../nodes/{node_id}/publish`                                    | Publish one level                                                                 |
+| `POST /v1/plans/{id}/sync`                                            | Reconcile now                                                                     |
+| `POST .../nodes/{epic_id}/run`, `.../run/pause`, `/resume`, `/cancel` | Epic run control                                                                  |
+| `POST .../nodes/{task_id}/run/retry`, `.../run/skip`                  | Per-task recovery in an epic run                                                  |
 
 ### Events
 
@@ -307,17 +330,17 @@ A `[planning]` block, with a per-repository override where `RepoConfig`
 narrows, in the config model, the example config and the user-guide knob
 table:
 
-| Key                        | Default | Meaning                                  |
-| -------------------------- | ------- | ---------------------------------------- |
-| `enabled`                  | `true`  | Offer planning on configured forges      |
-| `max_epics_per_initiative` | `8`     | Cap on one initiative's epics            |
-| `max_tasks_per_epic`       | `12`    | Cap on one epic's tasks                  |
-| `max_questions`            | `5`     | Clarifying questions per generation      |
-| `close_completed_epics`    | `true`  | Comment and close an epic when it's done |
+| Key                        | Default | Meaning                                          |
+| -------------------------- | ------- | ------------------------------------------------ |
+| `enabled`                  | `true`  | Offer planning on configured forges              |
+| `max_epics_per_initiative` | `8`     | Cap on one initiative's epics                    |
+| `max_tasks_per_epic`       | `12`    | Cap on one epic's tasks                          |
+| `max_questions`            | `5`     | Clarifying questions per generation              |
+| `close_completed`          | `true`  | Comment and close finished epics and initiatives |
 
 Plus `[agent.models] plan`, and the three level labels in `LabelSet`.
 
-## Client UX (Angie first, Lantern ports it)
+## Client UX (Angie is the reference, Lantern ports it)
 
 Both clients gate the section on `planning` and name the reason when it is
 absent ("the server needs `planning`", "this repository's forge can't hold
@@ -328,7 +351,8 @@ plans: Gitea is not supported").
   and a drift badge.
 - **New plan.** Level (initiative or epic), title, goal, success criteria,
   constraints and non-goals, repository (the home, for an initiative), and
-  attachments through the existing file inputs.
+  attachments through the existing file inputs. A concierge hand-off link
+  opens here with the draft pre-filled.
 - **Breakdown.** "Break down" starts a generation with live progress. A
   questions card appears if the planner asks. The proposal is an editable
   list of children: edit any section, reorder, delete, add, set
@@ -336,8 +360,9 @@ plans: Gitea is not supported").
   primary action names what it will do — "Publish 5 epics to
   brettbergin/sbxloop" — and nothing is written before it.
 - **Published node.** Forge link and state, children, drift shown as a diff
-  against the last known version, and "Re-plan", which shows a proposed diff
-  for approval.
+  against the last known version, in-place editing of the title and
+  sections, attach and detach, and "Re-plan", which shows a proposed diff for
+  approval.
 - **Epic run.** "Run epic" on a published epic, then a dependency-ordered
   list of tasks with their state (ready, queued, running, landed, failed,
   blocked by a dependency) linking to each run's thread; pause, resume,
@@ -362,24 +387,26 @@ issues.
    the GitLab checklist writer, the fake.
 2. Plan store, `/v1/plans` CRUD, capabilities, features, OpenAPI.
 3. Publish per level, idempotent by marker.
-4. Planner: config, prompts, generation job, clarify and answers.
-5. Reconciliation and re-plan diffs.
+4. Planner: config, prompts, the `plan` run kind, clarify and answers,
+   the concierge hand-off.
+5. Reconciliation, direct edits, attach and detach, re-plan diffs.
 6. Epic runs.
 7. Angie: API types and gating, list and form, breakdown editor and
    publish, published view and re-plan, epic run and action center.
 8. Lantern: regenerated client, capabilities, fake and demo world, then the
    same screens, push categories and `docs/parity.md` rows.
 
-sbxloop steps 1–3 unblock the clients' read and publish screens; the
-clients can build against the fakes while 4–6 land.
+Angie and Lantern start now, in parallel with the server: sbxloop steps 1–3
+unblock their read and publish screens, and both build against their fakes
+while 4–6 land. Lantern still ports behaviour from Angie screen by screen.
 
 ## Non-goals for the first version
 
 - Promoting an existing issue into an epic or initiative.
 - Gitea; GitHub Projects and milestones; GitLab native epics.
 - Tasks that span repositories.
-- Publishing or running anything without a person's action; agent-started
-  plans.
+- Publishing or running anything without a person's action. Agents never
+  start plans on their own; the concierge drafts one only on a person's yes.
 - Two-way sync of arbitrary body edits back into the plan's structured
   sections beyond the rendered headings.
 
@@ -405,6 +432,7 @@ Filed on 2026-09-26. Every issue carries its level label (`sbx:initiative`, `sbx
 - [sbxloop#2340](https://github.com/brettbergin/sbxloop/issues/2340) Store plans and serve /v1/plans with plans:create and plans:publish
 - [sbxloop#2341](https://github.com/brettbergin/sbxloop/issues/2341) Publish one plan level to the forge, idempotent by marker
 - [sbxloop#2342](https://github.com/brettbergin/sbxloop/issues/2342) Reconcile a published plan from the forge and report drift
+- [sbxloop#2350](https://github.com/brettbergin/sbxloop/issues/2350) Edit published plan nodes and attach or detach existing issues from the app
 
 **Epic (sbxloop): The planner:** [sbxloop#2336](https://github.com/brettbergin/sbxloop/issues/2336)
 
@@ -412,19 +440,20 @@ Filed on 2026-09-26. Every issue carries its level label (`sbx:initiative`, `sbx
 - [sbxloop#2344](https://github.com/brettbergin/sbxloop/issues/2344) Generate a proposed plan level in the sandbox from a read-only checkout
 - [sbxloop#2345](https://github.com/brettbergin/sbxloop/issues/2345) Ask clarifying questions before proposing, and take answers
 - [sbxloop#2346](https://github.com/brettbergin/sbxloop/issues/2346) Re-plan a published node as an approved diff
+- [sbxloop#2351](https://github.com/brettbergin/sbxloop/issues/2351) Offer a plan from chat when an ask is too big for one run
 
 **Epic (sbxloop): Epic runs:** [sbxloop#2337](https://github.com/brettbergin/sbxloop/issues/2337)
 
 - [sbxloop#2347](https://github.com/brettbergin/sbxloop/issues/2347) Admit an epic's ready tasks as issue runs in dependency order
 - [sbxloop#2348](https://github.com/brettbergin/sbxloop/issues/2348) Pause dependents of a failed task, with retry, skip and stop
-- [sbxloop#2349](https://github.com/brettbergin/sbxloop/issues/2349) Close a completed epic with a summary, and send the planning push notices
+- [sbxloop#2349](https://github.com/brettbergin/sbxloop/issues/2349) Close completed epics and initiatives with a summary, and send the planning push notices
 
 **Epic (angie): Plans section:** [angie#198](https://github.com/brettbergin/angie/issues/198)
 
 - [angie#199](https://github.com/brettbergin/angie/issues/199) Add plan types, capability gating and daemon fixtures
 - [angie#200](https://github.com/brettbergin/angie/issues/200) Build the Plans list and the new-plan form
 - [angie#201](https://github.com/brettbergin/angie/issues/201) Build the breakdown editor with clarifying questions and per-level publish
-- [angie#202](https://github.com/brettbergin/angie/issues/202) Show drift on published plans and review re-plan diffs
+- [angie#202](https://github.com/brettbergin/angie/issues/202) Edit published plans, show drift and review re-plan diffs
 - [angie#203](https://github.com/brettbergin/angie/issues/203) Run an epic from Plans and surface planning decisions in the action center
 
 **Epic (lantern): Plans section:** [lantern#61](https://github.com/brettbergin/lantern/issues/61)
