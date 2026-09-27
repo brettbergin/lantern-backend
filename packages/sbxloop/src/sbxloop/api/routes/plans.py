@@ -5,6 +5,10 @@ Feature ``planning``. Every plan, drafts included, is readable by anyone
 holding ``runs:read``; drafting and editing need ``plans:create``. Every
 mutation names the ``expected_revision`` it read; a stale one is ``409
 stale_revision`` with the plan's current revision.
+
+After publish the forge wins (#2342): reading a plan folds in what changed
+on the forge when its last reading is stale, ``POST .../sync`` does it now,
+and ``POST .../drift/ack`` marks the forge's changes seen.
 """
 
 from __future__ import annotations
@@ -23,6 +27,8 @@ from sbxloop.api.plan_schemas import (
     PlanApprove,
     PlanCreate,
     PlanDeleted,
+    PlanDrift,
+    PlanDriftAck,
     PlanForge,
     PlanNodeCreate,
     PlanNodeOut,
@@ -42,6 +48,7 @@ from sbxloop.daemon.controls.operations import (
     OperationStore,
 )
 from sbxloop.plans import Plan, PlanNode, PlanRefusal
+from sbxloop.plans.reconcile import Reconciliation
 from sbxloop.plans.service import SECTIONS
 
 router = APIRouter(prefix="/v1/plans", tags=["plans"])
@@ -90,10 +97,28 @@ def node_out(node: PlanNode) -> PlanNodeOut:
         forge=(
             None
             if node.forge is None
-            else PlanForge(number=node.forge.number, url=node.forge.url, state=node.forge.state)
+            else PlanForge(
+                number=node.forge.number,
+                url=node.forge.url,
+                state=node.forge.state,
+                updated_at=node.forge.updated_at,
+                detached=node.forge.detached,
+                marker_missing=node.forge.marker_missing,
+                checklist_error=node.forge.checklist_error,
+            )
         ),
         created_at=rfc3339(node.created_at) or "",
         updated_at=rfc3339(node.updated_at) or "",
+        drift=[
+            PlanDrift(
+                change=entry.change,
+                at=rfc3339(entry.at) or "",
+                before=dict(entry.before),
+                after=dict(entry.after),
+                reason=entry.reason,
+            )
+            for entry in node.drift
+        ],
     )
 
 
@@ -123,11 +148,31 @@ def _summary_fields(plan: Plan) -> dict[str, Any]:
         "created_at": rfc3339(plan.created_at) or "",
         "updated_at": rfc3339(plan.updated_at) or "",
         "rollup": _rollup(plan),
+        "drift": sum(1 for n in plan.nodes if n.drift),
+        "reconciled_at": rfc3339(plan.reconciled_at),
+        "reconcile_error": plan.reconcile_error,
     }
 
 
-def plan_out(plan: Plan) -> PlanOut:
-    return PlanOut(**_summary_fields(plan), nodes=[node_out(n) for n in plan.nodes])
+def plan_out(plan: Plan, *, reconcile_error: str | None = None) -> PlanOut:
+    fields = _summary_fields(plan)
+    if reconcile_error is not None:
+        fields["reconcile_error"] = reconcile_error
+    return PlanOut(**fields, nodes=[node_out(n) for n in plan.nodes])
+
+
+def _reconciled(result: Reconciliation) -> PlanOut:
+    return plan_out(result.plan, reconcile_error=result.error)
+
+
+def _forge_args(ctx: ApiContext) -> dict[str, Any]:
+    """How the plan service reaches the daemon's forge connection."""
+    forge = ctx.loop.github
+    return {
+        "forge_kind": None if forge is None else str(forge.kind),
+        "connect": lambda: forge.call(lambda ops: ops),
+        "clock": ctx.clock,
+    }
 
 
 @router.get("", response_model=Page[PlanSummary], summary="List plans")
@@ -177,12 +222,85 @@ async def create_plan(
 async def get_plan(
     plan_id: str,
     ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    _auth: Authenticated = Depends(require("runs:read")),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:read")),  # noqa: B008
 ) -> PlanOut:
+    """The plan and every node. A plan with anything on the forge whose
+    last reading is older than ``[planning] reconcile_interval_s`` is
+    reconciled first; a forge that cannot be read never fails the read —
+    the stored plan is served with ``reconciled_at`` and the reason in
+    ``reconcile_error``."""
+    forge = ctx.loop.github
     try:
-        plan = await ctx.call(ctx.plans.get, plan_id)
+        result = await ctx.call(
+            ctx.plans.open,
+            plan_id,
+            ready=bool(getattr(forge, "provisioned", True)),
+            actor=_actor(auth),
+            **_forge_args(ctx),
+        )
     except PlanRefusal as exc:
         raise _problem(exc) from exc
+    if result.changes:
+        ctx.hub.notify()
+    return _reconciled(result)
+
+
+@router.post(
+    "/{plan_id}/sync",
+    response_model=PlanOut,
+    summary="Reconcile a plan from the forge now",
+    responses={404: _PROBLEM, 409: _PROBLEM, 503: _PROBLEM},
+)
+async def sync_plan(
+    plan_id: str,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanOut:
+    """Read the plan's tree on the forge now and fold it in: titles,
+    sections under the rendered headings, open or closed, children adopted,
+    moved or detached — each change a ``plan.drift`` event. Never writes to
+    the forge. A forge that cannot be reached at all is ``503
+    source_unavailable``; issues it would not answer are named in
+    ``reconcile_error``. An archived plan is ``409 plan_archived``, one
+    being published or read right now ``409 already_in_progress``."""
+    try:
+        result = await ctx.call(
+            ctx.plans.reconcile, plan_id, actor=_actor(auth), force=True, **_forge_args(ctx)
+        )
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    if result.changes:
+        ctx.hub.notify()
+    return _reconciled(result)
+
+
+@router.post(
+    "/{plan_id}/drift/ack",
+    response_model=PlanOut,
+    summary="Mark the forge's changes to a plan seen",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+)
+async def ack_drift(
+    plan_id: str,
+    body: PlanDriftAck,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanOut:
+    """Clear the drift of every node, or of the nodes ``node_ids`` names:
+    someone looked, and the next forge edit is diffed against what they
+    saw. Nothing to clear changes nothing."""
+    try:
+        plan = await ctx.call(
+            ctx.plans.ack_drift,
+            plan_id,
+            expected_revision=body.expected_revision,
+            node_ids=body.node_ids,
+            now=ctx.clock(),
+            actor=_actor(auth),
+        )
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    ctx.hub.notify()
     return plan_out(plan)
 
 

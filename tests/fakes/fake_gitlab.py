@@ -121,6 +121,7 @@ class FakeGitlab(GitlabOps):
         self.lose_commit_response = False
         self.ci_file = False
         self.issues: dict[int, dict[str, Any]] = {}
+        self._edit_count = 0
         self.notes: dict[int, list[dict[str, Any]]] = {}
         self.label_events: dict[int, list[dict[str, Any]]] = {}
         self.labels: list[dict[str, Any]] = []
@@ -340,6 +341,42 @@ class FakeGitlab(GitlabOps):
             "labels": list(labels),
             "author_id": author_id if author_id is not None else self.user_id,
         }
+
+    # -- what a person does on the forge (#2342) ---------------------------------
+
+    def person_files(self, title: str, description: str = "") -> int:
+        """A person opens an issue in the project; its iid. Not ledgered."""
+        iid = 5000 + sum(1 for i in self.issues if i > 5000) + 1
+        self.seed_issue(iid, title, description=description)
+        self.issues[iid]["updated_at"] = self._stamp()
+        return iid
+
+    def person_edits(
+        self,
+        iid: int,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        state: str | None = None,
+    ) -> None:
+        """A person edits an issue's title or description, or closes
+        (``closed``) or reopens (``opened``) it; its ``updated_at`` moves."""
+        issue = self.issues[iid]
+        if title is not None:
+            issue["title"] = title
+        if description is not None:
+            issue["description"] = description
+        if state is not None:
+            issue["state"] = state
+        issue["updated_at"] = self._stamp()
+
+    def person_deletes(self, iid: int) -> None:
+        """An owner deletes an issue: reading it is GitLab's 404."""
+        del self.issues[iid]
+
+    def _stamp(self) -> str:
+        self._edit_count += 1
+        return f"2026-09-27T12:{self._edit_count // 60:02d}:{self._edit_count % 60:02d}.000Z"
 
     def seed_note(
         self,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -11,11 +11,45 @@ from sbxloop.daemon.controls.principal import WORKSPACE_ID
 
 
 class PlanForge(ApiModel):
-    """The issue a published node became, as the forge last said."""
+    """The issue a published node became, as the forge last said.
+    ``updated_at`` is the issue's version as last read. ``detached`` says
+    why the node no longer follows its issue (it left its parent, or the
+    forge); ``marker_missing`` that its body lost the ``sbx-plan`` marker;
+    ``checklist_error`` why its managed children checklist could not be
+    read. None of these is repaired by sbxloop."""
 
     number: int
     url: str
     state: Literal["open", "closed"] | None = None
+    updated_at: str | None = None
+    detached: str | None = None
+    marker_missing: bool = False
+    checklist_error: str | None = None
+
+
+class PlanDrift(ApiModel):
+    """One change the forge made to a node that nobody has marked seen.
+    ``title``, ``sections`` and ``state`` carry ``before`` (as a person
+    last saw it) and ``after`` (as the forge has it now), keyed by field,
+    for a diff; ``adopted``, ``moved`` and ``reattached`` carry the parent
+    in ``after`` (and ``before``); ``detached``, ``marker_removed`` and
+    ``checklist_mangled`` say why in ``reason``."""
+
+    change: Literal[
+        "title",
+        "sections",
+        "state",
+        "adopted",
+        "moved",
+        "detached",
+        "reattached",
+        "marker_removed",
+        "checklist_mangled",
+    ]
+    at: str
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
 
 
 class PlanNodeOut(ApiModel):
@@ -39,6 +73,8 @@ class PlanNodeOut(ApiModel):
     forge: PlanForge | None = None
     created_at: str
     updated_at: str
+    #: What the forge changed that nobody has marked seen, oldest first.
+    drift: list[PlanDrift] = Field(default_factory=list)
 
 
 class PlanRollup(ApiModel):
@@ -65,6 +101,13 @@ class PlanSummary(ApiModel):
     created_at: str
     updated_at: str
     rollup: PlanRollup
+    #: How many nodes carry drift nobody has marked seen: the badge.
+    drift: int = 0
+    #: When the forge was last read into the plan, and what stopped the
+    #: last reading (or part of it); a plan served while the forge is down
+    #: says so here.
+    reconciled_at: str | None = None
+    reconcile_error: str | None = None
 
 
 class PlanOut(PlanSummary):
@@ -140,6 +183,14 @@ class PlanApprove(ApiModel):
 
     expected_revision: int = Field(ge=1)
     node_ids: list[str] | None = Field(default=None, max_length=100)
+
+
+class PlanDriftAck(ApiModel):
+    """Mark the forge's changes seen: on every node, or the nodes
+    ``node_ids`` names."""
+
+    expected_revision: int = Field(ge=1)
+    node_ids: list[str] | None = Field(default=None, max_length=500)
 
 
 class PlanPublish(ApiModel):

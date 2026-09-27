@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+**A published plan follows the forge, and says what changed there.** After
+publish the forge wins: sbxloop re-reads a plan's issues and folds in what
+people did on the forge, and never writes over it. A title, the sections
+under the rendered headings and open or closed update the node; an issue a
+person added under a parent (a sub-issue, or a line in a GitLab parent's
+checklist) is adopted with `origin: forge`; a node removed from its parent,
+or whose issue was deleted, is detached and says why, and nothing is
+recreated; a removed marker or a broken managed checklist is reported, not
+repaired. Each change is kept on the node as `drift` — what a person last
+saw and what the forge has now — until someone marks it seen with
+`POST /v1/plans/{id}/drift/ack`, a plan counts its drifted nodes for a
+badge, and each change is a `plan.drift` event. `GET /v1/plans/{id}`
+reconciles a plan whose last reading is older than
+`[planning] reconcile_interval_s` (120 seconds; `0` only on sync) and never
+fails when the forge is down — it serves the stored plan with
+`reconciled_at` and the reason; `POST /v1/plans/{id}/sync` (`plans:create`)
+reconciles now. A new migration stores the reading. (#2342)
+
 **An approved plan level can be published to the forge, and publishing it
 again never duplicates an issue.** `POST /v1/plans/{id}/nodes/{node_id}/approve`
 (`plans:create`) marks a node's draft and proposed children approved.

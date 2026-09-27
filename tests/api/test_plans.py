@@ -307,6 +307,10 @@ class TestStates:
             "number": 12,
             "url": "https://github.com/o/r/issues/12",
             "state": "open",
+            "updated_at": None,
+            "detached": None,
+            "marker_missing": False,
+            "checklist_error": None,
         }
         refused = api.client.patch(
             f"/v1/plans/{plan['id']}/nodes/{epic['id']}",

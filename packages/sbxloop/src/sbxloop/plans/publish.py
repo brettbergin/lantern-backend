@@ -35,7 +35,7 @@ from sbxloop.config import Config
 from sbxloop.errors import SbxloopError
 from sbxloop.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from sbxloop.plans.model import ForgeRef, ForgeState, Plan, PlanNode
-from sbxloop.plans.render import markers, render_body
+from sbxloop.plans.render import markers, render_body, repo_of
 from sbxloop.plans.store import PlanEvent, PlanStore, StaleRevision
 from sbxloop.vcs.checklist import ChecklistEntry, add_child, update_checklist
 from sbxloop.vcs.github.labels import LEVEL_DESCRIPTORS, LabelSpec, ensure_label
@@ -117,16 +117,6 @@ def level_targets(plan: Plan, node_id: str) -> list[PlanNode]:
 def _say(exc: BaseException) -> str:
     text = " ".join(str(exc).split()) or type(exc).__name__
     return text[:ERROR_MAX]
-
-
-def _repo_of(row: Mapping[str, Any]) -> str:
-    """The ``owner/name`` an issue payload's web URL says it lives in."""
-    url = str(row.get("html_url") or "")
-    path = url.split("://", 1)[-1].split("/", 1)[-1]
-    for sep in ("/-/issues/", "/issues/"):
-        if sep in path:
-            return path.split(sep, 1)[0]
-    return ""
 
 
 class _Walk:
@@ -243,7 +233,7 @@ class _Walk:
         key = (repo.casefold(), number)
         if key not in self.children:
             self.children[key] = {
-                (_repo_of(row).casefold(), int(row["number"]))
+                (repo_of(row).casefold(), int(row["number"]))
                 for row in self.ops.sub_issues_list(repo, number)
                 if isinstance(row, dict) and isinstance(row.get("number"), int)
             }
