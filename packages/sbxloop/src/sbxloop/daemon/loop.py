@@ -73,6 +73,7 @@ from sbxloop.daemon.controls.results import (
     ResumeOutcome,
     SteerOutcome,
 )
+from sbxloop.daemon.epicruns import EpicRunDriver
 from sbxloop.daemon.github import DaemonGithub
 from sbxloop.daemon.holds import OPERATOR_HOLD, hold_name
 from sbxloop.daemon.logsink import event_log_subscriber
@@ -553,6 +554,9 @@ class DaemonLoop:
         self.usage_pool = UsagePool(dstore, lambda: self.config, clock)
         # `daemon_state` key: the day start the budget notice last went out for.
         self._budget_notice_key = "usage_pool_budget_notice_day"
+        # Epic runs (#2347): a plan's epic whose ready tasks this loop
+        # admits as issue runs, in dependency order, on every tick.
+        self.epic_runs = EpicRunDriver(self)
 
     # -- external control ---------------------------------------------------------
 
@@ -1940,6 +1944,10 @@ class DaemonLoop:
         # A parked PR's review poll (#675) is not new work: it runs even
         # paused, so an approval given during a pause still lands.
         self._review_tick(now)
+        # An epic run follows the tasks that settled above and queues the
+        # ones they made ready (#2347). Queueing is not starting: the gate
+        # below, the holds and the usage pool decide when each one runs.
+        self.epic_runs.tick(now)
         idle = self._dispatch_gate(now, first=True)
         if idle is not None:
             return idle

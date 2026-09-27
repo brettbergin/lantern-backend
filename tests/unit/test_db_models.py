@@ -52,6 +52,8 @@ DAEMON_TABLES = (
     "workspace_usage",
     "daemon_plans",
     "daemon_plan_nodes",
+    "daemon_plan_epic_runs",
+    "daemon_plan_epic_run_tasks",
 )
 API_TABLES = (
     "api_operations",

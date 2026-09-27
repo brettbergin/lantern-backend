@@ -2759,6 +2759,33 @@ entries leave `Replan.entries`, failed ones keep their error, and the call
 records `plan.published` (`replan: true`) and is a `plan.replan.approve`
 operation under an `Idempotency-Key`.
 
+Epic runs (#2347) are the one path from plan content to queued work.
+`plans/epicrun.py` holds the shapes, the rules and the rows
+(`daemon_plan_epic_runs`, one per run with its state and who started it;
+`daemon_plan_epic_run_tasks`, one per task with its state, the item it was
+admitted as and the run that item last started). `daemon/epicruns.py`'s
+`EpicRunDriver` hangs off the loop as `loop.epic_runs`: the route's start
+records the run and makes the first pass under the driver's lock, and
+`DaemonLoop._tick` calls `epic_runs.tick` right after the review poll, so
+a pass always sees what the tick's reap just settled and the tick's own
+dispatch picks up what the pass queued. A pass reads each admitted task's
+item — `done` is landed (the source's merge or completed report closed the
+issue), `failed`, `blocked` or `cancelled` is failed — then admits, in the
+plan's order, every task whose `depends_on` are all landed or closed, and
+marks the dependents of a failed task blocked. Admission is
+`controls/intake.py`'s `admit_issue` with `label=False` — the source's own
+rules, minus the queueing label — then `upsert` with `parent_item_id`
+naming the run (`erun_…`, `daemon/model.py::is_epic_run_id`) and, for a
+workload task, its profile; a live row for the issue is adopted instead.
+Because no label marks such an item, `GitHubIssueSource.claim` accepts an
+item whose `WorkItem.from_epic_run` is set without the trigger label: no
+poll can find the issue, so no other daemon races for it, and the claim
+comment is the trail and the half-claim evidence rather than a lock; the
+in-progress label goes on as always. How many run at once stays the
+queue's, the holds' and the usage pool's business, and the start is a
+`plan.run` operation that `reconcile_operations` settles from whether the
+run was recorded.
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

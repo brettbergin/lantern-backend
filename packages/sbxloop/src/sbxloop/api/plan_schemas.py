@@ -442,3 +442,58 @@ class PlanReplanApplied(ApiModel):
     results: list[PlanReplanResult]
     operation_id: str | None = None
     replayed: bool = False
+
+
+class EpicRunStart(ApiModel):
+    """Run a published epic. The ``Idempotency-Key`` header is required."""
+
+    expected_revision: int = Field(ge=1)
+
+
+class EpicRunTaskOut(ApiModel):
+    """One task of an epic run. ``state`` is ``waiting`` (a dependency is
+    not closed yet), ``ready`` (about to be admitted, or the forge could
+    not be read), ``queued``, ``running``, ``landed`` (its code run merged
+    or its workload delivered, and its issue was closed), ``closed`` (its
+    issue was already closed), ``failed`` (``reason`` says why) or
+    ``blocked`` (a dependency failed, so it is not admitted). ``item_id``
+    is the item it was admitted as and ``run_id`` the run that item last
+    started — the run's thread."""
+
+    node_id: str
+    title: str
+    kind: Literal["code", "workload"] | None = None
+    workload_profile: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    forge: PlanForge | None = None
+    state: Literal["waiting", "ready", "queued", "running", "landed", "closed", "failed", "blocked"]
+    item_id: str | None = None
+    run_id: str | None = None
+    reason: str | None = None
+    admitted_at: str | None = None
+    updated_at: str
+
+
+class EpicRunOut(ApiModel):
+    """An epic run: the daemon admitting an epic's ready tasks as issue
+    runs, in dependency order, with ``parent_item_id`` naming it."""
+
+    id: str
+    plan_id: str
+    node_id: str
+    state: Literal["running", "paused", "completed", "cancelled"]
+    started_by: str | None = None
+    started_by_display: str | None = None
+    created_at: str
+    updated_at: str
+    completed_at: str | None = None
+    tasks: list[EpicRunTaskOut]
+
+
+class EpicRunStarted(EpicRunOut):
+    """The epic run as it stands after its first pass. ``replayed`` is true
+    when the answer is a replay of an earlier call under the same
+    ``Idempotency-Key`` (the run as it is now)."""
+
+    operation_id: str | None = None
+    replayed: bool = False

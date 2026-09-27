@@ -32,6 +32,7 @@ from sbxloop.agents.assignment import RUN_ROLES
 from sbxloop.config import SINK_NAMES, Config
 from sbxloop.daemon.controls.results import ControlError, ErrorCode
 from sbxloop.daemon.model import WorkItem, requested_roles_json
+from sbxloop.daemon.sources import IssueNotOpen
 from sbxloop.engine.model import RunKind
 from sbxloop.entrygraph import resolve_targets
 from sbxloop.errors import ConfigError, DaemonError, GithubOpsError, SbxError, WorkerError
@@ -365,9 +366,11 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     )
 
 
-def admit_issue(loop: Any, request: IssueAdmission) -> WorkItem:
+def admit_issue(loop: Any, request: IssueAdmission, *, label: bool = True) -> WorkItem:
     """The item the GitHub source builds for the issue, labelled for
-    ``run_kind``; refusals as :class:`ControlError`."""
+    ``run_kind``; refusals as :class:`ControlError`. ``label=False`` is an
+    epic run's admission (#2347): the same rules, no queueing label. A
+    closed issue's refusal says so in ``issue_state``."""
     config: Config = loop.config
     entry = config.find_repo(request.repository)
     if entry is None:
@@ -380,10 +383,15 @@ def admit_issue(loop: Any, request: IssueAdmission) -> WorkItem:
             "source_unavailable", "this daemon polls no repository, so it cannot admit an issue"
         )
     kind: RunKind = request.run_kind
+    # Only an epic run passes the keyword: a source written before it
+    # takes the three arguments it always took.
+    unlabelled: dict[str, Any] = {} if label else {"label": False}
     try:
-        item: WorkItem = admit(entry.repo, str(request.number), kind)
+        item: WorkItem = admit(entry.repo, str(request.number), kind, **unlabelled)
     except KeyError as exc:
         raise ControlError("unknown_target", f"{entry.repo} is not polled by this daemon") from exc
+    except IssueNotOpen as exc:
+        raise ControlError("not_eligible", str(exc), issue_state="closed") from exc
     except ValueError as exc:
         raise ControlError("not_eligible", str(exc)) from exc
     except GithubOpsError as exc:

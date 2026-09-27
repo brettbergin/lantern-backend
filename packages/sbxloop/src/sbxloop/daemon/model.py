@@ -57,6 +57,17 @@ ItemState = Literal[
 PendingReport = Literal["abandoned", "requeued", "merged", "blocked", "gated", "completed", "held"]
 
 
+#: An epic run's id (#2347) starts with this. The items an epic run admits
+#: carry it as ``parent_item_id`` and wear no queueing label: no poll finds
+#: them, and their claim does not look for one.
+EPIC_RUN_PREFIX = "erun_"
+
+
+def is_epic_run_id(value: str | None) -> bool:
+    """Whether ``value`` names an epic run."""
+    return bool(value) and str(value).startswith(EPIC_RUN_PREFIX)
+
+
 def requested_roles_json(roles: Mapping[str, str]) -> str:
     """What an item's ``assignment_json`` holds before dispatch plans an
     assignment: the agent asked for in each run role."""
@@ -199,6 +210,12 @@ class WorkItem(BaseModel):
         if (self.recipe is None) != (self.recipe_target is None):
             raise ValueError("recipe and recipe_target are set together")
         return self
+
+    @property
+    def from_epic_run(self) -> bool:
+        """Whether an epic run admitted this item (#2347): a person's run
+        of a plan's epic, not an agent's chain, so no agent origin."""
+        return self.origin_agent is None and is_epic_run_id(self.parent_item_id)
 
     @property
     def restarted(self) -> bool:

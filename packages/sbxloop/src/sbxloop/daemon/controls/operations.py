@@ -70,6 +70,7 @@ EFFECTS: dict[str, str] = {
     "daemon.restart": "the restart is committed and signalled",
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
     "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
+    "plan.run": "the epic run is recorded and its ready tasks are admitted",
 }
 
 
@@ -620,6 +621,16 @@ def _judge(
             "the re-plan's approval was interrupted; approving what is left of it again "
             "resumes it without duplicating an issue",
         )
+    if op.action == "plan.run":
+        # The run is recorded before any task is admitted, and the daemon
+        # drives a recorded run on its own: recorded is started.
+        from sbxloop.plans.epicrun import EpicRunStore
+
+        node_id = str((op.request or {}).get("node_id") or "")
+        run = EpicRunStore(loop.dstore).latest(op.target_key, node_id)
+        if run is not None and run.created_at >= op.accepted_at:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the epic run was not started"
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:
