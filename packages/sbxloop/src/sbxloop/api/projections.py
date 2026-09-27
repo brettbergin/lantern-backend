@@ -37,6 +37,7 @@ from sbxloop.api.models import (
     Repository,
     RepositoryLabel,
     RepositoryLabels,
+    RepositoryPlanning,
     Rounds,
     Run,
     Schedule,
@@ -61,6 +62,7 @@ from sbxloop.db.event_scope import channel_for_item
 from sbxloop.engine.model import RunRecord, TaskRecord
 from sbxloop.errors import SbxloopError
 from sbxloop.ghids import is_api_id, is_chat_id, is_schedule_id, try_parse_gh_id
+from sbxloop.plans.hierarchy import repository_planning
 from sbxloop.recipes import RECIPES
 from sbxloop.vcs.github.labels import lifecycle_specs
 
@@ -524,6 +526,7 @@ class Views:
                     created_at=rfc3339(row.created_at) if row is not None else None,
                     restart_required=(entry.repo.casefold() in polled) != entry.enabled,
                     labels=repository_labels(self.config, entry.repo, row),
+                    planning=_planning(str(self.config.vcs_kind_for(entry.repo))),
                 )
             )
         return out
@@ -557,6 +560,11 @@ class Views:
 
 
 # -- administration (#1040) -----------------------------------------------------------
+
+
+def _planning(kind: str) -> RepositoryPlanning:
+    planning = repository_planning(kind)
+    return RepositoryPlanning(hierarchy=planning.hierarchy, reason=planning.reason)
 
 
 def repository_labels(config: Any, repo: str, row: Any | None) -> RepositoryLabels:

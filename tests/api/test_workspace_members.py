@@ -102,7 +102,9 @@ def test_an_invite_admits_a_member_with_the_role_capabilities(api: Any) -> None:
         "collaboration:read",
         "collaboration:write",
         "collaboration:delegate",
+        "plans:create",
     }
+    assert "plans:publish" not in body["scope"].split()
     assert "artifacts:read" not in body["scope"].split()
     assert "credentials:manage" not in body["scope"].split()
 

@@ -50,6 +50,8 @@ DAEMON_TABLES = (
     "daemon_repositories",
     "daemon_holds",
     "workspace_usage",
+    "daemon_plans",
+    "daemon_plan_nodes",
 )
 API_TABLES = (
     "api_operations",

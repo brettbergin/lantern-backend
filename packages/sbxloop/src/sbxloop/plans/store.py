@@ -1,0 +1,290 @@
+"""Plans and their nodes in the daemon's store.
+
+Reads return whole plans. Writes are one transaction each: the plan's
+revision is checked against what the caller read, the node rows are
+upserted or deleted, the revision is bumped, and the events that describe
+the change land in the same transaction, so a client that sees the event
+reads the change.
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Any, cast
+
+from sqlalchemy import delete, insert, select
+
+from sbxloop.daemon.store import DaemonStore
+from sbxloop.db.api_models import ApiEventRow
+from sbxloop.db.daemon_models import PlanNodeRow, PlanRow
+from sbxloop.plans.model import (
+    ForgeRef,
+    ForgeState,
+    Level,
+    NodeState,
+    Origin,
+    Plan,
+    PlanNode,
+    TaskKind,
+)
+
+_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+
+
+def new_id(prefix: str) -> str:
+    return prefix + "".join(secrets.choice(_ALPHABET) for _ in range(16))
+
+
+class StaleRevision(Exception):
+    """The plan moved on since the caller read it."""
+
+    def __init__(self, current: int) -> None:
+        super().__init__(f"the plan is at revision {current}")
+        self.current = current
+
+
+class PlanGone(Exception):
+    """The plan does not exist (or was deleted under the caller)."""
+
+
+@dataclass(frozen=True, slots=True)
+class PlanEvent:
+    type: str
+    data: dict[str, Any]
+
+
+def _node(row: PlanNodeRow) -> PlanNode:
+    forge = None
+    if row.forge_number is not None:
+        forge = ForgeRef(
+            number=int(row.forge_number),
+            url=str(row.forge_url or ""),
+            state=cast(ForgeState | None, row.forge_state),
+        )
+    return PlanNode(
+        id=str(row.node_id),
+        plan_id=str(row.plan_id),
+        parent_id=row.parent_id,
+        position=int(row.position),
+        level=cast(Level, row.level),
+        repository=str(row.repository),
+        state=cast(NodeState, row.state),
+        origin=cast(Origin, row.origin),
+        title=str(row.title),
+        goal=str(row.goal or ""),
+        context=str(row.context or ""),
+        acceptance_criteria=tuple(json.loads(row.acceptance_criteria_json or "[]")),
+        kind=cast(TaskKind | None, row.kind),
+        workload_profile=row.workload_profile,
+        verify_commands=tuple(json.loads(row.verify_commands_json or "[]")),
+        depends_on=tuple(json.loads(row.depends_on_json or "[]")),
+        non_goals=str(row.non_goals or ""),
+        constraints=str(row.constraints or ""),
+        forge=forge,
+        created_at=float(row.created_at),
+        updated_at=float(row.updated_at),
+    )
+
+
+def _columns(node: PlanNode) -> dict[str, Any]:
+    return {
+        "node_id": node.id,
+        "plan_id": node.plan_id,
+        "parent_id": node.parent_id,
+        "position": node.position,
+        "level": node.level,
+        "repository": node.repository,
+        "state": node.state,
+        "origin": node.origin,
+        "title": node.title,
+        "goal": node.goal,
+        "context": node.context,
+        "acceptance_criteria_json": json.dumps(list(node.acceptance_criteria)),
+        "kind": node.kind,
+        "workload_profile": node.workload_profile,
+        "verify_commands_json": json.dumps(list(node.verify_commands)),
+        "depends_on_json": json.dumps(list(node.depends_on)),
+        "non_goals": node.non_goals,
+        "constraints": node.constraints,
+        "forge_number": None if node.forge is None else node.forge.number,
+        "forge_url": None if node.forge is None else node.forge.url,
+        "forge_state": None if node.forge is None else node.forge.state,
+        "created_at": node.created_at,
+        "updated_at": node.updated_at,
+    }
+
+
+def _ordered(root_id: str, nodes: Iterable[PlanNode]) -> tuple[PlanNode, ...]:
+    """The root first, then depth-first in each parent's order."""
+    by_parent: dict[str | None, list[PlanNode]] = {}
+    for node in nodes:
+        by_parent.setdefault(node.parent_id, []).append(node)
+    for siblings in by_parent.values():
+        siblings.sort(key=lambda node: (node.position, node.id))
+    out: list[PlanNode] = []
+
+    def walk(node: PlanNode) -> None:
+        out.append(node)
+        for child in by_parent.get(node.id, []):
+            walk(child)
+
+    for node in by_parent.get(None, []):
+        if node.id == root_id:
+            walk(node)
+    return tuple(out)
+
+
+def _plan(row: PlanRow, nodes: Iterable[PlanNodeRow]) -> Plan:
+    return Plan(
+        id=str(row.plan_id),
+        workspace_id=str(row.workspace_id),
+        root_id=str(row.root_node_id),
+        archived=row.state == "archived",
+        created_by=row.created_by,
+        created_by_display=row.created_by_display,
+        created_at=float(row.created_at),
+        updated_at=float(row.updated_at),
+        revision=int(row.revision),
+        nodes=_ordered(str(row.root_node_id), (_node(n) for n in nodes)),
+    )
+
+
+def _event(session: Any, event: PlanEvent, now: float, actor: dict[str, Any] | None) -> None:
+    session.execute(
+        insert(ApiEventRow).values(
+            recorded_at=now,
+            occurred_at=now,
+            type=event.type,
+            run_id=None,
+            item_id=None,
+            operation_id=None,
+            actor_json=None if actor is None else json.dumps(actor, default=str),
+            source_seq=None,
+            data_json=json.dumps(event.data, default=str),
+            channel_id=None,
+            audience_user_id=None,
+        )
+    )
+
+
+class PlanStore:
+    def __init__(self, dstore: DaemonStore) -> None:
+        self.dstore = dstore
+
+    def get(self, plan_id: str) -> Plan | None:
+        with self.dstore.read() as session:
+            row = session.get(PlanRow, plan_id)
+            if row is None:
+                return None
+            nodes = session.scalars(select(PlanNodeRow).where(PlanNodeRow.plan_id == plan_id))
+            return _plan(row, nodes)
+
+    def all(self) -> list[Plan]:
+        """Every plan, most recently changed first."""
+        with self.dstore.read() as session:
+            rows = list(
+                session.scalars(
+                    select(PlanRow).order_by(PlanRow.updated_at.desc(), PlanRow.plan_id)
+                )
+            )
+            nodes: dict[str, list[PlanNodeRow]] = {}
+            for node in session.scalars(select(PlanNodeRow)):
+                nodes.setdefault(str(node.plan_id), []).append(node)
+            return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
+
+    def create(
+        self,
+        plan: Plan,
+        *,
+        events: Sequence[PlanEvent],
+        actor: dict[str, Any] | None,
+    ) -> Plan:
+        with self.dstore.transaction() as session:
+            session.add(
+                PlanRow(
+                    plan_id=plan.id,
+                    workspace_id=plan.workspace_id,
+                    root_node_id=plan.root_id,
+                    state="archived" if plan.archived else "active",
+                    created_by=plan.created_by,
+                    created_by_display=plan.created_by_display,
+                    created_at=plan.created_at,
+                    updated_at=plan.updated_at,
+                    revision=plan.revision,
+                )
+            )
+            for node in plan.nodes:
+                session.add(PlanNodeRow(**_columns(node)))
+            for event in events:
+                _event(session, event, plan.created_at, actor)
+        created = self.get(plan.id)
+        assert created is not None  # nosec B101 - written above
+        return created
+
+    def apply(
+        self,
+        plan_id: str,
+        *,
+        expected_revision: int,
+        now: float,
+        upsert: Sequence[PlanNode] = (),
+        remove: Sequence[str] = (),
+        archived: bool | None = None,
+        events: Sequence[PlanEvent] = (),
+        actor: dict[str, Any] | None = None,
+    ) -> Plan:
+        """Write one change to a plan, against the revision the caller
+        read; the plan as it now is."""
+        with self.dstore.transaction() as session:
+            row = session.get(PlanRow, plan_id)
+            if row is None:
+                raise PlanGone(plan_id)
+            if int(row.revision) != expected_revision:
+                raise StaleRevision(int(row.revision))
+            if remove:
+                session.execute(
+                    delete(PlanNodeRow).where(
+                        PlanNodeRow.plan_id == plan_id, PlanNodeRow.node_id.in_(list(remove))
+                    )
+                )
+            for node in upsert:
+                existing = session.get(PlanNodeRow, node.id)
+                columns = _columns(node)
+                if existing is None:
+                    session.add(PlanNodeRow(**columns))
+                else:
+                    for key, value in columns.items():
+                        setattr(existing, key, value)
+            if archived is not None:
+                row.state = "archived" if archived else "active"
+            row.revision = int(row.revision) + 1
+            row.updated_at = now
+            for event in events:
+                _event(session, event, now, actor)
+        changed = self.get(plan_id)
+        if changed is None:
+            raise PlanGone(plan_id)
+        return changed
+
+    def delete(
+        self,
+        plan_id: str,
+        *,
+        expected_revision: int,
+        now: float,
+        events: Sequence[PlanEvent] = (),
+        actor: dict[str, Any] | None = None,
+    ) -> None:
+        with self.dstore.transaction() as session:
+            row = session.get(PlanRow, plan_id)
+            if row is None:
+                raise PlanGone(plan_id)
+            if int(row.revision) != expected_revision:
+                raise StaleRevision(int(row.revision))
+            session.execute(delete(PlanNodeRow).where(PlanNodeRow.plan_id == plan_id))
+            session.delete(row)
+            for event in events:
+                _event(session, event, now, actor)

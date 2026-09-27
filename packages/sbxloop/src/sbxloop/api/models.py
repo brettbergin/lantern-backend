@@ -489,6 +489,15 @@ class RepositoryLabels(ApiModel):
     checked_at: str | None = None
 
 
+class RepositoryPlanning(ApiModel):
+    """What a plan looks like on this repository's forge (#2340):
+    ``native`` sub-issues, a managed ``checklist`` in the parent, or
+    ``unsupported`` with the reason a person reads."""
+
+    hierarchy: Literal["native", "checklist", "unsupported"]
+    reason: str | None = None
+
+
 class Repository(ApiModel):
     id: str
     workspace_id: str = WORKSPACE_ID
@@ -511,6 +520,7 @@ class Repository(ApiModel):
     #: the daemon's last reading (``[daemon] label_check_interval_s``) or
     #: the last label sync.
     labels: RepositoryLabels
+    planning: RepositoryPlanning
 
 
 class RepositoryCreate(ApiModel):
