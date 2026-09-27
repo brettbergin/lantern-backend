@@ -919,6 +919,8 @@ def _row_to_item(row: WorkItemRow) -> WorkItem:
         origin_agent=row.origin_agent,
         parent_item_id=row.parent_item_id,
         chain_depth=int(row.chain_depth or 0),
+        plan_id=row.plan_id,
+        plan_node_id=row.plan_node_id,
         revision=int(row.revision or 0),
     )
 
@@ -1857,6 +1859,8 @@ class DaemonStore:
                     origin_agent=item.origin_agent,
                     parent_item_id=item.parent_item_id,
                     chain_depth=item.chain_depth,
+                    plan_id=item.plan_id,
+                    plan_node_id=item.plan_node_id,
                     **admitted,
                 )
             )
@@ -2409,6 +2413,21 @@ class DaemonStore:
         stmt = select(WorkItemRow).order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
         if states:
             stmt = stmt.where(WorkItemRow.state.in_(list(states)))
+        with self._read() as session:
+            return [_row_to_item(row) for row in session.scalars(stmt)]
+
+    def plan_generations(self, plan_node_id: str) -> list[WorkItem]:
+        """The ``plan`` items proposing ``plan_node_id``'s next level that
+        are still queued or running, oldest first: what keeps a second
+        breakdown of the same node from starting beside the first."""
+        stmt = (
+            select(WorkItemRow)
+            .where(
+                WorkItemRow.plan_node_id == plan_node_id,
+                WorkItemRow.state.in_(("queued", "running")),
+            )
+            .order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
+        )
         with self._read() as session:
             return [_row_to_item(row) for row in session.scalars(stmt)]
 

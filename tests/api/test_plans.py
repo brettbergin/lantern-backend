@@ -457,3 +457,118 @@ class TestSwitchedOff:
             ]
             assert "planning" not in features
         built.ctx.close()
+
+
+class TestBreakdown:
+    """``POST .../nodes/{node_id}/breakdown`` queues a ``plan`` run (#2344)."""
+
+    def _breakdown(
+        self, api: Api, headers: dict[str, str], plan: dict[str, Any], node_id: str, **body: Any
+    ) -> Any:
+        return api.client.post(
+            f"/v1/plans/{plan['id']}/nodes/{node_id}/breakdown",
+            json={"expected_revision": plan["revision"], **body},
+            headers=headers,
+        )
+
+    def test_reading_alone_does_not_break_down(self, api: Api) -> None:
+        plan = _create(api, api.bearer(DRAFT))
+        refused = self._breakdown(api, api.bearer(READ), plan, plan["root_id"])
+        assert refused.status_code == 403
+        assert refused.json()["capability"] == "plans:create"
+
+    def test_a_breakdown_queues_a_plan_run_for_the_node(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, title="Ship reports")
+        accepted = self._breakdown(api, headers, plan, plan["root_id"], note="keep it to two epics")
+        assert accepted.status_code == 202, accepted.text
+        body = accepted.json()
+        assert body["plan_id"] == plan["id"] and body["node_id"] == plan["root_id"]
+        assert body["created"] is True
+        item = body["item"]
+        assert item["kind"] == "plan" and item["state"] == "queued"
+        assert item["title"] == "Propose the epics of “Ship reports”"
+        assert item["origin"]["kind"] == "api" and item["origin"]["repository"] == "o/r"
+        assert item["run_id"] is None, "a run id is minted when the item is dispatched"
+        assert body["operation"]["action"] == "item.admit"
+        assert body["operation"]["state"] == "succeeded"
+        # The row names its node and carries the note as its body.
+        (row,) = [i for i in api.loop.dstore.items() if i.kind == "plan"]
+        assert (row.plan_id, row.plan_node_id) == (plan["id"], plan["root_id"])
+        assert row.body == "keep it to two epics" and row.repo == "o/r"
+        # It is ordinary work: in the queue, and listed by kind.
+        listed = api.client.get("/v1/items", params={"kind": "plan"}, headers=api.bearer()).json()
+        assert [i["id"] for i in listed["data"]] == [item["id"]]
+        # Admission changed nothing on the plan.
+        after = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        assert after["revision"] == plan["revision"]
+
+    def test_a_second_breakdown_waits_for_the_first(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers)
+        first = self._breakdown(api, headers, plan, plan["root_id"])
+        assert first.status_code == 202, first.text
+        again = self._breakdown(api, headers, plan, plan["root_id"])
+        assert again.status_code == 409, again.text
+        assert again.json()["code"] == "already_in_progress"
+        assert again.json()["plan_code"] == "generation_in_progress"
+
+    def test_a_task_has_nothing_to_break_down(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, level="epic", title="An epic")
+        plan = _add(api, headers, plan, plan["root_id"], title="A task", kind="code")
+        refused = self._breakdown(api, headers, plan, _node(plan, "A task")["id"])
+        assert refused.status_code == 422 and "no children" in refused.json()["detail"]
+
+    def test_a_published_node_with_children_is_re_planned_not_broken_down(self, api: Api) -> None:
+        from sbxloop.plans.model import ForgeRef
+
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, level="epic", title="An epic")
+        plan = _add(api, headers, plan, plan["root_id"], title="A task", kind="code")
+        TestStates()._mark(
+            api,
+            plan["id"],
+            plan["root_id"],
+            state="published",
+            forge=ForgeRef(number=3, url="https://github.com/o/r/issues/3", state="open"),
+        )
+        current = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        refused = self._breakdown(api, headers, current, current["root_id"])
+        assert refused.status_code == 409 and refused.json()["code"] == "replan_required"
+
+    def test_planning_switched_off_for_the_repository_refuses(self, api: Api) -> None:
+        from sbxloop.config import PlanningConfig
+
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers)
+        off = api.ctx.config.model_copy(update={"planning": PlanningConfig(enabled=False)})
+        api.ctx.config = off
+        api.loop.config = off
+        refused = self._breakdown(api, headers, plan, plan["root_id"])
+        assert refused.status_code == 409 and refused.json()["code"] == "planning_unsupported"
+        assert "planning is off" in refused.json()["detail"]
+
+    def test_a_full_level_and_a_stale_revision_are_refused(self, api: Api) -> None:
+        from sbxloop.config import PlanningConfig
+
+        headers = api.bearer(DRAFT)
+        plan = _create(api, headers, level="epic", title="An epic")
+        plan = _add(api, headers, plan, plan["root_id"], title="Only", kind="code")
+        stale = api.client.post(
+            f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/breakdown",
+            json={"expected_revision": plan["revision"] - 1},
+            headers=headers,
+        )
+        assert stale.status_code == 409 and stale.json()["code"] == "stale_revision"
+        full = api.ctx.config.model_copy(update={"planning": PlanningConfig(max_tasks_per_epic=1)})
+        api.ctx.config = full
+        api.loop.config = full
+        refused = self._breakdown(api, headers, plan, plan["root_id"])
+        assert refused.status_code == 409 and refused.json()["code"] == "level_full"
+
+    def test_an_unknown_channel_is_refused(self, api: Api) -> None:
+        plan = _create(api, api.bearer(DRAFT))
+        refused = self._breakdown(api, api.bearer(), plan, plan["root_id"], channel_id="chan_x")
+        assert refused.status_code == 404 and refused.json()["code"] == "channel_not_found"
+        assert [i for i in api.loop.dstore.items() if i.kind == "plan"] == []

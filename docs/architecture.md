@@ -1162,7 +1162,11 @@ task's `needs` declared by name — "never its value" — and the criteria as
 mechanical evidence; a failing verdict must "quote the criterion"). They
 are sent as the whole system prompt rather than appended to the coding
 agent's preset (`JobRequest.system_preset = False`), so the operator and
-the judge present as themselves. The one ecosystem-specific example — the config-override that decompose.md warns
+the judge present as themselves. A plan run renders plan_propose.md as the
+`plan` phase (the planner's persona and `[agent.models] plan`): one level of
+a plan node, read-only ("changes nothing", "writes nothing to the forge"),
+each task sized to "one run" and its verify commands authored under
+decompose.md's rules ("workspace root", "no shell variables"). The one ecosystem-specific example — the config-override that decompose.md warns
 against and review.md's wrong-check section describes — is rendered per run:
 `verifylint.config_override_example` picks the story for the first resolved
 language that has one (mypy `files`; `tsc` ignoring `tsconfig.json` when
@@ -1444,9 +1448,10 @@ tests cover the implementation.
 
 ## Workloads
 
-A run has a **kind** (`RunKind`: `code` or `workload`, `runs.kind`), and the
-kind decides which stages the engine walks after the task graph — nothing
-else in the run shape depends on it. `code` is the developer loop above; a
+A run has a **kind** (`RunKind`: `code`, `workload`, `tool` or `plan`,
+`runs.kind`), and the kind decides which stages the engine walks after the
+task graph — nothing else in the run shape depends on it. `tool` and `plan`
+are described under [Tools](#tools) and [Plan runs](#plan-runs). `code` is the developer loop above; a
 `workload` is any finite ask whose result is not a pull request on the
 customer's repository: a brief, a report, a set of files, an answer. Both
 kinds share one intake, one store, one pair of sandboxes, one task graph and
@@ -1591,6 +1596,75 @@ as for a code run, and the workload cases are the ones that test them:
    a call and reads its redacted result, and the same holds for a private
    registry — the service box fetches, the agent box installs offline from
    the shared mount.
+
+## Plan runs
+
+The fourth run kind, `plan`, proposes one level of a plan — an
+initiative's epics or an epic's tasks — and delivers the proposal to the
+plan record, never to the forge. A breakdown
+(`POST /v1/plans/{id}/nodes/{node_id}/breakdown`) is admitted like any work
+(`PlanAdmission` through `ControlService.admit`, under `plans:create`, an
+`api:plan:` item naming `plan_id` and `plan_node_id`, revision 0044), so
+the run has a place in the queue and History, a chronology, a channel,
+steering from chat and cancel, and its spend lands in the usage pool
+through the same bus subscriber every run gets.
+
+The engine knows the plan only as a `PlanDesk` (`engine/planning.py`): the
+brief it reads before the turn (the node's sections, the level, the room
+the cap leaves, the children that stay, the configured workload profiles,
+the repositories to read) and the record it hands the validated proposal to.
+The daemon's desk is `plans/generation.py` over the plan service, built per
+item in `_launch`; `start(kind="plan")` without one is refused. The run
+seeds one task, `propose`, and walks one stage, `proposing`:
+
+```
+provision (agent box only, data dir mounted, no toolchains)
+  ─▶ PROPOSING: brief ─▶ cut checkouts on the host ─▶ steer boundary
+       ─▶ plan_propose (read-only, validated, one retry) ─▶ persist on the task
+       ─▶ deliver to the plan record ─▶ completed
+```
+
+- **Read-only, no credential.** Provisioning treats it like a workload or
+  tool — a per-run data directory, the agent sandbox, never a github box,
+  and a service box only for an MCP server's credential (a repository's
+  registries are no reason for one: the run installs nothing) — and
+  resolves no toolchain. The node's repository is cut into the data
+  directory by `Provisioner.clone_repo_into_data_dir` on the host, under the
+  host's credential, which lives only in the clone's environment; the
+  sandbox is handed the tree, never a token, and the planner's session runs
+  `read_only`. Nothing is delivered from the checkout. The run's config is
+  narrowed to that one repository, as every run's is, so the other
+  repositories an initiative's kept epics target are named to the planner
+  rather than checked out.
+- **Validated like decompose.** `PlanProposal` is checked by
+  `proposal_problems` inside `_agent_json`'s retry: the level's room, a
+  task's acceptance criteria and kind, a workload task's configured profile,
+  a code task's verify commands (no shell variables, and the verify lint
+  under the target repository's own toolchains, read from the checkout on
+  the host), and `depends_on` among siblings without a cycle. Invalid twice
+  fails the run named.
+- **Delivered once.** The validated proposal is persisted on the task's
+  output before delivery, and the delivery is recorded as a `plan`
+  `Published` row, so a resume delivers without a second turn and never
+  twice. The plan service writes it in one revision: the node's previous
+  `proposed` children go, a person's `draft` and `approved` children stay,
+  each proposed child is `proposed` with `origin = planner` and its
+  dependencies mapped to the new ids, under the same section rules a
+  person's edit meets.
+- **Events.** `plan.generation.started` when the run starts,
+  `plan.generation.proposed` in the delivery's transaction, and
+  `plan.generation.failed` when the run ends any other way (a provider hold
+  is a pause, not an end), each scoped to the run, its item and its
+  channel.
+- **The clarify seam.** The clarifying turn and the wait for a person's
+  answers go in front of `proposing` as stages of their own (`PLAN_STAGES`),
+  reading the same brief; `_plan_stages` takes the stage a resume re-enters
+  at, and `plan_propose` is rendered as the `plan` phase that
+  `plan_clarify` will share.
+
+`tests/unit/test_plan_run_trail.py` holds a plan run's chronology the way
+the code and tool trails hold theirs, and asserts no github sandbox and no
+delivery appears in it.
 
 ## The home
 
@@ -2492,7 +2566,11 @@ transaction that checks the plan's single `revision`, applies the node
 upserts and deletes, bumps the revision and records its `plan.*` events in
 `api_events`, so a client that sees the event reads the change. The API
 routes (`api/routes/plans.py`) only translate; the planner, publishing and
-epic runs call the same service.
+epic runs call the same service. The planner's breakdown is a `plan` run
+([Plan runs](#plan-runs)) whose desk (`plans/generation.py`) reads the node
+through `PlanService.brief` and writes the level through
+`PlanService.deliver_proposal`, which applies the same section rules in one
+revision.
 
 Publishing a level (#2341) is split three ways. `render.py` turns a node
 into its issue body — the sections as markdown headings, then the

@@ -52,6 +52,7 @@ from sbxloop.engine.model import (
     VerifyReauthor,
     WorkloadPlan,
 )
+from sbxloop.engine.planning import PlanBrief, PlanProposal, proposal_problems
 from sbxloop.engine.prompts import bullet_list, render
 from sbxloop.engine.repocontext import repo_conventions
 from sbxloop.engine.review import ReviewGuard, ReviewVerdict
@@ -929,8 +930,13 @@ class PhaseRunner:
         repair_identity: str = "",
         task_id: str | None = None,
         binding: AgentBinding | None = None,
+        phase: str | None = None,
     ) -> tuple[ModelT, JobResult]:
         """Run a JSON-expecting job, normally with one validation retry.
+
+        ``phase`` is the agent phase the job runs as (its persona, model and
+        role) when that is not the template's own name — a plan run renders
+        ``plan_propose`` as the ``plan`` phase.
 
         A parsed review instead gets at most two response-only corrections.
         Completed responses survive provider holds and replay without tools
@@ -948,7 +954,8 @@ class PhaseRunner:
         """
         checkpoint_key: str | None = None
         checkpoint: _ReviewResponseCheckpoint | None = None
-        binding = binding or self._binding(prompt_name, task_id)
+        agent_phase = phase or prompt_name
+        binding = binding or self._binding(agent_phase, task_id)
         if prompt_name == "review" and self.store is not None:
             identity = {
                 "prompt": render(prompt_name, retry_context="", **context),
@@ -981,7 +988,7 @@ class PhaseRunner:
         retry_context = ""
         last_error: Exception | None = None
         if checkpoint is None:
-            selection = self._selection(prompt_name, binding)
+            selection = self._selection(agent_phase, binding)
         else:
             # Checkpoints written before per-agent models used the run's
             # top-level model. Restore session identities as well as responses
@@ -1000,7 +1007,7 @@ class PhaseRunner:
                     if checkpoint is not None
                     else self._agent_job(
                         prompt,
-                        phase=prompt_name,
+                        phase=agent_phase,
                         permission_mode=permission_mode,
                         expect="json",
                         system_message=system_message,
@@ -1700,6 +1707,70 @@ class PhaseRunner:
         )
         return verdict
 
+    # -- a plan run's phase -------------------------------------------------
+
+    def propose_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanProposal:
+        """The planner's proposal of one level, read-only, from the
+        checkouts cut into the data directory.
+
+        ``checkouts`` pairs the node's repository with where the planner
+        finds it; ``home`` is the host path of that checkout, whose
+        instruction files ride in the prompt and
+        whose toolchains the code tasks' verify commands are linted for —
+        the run that later works the task will hold them to the same rules.
+        The answer is held to the level's rules and cap with one retry, as
+        ``decompose`` is; :class:`InvalidOutputTwice` when both answers
+        break them."""
+        lint = self._plan_lint(home)
+
+        def check(proposal: PlanProposal) -> None:
+            problems = proposal_problems(proposal, brief, lint=lint)
+            if problems:
+                raise ValueError(
+                    "the proposal breaks these rules:\n" + "\n".join(f"- {p}" for p in problems)
+                )
+
+        proposal, _ = self._agent_json(
+            PlanProposal,
+            "plan_propose",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "room": str(brief.room),
+                "kept": bullet_list(brief.kept),
+                "profiles": _plan_profiles(brief),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "note": brief.note.strip() or "(none)",
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return proposal
+
+    def _plan_lint(self, home: Path | None) -> Callable[[Sequence[str]], list[str]]:
+        """The verify-command lint for the repository being planned: its
+        own toolchains and project shape, not this read-only sandbox's."""
+        languages = toolchains.resolve_languages(self.config.sandbox.languages, home).languages
+        uv_project = home is not None and (home / UV_LOCKFILE).is_file()
+
+        def lint(commands: Sequence[str]) -> list[str]:
+            return lint_verify_commands(commands, languages, uv_project=uv_project, workspace=home)
+
+        return lint
+
     def _work_dir(self) -> str:
         return f"`{self.workdir}`" if self.workdir else "the current working directory"
 
@@ -1819,3 +1890,52 @@ class PhaseRunner:
             results="\n\n".join(results) or "(no verify commands)",
             failures=tuple(failures),
         )
+
+
+# -- a plan run's prompt sections -------------------------------------------
+
+
+def _plan_node_section(brief: PlanBrief) -> str:
+    """The node being broken down, section by section, as a person wrote it."""
+    lines = [f"**{brief.level.capitalize()}:** {brief.title}"]
+    if brief.parent:
+        lines.append(f"**Part of:** {brief.parent}")
+    lines.append(f"**Repository:** {brief.repository}")
+    for heading, text in (
+        ("Goal", brief.goal),
+        ("Context", brief.context),
+        ("Non-goals", brief.non_goals),
+        ("Constraints", brief.constraints),
+    ):
+        if text.strip():
+            lines.append(f"**{heading}:**\n\n{text.strip()}")
+    if brief.acceptance_criteria:
+        lines.append("**Acceptance criteria:**\n\n" + bullet_list(brief.acceptance_criteria))
+    return "\n\n".join(lines)
+
+
+def _plan_profiles(brief: PlanBrief) -> str:
+    if not brief.profiles:
+        return "(none is configured: every task is a `code` task)"
+    return "\n".join(
+        f"- `{profile.name}`" + (f" — {profile.description}" if profile.description else "")
+        for profile in brief.profiles
+    )
+
+
+def _plan_checkouts(
+    checkouts: Sequence[tuple[str, str]], home: str, others: Sequence[str] = ()
+) -> str:
+    lines = [
+        f"- `{where}` — {repo}, the repository this level lives in"
+        for repo, where in checkouts
+        if repo == home
+    ]
+    if not lines:
+        lines.append("(no checkout could be cut; plan from the node alone and say so in `context`)")
+    lines += [
+        f"- {repo} is not checked out here; a child that stays already targets it, so "
+        "leave its work to that child"
+        for repo in others
+    ]
+    return "\n".join(lines)

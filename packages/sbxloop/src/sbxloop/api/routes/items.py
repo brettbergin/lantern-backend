@@ -28,7 +28,7 @@ from sbxloop.daemon.model import ItemState, WorkItem
 router = APIRouter(prefix="/v1", tags=["items"])
 
 ITEM_STATES: tuple[str, ...] = get_args(ItemState)
-RUN_KINDS: tuple[str, ...] = ("code", "workload", "tool")
+RUN_KINDS: tuple[str, ...] = ("code", "workload", "tool", "plan")
 
 
 @router.get("/items", response_model=Page[Item])

@@ -27,8 +27,10 @@ from sbxloop.config import ScheduleConfig
 from sbxloop.daemon.controls.intake import (
     AdmitRequest,
     IssueAdmission,
+    PlanAdmission,
     admit_issue,
     build_item,
+    plan_item,
     resolve_assignment_request,
     target_key,
     upsert,
@@ -635,10 +637,13 @@ class ControlService:
         idempotency: tuple[str, str] | None = None,
     ) -> AdmitOutcome:
         """Admit work through its source's rules (#1036): an existing
-        issue, an inline workload, or a registered recipe. Recorded as
+        issue, an inline workload, a registered recipe, or a breakdown of a
+        plan node (a ``plan`` run, under ``plans:create``). Recorded as
         one ``item.admit`` operation against the item it queues, so a
         replay under the same idempotency pair names the same row."""
-        require(principal, "items:create")
+        # A breakdown is plan work: drafting a plan's levels is what
+        # `plans:create` allows, and it queues nothing but a proposal.
+        require(principal, "plans:create" if isinstance(request, PlanAdmission) else "items:create")
         key = target_key(request)
         loop: Any = self.loop
 
@@ -648,6 +653,8 @@ class ControlService:
             lead, roles = resolve_assignment_request(self._agents(), request)
             if isinstance(request, IssueAdmission):
                 item = admit_issue(loop, request)
+            elif isinstance(request, PlanAdmission):
+                item = plan_item(loop, request, item_id=key)
             else:
                 item = build_item(loop.config, request, item_id=key, requested_by=None)
             item = with_assignment_request(item, request, lead, roles)

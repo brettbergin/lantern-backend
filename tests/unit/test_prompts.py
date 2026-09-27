@@ -327,6 +327,19 @@ RENDER_CONTEXTS: dict[str, dict[str, str]] = {
         "tool_digest": "1. `Bash` `ls` — ok",
         "evidence": "(no mechanical checks declared)",
     },
+    # A plan run's proposal of one level (#2344).
+    "plan_propose": {
+        "level": "epic",
+        "children": "tasks",
+        "node": "**Epic:** Export reports\n\n**Repository:** o/app",
+        "room": "4",
+        "kept": "- Person's task",
+        "profiles": "- `research` — reads the web",
+        "checkouts": "- `/data/app` — o/app, the repository this level lives in",
+        "note": "CSV only",
+        "work_dir": "`/data`",
+        "user_guidance": "(none)",
+    },
 }
 
 
@@ -853,3 +866,58 @@ def test_operator_judge_quotes_unmet_criteria() -> None:
         retry_context="## Previous attempt was invalid",
     )
     assert retried.rstrip().endswith("## Previous attempt was invalid")
+
+
+# -- a plan run's proposal (#2344) ----------------------------------------------
+
+
+def test_plan_propose_proposes_one_level_and_changes_nothing() -> None:
+    """The planner proposes the node's next level and nothing below it, from
+    a checkout it reads and never writes; a person approves before anything
+    is filed."""
+    text = render("plan_propose", **RENDER_CONTEXTS["plan_propose"])
+    plain = " ".join(text.split())
+    assert text.startswith("# Propose the tasks of one epic")
+    assert "**one level**" in plain and "not yours to plan now" in plain
+    assert "**changes nothing**" in plain and "writes nothing to the forge" in plain
+    assert "At most 4 tasks" in plain
+    assert "- Person's task" in text and "propose only what is still missing" in plain
+    assert "- `/data/app` — o/app, the repository this level lives in" in text
+    assert "CSV only" in text
+
+
+def test_plan_propose_sizes_tasks_to_one_run() -> None:
+    """A task is one run: a code task one pull request, a workload task one
+    delivery under a configured profile, each with criteria and a kind."""
+    plain = " ".join(render("plan_propose", **RENDER_CONTEXTS["plan_propose"]).split())
+    assert "sized to **one run**" in plain
+    assert "**one pull request**" in plain and "**one delivery**" in plain
+    assert "Every task needs `kind` (`code` or `workload`) and at least one acceptance" in plain
+    assert "names its `workload_profile`, one of the configured profiles below" in plain
+    assert "- `research` — reads the web" in plain
+    assert "A `code` task needs `verify_commands`" in plain
+    assert '"children": [' in plain and '"depends_on": []' in plain
+
+
+def test_plan_propose_carries_verify_authoring_rules() -> None:
+    """The verify commands a planned code task carries are the exam a later
+    run cannot edit, so they are authored under decompose's rules."""
+    plain = " ".join(render("plan_propose", **RENDER_CONTEXTS["plan_propose"]).split())
+    assert "**workspace root**" in plain
+    assert "**no shell variables**" in plain
+    assert "(no `sh -c`, `bash -c`)" in plain
+    decompose = " ".join(
+        render("decompose", outcome="o", max_tasks="3", project_gate="- g", **EXAMPLE).split()
+    )
+    assert "**workspace root**" in decompose
+
+
+def test_plan_propose_carries_the_repository_conventions_and_guidance() -> None:
+    text = render(
+        "plan_propose",
+        **{**RENDER_CONTEXTS["plan_propose"], "user_guidance": "- keep it small"},
+        repo_conventions="## Repository conventions\n\nrun make check",
+        retry_context="## Previous attempt was invalid",
+    )
+    assert "run make check" in text and "- keep it small" in text
+    assert text.rstrip().endswith("## Previous attempt was invalid")

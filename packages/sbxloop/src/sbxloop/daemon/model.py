@@ -161,10 +161,24 @@ class WorkItem(BaseModel):
     origin_agent: str | None = None
     parent_item_id: str | None = None
     chain_depth: int = 0
+    # The plan node a `plan` item proposes the next level of (revision
+    # 0044): the plan and the node, set together and only on a plan item.
+    plan_id: str | None = None
+    plan_node_id: str | None = None
     # Bumped on every write of the row (a trigger, revision 0010); what a
     # remote command's `expected_revision` is checked against. Not a
     # column a caller sets.
     revision: int = 0
+
+    @model_validator(mode="after")
+    def _plan_fields_name_a_node(self) -> WorkItem:
+        # A plan item proposes a level of one node; any other item names
+        # none. Both ids or neither, so a half-written link cannot load.
+        if (self.plan_id is None) != (self.plan_node_id is None):
+            raise ValueError("plan_id and plan_node_id are set together")
+        if (self.plan_id is not None) != (self.kind == "plan"):
+            raise ValueError("a plan item, and only a plan item, names a plan node")
+        return self
 
     @field_validator("recipe")
     @classmethod

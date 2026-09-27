@@ -716,22 +716,23 @@ included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
 and owners) publishes to the forge and edits, attaches and detaches its issues.
 
-| Route                                         | Body                                                         | Result                                                |
-| --------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |
-| `GET /v1/plans`                               | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first       |
-| `POST /v1/plans`                              | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node                    |
-| `GET /v1/plans/{id}`                          | none                                                         | `200`, the plan and every node                        |
-| `PATCH /v1/plans/{id}`                        | `{expected_revision, …sections}`                             | `200`, the root node's sections edited                |
-| `DELETE /v1/plans/{id}`                       | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`              |
-| `POST /v1/plans/{id}/nodes`                   | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node        |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`        | `{expected_revision, position?, forge_version?, …sections}`  | `200`, the plan (a published node: its issue written) |
-| `DELETE /v1/plans/{id}/nodes/{node_id}`       | `?expected_revision=`                                        | `200`, the plan without the node and its subtree      |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve` | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved          |
-| `POST /v1/plans/{id}/nodes/{node_id}/publish` | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`         |
-| `POST /v1/plans/{id}/nodes/{node_id}/attach`  | `{expected_revision, repository?, number?, url?}`            | `200 {plan, node_id, linked, reason}`                 |
-| `POST /v1/plans/{id}/nodes/{node_id}/detach`  | `{expected_revision}`                                        | `200`, the plan with the child detached               |
-| `POST /v1/plans/{id}/sync`                    | none                                                         | `200`, the plan reconciled from the forge now         |
-| `POST /v1/plans/{id}/drift/ack`               | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen           |
+| Route                                           | Body                                                         | Result                                                                  |
+| ----------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /v1/plans`                                 | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first                         |
+| `POST /v1/plans`                                | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node                                      |
+| `GET /v1/plans/{id}`                            | none                                                         | `200`, the plan and every node                                          |
+| `PATCH /v1/plans/{id}`                          | `{expected_revision, …sections}`                             | `200`, the root node's sections edited                                  |
+| `DELETE /v1/plans/{id}`                         | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`                                |
+| `POST /v1/plans/{id}/nodes`                     | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node                          |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`          | `{expected_revision, position?, forge_version?, …sections}`  | `200`, the plan (a published node: its issue written)                   |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`         | `?expected_revision=`                                        | `200`, the plan without the node and its subtree                        |
+| `POST /v1/plans/{id}/nodes/{node_id}/breakdown` | `{expected_revision, note?, channel_id?}`                    | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve`   | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved                            |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish`   | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/attach`    | `{expected_revision, repository?, number?, url?}`            | `200 {plan, node_id, linked, reason}`                                   |
+| `POST /v1/plans/{id}/nodes/{node_id}/detach`    | `{expected_revision}`                                        | `200`, the plan with the child detached                                 |
+| `POST /v1/plans/{id}/sync`                      | none                                                         | `200`, the plan reconciled from the forge now                           |
+| `POST /v1/plans/{id}/drift/ack`                 | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen                             |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -856,6 +857,38 @@ each child's body (the reconcile reads the issue when it does not), and
 that a GitHub issue this server's credential can no longer see answers
 404 like a deleted one — such a node is detached, and attached again once
 it is listed again.
+
+**Breakdown.** `POST /v1/plans/{id}/nodes/{node_id}/breakdown`
+(`plans:create`) asks the planner for the node's next level — an
+initiative's epics or an epic's tasks. It queues a run of the fourth run
+kind, `plan`, admitted like any work (an `item.admit` operation; an
+optional `Idempotency-Key`): the item is `kind: "plan"`, it appears in the
+queue and History, can be cancelled, and answers to `channel_id` when one is
+named (checked as any channel-linked admission is), where its chronology is
+told and a person can steer it. The run reads a read-only checkout of the
+node's repository cut on the host into its data directory (other
+repositories a kept epic targets are named to the planner, not checked
+out); it holds no write credential and never touches the forge. The planner proposes at most the
+level's cap (`[planning] max_epics_per_initiative` / `max_tasks_per_epic`,
+less the children that stay), each child with the sections above; a task
+carries `kind`, acceptance criteria, `verify_commands` for code and a
+configured `workload_profile` for workload, and `depends_on` among its
+siblings. An answer that breaks a rule is sent back once, the way the
+in-run decompose is; a second is a failed generation. The proposal is
+delivered to the plan, never to the forge: it replaces the node's previous
+`proposed` children (and anything under them), leaves the children a person
+made or approved where they are, and adds each proposed child as `proposed`
+with `origin: "planner"` and its dependencies mapped to the new ids — one
+write, one revision. Refused: a task (`422`, it has no children); a node on
+the forge that already has children (`409 replan_required`); a repository
+planning is off for or no longer configured (`409 planning_unsupported`,
+`409 unknown_repository`); a level at its cap (`409 level_full`); a
+breakdown of the node already queued or running (`409 already_in_progress`,
+`plan_code: generation_in_progress`); a stale `expected_revision`. The
+generation emits `plan.generation.started` `{plan_id, node_id, run_id}` when
+the run starts, then `plan.generation.proposed` `{plan_id, node_id, run_id, count}` when the plan holds the proposal, or `plan.generation.failed`
+`{plan_id, node_id, run_id, reason}` when the run ends without one; each is
+scoped to the run, its item and its channel.
 
 **Editing a published plan, attaching and detaching (#2350).** After
 publish sbxloop writes to a plan's issues only when a person asks, and
@@ -1393,7 +1426,7 @@ A refusal names the capability it needed (`403 forbidden` with
   "workspace_id": "local",
   "features": ["status", "operations", "auth.client_credentials", "…", "schedules"],
   "capabilities": ["runs:read", "…"],
-  "run_kinds": ["code", "workload", "tool"],
+  "run_kinds": ["code", "workload", "tool", "plan"],
   "limits": {"page_default": 50, "page_max": 200, "max_body_bytes": 262144, "…": "…"},
   "retention": {"replay_s": 604800, "idempotency_s": 86400, "operation_deadline_s": 300}
 }
@@ -1492,6 +1525,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/detach`      | `plans:publish`        | Unlink a child from its parent; its issue stays open                  |
 | `POST`   | `/v1/plans/{id}/sync`                        | `plans:create`         | Reconcile the plan from the forge now                                 |
 | `POST`   | `/v1/plans/{id}/drift/ack`                   | `plans:create`         | Mark the forge's changes to a plan seen                               |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/breakdown`   | `plans:create`         | Queue a `plan` run proposing the node's next level                    |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

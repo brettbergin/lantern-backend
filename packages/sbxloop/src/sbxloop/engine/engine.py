@@ -56,7 +56,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from functools import partial
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from pydantic import ValidationError
@@ -131,6 +131,14 @@ from sbxloop.engine.phases import (
     clip_head_tail,
     verify_suspect_feedback,
 )
+from sbxloop.engine.planning import (
+    PLAN_SINK,
+    PROPOSE_TASK_ID,
+    PlanBrief,
+    PlanDesk,
+    PlanProposal,
+    plan_task,
+)
 from sbxloop.engine.reconcile import (
     ReconcileOutcome,
     acknowledge_human_threads,
@@ -169,6 +177,7 @@ from sbxloop.errors import (
     EmptyDeliveryError,
     GithubOpsError,
     InvalidOutputTwice,
+    PlanDeliveryError,
     ProvisionError,
     RunCancelledError,
     SbxError,
@@ -333,6 +342,8 @@ _PROMPT_BY_RECORDED_PHASE: dict[str, str] = {
     "judge": "operator_judge",
     "review": "review",
     "steer": "steer",
+    # A plan run's proposal: the planner's one turn.
+    "propose": "plan",
 }
 
 
@@ -352,6 +363,7 @@ class LoopEngine:
         service_ops: ServiceOpsFactory | None = None,
         trigger_label: str | None = None,
         memory: MemoryService | None = None,
+        plan_desk: PlanDesk | None = None,
     ) -> None:
         # Library parity with the CLI: the home's secrets.env supplies tokens
         # and settings even when the caller passes a prebuilt Config (real
@@ -367,6 +379,10 @@ class LoopEngine:
         # Every agent's long-term memory, for the memory tools of an agent
         # whose `tools` name `memory` (the daemon's store). None offers none.
         self.memory = memory
+        # The plan record a `plan` run reads its brief from and delivers
+        # its proposal to; None for every other kind, and a `plan` run
+        # refuses to start without one.
+        self.plan_desk = plan_desk
         self.bus = bus or EventBus()
         self.sbx = sbx or SbxCLI(app_name=self.config.app_name or None)
         self.worker_python = (
@@ -552,6 +568,18 @@ class LoopEngine:
             # without them has no work, so the mount is required unless the
             # caller says otherwise.
             expects_mount = True if expects_mount is None else expects_mount
+        if kind == "plan":
+            # A plan run proposes one level of a plan and delivers it to the
+            # plan record; with no record to read or deliver to there is no
+            # run. Its one task is seeded here, from the brief.
+            if self.plan_desk is None:
+                raise ConfigError("a `plan` run delivers to a plan record, and none was given")
+            if tasks or credentials:
+                raise ConfigError("a `plan` run is seeded from its plan and holds no credentials")
+            tasks = [plan_task(self.plan_desk.brief())]
+            # The checkout is cut into the data directory once the sandbox
+            # is up; a sandbox that cannot see it has nothing to read.
+            expects_mount = True if expects_mount is None else expects_mount
         self._select_repo(repo)
         if kind == "workload":
             self.config = self.config.for_workload_profile(profile)
@@ -567,6 +595,9 @@ class LoopEngine:
         if tasks:
             self.store.save_tasks(run_id, list(tasks))
             self._record_assignees(run_id, kind, [spec.id for spec in tasks])
+        if kind == "plan":
+            assert self.plan_desk is not None  # nosec B101 - checked above
+            self.plan_desk.started(run_id)
         if kind != "code":
             # The data dir is cut at provisioning (`sandbox.workspace_mount`
             # names it); the start event says only that no checkout is in
@@ -943,14 +974,34 @@ class LoopEngine:
     ) -> RunResult:
         kind = self.store.get_run(run_id).kind
         with self._assignment_stamps(run_id, kind):
-            return self._drive_run(
-                run_id,
-                outcome,
-                workspace=workspace,
-                stage=stage,
-                expects_mount=expects_mount,
-                warm=warm,
-            )
+            try:
+                result = self._drive_run(
+                    run_id,
+                    outcome,
+                    workspace=workspace,
+                    stage=stage,
+                    expects_mount=expects_mount,
+                    warm=warm,
+                )
+            except SbxloopError as exc:
+                if kind == "plan":
+                    self._plan_failed(run_id, str(exc))
+                raise
+        # A plan run that ends any way but with its proposal delivered tells
+        # the plan so; a provider hold is a pause, not an end.
+        if kind == "plan" and result.state not in ("completed", "provider_held"):
+            self._plan_failed(run_id, result.reason or f"the run ended {result.state}")
+        return result
+
+    def _plan_failed(self, run_id: str, reason: str) -> None:
+        """Tell the plan record its generation ended without a proposal —
+        once per run end, and never at the cost of the run's own report."""
+        if self.plan_desk is None:
+            return
+        try:
+            self.plan_desk.failed(run_id, reason)
+        except Exception:
+            log.warning("run.plan_failed_notice", run=run_id, exc_info=True)
 
     def _drive_run(
         self,
@@ -1861,9 +1912,12 @@ class LoopEngine:
             # message to its thread has nothing to steer and no one to
             # answer it. The queue controls (cancel, resume) are the ways in.
             return self._tool_stages(p, stage)
-        state, reason = (
-            self._workload_stages(p, stage) if p.kind == "workload" else self._stages(p, stage)
-        )
+        if p.kind == "plan":
+            state, reason = self._plan_stages(p, stage)
+        elif p.kind == "workload":
+            state, reason = self._workload_stages(p, stage)
+        else:
+            state, reason = self._stages(p, stage)
         # A message that arrived during the last wait or stage still gets
         # answered — as steer_run; there is nothing left to steer.
         self._process_chat(p.run_id, p.phases, None, stage=f"finished ({state})")
@@ -2098,6 +2152,180 @@ class LoopEngine:
                 ", ".join(f"`{name}`" for name in spec.result_files) or "none declared"
             )
         return TaskOutput.from_report(clip(report), files=list(spec.result_files))
+
+    # -- a plan run -------------------------------------------------------
+
+    def _plan_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        """A ``plan`` run's life: the planner proposes one level from a
+        read-only checkout, and the proposal is delivered to the plan
+        record — never to the forge; the run has no github sandbox and no
+        write credential to reach it with.
+
+        One stage today, ``proposing``. The clarifying turn and the wait
+        for a person's answers are the stages that go in front of it when a
+        plan run asks questions; ``stage`` is where a resume re-enters, and
+        a proposal already validated and persisted is delivered without a
+        second turn.
+        """
+        reason = self._stage_propose(p)
+        if reason is not None:
+            return "failed", reason
+        return "completed", None
+
+    def _stage_propose(self, p: Pipeline) -> str | None:
+        """Read the brief, cut the checkouts, ask the planner once (with the
+        one validation retry every JSON phase has), persist the answer on
+        the run's task, and deliver it. Returns the reason the run failed,
+        or None once the plan record holds the proposal."""
+        run_id, phases = p.run_id, p.phases
+        desk = self.plan_desk
+        if desk is None:
+            return "a `plan` run delivers to a plan record, and this engine was given none"
+        self._set_run_state(run_id, "proposing")
+        tasks = self.store.get_tasks(run_id)
+        task = next((t for t in tasks if t.spec.id == PROPOSE_TASK_ID), None)
+        if task is None:
+            return "this plan run has no proposal task to carry its answer"
+        run = self.store.get_run(run_id)
+        if any(entry.sink == PLAN_SINK for entry in run.published):
+            # A resume after the delivery landed: the record has it.
+            return None
+        try:
+            brief = desk.brief()
+        except PlanDeliveryError as exc:
+            return str(exc)
+        proposal: PlanProposal | None = None
+        if task.output is not None and task.output.data.get("proposal") is not None:
+            proposal = PlanProposal.model_validate(task.output.data["proposal"])
+        if proposal is None:
+            self._check_cancelled_and_clock(run_id, p.deadline)
+            self._set_task_state(run_id, task, "executing")
+            self.bus.emit(
+                HostEventTypes.TASK_START, run_id, task_id=task.spec.id, title=task.spec.title
+            )
+            reason, checkouts, home = self._plan_checkouts(p, brief)
+            if reason is not None:
+                return self._propose_failed(run_id, task, reason)
+            # A message that arrived while the checkout was cut steers the
+            # proposal: a run-level answer becomes guidance the prompt carries.
+            self._process_chat(run_id, phases, None, stage="reading the repository")
+            self._check_cancelled_and_clock(run_id, p.deadline)
+            started = time.time()
+            try:
+                proposal = phases.propose_plan(brief, checkouts=checkouts, home=home)
+            except InvalidOutputTwice as exc:
+                spend = phases.drain_spend()
+                self._record_phase(
+                    run_id,
+                    "propose",
+                    task_id=task.spec.id,
+                    attempt=1,
+                    status="failed",
+                    output_json=json.dumps({"error": str(exc)}),
+                    started_at=started,
+                    usage=spend.usage,
+                    turns=spend.turns,
+                )
+                return self._propose_failed(run_id, task, _invalid_twice_reason(exc))
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "propose",
+                task_id=task.spec.id,
+                attempt=1,
+                status="ok",
+                output_json=proposal.model_dump_json(),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            count = len(proposal.children)
+            task.output = TaskOutput(
+                summary=f"Proposed {count} {brief.child_noun if count != 1 else brief.child_level} "
+                f"for the {brief.level} “{brief.title}”; they wait in the plan for review",
+                data={"proposal": proposal.model_dump(mode="json")},
+            )
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="propose",
+                status="ok",
+                message=task.output.summary,
+            )
+            self._set_task_state(run_id, task, "done")
+            self.bus.emit(
+                HostEventTypes.TASK_OUTPUT,
+                run_id,
+                task_id=task.spec.id,
+                attempt=1,
+                summary=task.output.summary,
+                files=0,
+            )
+            self._emit_task_end(run_id, task)
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        try:
+            delivered = desk.deliver(run_id, proposal)
+        except PlanDeliveryError as exc:
+            return f"the plan would not take the proposal: {exc}"
+        entry = Published(
+            sink=PLAN_SINK, location=delivered.location, tasks=[PROPOSE_TASK_ID], files=0
+        )
+        self.store.add_run_published(run_id, entry)
+        self.bus.emit(
+            HostEventTypes.RUN_PUBLISHED,
+            run_id,
+            sink=entry.sink,
+            location=entry.location,
+            tasks=entry.tasks,
+            files=0,
+            paths=[],
+            message=task.output.summary if task.output is not None else "proposal delivered",
+        )
+        return None
+
+    def _propose_failed(self, run_id: str, task: TaskRecord, reason: str) -> str:
+        task.last_feedback = reason
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="propose",
+            status="failed",
+            message=reason,
+        )
+        self._set_task_state(run_id, task, "failed")
+        self._emit_task_end(run_id, task)
+        return reason
+
+    def _plan_checkouts(
+        self, p: Pipeline, brief: PlanBrief
+    ) -> tuple[str | None, list[tuple[str, str]], Path | None]:
+        """Cut a checkout of the node's repository into the data directory,
+        on the host, under the host's own credential: the agent sandbox is
+        given the tree, never a token, and nothing is ever delivered from
+        it. The run's config is narrowed to that one repository, as every
+        run's is; the other repositories an initiative's epics target are
+        named to the planner by the brief, not checked out. Returns the
+        reason the run cannot read, the (repository, in-sandbox path)
+        pairs, and the host path of the checkout."""
+        if not p.pair.mounted:
+            return (
+                "the data directory is not mounted in the agent sandbox, so a checkout "
+                "there would never be seen (see the sandbox row of `sbxloop doctor`)",
+                [],
+                None,
+            )
+        assert p.provisioner is not None and p.pair.workspace is not None  # nosec B101
+        repo = brief.repository
+        if self.config.find_repo(repo) is None:
+            return f"repository `{repo}` is not configured on this server", [], None
+        try:
+            path = p.provisioner.clone_repo_into_data_dir(p.run_id, p.pair.workspace, repo)
+        except ProvisionError as exc:
+            return str(exc), [], None
+        where = str(PurePosixPath(p.pair.agent_workdir) / path.relative_to(p.pair.workspace))
+        return None, [(repo, where)], path
 
     def _workload_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
         """A ``workload`` run's life (#755): plan → execute → judge → publish.
@@ -5639,6 +5867,17 @@ def _last_line(output: str, limit: int = 300) -> str:
     if len(line) > limit:
         line = line[: limit - 1] + "…"
     return f" — {line}"
+
+
+def _invalid_twice_reason(exc: InvalidOutputTwice) -> str:
+    """One line on why the planner's answers were refused: the last
+    validation error, whitespace-folded and clipped, under a sentence a
+    person reads."""
+    detail = str(exc).split("invalid output twice:", 1)[-1]
+    folded = " ".join(detail.split())
+    if len(folded) > 400:
+        folded = folded[:399] + "…"
+    return f"the planner's proposal was invalid twice: {folded}"
 
 
 def run_outcome(outcome: str, config: Config | None = None) -> RunResult:

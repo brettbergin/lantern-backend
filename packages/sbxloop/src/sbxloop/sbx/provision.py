@@ -645,6 +645,12 @@ class Provisioner:
         separately) and no compiler, and the field showed every chat
         workload spending a minute installing toolchains it never used.
         """
+        if kind == "plan":
+            # A plan run reads a checkout and builds nothing: the planner
+            # needs its backend's runtime (ensured separately) and no
+            # toolchain; the target's toolchains are what its proposal is
+            # linted for, on the host.
+            return toolchains.LanguageResolution((), "none", {}, {})
         if kind == "tool":
             # A tool run's recipe pinned `[sandbox] languages` to what its
             # command needs; nothing is detected, and nothing defaults.
@@ -996,7 +1002,9 @@ class Provisioner:
             workspace = workspace.resolve()
             if expects_mount is None:
                 expects_mount = True
-        elif kind in ("workload", "tool"):
+        elif kind in ("workload", "tool", "plan"):
+            # A plan run's data directory is where its read-only checkouts
+            # are cut once the sandbox is up.
             workspace = self._data_dir(run_id)
             if expects_mount is None:
                 # A workload's data directory starts empty and the run fills
@@ -1611,7 +1619,9 @@ class Provisioner:
         # through that box like every other GitHub write — and never
         # otherwise, configured or not.
         # A tool run never gets one: its sinks are chat and the artifact
-        # directory, and it has no agent to hand a GitHub token to.
+        # directory, and it has no agent to hand a GitHub token to. Nor
+        # does a plan run: it reads a checkout the host cut and writes to
+        # the plan record, so it holds no write credential at all.
         github_enabled = self.config.vcs.enabled and (
             kind == "code" or (kind == "workload" and self._workload_needs_github())
         )
@@ -1626,7 +1636,9 @@ class Provisioner:
         # credential: the box fetches the dependencies the agent sandbox
         # then builds from offline.
         regs = self.config.credentialed_registries_for(repo)
-        service_enabled = bool(creds or regs)
+        # A plan run installs nothing, so its repository's registries are
+        # no reason for a service box.
+        service_enabled = bool(creds or (regs and kind != "plan"))
 
         # Fail fast on missing credentials before creating any microVM. In
         # App mode this mints the first installation token here.

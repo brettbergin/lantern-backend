@@ -74,7 +74,7 @@ class TestCapabilities:
     def test_capabilities_name_the_contract_and_limits(self, api: Api) -> None:
         body = api.client.get("/v1/capabilities", headers=api.bearer()).json()
         assert body["contract_version"] == 1 and body["workspace_id"] == "local"
-        assert body["run_kinds"] == ["code", "workload", "tool"]
+        assert body["run_kinds"] == ["code", "workload", "tool", "plan"]
         assert "auth.refresh" in body["features"] and "runs:read" in body["capabilities"]
         assert body["limits"]["page_max"] == 200 and body["limits"]["max_body_bytes"] == 262144
         assert body["retention"]["replay_s"] == 604800

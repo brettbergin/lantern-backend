@@ -56,6 +56,11 @@ class PlanGone(Exception):
 class PlanEvent:
     type: str
     data: dict[str, Any]
+    #: The run, work item and channel the event belongs to, when a plan
+    #: run caused it: a reader scoped to the run or its channel sees it.
+    run_id: str | None = None
+    item_id: str | None = None
+    channel_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,13 +210,13 @@ def _event(session: Any, event: PlanEvent, now: float, actor: dict[str, Any] | N
             recorded_at=now,
             occurred_at=now,
             type=event.type,
-            run_id=None,
-            item_id=None,
+            run_id=event.run_id,
+            item_id=event.item_id,
             operation_id=None,
             actor_json=None if actor is None else json.dumps(actor, default=str),
             source_seq=None,
             data_json=json.dumps(event.data, default=str),
-            channel_id=None,
+            channel_id=event.channel_id,
             audience_user_id=None,
         )
     )
@@ -348,6 +353,19 @@ class PlanStore:
         with self.dstore.transaction() as session:
             if session.get(PlanRow, plan_id) is None:
                 raise PlanGone(plan_id)
+            for event in events:
+                _event(session, event, now, actor)
+
+    def record(
+        self,
+        events: Sequence[PlanEvent],
+        *,
+        now: float,
+        actor: dict[str, Any] | None = None,
+    ) -> None:
+        """Record events that change no plan row — a generation starting or
+        failing — without touching the plan's revision."""
+        with self.dstore.transaction() as session:
             for event in events:
                 _event(session, event, now, actor)
 

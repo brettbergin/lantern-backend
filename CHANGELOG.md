@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+**The planner proposes a plan's next level from a read-only checkout.**
+`POST /v1/plans/{id}/nodes/{node_id}/breakdown` (`plans:create`, `{expected_revision, note?, channel_id?}`) queues a run of a fourth run kind,
+`plan`, and answers `202` with its work item: it is in the queue and
+History, can be cancelled, is steerable from the channel it names, and its
+spend is metered to the usage pool on `[agent.models] plan`. The run reads a
+checkout of the node's repository the host cut into its data directory — no
+github sandbox, no write credential — and `plan_propose.md` returns an
+initiative's epics or an epic's tasks, validated with one retry and held to
+`[planning]`'s cap: every task carries its kind, acceptance criteria,
+verify commands (code, authored under decompose's rules) or a configured
+workload profile (workload), and `depends_on` among its siblings. The
+proposal goes to the plan, never the forge: it replaces the node's previous
+`proposed` children, leaves a person's drafts and approvals, and arrives as
+`plan.generation.proposed` (`plan.generation.started` and `.failed` bracket
+it). A task, a published node that already has children, a repository
+planning is off for, a full level and a breakdown already running are
+refused by name. (#2344)
+
 **A published plan can be edited, and issues attached or detached, from
 the app — never over a change made on the forge.** With `plans:publish`,
 `PATCH /v1/plans/{id}/nodes/{node_id}` on a published node writes its

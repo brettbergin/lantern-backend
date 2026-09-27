@@ -932,6 +932,24 @@ result sink. A tool run has no workload profile: its declared hosts are its
 whole egress grant. Replaying the same chat message does not duplicate scans;
 a new message queues a fresh scan.
 
+**Plan runs.** The fourth kind, `plan`, is how a plan gets its next level
+(`POST /v1/plans/{id}/nodes/{node_id}/breakdown`, see [api.md](api.md#plans)):
+the planner proposes an initiative's epics or an epic's tasks from a
+read-only checkout of the node's repository. The host cuts the checkout into
+the run's data directory with its own credential — the agent sandbox gets
+the tree and never a token, there is no github sandbox, and nothing is ever
+delivered from it — and the planner's session is read-only. Its answer is
+held to the level's rules and to `[planning] max_epics_per_initiative` /
+`max_tasks_per_epic` (less the children a person already made), sent back
+once when it breaks one, and delivered to the plan, never to the forge: the
+node's previous `proposed` children are replaced, a person's drafts and
+approvals stay, and each proposed task names its `kind`, acceptance
+criteria, verify commands (code) or workload profile (workload) and what it
+depends on. It is ordinary work otherwise: in the queue and History as
+`kind: plan`, one stage (`proposing`), cancellable, resumable (a proposal
+already made is delivered without a second turn), steerable from the channel
+it was started in, metered to the usage pool, and run on `[agent.models] plan`. A person still reviews, edits and publishes the level.
+
 **Workloads on a cadence** (#761) are the third way in: **schedules**,
 which live in the daemon's database (#818), not in the config file. Create
 one from chat — "every weekday morning, summarise what changed overnight":

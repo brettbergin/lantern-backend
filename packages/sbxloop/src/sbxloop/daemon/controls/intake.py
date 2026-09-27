@@ -9,7 +9,9 @@ Three forms, each through the rules its source already applies:
   concierge's ``start_workload`` queues, keyed by an ``api:`` id the
   composite source routes to :class:`~sbxloop.daemon.sources.ApiSource`;
 * a **registered tool recipe** with validated parameters — never a free
-  command, never an agent: the recipe registry is the whole plan.
+  command, never an agent: the recipe registry is the whole plan;
+* a **breakdown** of a plan node — a ``plan`` run proposing the node's next
+  level to the plan record, under the plan service's rules.
 
 Nothing here talks HTTP. A route validates its body into one of the
 request dataclasses and calls :meth:`ControlService.admit`; the prose
@@ -28,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from sbxloop.agents.assignment import RUN_ROLES
 from sbxloop.config import SINK_NAMES, Config
-from sbxloop.daemon.controls.results import ControlError
+from sbxloop.daemon.controls.results import ControlError, ErrorCode
 from sbxloop.daemon.model import WorkItem, requested_roles_json
 from sbxloop.engine.model import RunKind
 from sbxloop.entrygraph import resolve_targets
@@ -92,7 +94,20 @@ class ToolAdmission:
     key: str | None = None
 
 
-AdmitRequest = IssueAdmission | WorkloadAdmission | ToolAdmission
+@dataclass(frozen=True, slots=True)
+class PlanAdmission:
+    """A breakdown: propose the next level of ``node_id`` in ``plan_id``,
+    read against ``expected_revision``, with the person's ``note``."""
+
+    plan_id: str
+    node_id: str
+    expected_revision: int | None = None
+    note: str = ""
+    channel_id: str | None = None
+    key: str | None = None
+
+
+AdmitRequest = IssueAdmission | WorkloadAdmission | ToolAdmission | PlanAdmission
 
 
 def _usable_slug(registry: AgentRegistry, slug: str, role: str) -> str:
@@ -139,6 +154,9 @@ def with_assignment_request(
     item: WorkItem, request: AdmitRequest, lead: str | None, roles: Mapping[str, str]
 ) -> WorkItem:
     """``item`` carrying the channel, lead and roles the request names."""
+    if isinstance(request, PlanAdmission):
+        channel = (request.channel_id or "").strip() or None
+        return item.model_copy(update={"channel_id": channel}) if channel else item
     if not isinstance(request, IssueAdmission | WorkloadAdmission):
         return item
     channel_id = (request.channel_id or "").strip() or None
@@ -174,6 +192,8 @@ def target_key(request: AdmitRequest) -> str:
         return f"{request.repository}#{request.number}"
     if isinstance(request, WorkloadAdmission):
         return api_item_id(request.key or new_run_id())
+    if isinstance(request, PlanAdmission):
+        return api_item_id(f"plan:{request.key or new_run_id()}")
     # The recipe rides the id: a name that is not registered is refused
     # here, before an id is built from it — a free string is never a key.
     name = request.recipe.strip()
@@ -286,6 +306,59 @@ def _tool_item(
         recipe_target=target,
         repo=entry.repo if entry is not None else None,
         requested_by=requested_by,
+    )
+
+
+#: How a plan refusal's HTTP status reads as a control refusal; the plan's
+#: own code rides along as ``plan_code``.
+_PLAN_CODES: dict[int, ErrorCode] = {
+    404: "unknown_target",
+    409: "not_eligible",
+    422: "invalid_argument",
+}
+
+
+def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
+    """The ``plan`` item a breakdown queues: the node checked against the
+    plan service's rules — a task has no children, a node on the forge with
+    children is re-planned, planning must be on for its repository, the
+    level must have room — and against a breakdown of it already queued or
+    running."""
+    from sbxloop.plans.model import child_level
+    from sbxloop.plans.service import PlanRefusal, PlanService
+    from sbxloop.plans.store import PlanStore
+
+    service = PlanService(PlanStore(loop.dstore), lambda: loop.config)
+    try:
+        plan, node = service.breakdown_target(
+            request.plan_id, request.node_id, expected_revision=request.expected_revision
+        )
+    except PlanRefusal as exc:
+        code: ErrorCode = (
+            "stale_revision"
+            if exc.code == "stale_revision"
+            else _PLAN_CODES.get(exc.status, "not_eligible")
+        )
+        raise ControlError(code, exc.detail, plan_code=exc.code, **exc.extra) from exc
+    active = loop.dstore.plan_generations(node.id)
+    if active:
+        raise ControlError(
+            "already_in_progress",
+            f"a breakdown of this {node.level} is already {active[0].state}",
+            plan_code="generation_in_progress",
+            item=active[0].item_id,
+        )
+    level = child_level(node.level)
+    noun = "epics" if level == "epic" else "tasks"
+    return WorkItem(
+        item_id=item_id,
+        source_key=item_id.partition(":")[2],
+        title=_title(f"Propose the {noun} of “{node.title}”", "plan"),
+        body=request.note.strip(),
+        kind="plan",
+        repo=node.repository,
+        plan_id=plan.id,
+        plan_node_id=node.id,
     )
 
 

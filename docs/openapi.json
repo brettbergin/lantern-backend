@@ -5749,6 +5749,79 @@
         "title": "PlanAttached",
         "type": "object"
       },
+      "PlanBreakdown": {
+        "additionalProperties": false,
+        "description": "Start a breakdown: a ``plan`` run proposing the node's next level.",
+        "properties": {
+          "channel_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanBreakdown",
+        "type": "object"
+      },
+      "PlanBreakdownAccepted": {
+        "additionalProperties": false,
+        "description": "The breakdown was queued as a ``plan`` run: the work item (its\n``run_id`` once dispatched) and the operation that admitted it. The\nproposal arrives on the plan as ``plan.generation.proposed``.",
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "item": {
+            "$ref": "#/components/schemas/Item"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "node_id",
+          "item",
+          "operation",
+          "created"
+        ],
+        "title": "PlanBreakdownAccepted",
+        "type": "object"
+      },
       "PlanCreate": {
         "additionalProperties": false,
         "description": "A new draft plan from the form: an initiative (its home repository)\nor a lone epic (the repository it targets).",
@@ -15382,6 +15455,70 @@
           }
         },
         "summary": "Attach an existing issue as a child",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/breakdown": {
+      "post": {
+        "description": "Start a ``plan`` run that reads a read-only checkout of the node's\nrepository and proposes its next level \u2014 an initiative's epics or an\nepic's tasks, at most the level's cap. The run is queued like any work\n(it appears in the queue and History, can be cancelled, and answers to\n``channel_id`` when one is named); ``202`` names its work item, whose\n``run_id`` is set once it is dispatched. The proposal is delivered to\nthe plan, never to the forge: it replaces the node's previous\n``proposed`` children and arrives as ``plan.generation.proposed``; a\nrun that proposes nothing ends with ``plan.generation.failed``.\n\nRefused: a task (``422``: it has no children); a node on the forge that\nalready has children (``409 replan_required``); a repository planning\nis off for (``409 planning_unsupported``); a level at its cap (``409\nlevel_full``); a breakdown of the node already queued or running\n(``409 already_in_progress``); a stale ``expected_revision``.",
+        "operationId": "breakdown_node_v1_plans__plan_id__nodes__node_id__breakdown_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanBreakdown"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanBreakdownAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Propose a node's next level",
         "tags": [
           "plans"
         ]

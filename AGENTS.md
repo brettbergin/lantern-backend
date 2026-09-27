@@ -14,7 +14,9 @@ deliver, land) is the first run kind, `code`; the second, `workload` (plan,
 execute, judge, publish — a brief, a report, a set of files, delivered to a
 sink rather than landed as a pull request), is real and rides the same run
 shape; the third, `tool` (a fixed recipe: one command, its checks, its
-files to a sink — no agent anywhere in it), rides it too. Nothing in this codebase may assume the task ends in code, and the
+files to a sink — no agent anywhere in it), rides it too; so does the
+fourth, `plan` (one level of a plan proposed from a read-only checkout and
+delivered to the plan record, never the forge). Nothing in this codebase may assume the task ends in code, and the
 trail fixture `tests/unit/test_code_run_trail.py` holds a `code` run
 byte-identical across every change the workload kind brings — read
 `docs/architecture.md` "Workloads" before touching either. sbxloop's own
