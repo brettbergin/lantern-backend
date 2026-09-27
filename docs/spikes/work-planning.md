@@ -1,7 +1,9 @@
 # Spike: planning work into the forge (initiative, epic, task)
 
-Status: **proposed.** The product decisions below were taken with the
-maintainer on 2026-09-26; nothing here is built yet. The effort spans three
+Status: **proposed; tracked as an initiative.** The product decisions below
+were taken with the maintainer on 2026-09-26; nothing here is built yet. The
+initiative is [sbxloop#2334](https://github.com/brettbergin/sbxloop/issues/2334); its epics and tasks are listed in the
+[appendix](#appendix-this-effort-as-issues). The effort spans three
 repositories: sbxloop owns the contract, the planner, publishing,
 reconciliation and epic runs; Angie builds the reference UX; Lantern ports
 it. Code-seam claims were read off `main` at f87f6c5e. Forge behaviour not
@@ -127,9 +129,10 @@ published task is inert until a person starts it.
   and are not used.
 - **Hierarchy.** Native sub-issues: `POST /repos/{owner}/{repo}/issues/{number}/sub_issues` with the child's issue
   *id* (not number), plus list and remove. An initiative's epics in other
-  repositories are cross-repository sub-issues — **field-unverified** for a
-  personal account and for a GitHub App installation that does not cover
-  both repositories; if the forge refuses, the epic is still published and
+  repositories are cross-repository sub-issues. **Verified** on 2026-09-26 for
+  a personal account with a user token: this effort's Angie and Lantern epics
+  are sub-issues of its sbxloop initiative. **field-unverified** for a GitHub
+  App installation that does not cover both repositories; if the forge refuses, the epic is still published and
   the initiative's body carries it in a managed checklist, with the reason
   named in the plan.
 - **Dependencies.** `depends_on` is rendered into the task body as a
@@ -382,8 +385,8 @@ clients can build against the fakes while 4–6 land.
 
 ## Field-unverified
 
-- Cross-repository sub-issues on a personal account, and under a GitHub App
-  installation that does not cover both repositories.
+- Cross-repository sub-issues under a GitHub App installation that does not
+  cover both repositories. (A personal account with a user token is verified.)
 - GitHub's exact caps on sub-issues per parent and nesting depth.
 - GitHub native issue dependencies: availability and API shape.
 - GitLab description size limits for a large managed checklist.
@@ -391,54 +394,43 @@ clients can build against the fakes while 4–6 land.
 
 ## Appendix: this effort as issues
 
-Filed only after the maintainer confirms. The initiative is in sbxloop; each
-epic lives in its repository and is a sub-issue of the initiative.
+Filed on 2026-09-26. Every issue carries its level label (`sbx:initiative`, `sbx:epic`, `sbx:task`) and none carries the trigger label. Epics are sub-issues of the initiative and tasks are sub-issues of their epic; each task's body lists what it depends on.
 
-**Initiative (sbxloop):** Plan work into the forge from the apps
-(initiative, epic, task).
+**Initiative:** [sbxloop#2334](https://github.com/brettbergin/sbxloop/issues/2334) Plan work into the forge from the apps (initiative, epic, task).
 
-**Epic A (sbxloop): Plans API and forge publishing**
+**Epic (sbxloop): Plans API and forge publishing:** [sbxloop#2335](https://github.com/brettbergin/sbxloop/issues/2335)
 
-1. Add `issue_update` and sub-issue operations to the forge protocol, with a
-   `sub_issues` capability and fake support.
-2. Write a managed children checklist into GitLab parent issues.
-3. Store plans and serve `/v1/plans` with `plans:create` and
-   `plans:publish`.
-4. Publish one plan level to the forge, idempotent by marker.
-5. Reconcile a published plan from the forge and report drift.
+- [sbxloop#2338](https://github.com/brettbergin/sbxloop/issues/2338) Add issue_update and sub-issue operations to the forge protocol
+- [sbxloop#2339](https://github.com/brettbergin/sbxloop/issues/2339) Write a managed children checklist into GitLab parent issues
+- [sbxloop#2340](https://github.com/brettbergin/sbxloop/issues/2340) Store plans and serve /v1/plans with plans:create and plans:publish
+- [sbxloop#2341](https://github.com/brettbergin/sbxloop/issues/2341) Publish one plan level to the forge, idempotent by marker
+- [sbxloop#2342](https://github.com/brettbergin/sbxloop/issues/2342) Reconcile a published plan from the forge and report drift
 
-**Epic B (sbxloop): The planner**
+**Epic (sbxloop): The planner:** [sbxloop#2336](https://github.com/brettbergin/sbxloop/issues/2336)
 
-1. Add the `[planning]` config and the `plan` agent model.
-2. Generate a proposed level in the sandbox from a read-only checkout.
-3. Ask clarifying questions before proposing, and take answers.
-4. Re-plan a published node as an approved diff.
+- [sbxloop#2343](https://github.com/brettbergin/sbxloop/issues/2343) Add the [planning] config and the plan agent model
+- [sbxloop#2344](https://github.com/brettbergin/sbxloop/issues/2344) Generate a proposed plan level in the sandbox from a read-only checkout
+- [sbxloop#2345](https://github.com/brettbergin/sbxloop/issues/2345) Ask clarifying questions before proposing, and take answers
+- [sbxloop#2346](https://github.com/brettbergin/sbxloop/issues/2346) Re-plan a published node as an approved diff
 
-**Epic C (sbxloop): Epic runs**
+**Epic (sbxloop): Epic runs:** [sbxloop#2337](https://github.com/brettbergin/sbxloop/issues/2337)
 
-1. Admit an epic's ready tasks as issue runs in dependency order.
-2. Pause dependents of a failed task, with retry, skip and stop.
-3. Close a completed epic with a summary, and send the planning push
-   notices.
+- [sbxloop#2347](https://github.com/brettbergin/sbxloop/issues/2347) Admit an epic's ready tasks as issue runs in dependency order
+- [sbxloop#2348](https://github.com/brettbergin/sbxloop/issues/2348) Pause dependents of a failed task, with retry, skip and stop
+- [sbxloop#2349](https://github.com/brettbergin/sbxloop/issues/2349) Close a completed epic with a summary, and send the planning push notices
 
-**Epic D (angie): Plans section**
+**Epic (angie): Plans section:** [angie#198](https://github.com/brettbergin/angie/issues/198)
 
-1. Add plan types, capability gating and daemon fixtures.
-2. Build the Plans list and the new-plan form.
-3. Build the breakdown editor with clarifying questions and per-level
-   publish.
-4. Show drift on published plans and review re-plan diffs.
-5. Run an epic from Plans and surface planning decisions in the action
-   center.
+- [angie#199](https://github.com/brettbergin/angie/issues/199) Add plan types, capability gating and daemon fixtures
+- [angie#200](https://github.com/brettbergin/angie/issues/200) Build the Plans list and the new-plan form
+- [angie#201](https://github.com/brettbergin/angie/issues/201) Build the breakdown editor with clarifying questions and per-level publish
+- [angie#202](https://github.com/brettbergin/angie/issues/202) Show drift on published plans and review re-plan diffs
+- [angie#203](https://github.com/brettbergin/angie/issues/203) Run an epic from Plans and surface planning decisions in the action center
 
-**Epic E (lantern): Plans section**
+**Epic (lantern): Plans section:** [lantern#61](https://github.com/brettbergin/lantern/issues/61)
 
-1. Regenerate the client and add planning capabilities, fake routes and a
-   demo plan.
-2. Build the Plans list and the new-plan sheet.
-3. Build the breakdown editor with clarifying questions and per-level
-   publish.
-4. Show drift, review re-plans and run epics, with action-center decisions
-   and push categories.
-5. Record the planning rows in `docs/parity.md` and walk the screens against
-   a real daemon.
+- [lantern#62](https://github.com/brettbergin/lantern/issues/62) Regenerate the client and add planning capabilities, fake routes and a demo plan
+- [lantern#63](https://github.com/brettbergin/lantern/issues/63) Build the Plans list and the new-plan sheet
+- [lantern#64](https://github.com/brettbergin/lantern/issues/64) Build the breakdown editor with clarifying questions and per-level publish
+- [lantern#65](https://github.com/brettbergin/lantern/issues/65) Show drift, review re-plans and run epics, with action-center decisions and push categories
+- [lantern#66](https://github.com/brettbergin/lantern/issues/66) Record the planning rows in docs/parity.md and walk the screens against a real daemon
