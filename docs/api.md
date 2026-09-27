@@ -714,22 +714,24 @@ initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
-and owners) publishes to the forge.
+and owners) publishes to the forge and edits, attaches and detaches its issues.
 
-| Route                                         | Body                                                         | Result                                           |
-| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
-| `GET /v1/plans`                               | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first  |
-| `POST /v1/plans`                              | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node               |
-| `GET /v1/plans/{id}`                          | none                                                         | `200`, the plan and every node                   |
-| `PATCH /v1/plans/{id}`                        | `{expected_revision, …sections}`                             | `200`, the root node's sections edited           |
-| `DELETE /v1/plans/{id}`                       | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`         |
-| `POST /v1/plans/{id}/nodes`                   | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node   |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`        | `{expected_revision, position?, …sections}`                  | `200`, the plan                                  |
-| `DELETE /v1/plans/{id}/nodes/{node_id}`       | `?expected_revision=`                                        | `200`, the plan without the node and its subtree |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve` | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved     |
-| `POST /v1/plans/{id}/nodes/{node_id}/publish` | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`    |
-| `POST /v1/plans/{id}/sync`                    | none                                                         | `200`, the plan reconciled from the forge now    |
-| `POST /v1/plans/{id}/drift/ack`               | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen      |
+| Route                                         | Body                                                         | Result                                                |
+| --------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------- |
+| `GET /v1/plans`                               | `?repository=&level=&state=`                                 | `200 {data: [plan summary]}`, most recent first       |
+| `POST /v1/plans`                              | `{level, repository, title, goal?, acceptance_criteria?, …}` | `201`, the plan with its root node                    |
+| `GET /v1/plans/{id}`                          | none                                                         | `200`, the plan and every node                        |
+| `PATCH /v1/plans/{id}`                        | `{expected_revision, …sections}`                             | `200`, the root node's sections edited                |
+| `DELETE /v1/plans/{id}`                       | `?expected_revision=`                                        | `200 {id, outcome: deleted \| archived}`              |
+| `POST /v1/plans/{id}/nodes`                   | `{expected_revision, parent_id, title, repository?, …}`      | `201`, the plan; `Location` names the new node        |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`        | `{expected_revision, position?, forge_version?, …sections}`  | `200`, the plan (a published node: its issue written) |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`       | `?expected_revision=`                                        | `200`, the plan without the node and its subtree      |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve` | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved          |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish` | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`         |
+| `POST /v1/plans/{id}/nodes/{node_id}/attach`  | `{expected_revision, repository?, number?, url?}`            | `200 {plan, node_id, linked, reason}`                 |
+| `POST /v1/plans/{id}/nodes/{node_id}/detach`  | `{expected_revision}`                                        | `200`, the plan with the child detached               |
+| `POST /v1/plans/{id}/sync`                    | none                                                         | `200`, the plan reconciled from the forge now         |
+| `POST /v1/plans/{id}/drift/ack`               | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen           |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -739,7 +741,7 @@ a cycle). A child is always one level down; an epic may target any
 plannable repository (its initiative's home by default), and a task lives in
 its epic's. A node's `state` is `draft`, `proposed` (the planner wrote it
 and nobody has touched it), `approved` or `published`; editing a proposed or
-approved node makes it a draft again, and a published node carries `forge: {number, url, state}` and is `409 node_published` here. A plan's `state` is
+approved node makes it a draft again, and a published node carries `forge: {number, url, state, version}` and editing its sections writes its issue (below). A plan's `state` is
 `draft` until something of it is published, then `published`; deleting a
 published plan archives it (its issues stay) rather than deleting it. Every
 summary carries a `rollup`: epics, tasks, tasks the forge has closed, and
@@ -753,7 +755,8 @@ labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
 repository's forge can't hold plans: Gitea is not supported"; or `[planning] enabled = false` for it: "planning is off for this repository"). Changes emit
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
-`deleted`, `approved` with `node_ids`, `published` with `number`).
+`deleted`, `approved` with `node_ids`, `published` with `number`,
+`issue_edited`, `attached` and `detached` — see below).
 
 **Approving and publishing a level (#2341).** `approve` (`plans:create`) is
 a person's "this is right": the node's `draft` and `proposed` children —
@@ -853,6 +856,81 @@ each child's body (the reconcile reads the issue when it does not), and
 that a GitHub issue this server's credential can no longer see answers
 404 like a deleted one — such a node is detached, and attached again once
 it is listed again.
+
+**Editing a published plan, attaching and detaching (#2350).** After
+publish sbxloop writes to a plan's issues only when a person asks, and
+never over a change made on the forge. Each of these needs `plans:publish`
+and writes the forge at once; a daemon with no forge connection is `503 source_unavailable`, a forge that refuses a write `502 forge_refused` with its
+words, and a plan being published, read from the forge or written right
+now `409 already_in_progress`.
+
+`PATCH /v1/plans/{id}/nodes/{node_id}` with sections on a published node
+writes them to its issue (`plans:create` alone is `403 forbidden` naming
+`plans:publish`; moving a published node among its siblings stays
+`plans:create`). The request names `forge_version`, the version of the
+issue the client read: the node's `forge.version` — a digest of its title
+and sections as sbxloop last read or wrote them — or the one a refusal
+answered with (a missing one is `422`). The issue is read first, the way a
+reconcile reads it; if its title or sections changed on the forge since,
+the edit is `409 forge_changed` with the forge's `forge_version` and
+`current: {title, goal, …, forge_version, number, url}` (its title and
+sections as read), and nothing is written. Editing again naming that
+version applies the edit to the forge's version: sections the person did
+not touch keep the forge's text. The write sends the title only when it
+changed and rewrites in the body only the sections the edit changed — a
+person's text outside the rendered headings, the other sections (a ticked
+criterion stays ticked), the marker and the managed checklist keep their
+text; an issue adopted from the forge whose whole text was read as its
+goal is rewritten as headings, the goal first. A dependency the edit adds
+must be a sibling that follows its issue (`409 dependency_unpublished`); a
+detached node is `409 node_detached`, an issue gone from the forge `409 issue_gone`, and a stale `expected_revision` `409 stale_revision` as
+anywhere. The version is a content digest rather than the forge's
+`updated_at` because a comment, a label or sbxloop's own checklist and
+sub-issue writes move `updated_at` without touching what an edit
+overwrites. A limit: neither forge offers a conditional issue update, so
+a forge edit landing between sbxloop's read and its write — one request
+apart — is not seen and is overwritten (sbxloop itself holds one write
+per plan at a time; the window against a person on the forge is not
+exercised against a real forge, **field-unverified**). Records
+`plan.node.changed` with `change: issue_edited`, `number`, `fields` (the
+node fields that changed) and `wrote` (`title`, `body`).
+
+`POST .../nodes/{node_id}/attach` links an existing open issue — named by
+`repository` and `number`, or by its web `url` — as a child one level
+under the node, which must follow its issue: a native sub-issue on GitHub,
+a line in the parent's managed checklist on GitLab (or, like publishing,
+where GitHub refuses a cross-repository sub-issue, with the reason), then
+its level label — never the trigger or the workload label. It is recorded
+`published` with `origin: forge`, its sections read from its body the way
+a reconcile adopts an issue (its whole text as the goal where it has none
+of our headings), and the answer is `{plan, node_id, linked, reason}` with
+`Location` naming the node. A node of this plan detached from the same
+issue follows it again instead of a new one. Refused before anything is
+linked: a closed issue (`409 issue_closed`), a pull request (`422 not_an_issue`), no such issue (`404 issue_not_found`), an issue already in
+this plan (`409 already_in_plan` with `node_id`) or carrying another
+plan's marker (`409 in_another_plan`), a task outside its epic's
+repository or a task as the parent (`422`), a parent at its cap (`409 too_many_children`), a broken managed checklist (`409 checklist_mangled`),
+and on GitHub an issue already under another parent (GitHub's 422, `409 already_has_parent`: moving it is a person's decision there). On GitLab an
+issue listed in another parent's checklist carries no link sbxloop can
+see and is not refused. Records `change: attached` with `parent_id`,
+`number`, `url`, `linked` and `reattached`.
+
+`POST .../nodes/{node_id}/detach` unlinks a published child from its
+parent without closing its issue: the GitHub sub-issue link and any line
+in the parent's checklist go. The node stays in the plan detached, as a
+reconcile leaves a node its parent no longer lists: `forge.detached` says
+a person detached it, it is no longer followed (its subtree is left as it
+was), and linking its issue again — attaching it, or on the forge — makes
+it followed again. Its siblings stop depending on it, in the plan and in
+their issues: only the `Depends on` items naming it are removed. The root
+is `422` (archive the plan instead), an unpublished node `409 node_unpublished` (remove it instead) and a detached one `409 node_detached`. Records `change: detached` with `parent_id`, `number`,
+`unlinked` (`native`, `checklist`) and `dependents`.
+
+sbxloop's own writes are what the next reconcile reads back: an edit,
+attach or detach never shows as drift. **field-unverified**: GitHub's 422
+for a sub-issue that already has a parent is the documented answer; the
+exact status GitHub gives a cross-repository refusal is not, and any other
+refusal of a cross-repository link falls back to the checklist.
 
 ### Workspace people
 
@@ -1409,6 +1487,9 @@ rechecked when it arrives) and a `revision` a command may pin.
 | CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`       | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes               |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`     | `plans:create`         | Approve a node's draft and proposed children                          |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`     | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required            |
+| `PATCH`  | `/v1/plans/{id}/nodes/{node_id}` (published) | `plans:publish`        | Edit a published node's sections: writes its issue                    |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/attach`      | `plans:publish`        | Attach an existing open issue as a child                              |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/detach`      | `plans:publish`        | Unlink a child from its parent; its issue stays open                  |
 | `POST`   | `/v1/plans/{id}/sync`                        | `plans:create`         | Reconcile the plan from the forge now                                 |
 | `POST`   | `/v1/plans/{id}/drift/ack`                   | `plans:create`         | Mark the forge's changes to a plan seen                               |
 

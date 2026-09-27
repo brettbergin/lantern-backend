@@ -868,6 +868,7 @@ class FakeGithub(GithubOps):
             issue = self._issue_at(path)
             if issue is not None:
                 issue.update(body)
+                issue["updated_at"] = self._stamp()
                 return dict(issue)
             return {"number": number, **body}
         if method == "GET" and re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+/events", path):
@@ -976,24 +977,33 @@ class FakeGithub(GithubOps):
     # a test asserting "sbxloop wrote nothing" still sees an empty ledger.
 
     def person_files(
-        self, repo: str, title: str, body: str = "", *, labels: Sequence[str] = ()
+        self,
+        repo: str,
+        title: str,
+        body: str = "",
+        *,
+        labels: Sequence[str] = (),
+        pull_request: bool = False,
     ) -> int:
-        """A person opens an issue on the forge; its number."""
+        """A person opens an issue on the forge — or, with
+        ``pull_request``, a pull request, which the issues API serves too;
+        its number."""
         self._person_issues += 1
         number = 5000 + self._person_issues
-        self.existing_issues.append(
-            {
-                "number": number,
-                "id": 70000 + number,
-                "title": title,
-                "body": body,
-                "state": "open",
-                "state_reason": None,
-                "html_url": f"https://github.com/{repo}/issues/{number}",
-                "labels": [{"name": label} for label in labels],
-                "updated_at": self._stamp(),
-            }
-        )
+        issue: dict[str, Any] = {
+            "number": number,
+            "id": 70000 + number,
+            "title": title,
+            "body": body,
+            "state": "open",
+            "state_reason": None,
+            "html_url": f"https://github.com/{repo}/issues/{number}",
+            "labels": [{"name": label} for label in labels],
+            "updated_at": self._stamp(),
+        }
+        if pull_request:
+            issue["pull_request"] = {"url": f"https://api.github.com/repos/{repo}/pulls/{number}"}
+        self.existing_issues.append(issue)
         return number
 
     def person_edits(

@@ -1,5 +1,28 @@
 ## [Unreleased]
 
+**A published plan can be edited, and issues attached or detached, from
+the app — never over a change made on the forge.** With `plans:publish`,
+`PATCH /v1/plans/{id}/nodes/{node_id}` on a published node writes its
+title and the sections edited to its issue at once — a person's text
+outside the rendered headings, the sections not edited, the marker and the
+managed checklist keep their text — naming `forge_version`, the version of
+the issue the client read (each published node's `forge.version`, a digest
+of its title and sections). An issue that changed on the forge since is
+refused as `409 forge_changed` with its current title, sections and
+version, and nothing is written; editing again naming that version keeps
+the forge's text wherever the edit did not touch it. `POST .../attach`
+links an existing open issue as a child one level down — a sub-issue on
+GitHub, a line in the parent's checklist on GitLab — with its level label,
+adopted with `origin: forge`; closed issues, pull requests, issues already
+in this plan or another, issues already under another GitHub parent, a
+task outside its epic's repository and a parent at its cap are refused.
+`POST .../detach` unlinks a child without closing its issue, marks it
+detached and drops it from its siblings' dependencies, in the plan and in
+their `Depends on` lists. None of these shows as drift on the next
+reconcile; each is a `plan.node.changed` event (`issue_edited`, `attached`,
+`detached`). `plans:create` alone editing a published node is now
+`403 forbidden` naming `plans:publish` (was `409 node_published`). (#2350)
+
 **A published plan follows the forge, and says what changed there.** After
 publish the forge wins: sbxloop re-reads a plan's issues and folds in what
 people did on the forge, and never writes over it. A title, the sections

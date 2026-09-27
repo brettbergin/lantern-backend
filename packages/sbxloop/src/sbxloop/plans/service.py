@@ -4,26 +4,59 @@ Every surface (the API today; the planner and chat later) creates and edits
 plans here, so the rules hold once: a node breaks down one level at a time
 (initiative → epic → task), a task lives in its epic's repository, a
 dependency names a sibling task and never makes a cycle, a repository
-whose forge cannot hold a plan is refused by name, a published node is not
-edited here, and every mutation names the revision it read. After publish
-the forge wins: :meth:`PlanService.reconcile` folds it in (#2342).
+whose forge cannot hold a plan is refused by name, and every mutation
+names the revision it read. After publish the forge wins:
+:meth:`PlanService.reconcile` folds it in (#2342), and the only writes to a
+published node are a person's direct ones — :meth:`PlanService.edit_published`,
+:meth:`~PlanService.attach` and :meth:`~PlanService.detach` (#2350) — each
+written to the forge at once and never over a forge change.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
 from sbxloop.errors import SbxloopError
 from sbxloop.log import get_logger
+from sbxloop.plans.direct import (
+    Linked,
+    LinkRefused,
+    add_level_label,
+    gone,
+    issue_write,
+    labelled,
+    link_child,
+    say,
+    unlink_child,
+    without_dependency,
+)
 from sbxloop.plans.hierarchy import FORGE_NAMES, repository_planning_for
-from sbxloop.plans.model import Level, Plan, PlanNode, child_level
+from sbxloop.plans.model import (
+    CONTENT_FIELDS,
+    ForgeRef,
+    Level,
+    Plan,
+    PlanNode,
+    child_level,
+    content,
+    content_version,
+)
 from sbxloop.plans.publish import LevelResult, level_targets, publish_level
-from sbxloop.plans.reconcile import Reconciliation, reconcile_plan
+from sbxloop.plans.reconcile import (
+    Reconciliation,
+    Seen,
+    as_forge_has_it,
+    key_of,
+    reconcile_plan,
+    seen_of,
+)
+from sbxloop.plans.render import drop_reference, markers, parse_issue_url
 from sbxloop.plans.store import (
     PlanEvent,
     PlanGone,
@@ -32,6 +65,7 @@ from sbxloop.plans.store import (
     StaleRevision,
     new_id,
 )
+from sbxloop.vcs.checklist import ChecklistMangled
 from sbxloop.vcs.protocol import IssueOps
 
 #: The sections a person may set on a node, as the API and the store name
@@ -82,6 +116,18 @@ def _stale(exc: StaleRevision) -> PlanRefusal:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class Attached:
+    """An attach's outcome: the plan as it now is, the node that follows
+    the issue, how it is linked under its parent, and why a native link
+    became a checklist line."""
+
+    plan: Plan
+    node_id: str
+    linked: Linked
+    reason: str | None = None
+
+
 class PlanService:
     def __init__(self, store: PlanStore, config: Callable[[], Config]) -> None:
         self.store = store
@@ -94,6 +140,10 @@ class PlanService:
         # forge that is down is not asked again on every open).
         self._reconciling: set[str] = set()
         self._attempted: dict[str, float] = {}
+        # Plans a person's direct write is on the forge for now: a
+        # reconcile reading the forge meanwhile would fold the half-written
+        # state in as someone else's edit.
+        self._writing: set[str] = set()
 
     # -- reads ----------------------------------------------------------------
 
@@ -268,7 +318,7 @@ class PlanService:
             raise PlanRefusal(
                 409,
                 "node_published",
-                "this node is on the forge; edit its issue there",
+                "this node is on the forge: an edit of it writes its issue (edit_published)",
                 node_id=node.id,
             )
         upsert: dict[str, PlanNode] = {}
@@ -475,9 +525,9 @@ class PlanService:
         if forge_kind is None:
             raise PlanRefusal(503, "source_unavailable", "the daemon has no forge connection")
         with self._publishing_lock:
-            if plan.id in self._publishing:
+            if plan.id in self._publishing or plan.id in self._writing:
                 raise PlanRefusal(
-                    409, "already_in_progress", "this plan is being published right now"
+                    409, "already_in_progress", "this plan is being written to the forge right now"
                 )
             self._publishing.add(plan.id)
         try:
@@ -587,7 +637,11 @@ class PlanService:
             if not ready:
                 return Reconciliation(plan, 0, IDLE)
         with self._publishing_lock:
-            busy = plan.id in self._publishing or plan.id in self._reconciling
+            busy = (
+                plan.id in self._publishing
+                or plan.id in self._reconciling
+                or plan.id in self._writing
+            )
             if busy:
                 if force:
                     raise PlanRefusal(
@@ -678,6 +732,557 @@ class PlanService:
             ],
             actor=actor,
         )
+
+    # -- a person's direct writes (#2350) ---------------------------------------
+
+    def edit_published(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        forge_version: str | None,
+        sections: Mapping[str, Any],
+        position: int | None,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """Write a published node's title and sections to its issue at once
+        (see :mod:`~sbxloop.plans.direct`) and record them. ``forge_version``
+        is the version of the issue the client read — the node's
+        ``forge.version``, or the one a ``forge_changed`` refusal answered
+        with. The issue is read first and, when it changed on the forge
+        since, the edit is ``409 forge_changed`` with the forge's current
+        version and nothing is written. Neither forge offers a conditional
+        update, so a forge edit landing between that read and the write is
+        not seen: the window is one request long."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._followed(plan, node_id)
+        if not sections:
+            raise PlanRefusal(422, "invalid_argument", "nothing to change")
+        if not forge_version:
+            raise PlanRefusal(
+                422,
+                "invalid_argument",
+                "an edit of a published node names the forge_version it read (its forge.version)",
+            )
+        if position is not None and node.parent_id is None:
+            raise PlanRefusal(422, "invalid_argument", "the plan's root has no siblings")
+        siblings = self._siblings(plan, node)
+        self._check_published_dependencies(
+            plan, node, self._with_sections(node, sections, siblings=siblings)
+        )
+        self._check_publishable(node.repository, forge_kind)
+        assert node.forge is not None  # nosec B101 - _followed checks
+        where = f"{node.repository}#{node.forge.number}"
+        issue_url = node.forge.url
+        with self._forge_write(plan.id, expected_revision) as plan:
+            ops = self._connect(forge_kind, connect)
+            seen = self._read(ops, node.repository, node.forge.number, missing=409)
+            node = self._followed(plan, node_id)
+            current = as_forge_has_it(plan, node, title=seen.title, body=seen.body)
+            version = content_version(current)
+            if version != forge_version:
+                raise PlanRefusal(
+                    409,
+                    "forge_changed",
+                    f"{where} changed on the forge since it was read; nothing was written. "
+                    "Review its current version and edit again naming its forge_version",
+                    forge_version=version,
+                    current={
+                        **content(current),
+                        "forge_version": version,
+                        "number": seen.number,
+                        "url": seen.url or issue_url,
+                    },
+                )
+            edited = self._with_sections(current, sections, siblings=self._siblings(plan, node))
+            self._check_published_dependencies(plan, current, edited)
+            title, body = issue_write(plan, current, edited, title=seen.title, body=seen.body)
+            written: dict[str, Any] = {}
+            if title is not None or body is not None:
+                try:
+                    written = ops.issue_update(node.repository, seen.number, title=title, body=body)
+                except SbxloopError as exc:
+                    raise PlanRefusal(
+                        502, "forge_refused", f"could not write {where}: {say(exc)}"
+                    ) from exc
+            stamp = str(written.get("updated_at") or "") or seen.updated_at
+            fields = [k for k in CONTENT_FIELDS if getattr(node, k) != getattr(edited, k)]
+
+            def change(latest: Plan, now: float) -> list[PlanNode]:
+                base = self._node(latest, node_id)
+                assert base.forge is not None  # nosec B101 - followed above
+                new = replace(
+                    base,
+                    **{k: getattr(edited, k) for k in CONTENT_FIELDS},
+                    forge=replace(base.forge, updated_at=stamp),
+                    updated_at=now,
+                )
+                if position is None or new.parent_id is None:
+                    return [new]
+                around = [new if s.id == new.id else s for s in latest.children(new.parent_id)]
+                return self._reorder(around, new.id, position)
+
+            return self._record(
+                plan.id,
+                change,
+                event={
+                    "node_id": node.id,
+                    "change": "issue_edited",
+                    "number": seen.number,
+                    "fields": fields,
+                    "wrote": [k for k, v in (("title", title), ("body", body)) if v is not None],
+                },
+                clock=clock,
+                actor=actor,
+            )
+
+    def attach(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        repository: str | None,
+        number: int | None,
+        url: str | None,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> Attached:
+        """Link an existing open issue as a child one level under
+        ``node_id``: a native sub-issue on GitHub, a line in the parent's
+        managed checklist on GitLab, then its level label (never the trigger
+        or the workload label). It is recorded ``published`` with ``origin =
+        forge`` and its sections read from its body, the way a reconcile
+        adopts one; a node of this plan that was detached from the same
+        issue follows it again instead. Refused before the forge is written:
+        a closed issue, a pull request, one already in this plan or in
+        another, a task outside its epic's repository, a parent at its cap —
+        and on GitHub one already under another parent."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        parent = self._followed(plan, node_id)
+        level = child_level(parent.level)
+        if level is None:
+            raise PlanRefusal(422, "invalid_argument", "a task has no children")
+        asked, wanted = self._issue_named(repository, number, url)
+        repo = self._child_repository(parent, level, asked)
+        for name in dict.fromkeys([parent.repository, repo]):
+            self._check_publishable(name, forge_kind)
+        existing = self._by_issue(plan, repo, wanted)
+        if existing is not None and (existing.followed or existing.level != level):
+            raise PlanRefusal(
+                409,
+                "already_in_plan",
+                f"{repo}#{wanted} is already in this plan as {existing.title}",
+                node_id=existing.id,
+            )
+        self._check_room(plan, parent)
+        assert parent.forge is not None  # nosec B101 - _followed checks
+        where = f"{repo}#{wanted}"
+        with self._forge_write(plan.id, expected_revision) as plan:
+            ops = self._connect(forge_kind, connect)
+            try:
+                row = ops.issue_get(repo, wanted)
+            except SbxloopError as exc:
+                if gone(exc):
+                    raise PlanRefusal(
+                        404, "issue_not_found", f"there is no issue {where}", repository=repo
+                    ) from exc
+                raise PlanRefusal(
+                    502, "forge_refused", f"could not read {where}: {say(exc)}"
+                ) from exc
+            if "pull_request" in row:
+                raise PlanRefusal(422, "not_an_issue", f"{where} is a pull request, not an issue")
+            seen = seen_of(row, repo, wanted)
+            if seen.state == "closed":
+                raise PlanRefusal(409, "issue_closed", f"{where} is closed: attach an open issue")
+            for other_plan, other_node in markers(seen.body):
+                if other_plan != plan.id:
+                    raise PlanRefusal(
+                        409,
+                        "in_another_plan",
+                        f"{where} belongs to another plan ({other_plan})",
+                        plan_id=other_plan,
+                    )
+                known = plan.node(other_node)
+                if known is not None and (existing is None or known.id != existing.id):
+                    raise PlanRefusal(
+                        409,
+                        "already_in_plan",
+                        f"{where} is already in this plan as {known.title}",
+                        node_id=known.id,
+                    )
+            title = (" ".join(seen.title.split()) or where)[:256]
+            try:
+                linked, reason = link_child(ops, self._config(), parent, repo, wanted, title)
+                label = self._config().labels_for(repo).levels.get(level)
+                if not label or not labelled(row, label):
+                    add_level_label(ops, self._config(), repo, wanted, level)
+            except LinkRefused as exc:
+                raise PlanRefusal(409, exc.code, exc.detail, repository=repo) from exc
+            except ChecklistMangled as exc:
+                raise PlanRefusal(
+                    409,
+                    "checklist_mangled",
+                    f"the managed checklist of {parent.repository}#{parent.forge.number} "
+                    f"cannot be written: {exc}",
+                ) from exc
+            except SbxloopError as exc:
+                raise PlanRefusal(
+                    502, "forge_refused", f"could not attach {where}: {say(exc)}"
+                ) from exc
+            ref = ForgeRef(
+                number=seen.number,
+                url=seen.url,
+                state=seen.state,
+                updated_at=seen.updated_at,
+            )
+            child_id = existing.id if existing is not None else new_id("node_")
+
+            def change(latest: Plan, now: float) -> list[PlanNode]:
+                position = max((c.position for c in latest.children(parent.id)), default=-1) + 1
+                again = latest.node(child_id)
+                if again is not None and again.forge is not None:
+                    return [
+                        replace(
+                            again,
+                            parent_id=parent.id,
+                            position=position,
+                            forge=replace(again.forge, detached=None),
+                            updated_at=now,
+                        )
+                    ]
+                blank = PlanNode(
+                    id=child_id,
+                    plan_id=latest.id,
+                    parent_id=parent.id,
+                    position=position,
+                    level=level,
+                    repository=repo,
+                    state="published",
+                    origin="forge",
+                    title=title,
+                    forge=ref,
+                    created_at=now,
+                    updated_at=now,
+                )
+                adopted = as_forge_has_it(latest, blank, title=title, body=seen.body)
+                return [replace(adopted, title=title)]
+
+            changed = self._record(
+                plan.id,
+                change,
+                event={
+                    "node_id": child_id,
+                    "change": "attached",
+                    "parent_id": parent.id,
+                    "number": seen.number,
+                    "url": seen.url,
+                    "linked": linked,
+                    "reattached": existing is not None,
+                },
+                clock=clock,
+                actor=actor,
+            )
+            return Attached(changed, child_id, linked, reason)
+
+    def detach(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        expected_revision: int,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """Unlink a published child from its parent on the forge — its
+        sub-issue link, any checklist line — without closing its issue. The
+        node stays in the plan *detached*, as a reconcile leaves a node its
+        parent no longer lists: ``forge.detached`` says a person did it,
+        it is not followed any more, its subtree is left as it was, and
+        linking the issue again (here or on the forge) makes it followed
+        again. Its siblings stop depending on it, in the plan and in their
+        issues' ``Depends on`` lists (only the items naming it go)."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        parent_id = self._node(plan, node_id).parent_id
+        if parent_id is None:
+            raise PlanRefusal(
+                422, "invalid_argument", "the root has no parent: archive the plan instead"
+            )
+        node = self._followed(plan, node_id)
+        parent = self._node(plan, parent_id)
+        if parent.state != "published" or parent.forge is None:
+            raise PlanRefusal(409, "parent_unpublished", f"{parent.title} is not on the forge")
+        self._check_publishable(parent.repository, forge_kind)
+        assert node.forge is not None  # nosec B101 - _followed checks
+        where = f"{parent.repository}#{parent.forge.number}"
+        with self._forge_write(plan.id, expected_revision) as plan:
+            ops = self._connect(forge_kind, connect)
+            try:
+                rewritten = self._drop_dependents(ops, plan, node)
+                unlinked = unlink_child(ops, self._config(), parent, node)
+            except ChecklistMangled as exc:
+                raise PlanRefusal(
+                    409,
+                    "checklist_mangled",
+                    f"the managed checklist of {where} cannot be written: {exc}",
+                ) from exc
+            except SbxloopError as exc:
+                raise PlanRefusal(
+                    502,
+                    "forge_refused",
+                    f"could not unlink {node.repository}#{node.forge.number} from {where}: "
+                    f"{say(exc)}",
+                ) from exc
+            who = str(actor.get("display") or actor.get("id") or "someone")
+            reason = f"{who} detached it from {where} in the app; its issue stays open"
+
+            def change(latest: Plan, now: float) -> list[PlanNode]:
+                base = self._node(latest, node_id)
+                assert base.forge is not None  # nosec B101 - followed above
+                siblings = [s for s in latest.children(base.parent_id or "") if s.id != base.id]
+                return [
+                    replace(base, forge=replace(base.forge, detached=reason), updated_at=now),
+                    *without_dependency(siblings, base.id),
+                ]
+
+            return self._record(
+                plan.id,
+                change,
+                event={
+                    "node_id": node.id,
+                    "change": "detached",
+                    "parent_id": parent.id,
+                    "number": node.forge.number,
+                    "unlinked": list(unlinked),
+                    "dependents": rewritten,
+                },
+                clock=clock,
+                actor=actor,
+            )
+
+    def _drop_dependents(self, ops: IssueOps, plan: Plan, node: PlanNode) -> list[str]:
+        """Before ``node`` is unlinked, its siblings that depend on it stop
+        saying so on the forge too — the ``Depends on`` list is the source
+        of truth — by removing only the items that name its issue; the ids
+        of the siblings whose issue was rewritten. One whose issue is gone
+        is left to a reconcile."""
+        assert node.forge is not None  # nosec B101 - the caller checks
+        rewritten: list[str] = []
+        for sibling in self._siblings(plan, node):
+            if node.id not in sibling.depends_on or not sibling.followed:
+                continue
+            assert sibling.forge is not None  # nosec B101 - followed
+            try:
+                row = ops.issue_get(sibling.repository, sibling.forge.number)
+            except SbxloopError as exc:
+                if gone(exc):
+                    continue
+                raise
+            body = str(row.get("body") or "")
+            dropped = drop_reference(body, sibling.repository, node.repository, node.forge.number)
+            if dropped != body:
+                ops.issue_update(sibling.repository, sibling.forge.number, body=dropped)
+                rewritten.append(sibling.id)
+        return rewritten
+
+    @contextmanager
+    def _forge_write(self, plan_id: str, expected_revision: int) -> Iterator[Plan]:
+        """One direct write at a time per plan, never beside a publish or a
+        reconcile of it; yields the plan as it is now, still at
+        ``expected_revision``."""
+        with self._publishing_lock:
+            if (
+                plan_id in self._publishing
+                or plan_id in self._reconciling
+                or (plan_id in self._writing)
+            ):
+                raise PlanRefusal(
+                    409,
+                    "already_in_progress",
+                    "this plan is being written to or read from the forge right now",
+                )
+            self._writing.add(plan_id)
+        try:
+            plan = self.get(plan_id)
+            self._check_revision(plan, expected_revision)
+            yield plan
+        finally:
+            with self._publishing_lock:
+                self._writing.discard(plan_id)
+
+    @staticmethod
+    def _connect(forge_kind: str | None, connect: Callable[[], IssueOps]) -> IssueOps:
+        if forge_kind is None:
+            raise PlanRefusal(503, "source_unavailable", NO_FORGE)
+        try:
+            return connect()
+        except SbxloopError as exc:
+            raise PlanRefusal(
+                503, "source_unavailable", f"could not reach the forge: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _read(ops: IssueOps, repo: str, number: int, *, missing: int) -> Seen:
+        try:
+            row = ops.issue_get(repo, number)
+        except SbxloopError as exc:
+            if gone(exc):
+                raise PlanRefusal(
+                    missing,
+                    "issue_gone",
+                    f"{repo}#{number} is gone from the forge (or this server can no longer "
+                    "see it); a sync detaches it",
+                ) from exc
+            raise PlanRefusal(
+                502, "forge_refused", f"could not read {repo}#{number}: {say(exc)}"
+            ) from exc
+        return seen_of(row, repo, number)
+
+    def _record(
+        self,
+        plan_id: str,
+        change: Callable[[Plan, float], Sequence[PlanNode]],
+        *,
+        event: Mapping[str, Any],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """Record what was just written to the forge, against the plan as
+        it now is: the forge already has it, so another edit of the plan
+        meanwhile is not a reason to lose it."""
+        for _ in range(3):
+            latest = self.get(plan_id)
+            now = clock()
+            try:
+                return self.store.apply(
+                    plan_id,
+                    expected_revision=latest.revision,
+                    now=now,
+                    upsert=change(latest, now),
+                    events=[PlanEvent("plan.node.changed", {"plan_id": plan_id, **event})],
+                    actor=dict(actor),
+                )
+            except StaleRevision:
+                continue
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+        raise PlanRefusal(
+            409,
+            "already_in_progress",
+            "the forge was written but the plan kept changing while it was recorded; "
+            "a sync reads it back",
+        )
+
+    @staticmethod
+    def _followed(plan: Plan, node_id: str) -> PlanNode:
+        """``node_id``, on the forge and still following its issue."""
+        node = PlanService._node(plan, node_id)
+        if node.state != "published" or node.forge is None:
+            raise PlanRefusal(
+                409,
+                "node_unpublished",
+                f"{node.title} is not on the forge yet",
+                node_id=node.id,
+            )
+        if node.forge.detached:
+            raise PlanRefusal(
+                409,
+                "node_detached",
+                f"{node.title} no longer follows its issue ({node.forge.detached})",
+                node_id=node.id,
+            )
+        return node
+
+    @staticmethod
+    def _siblings(plan: Plan, node: PlanNode) -> list[PlanNode]:
+        if node.parent_id is None:
+            return []
+        return [s for s in plan.children(node.parent_id) if s.id != node.id]
+
+    @staticmethod
+    def _check_published_dependencies(plan: Plan, before: PlanNode, after: PlanNode) -> None:
+        """A dependency an edit adds to a published node is a sibling that
+        follows its issue: its ``Depends on`` section names it by
+        reference."""
+        missing = []
+        for dep in after.depends_on:
+            if dep in before.depends_on:
+                continue
+            sibling = plan.node(dep)
+            if sibling is None or not sibling.followed:
+                missing.append(dep)
+        if missing:
+            raise PlanRefusal(
+                409,
+                "dependency_unpublished",
+                "a published task depends only on published siblings: "
+                + ", ".join(_title(plan, d) for d in missing),
+                node_ids=missing,
+            )
+
+    @staticmethod
+    def _issue_named(
+        repository: str | None, number: int | None, url: str | None
+    ) -> tuple[str, int]:
+        """The issue an attach names: ``repository`` and ``number``, or its
+        web ``url``."""
+        if url:
+            parsed = parse_issue_url(url)
+            if parsed is None:
+                raise PlanRefusal(422, "invalid_argument", f"{url} is not an issue's web URL")
+            if (repository and repository.casefold() != parsed[0].casefold()) or (
+                number is not None and number != parsed[1]
+            ):
+                raise PlanRefusal(
+                    422, "invalid_argument", "the url and the repository or number disagree"
+                )
+            return parsed
+        if not repository or number is None:
+            raise PlanRefusal(
+                422, "invalid_argument", "name the issue: its repository and number, or its url"
+            )
+        return repository, number
+
+    @staticmethod
+    def _by_issue(plan: Plan, repo: str, number: int) -> PlanNode | None:
+        key = key_of(repo, number)
+        for node in plan.nodes:
+            if node.forge is not None and key_of(node.repository, node.forge.number) == key:
+                return node
+        return None
+
+    def _check_room(self, plan: Plan, parent: PlanNode) -> None:
+        """One more child keeps ``parent`` within ``[planning]``'s cap."""
+        planning = self._config().planning_for(parent.repository)
+        cap, key = (
+            (planning.max_epics_per_initiative, "max_epics_per_initiative")
+            if parent.level == "initiative"
+            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
+        )
+        children = [c for c in plan.children(parent.id) if c.followed]
+        if len(children) + 1 > cap:
+            raise PlanRefusal(
+                409,
+                "too_many_children",
+                f"{parent.title} already has {len(children)} children on the forge; "
+                f"[planning] {key} is {cap}",
+                cap=cap,
+                children=len(children),
+            )
 
     # -- the rules ------------------------------------------------------------
 

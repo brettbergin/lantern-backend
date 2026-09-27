@@ -11,14 +11,18 @@ from typing import Any
 
 from sbxloop.plans.model import ForgeRef, PlanNode
 from sbxloop.plans.render import (
+    drop_reference,
     free_text,
     issue_reference,
     marked,
     marker,
     markers,
+    parse_issue_url,
     parse_kind,
     parse_sections,
     render_body,
+    rewrite_sections,
+    section_blocks,
 )
 from sbxloop.vcs.checklist import ChecklistEntry, render_checklist
 
@@ -179,3 +183,82 @@ class TestReadingABodyBack:
             + marker("plan_other", "node_x")
         )
         assert free_text(body) == "Please do the thing."
+
+
+class TestRewritingSections:
+    """A direct edit rewrites only the sections it changed (#2350)."""
+
+    def _body(self) -> str:
+        node = _task(goal="Keep plans.", acceptance_criteria=("stored", "listed"), context="A db.")
+        rendered = render_body(node)
+        return (
+            "A person's preface.\n\n"
+            + rendered.replace("- [ ] stored", "- [x] stored").replace(
+                "## Context", "## Team notes\n\nours, not sbxloop's\n\n## Context"
+            )
+            + "\n"
+            + render_checklist([ChecklistEntry("o/r#3", "Child")])
+            + "\n"
+        )
+
+    def test_only_the_named_section_changes(self) -> None:
+        body = self._body()
+        edited = _task(goal="Keep plans, and their history.", acceptance_criteria=("x",))
+        out = rewrite_sections(body, section_blocks(edited), ["goal"])
+        assert parse_sections(out)["goal"] == "Keep plans, and their history."
+        # Untouched: the preface, the ticked criterion, the notes, the
+        # context, the marker and the checklist.
+        assert out.startswith("A person's preface.\n\n## Goal\n\nKeep plans, and their history.")
+        for kept in ("- [x] stored", "## Team notes\n\nours, not sbxloop's", "A db."):
+            assert kept in out
+        assert marked(out, "plan_p", "node_t") and "<!-- sbx-plan:children -->" in out
+        assert "Keep plans.\n" not in out
+
+    def test_an_emptied_section_goes_and_a_new_one_lands_in_rendered_order(self) -> None:
+        body = self._body()
+        edited = _task(goal="", non_goals="No UI.", acceptance_criteria=("stored", "listed"))
+        out = rewrite_sections(body, section_blocks(edited), ["goal", "non_goals"])
+        parsed = parse_sections(out)
+        assert "goal" not in parsed and parsed["non_goals"] == "No UI."
+        assert out.index("## Acceptance criteria") < out.index("## Non-goals")
+        assert out.index("## Non-goals") < out.index("<!-- sbx-plan: plan_p/node_t -->")
+
+    def test_a_body_with_none_of_our_sections_gets_them_before_the_marker(self) -> None:
+        body = "Just words.\n\n<!-- sbx-plan: plan_p/node_t -->\n"
+        out = rewrite_sections(body, section_blocks(_task(goal="G")), ["goal"])
+        assert out == "Just words.\n\n## Goal\n\nG\n\n<!-- sbx-plan: plan_p/node_t -->\n"
+
+    def test_a_heading_in_fenced_code_is_not_a_section(self) -> None:
+        body = "## Goal\n\nOld\n\n## Context\n\n```\n## Goal\n```\n"
+        out = rewrite_sections(body, section_blocks(_task(goal="New")), ["goal"])
+        assert out == "## Goal\n\nNew\n\n## Context\n\n```\n## Goal\n```\n"
+
+    def test_whole_text_read_as_the_goal_is_replaced_and_the_marker_kept(self) -> None:
+        body = "Written on the forge.\n\n" + render_checklist([ChecklistEntry("o/r#3", "C")])
+        edited = _task(origin="forge", goal="Written on the forge.", context="More.")
+        out = rewrite_sections(body, section_blocks(edited), ["context"], whole=True)
+        assert parse_sections(out) == {"goal": "Written on the forge.", "context": "More."}
+        assert out.endswith(render_checklist([ChecklistEntry("o/r#3", "C")]) + "\n")
+
+
+class TestDroppingADependency:
+    def test_only_the_items_naming_the_issue_go(self) -> None:
+        body = (
+            "## Goal\n\nG\n\n## Depends on\n\n- #3\n- other/repo#3\n- `O/R#3`\n- #4\n\n"
+            "<!-- sbx-plan: plan_p/node_t -->\n"
+        )
+        out = drop_reference(body, "o/r", "o/r", 3)
+        assert parse_sections(out)["depends_on"] == ("other/repo#3", "#4")
+        assert out.startswith("## Goal\n\nG\n\n") and marked(out, "plan_p", "node_t")
+        assert drop_reference(out, "o/r", "o/r", 99) == out
+
+    def test_a_section_left_empty_goes(self) -> None:
+        body = "## Depends on\n\n- #3\n\n## Non-goals\n\nNo UI.\n"
+        assert drop_reference(body, "o/r", "o/r", 3) == "## Non-goals\n\nNo UI.\n"
+
+
+class TestIssueUrls:
+    def test_both_forges_urls_name_the_repository_and_number(self) -> None:
+        assert parse_issue_url("https://github.com/o/r/issues/12") == ("o/r", 12)
+        assert parse_issue_url("https://gitlab.com/g/sub/p/-/issues/7#note_1") == ("g/sub/p", 7)
+        assert parse_issue_url("https://github.com/o/r/pull/12") is None

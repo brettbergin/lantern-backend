@@ -192,7 +192,9 @@ class TestPublishingOnGithub:
         published = body["plan"]
         assert published["state"] == "published"
         assert {n["state"] for n in published["nodes"]} == {"published"}
-        assert _node(published, "A")["forge"] == {
+        forge = dict(_node(published, "A")["forge"])
+        assert str(forge.pop("version")).startswith("c1-")
+        assert forge == {
             "number": a,
             "url": f"https://github.com/o/r/issues/{a}",
             "state": "open",
