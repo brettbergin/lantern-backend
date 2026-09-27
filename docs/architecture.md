@@ -2541,6 +2541,27 @@ with the reason), and never boots an idle forge sandbox; `reconcile` is the
 sync route's, and `reconcile_plan` is the entry point an epic run's slow
 poll will call (#2347 wires it).
 
+After publish the only writes to a plan's issues are a person's (#2350),
+and `direct.py` holds their forge side; `PlanService.edit_published`,
+`attach` and `detach` hold the rules, take one write per plan at a time
+(never beside a publish or a reconcile of it) and record the result
+against the plan as it then is. An edit names the version of the issue
+the client read — `model.content_version`, a digest of the node's title
+and sections, not the forge's `updated_at`, which comments, labels and
+sbxloop's own checklist writes move — and the issue is read first and
+folded the way a reconcile folds it (`reconcile.as_forge_has_it`), so the
+two never disagree about whether it changed; a mismatch is refused with
+the forge's version and nothing is written. The write rewrites only the
+sections the edit changed (`render.rewrite_sections`), leaving a person's
+text, the other sections, the marker and the checklist as they were.
+Attach links an open issue as a sub-issue or checklist line and adopts it
+with `origin = forge` as a reconcile would; detach unlinks a child without
+closing it and marks the node detached — the same state a reconcile
+leaves — after removing only the `Depends on` items that name it from its
+siblings' issues (`render.drop_reference`). Because each write leaves the
+forge exactly as the node now reads, the next reconcile reports no drift
+for it.
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

@@ -1351,6 +1351,8 @@ class FakeGitlab(GitlabOps):
                     issue["title"] = str(body["title"])
                 if "description" in body:
                     issue["description"] = str(body["description"])
+                if "title" in body or "description" in body:
+                    issue["updated_at"] = self._stamp()
                 return self._issue_payload(issue)
             if tail == "/notes" and method == "POST":
                 assert body is not None

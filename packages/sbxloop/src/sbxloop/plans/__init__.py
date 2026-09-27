@@ -11,8 +11,9 @@ the rows, :mod:`~sbxloop.plans.hierarchy` what each forge can hold,
 :mod:`~sbxloop.plans.render` a node as its issue body (and back),
 :mod:`~sbxloop.plans.publish` the walk that writes a level to the forge,
 :mod:`~sbxloop.plans.reconcile` the reading that folds the forge back in
-after publish, and :mod:`~sbxloop.plans.service` the rules every surface
-goes through.
+after publish, :mod:`~sbxloop.plans.direct` a person's edits, attaches and
+detaches written to the forge after publish, and
+:mod:`~sbxloop.plans.service` the rules every surface goes through.
 """
 
 from __future__ import annotations

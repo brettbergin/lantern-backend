@@ -6,6 +6,8 @@ hidden marker ``<!-- sbx-plan: <plan_id>/<node_id> -->``. The marker is how
 publishing stays idempotent: an issue an interrupted attempt already
 created is found by it, never created twice.
 
+Rewriting a published issue (:func:`rewrite_sections`, #2350) replaces
+only the sections a person edited from the app and keeps everything else.
 Reading a body back (:func:`parse_sections`, #2342) is limited to those
 headings: a section runs from its heading to the next level-two heading, an
 ``sbx-plan`` comment or the end, fenced code is never read as a heading,
@@ -16,7 +18,7 @@ Everything here is pure.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from sbxloop.plans.model import ForgeRef, PlanNode
@@ -55,53 +57,6 @@ def _fence(lines: list[str]) -> str:
     return "\n".join([fence, *lines, fence])
 
 
-def render_body(
-    node: PlanNode,
-    *,
-    dependencies: Mapping[str, tuple[str, ForgeRef]] | None = None,
-) -> str:
-    """The issue body for ``node``: its non-empty sections, then the marker.
-
-    ``dependencies`` maps each ``depends_on`` sibling id to its repository
-    and forge reference, rendered as issue references; a dependency not in
-    it (never the case once its sibling is published) is named by id.
-    """
-    parts: list[str] = []
-
-    def section(heading: str, text: str) -> None:
-        text = text.strip()
-        if text:
-            parts.append(f"## {heading}\n\n{text}")
-
-    section("Goal", node.goal)
-    section("Context", node.context)
-    criteria = [c.strip() for c in node.acceptance_criteria if c.strip()]
-    if criteria:
-        section("Acceptance criteria", "\n".join(f"- [ ] {c}" for c in criteria))
-    if node.level == "task" and node.kind:
-        kind: str = node.kind
-        if node.kind == "workload" and node.workload_profile:
-            kind += f" (workload profile `{node.workload_profile}`)"
-        section("Kind", kind)
-    commands = [c for c in node.verify_commands if c.strip()]
-    if commands:
-        section("Verify commands", _fence(commands))
-    if node.depends_on:
-        known = dependencies or {}
-        refs = []
-        for dep in node.depends_on:
-            if dep in known:
-                repo, forge = known[dep]
-                refs.append(f"- {issue_reference(node.repository, repo, forge.number)}")
-            else:
-                refs.append(f"- `{dep}`")
-        section("Depends on", "\n".join(refs))
-    section("Non-goals", node.non_goals)
-    section("Constraints", node.constraints)
-    parts.append(marker(node.plan_id, node.id))
-    return "\n\n".join(parts) + "\n"
-
-
 #: Our headings, by the section each holds, in the order they are rendered.
 HEADINGS: dict[str, str] = {
     "goal": "Goal",
@@ -113,6 +68,67 @@ HEADINGS: dict[str, str] = {
     "non_goals": "Non-goals",
     "constraints": "Constraints",
 }
+
+
+def section_blocks(
+    node: PlanNode,
+    *,
+    dependencies: Mapping[str, tuple[str, ForgeRef]] | None = None,
+) -> dict[str, str]:
+    """Each non-empty section of ``node`` as it is rendered — its heading,
+    a blank line, its text — by section, in the order they are rendered.
+
+    ``dependencies`` maps each ``depends_on`` sibling id to its repository
+    and forge reference, rendered as issue references; a dependency not in
+    it (never the case once its sibling is published) is named by id.
+    """
+    blocks: dict[str, str] = {}
+
+    def section(key: str, text: str) -> None:
+        text = text.strip()
+        if text:
+            blocks[key] = f"## {HEADINGS[key]}\n\n{text}"
+
+    section("goal", node.goal)
+    section("context", node.context)
+    criteria = [c.strip() for c in node.acceptance_criteria if c.strip()]
+    if criteria:
+        section("acceptance_criteria", "\n".join(f"- [ ] {c}" for c in criteria))
+    if node.level == "task" and node.kind:
+        kind: str = node.kind
+        if node.kind == "workload" and node.workload_profile:
+            kind += f" (workload profile `{node.workload_profile}`)"
+        section("kind", kind)
+    commands = [c for c in node.verify_commands if c.strip()]
+    if commands:
+        section("verify_commands", _fence(commands))
+    if node.depends_on:
+        known = dependencies or {}
+        refs = []
+        for dep in node.depends_on:
+            if dep in known:
+                repo, forge = known[dep]
+                refs.append(f"- {issue_reference(node.repository, repo, forge.number)}")
+            else:
+                refs.append(f"- `{dep}`")
+        section("depends_on", "\n".join(refs))
+    section("non_goals", node.non_goals)
+    section("constraints", node.constraints)
+    return blocks
+
+
+def render_body(
+    node: PlanNode,
+    *,
+    dependencies: Mapping[str, tuple[str, ForgeRef]] | None = None,
+) -> str:
+    """The issue body for ``node``: its non-empty sections (see
+    :func:`section_blocks`), then the marker."""
+    parts = [*section_blocks(node, dependencies=dependencies).values()]
+    parts.append(marker(node.plan_id, node.id))
+    return "\n\n".join(parts) + "\n"
+
+
 _BY_HEADING = {heading.casefold(): key for key, heading in HEADINGS.items()}
 _HEADING = re.compile(r"^##[ \t]+(?P<name>.*?)[ \t#]*$")
 _FENCE_OPEN = re.compile(r"^[ ]{0,3}(?P<fence>`{3,}|~{3,})")
@@ -232,6 +248,137 @@ def free_text(body: str) -> str:
     """``body`` without the ``sbx-plan`` marker and managed children block:
     what a person wrote on an issue sbxloop did not render."""
     return _COMMENT.sub("", _CHILDREN_BLOCK.sub("", body.replace("\r\n", "\n"))).strip()
+
+
+def _trim(lines: list[str]) -> str:
+    """``lines`` without the blank lines around them."""
+    start, end = 0, len(lines)
+    while start < end and not lines[start].strip():
+        start += 1
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return "\n".join(lines[start:end])
+
+
+_KEPT = re.compile(f"{_CHILDREN_BLOCK.pattern}|{_COMMENT.pattern}", re.DOTALL)
+
+
+def rewrite_sections(
+    body: str, blocks: Mapping[str, str], keys: Iterable[str], *, whole: bool = False
+) -> str:
+    """``body`` with the sections ``keys`` names rewritten (#2350): each
+    becomes its block in ``blocks``, or goes when it has none. A section
+    named but absent is placed among ours in rendered order. Everything
+    else keeps its text — a person's writing outside our headings, the
+    sections not named (a ticked criterion stays ticked), the marker and
+    the managed checklist; only the blank lines between parts are
+    normalised. Sections are found the way :func:`section_texts` finds
+    them; every copy of a named heading goes, so the one written is the
+    one read back.
+
+    ``whole`` is an issue adopted from the forge with none of our headings,
+    whose whole text was read as its goal: ``blocks`` then replace all of
+    it, and only the marker and the managed checklist stay."""
+    text = body.replace("\r\n", "\n").replace("\r", "\n")
+    wanted = set(keys)
+    rank = {key: index for index, key in enumerate(HEADINGS)}
+    if whole:
+        kept = [match.group(0) for match in _KEPT.finditer(text)]
+        ordered = [blocks[key] for key in HEADINGS if key in blocks]
+        return "\n\n".join([*ordered, *kept]) + "\n"
+    # Each chunk: the section it holds (``None`` before any heading, ``""``
+    # under a heading or comment that is not ours) and its lines.
+    chunks: list[tuple[str | None, list[str]]] = [(None, [])]
+    fence: str | None = None
+    for line in text.split("\n"):
+        if fence is not None:
+            if _closes(line, fence):
+                fence = None
+        elif (opened := _FENCE_OPEN.match(line)) is not None:
+            fence = opened.group("fence")
+        else:
+            heading = _HEADING.match(line)
+            if heading is not None or line.lstrip().startswith("<!-- sbx-plan"):
+                name = heading.group("name").casefold() if heading is not None else ""
+                chunks.append((_BY_HEADING.get(name, ""), [line]))
+                continue
+        chunks[-1][1].append(line)
+    present = {key for key, _ in chunks if key}
+    absent = [key for key in HEADINGS if key in wanted and key not in present and key in blocks]
+    ours = [index for index, (key, _) in enumerate(chunks) if key]
+    # With none of our sections, new ones go before the marker (or last).
+    anchor = next(
+        (
+            index
+            for index, (key, lines) in enumerate(chunks)
+            if key == "" and lines[0].lstrip().startswith("<!-- sbx-plan")
+        ),
+        len(chunks),
+    )
+    out: list[str] = []
+    written: set[str] = set()
+    for index, (key, lines) in enumerate(chunks):
+        if not ours and index == anchor:
+            out.extend(blocks[a] for a in absent)
+            absent = []
+        if not key:
+            out.append(_trim(lines))
+            continue
+        before = [a for a in absent if rank[a] < rank[key]]
+        out.extend(blocks[a] for a in before)
+        absent = [a for a in absent if a not in before]
+        if key not in wanted:
+            out.append(_trim(lines))
+        elif key not in written:
+            written.add(key)
+            out.append(blocks.get(key, ""))
+        if index == ours[-1]:
+            out.extend(blocks[a] for a in absent)
+            absent = []
+    out.extend(blocks[a] for a in absent)
+    return "\n\n".join(part for part in out if part) + "\n"
+
+
+def drop_reference(body: str, from_repo: str, repo: str, number: int) -> str:
+    """``body`` with every item of its ``Depends on`` section that names
+    issue ``number`` of ``repo`` removed (with the lines that continue it),
+    and the section itself when nothing is left; everything else — the
+    other items as written, included — is unchanged. A body whose section
+    names no such issue comes back as it was."""
+    texts = section_texts(body)
+    if "depends_on" not in texts:
+        return body
+    target = (repo.casefold(), number)
+    kept: list[str] = []
+    dropping = False
+    for line in texts["depends_on"].split("\n"):
+        item = _ITEM.match(line)
+        if item is not None:
+            ref = item.group("text").strip().strip("`").strip()
+            owner, _, digits = ref.rpartition("#")
+            dropping = digits.isdigit() and ((owner or from_repo).casefold(), int(digits)) == target
+        if not dropping:
+            kept.append(line)
+    if len(kept) == len(texts["depends_on"].split("\n")):
+        return body
+    remaining = _trim(kept)
+    blocks = {"depends_on": f"## {HEADINGS['depends_on']}\n\n{remaining}"} if remaining else {}
+    return rewrite_sections(body, blocks, ["depends_on"])
+
+
+_ISSUE_URL = re.compile(
+    r"^https?://[^/\s]+/(?P<repo>[^\s?#]+?)(?:/-)?/issues/(?P<number>\d+)/?(?:[?#]\S*)?$"
+)
+
+
+def parse_issue_url(url: str) -> tuple[str, int] | None:
+    """``(repository, number)`` from an issue's web URL on either forge
+    (``…/owner/name/issues/12``, ``…/group/project/-/issues/12``); ``None``
+    for anything else."""
+    match = _ISSUE_URL.match(url.strip())
+    if match is None:
+        return None
+    return match.group("repo"), int(match.group("number"))
 
 
 def repo_of(row: Mapping[str, Any]) -> str:

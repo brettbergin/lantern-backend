@@ -303,7 +303,9 @@ class TestStates:
         )
         current = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
         assert current["state"] == "published"
-        assert _node(current, "An epic")["forge"] == {
+        forge = dict(_node(current, "An epic")["forge"])
+        assert str(forge.pop("version")).startswith("c1-")
+        assert forge == {
             "number": 12,
             "url": "https://github.com/o/r/issues/12",
             "state": "open",
@@ -317,7 +319,8 @@ class TestStates:
             json={"expected_revision": current["revision"], "title": "renamed"},
             headers=headers,
         )
-        assert refused.status_code == 409 and refused.json()["code"] == "node_published"
+        # Editing a published node writes its issue: drafting alone may not.
+        assert refused.status_code == 403 and refused.json()["capability"] == "plans:publish"
         archived = api.client.delete(
             f"/v1/plans/{plan['id']}",
             params={"expected_revision": current["revision"]},

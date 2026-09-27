@@ -15,6 +15,8 @@ forge) is *detached* — kept, said so, never recreated.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
@@ -61,8 +63,8 @@ class ForgeRef:
     number: int
     url: str
     state: ForgeState | None
-    #: The issue's ``updated_at`` as last read: the version a direct edit
-    #: from the app names.
+    #: The issue's ``updated_at`` as last read (the version a direct edit
+    #: names is :func:`content_version`, not this: see there).
     updated_at: str | None = None
     #: Why the node no longer follows its issue (it left its parent, or the
     #: forge); ``None`` while it does.
@@ -174,3 +176,40 @@ class Plan:
             out.append(child)
             out.extend(self.descendants(child.id))
         return out
+
+
+#: The fields a node's issue holds and a direct edit writes: its title and
+#: the sections under sbxloop's rendered headings.
+CONTENT_FIELDS: tuple[str, ...] = (
+    "title",
+    "goal",
+    "context",
+    "acceptance_criteria",
+    "kind",
+    "workload_profile",
+    "verify_commands",
+    "depends_on",
+    "non_goals",
+    "constraints",
+)
+
+
+def content(node: PlanNode) -> dict[str, Any]:
+    """The node's title and sections, JSON-shaped."""
+    return {
+        key: list(value) if isinstance(value, tuple) else value
+        for key in CONTENT_FIELDS
+        for value in (getattr(node, key),)
+    }
+
+
+def content_version(node: PlanNode) -> str:
+    """The version of a published node's issue a direct edit names (#2350):
+    a digest of the title and sections as the node holds them — which is
+    the issue as sbxloop last read or wrote it. The forge's ``updated_at``
+    is not used: a comment, a label or sbxloop's own checklist and
+    sub-issue writes move it, and it covers text a direct edit never
+    writes, so it would refuse edits nothing stood in the way of. The
+    digest covers exactly what an edit overwrites."""
+    raw = json.dumps(content(node), sort_keys=True, separators=(",", ":"))
+    return "c1-" + hashlib.sha256(raw.encode()).hexdigest()[:32]

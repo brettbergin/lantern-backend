@@ -8,7 +8,10 @@ stale_revision`` with the plan's current revision.
 
 After publish the forge wins (#2342): reading a plan folds in what changed
 on the forge when its last reading is stale, ``POST .../sync`` does it now,
-and ``POST .../drift/ack`` marks the forge's changes seen.
+and ``POST .../drift/ack`` marks the forge's changes seen. A person's direct
+writes (#2350) need ``plans:publish``: ``PATCH`` of a published node's
+sections writes its issue, refused when the issue changed since it was
+read; ``POST .../attach`` and ``.../detach`` link and unlink a child.
 """
 
 from __future__ import annotations
@@ -25,8 +28,11 @@ from sbxloop.api.models import rfc3339
 from sbxloop.api.pagination import Page
 from sbxloop.api.plan_schemas import (
     PlanApprove,
+    PlanAttach,
+    PlanAttached,
     PlanCreate,
     PlanDeleted,
+    PlanDetach,
     PlanDrift,
     PlanDriftAck,
     PlanForge,
@@ -48,6 +54,7 @@ from sbxloop.daemon.controls.operations import (
     OperationStore,
 )
 from sbxloop.plans import Plan, PlanNode, PlanRefusal
+from sbxloop.plans.model import content_version
 from sbxloop.plans.reconcile import Reconciliation
 from sbxloop.plans.service import SECTIONS
 
@@ -101,6 +108,7 @@ def node_out(node: PlanNode) -> PlanNodeOut:
                 number=node.forge.number,
                 url=node.forge.url,
                 state=node.forge.state,
+                version=content_version(node) if node.state == "published" else None,
                 updated_at=node.forge.updated_at,
                 detached=node.forge.detached,
                 marker_missing=node.forge.marker_missing,
@@ -399,7 +407,14 @@ async def add_node(
     "/{plan_id}/nodes/{node_id}",
     response_model=PlanOut,
     summary="Edit or move a node",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={
+        403: _PROBLEM,
+        404: _PROBLEM,
+        409: _PROBLEM,
+        422: _PROBLEM,
+        502: _PROBLEM,
+        503: _PROBLEM,
+    },
 )
 async def update_node(
     plan_id: str,
@@ -409,18 +424,135 @@ async def update_node(
     auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
 ) -> PlanOut:
     """Edit a node's sections or move it among its siblings. Editing a
-    proposed or approved node makes it a draft again; a published node is
-    ``409 node_published``."""
-    try:
-        plan = await ctx.call(
-            ctx.plans.update_node,
+    proposed or approved node makes it a draft again.
+
+    Editing a published node's sections writes them to its issue at once
+    and needs ``plans:publish`` (``403 forbidden`` naming it otherwise):
+    only the title (when changed) and the sections edited are rewritten —
+    a person's text outside the rendered headings, the other sections, the
+    marker and the managed checklist stay. ``forge_version`` names the
+    version of the issue the client read; the issue is read first and, when
+    it changed on the forge since, the edit is ``409 forge_changed`` with
+    the forge's version in ``forge_version`` and ``current`` (its title and
+    sections as read) and nothing is written. The edit is recorded as
+    ``plan.node.changed`` with ``change: issue_edited``."""
+    sections = _sections(body)
+    actor = _actor(auth)
+
+    def run() -> Plan:
+        node = ctx.plans.get(plan_id).node(node_id)
+        if node is None or node.state != "published" or not sections:
+            return ctx.plans.update_node(
+                plan_id,
+                node_id,
+                expected_revision=body.expected_revision,
+                sections=sections,
+                position=body.position,
+                now=ctx.clock(),
+                actor=actor,
+            )
+        if not auth.principal.can("plans:publish"):
+            raise PlanRefusal(
+                403,
+                "forbidden",
+                f"{auth.principal.id} lacks plans:publish: an edit of a published node "
+                "writes its issue",
+                capability="plans:publish",
+            )
+        return ctx.plans.edit_published(
             plan_id,
             node_id,
             expected_revision=body.expected_revision,
-            sections=_sections(body),
+            forge_version=body.forge_version,
+            sections=sections,
             position=body.position,
-            now=ctx.clock(),
+            actor=actor,
+            **_forge_args(ctx),
+        )
+
+    try:
+        plan = await ctx.call(run)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    ctx.hub.notify()
+    return plan_out(plan)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/attach",
+    response_model=PlanAttached,
+    summary="Attach an existing issue as a child",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 502: _PROBLEM, 503: _PROBLEM},
+)
+async def attach_issue(
+    plan_id: str,
+    node_id: str,
+    body: PlanAttach,
+    response: Response,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> PlanAttached:
+    """Link an existing open issue — ``repository`` and ``number``, or its
+    ``url`` — as a child one level under the node: a sub-issue on GitHub, a
+    line in the parent's managed checklist on GitLab, and its level label
+    (never the trigger or the workload label). It is recorded ``published``
+    with ``origin: forge`` and its sections read from its body; the
+    ``Location`` header names its node. A closed issue (``409
+    issue_closed``), a pull request (``422 not_an_issue``), an issue
+    already in this plan (``409 already_in_plan``) or another (``409
+    in_another_plan``), one already under another parent on GitHub (``409
+    already_has_parent``), a task outside its epic's repository (``422``)
+    and a parent at its cap (``409 too_many_children``) are refused."""
+    try:
+        attached = await ctx.call(
+            ctx.plans.attach,
+            plan_id,
+            node_id,
+            expected_revision=body.expected_revision,
+            repository=body.repository,
+            number=body.number,
+            url=body.url,
             actor=_actor(auth),
+            **_forge_args(ctx),
+        )
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{attached.node_id}"
+    ctx.hub.notify()
+    return PlanAttached(
+        plan=plan_out(attached.plan),
+        node_id=attached.node_id,
+        linked=attached.linked,
+        reason=attached.reason,
+    )
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/detach",
+    response_model=PlanOut,
+    summary="Detach a child from its parent",
+    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 502: _PROBLEM, 503: _PROBLEM},
+)
+async def detach_issue(
+    plan_id: str,
+    node_id: str,
+    body: PlanDetach,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
+) -> PlanOut:
+    """Unlink a published child from its parent on the forge — its
+    sub-issue link and any checklist line — without closing its issue. The
+    node stays in the plan with ``forge.detached`` saying a person did it,
+    is no longer followed (its subtree is left as it was), and its siblings
+    stop depending on it."""
+    try:
+        plan = await ctx.call(
+            ctx.plans.detach,
+            plan_id,
+            node_id,
+            expected_revision=body.expected_revision,
+            actor=_actor(auth),
+            **_forge_args(ctx),
         )
     except PlanRefusal as exc:
         raise _problem(exc) from exc
@@ -441,7 +573,8 @@ async def remove_node(
     ctx: ApiContext = Depends(get_ctx),  # noqa: B008
     auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
 ) -> PlanOut:
-    """Remove an unpublished node and everything under it."""
+    """Remove an unpublished node and everything under it; a published one
+    is ``409 node_published`` (detach it instead)."""
     try:
         plan = await ctx.call(
             ctx.plans.remove_node,

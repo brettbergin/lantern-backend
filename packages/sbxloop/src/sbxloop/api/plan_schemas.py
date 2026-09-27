@@ -12,15 +12,20 @@ from sbxloop.daemon.controls.principal import WORKSPACE_ID
 
 class PlanForge(ApiModel):
     """The issue a published node became, as the forge last said.
-    ``updated_at`` is the issue's version as last read. ``detached`` says
-    why the node no longer follows its issue (it left its parent, or the
-    forge); ``marker_missing`` that its body lost the ``sbx-plan`` marker;
-    ``checklist_error`` why its managed children checklist could not be
-    read. None of these is repaired by sbxloop."""
+    ``version`` is the version of the issue the node holds — a digest of its
+    title and sections as sbxloop last read or wrote them — which an edit of
+    the node names as ``forge_version``. ``updated_at`` is the forge's own
+    timestamp as last read (informational: a comment or a label moves it).
+    ``detached`` says why the node no longer follows its issue (it left its
+    parent or the forge, or a person detached it); ``marker_missing`` that
+    its body lost the ``sbx-plan`` marker; ``checklist_error`` why its
+    managed children checklist could not be read. None of these is
+    repaired by sbxloop."""
 
     number: int
     url: str
     state: Literal["open", "closed"] | None = None
+    version: str | None = None
     updated_at: str | None = None
     detached: str | None = None
     marker_missing: bool = False
@@ -166,10 +171,43 @@ class PlanNodeCreate(TaskSections):
 
 
 class PlanNodeUpdate(TaskSections):
-    """Edit a node's sections, or move it among its siblings."""
+    """Edit a node's sections, or move it among its siblings. An edit of a
+    published node's sections writes its issue (``plans:publish``) and
+    names ``forge_version``: the version of the issue the client read — the
+    node's ``forge.version``, or the one a ``409 forge_changed`` answered
+    with."""
 
     expected_revision: int = Field(ge=1)
     position: int | None = Field(default=None, ge=0)
+    forge_version: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class PlanAttach(ApiModel):
+    """Attach an existing open issue as a child of the node: its
+    ``repository`` and ``number``, or its web ``url``."""
+
+    expected_revision: int = Field(ge=1)
+    repository: str | None = Field(default=None, min_length=3, max_length=200)
+    number: int | None = Field(default=None, ge=1)
+    url: str | None = Field(default=None, min_length=8, max_length=500)
+
+
+class PlanAttached(ApiModel):
+    """The plan as it now is and the node that follows the attached issue.
+    ``linked`` is how it sits under its parent: a ``native`` sub-issue or a
+    ``checklist`` line; ``reason`` says why a native link became a
+    checklist line."""
+
+    plan: PlanOut
+    node_id: str
+    linked: Literal["native", "checklist"]
+    reason: str | None = None
+
+
+class PlanDetach(ApiModel):
+    """Unlink a published child from its parent; its issue stays open."""
+
+    expected_revision: int = Field(ge=1)
 
 
 class PlanDeleted(ApiModel):

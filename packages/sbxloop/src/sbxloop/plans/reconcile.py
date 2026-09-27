@@ -145,7 +145,7 @@ class Snapshot:
     errors: list[str] = field(default_factory=list)
 
 
-def _seen(row: Mapping[str, Any], repo: str, number: int) -> Seen:
+def seen_of(row: Mapping[str, Any], repo: str, number: int) -> Seen:
     state: ForgeState = "closed" if str(row.get("state") or "") == "closed" else "open"
     updated = row.get("updated_at")
     return Seen(
@@ -175,14 +175,14 @@ class _Reader:
 
     def issue(self, repo: str, number: int, payload: Mapping[str, Any] | None) -> Read:
         if payload is not None and "body" in payload and "title" in payload:
-            return Read(seen=_seen(payload, repo, number))
+            return Read(seen=seen_of(payload, repo, number))
         try:
             row = self.ops.issue_get(repo, number)
         except SbxloopError as exc:
             if getattr(exc, "http_status", None) in GONE:
                 return Read()
             return Read(error=f"could not read {repo}#{number}: {_say(exc)}")
-        return Read(seen=_seen(row, repo, number))
+        return Read(seen=seen_of(row, repo, number))
 
     def children(
         self, key: Key, seen: Seen
@@ -650,6 +650,17 @@ class _Fold:
 
 def _detached_or_none(node: PlanNode) -> bool:
     return node.forge is None or node.forge.detached is not None
+
+
+def as_forge_has_it(plan: Plan, node: PlanNode, *, title: str, body: str) -> PlanNode:
+    """``node`` with the title and sections its issue has on the forge —
+    ``title`` and ``body`` — read exactly the way a reconcile folds them in,
+    so the two never disagree about whether the issue changed (#2350).
+    Pure; ``node`` need not be in ``plan`` yet (an issue being attached)."""
+    folding = _Fold(plan, Snapshot(), 0.0)
+    edited = replace(node, **folding.edited_sections(node, body))
+    title = " ".join(title.split())
+    return replace(edited, title=title) if title else edited
 
 
 def fold(plan: Plan, snap: Snapshot, *, now: float) -> Folded:

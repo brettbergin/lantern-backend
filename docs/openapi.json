@@ -5656,6 +5656,99 @@
         "title": "PlanApprove",
         "type": "object"
       },
+      "PlanAttach": {
+        "additionalProperties": false,
+        "description": "Attach an existing open issue as a child of the node: its\n``repository`` and ``number``, or its web ``url``.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "number": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Number"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 3,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanAttach",
+        "type": "object"
+      },
+      "PlanAttached": {
+        "additionalProperties": false,
+        "description": "The plan as it now is and the node that follows the attached issue.\n``linked`` is how it sits under its parent: a ``native`` sub-issue or a\n``checklist`` line; ``reason`` says why a native link became a\nchecklist line.",
+        "properties": {
+          "linked": {
+            "enum": [
+              "native",
+              "checklist"
+            ],
+            "title": "Linked",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "plan",
+          "node_id",
+          "linked"
+        ],
+        "title": "PlanAttached",
+        "type": "object"
+      },
       "PlanCreate": {
         "additionalProperties": false,
         "description": "A new draft plan from the form: an initiative (its home repository)\nor a lone epic (the repository it targets).",
@@ -5775,6 +5868,22 @@
         "title": "PlanDeleted",
         "type": "object"
       },
+      "PlanDetach": {
+        "additionalProperties": false,
+        "description": "Unlink a published child from its parent; its issue stays open.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanDetach",
+        "type": "object"
+      },
       "PlanDrift": {
         "additionalProperties": false,
         "description": "One change the forge made to a node that nobody has marked seen.\n``title``, ``sections`` and ``state`` carry ``before`` (as a person\nlast saw it) and ``after`` (as the forge has it now), keyed by field,\nfor a diff; ``adopted``, ``moved`` and ``reattached`` carry the parent\nin ``after`` (and ``before``); ``detached``, ``marker_removed`` and\n``checklist_mangled`` say why in ``reason``.",
@@ -5860,7 +5969,7 @@
       },
       "PlanForge": {
         "additionalProperties": false,
-        "description": "The issue a published node became, as the forge last said.\n``updated_at`` is the issue's version as last read. ``detached`` says\nwhy the node no longer follows its issue (it left its parent, or the\nforge); ``marker_missing`` that its body lost the ``sbx-plan`` marker;\n``checklist_error`` why its managed children checklist could not be\nread. None of these is repaired by sbxloop.",
+        "description": "The issue a published node became, as the forge last said.\n``version`` is the version of the issue the node holds \u2014 a digest of its\ntitle and sections as sbxloop last read or wrote them \u2014 which an edit of\nthe node names as ``forge_version``. ``updated_at`` is the forge's own\ntimestamp as last read (informational: a comment or a label moves it).\n``detached`` says why the node no longer follows its issue (it left its\nparent or the forge, or a person detached it); ``marker_missing`` that\nits body lost the ``sbx-plan`` marker; ``checklist_error`` why its\nmanaged children checklist could not be read. None of these is\nrepaired by sbxloop.",
         "properties": {
           "checklist_error": {
             "anyOf": [
@@ -5922,6 +6031,17 @@
           "url": {
             "title": "Url",
             "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
           }
         },
         "required": [
@@ -6273,7 +6393,7 @@
       },
       "PlanNodeUpdate": {
         "additionalProperties": false,
-        "description": "Edit a node's sections, or move it among its siblings.",
+        "description": "Edit a node's sections, or move it among its siblings. An edit of a\npublished node's sections writes its issue (``plans:publish``) and\nnames ``forge_version``: the version of the issue the client read \u2014 the\nnode's ``forge.version``, or the one a ``409 forge_changed`` answered\nwith.",
         "properties": {
           "acceptance_criteria": {
             "anyOf": [
@@ -6333,6 +6453,19 @@
             "minimum": 1.0,
             "title": "Expected Revision",
             "type": "integer"
+          },
+          "forge_version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forge Version"
           },
           "goal": {
             "anyOf": [
@@ -14999,7 +15132,7 @@
     },
     "/v1/plans/{plan_id}/nodes/{node_id}": {
       "delete": {
-        "description": "Remove an unpublished node and everything under it.",
+        "description": "Remove an unpublished node and everything under it; a published one\nis ``409 node_published`` (detach it instead).",
         "operationId": "remove_node_v1_plans__plan_id__nodes__node_id__delete",
         "parameters": [
           {
@@ -15058,7 +15191,7 @@
         ]
       },
       "patch": {
-        "description": "Edit a node's sections or move it among its siblings. Editing a\nproposed or approved node makes it a draft again; a published node is\n``409 node_published``.",
+        "description": "Edit a node's sections or move it among its siblings. Editing a\nproposed or approved node makes it a draft again.\n\nEditing a published node's sections writes them to its issue at once\nand needs ``plans:publish`` (``403 forbidden`` naming it otherwise):\nonly the title (when changed) and the sections edited are rewritten \u2014\na person's text outside the rendered headings, the other sections, the\nmarker and the managed checklist stay. ``forge_version`` names the\nversion of the issue the client read; the issue is read first and, when\nit changed on the forge since, the edit is ``409 forge_changed`` with\nthe forge's version in ``forge_version`` and ``current`` (its title and\nsections as read) and nothing is written. The edit is recorded as\n``plan.node.changed`` with ``change: issue_edited``.",
         "operationId": "update_node_v1_plans__plan_id__nodes__node_id__patch",
         "parameters": [
           {
@@ -15101,6 +15234,9 @@
             },
             "description": "Successful Response"
           },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
+          },
           "404": {
             "description": "A refusal, as `application/problem+json`."
           },
@@ -15108,6 +15244,12 @@
             "description": "A refusal, as `application/problem+json`."
           },
           "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "502": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
             "description": "A refusal, as `application/problem+json`."
           }
         },
@@ -15173,6 +15315,140 @@
           }
         },
         "summary": "Approve a node's children",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/attach": {
+      "post": {
+        "description": "Link an existing open issue \u2014 ``repository`` and ``number``, or its\n``url`` \u2014 as a child one level under the node: a sub-issue on GitHub, a\nline in the parent's managed checklist on GitLab, and its level label\n(never the trigger or the workload label). It is recorded ``published``\nwith ``origin: forge`` and its sections read from its body; the\n``Location`` header names its node. A closed issue (``409\nissue_closed``), a pull request (``422 not_an_issue``), an issue\nalready in this plan (``409 already_in_plan``) or another (``409\nin_another_plan``), one already under another parent on GitHub (``409\nalready_has_parent``), a task outside its epic's repository (``422``)\nand a parent at its cap (``409 too_many_children``) are refused.",
+        "operationId": "attach_issue_v1_plans__plan_id__nodes__node_id__attach_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanAttach"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanAttached"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "502": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Attach an existing issue as a child",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/nodes/{node_id}/detach": {
+      "post": {
+        "description": "Unlink a published child from its parent on the forge \u2014 its\nsub-issue link and any checklist line \u2014 without closing its issue. The\nnode stays in the plan with ``forge.detached`` saying a person did it,\nis no longer followed (its subtree is left as it was), and its siblings\nstop depending on it.",
+        "operationId": "detach_issue_v1_plans__plan_id__nodes__node_id__detach_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDetach"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "502": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Detach a child from its parent",
         "tags": [
           "plans"
         ]
