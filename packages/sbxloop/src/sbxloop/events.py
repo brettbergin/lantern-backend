@@ -245,6 +245,11 @@ class HostEventTypes:
     # `publish = "hold"` (#760): judged and persisted, nothing published;
     # a person releases it (`profile`, `sinks` the plan declared).
     RUN_HELD = "run.held"
+    # A plan run parked on its clarifying questions (#2345): the questions
+    # are on the plan record and the run waits for a person to answer or
+    # skip them (`plan_id`, `node_id`, `questions` in the chat choice
+    # question's shape: `id`, `prompt`, `choices`, `allow_free_text`).
+    RUN_AWAITING_ANSWERS = "run.awaiting_answers"
     # Follow-up issues filed (or listed on the PR) after the merge (#517):
     # `pr`, `mode`, `filed` [{number, url, title}], `listed` (titles).
     RUN_FOLLOWUPS = "run.followups"

@@ -618,3 +618,7 @@ class PlanNodeRow(Base):
     forge_checklist_error: Mapped[str | None] = mapped_column(Text)
     # The forge's changes nobody has marked seen, as a JSON array.
     drift_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'[]'"))
+    # The node's latest clarifying questions and a person's answers, as
+    # JSON (revision 0045): which run asked, what, and what was answered or
+    # skipped. NULL until a breakdown of the node asks something.
+    generation_json: Mapped[str | None] = mapped_column(Text)

@@ -224,9 +224,11 @@ It is grouped by **what you would do about it**, in the order a person
 triages. A stat strip leads: `7 queued · oldest 2d · median wait 12m · 2 waiting on you` — the age of what is waiting *now*, since a work item
 carries no dispatch timestamp for a queued-to-started time.
 
-- **waiting on you** — `gated`, `awaiting_review`, `paused_review`, each
-  row naming what holds it (`merge #170`, `review #182`) and the key that
-  clears it. These are the rows the loop is blocked on.
+- **waiting on you** — `gated`, `awaiting_review`, `paused_review` and
+  `awaiting_answers` (a plan run's clarifying questions, answered in the
+  plan or the run's thread), each row naming what holds it (`merge #170`,
+  `review #182`) and the key that clears it. These are the rows the loop is
+  blocked on.
 - **running now** — the pinned run and how long since it moved.
 - **queued next** — the daemon's own dispatch order, numbered, with the
   item's own reason: `now`, `resume, first`, `retry 14:20`, `backoff 3 · 14:20`.

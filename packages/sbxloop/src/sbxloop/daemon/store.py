@@ -2418,13 +2418,14 @@ class DaemonStore:
 
     def plan_generations(self, plan_node_id: str) -> list[WorkItem]:
         """The ``plan`` items proposing ``plan_node_id``'s next level that
-        are still queued or running, oldest first: what keeps a second
-        breakdown of the same node from starting beside the first."""
+        are still queued, running or waiting on a person's answers, oldest
+        first: what keeps a second breakdown of the same node from starting
+        beside the first, and what an answer resumes."""
         stmt = (
             select(WorkItemRow)
             .where(
                 WorkItemRow.plan_node_id == plan_node_id,
-                WorkItemRow.state.in_(("queued", "running")),
+                WorkItemRow.state.in_(("queued", "running", "awaiting_answers")),
             )
             .order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
         )
@@ -2467,7 +2468,7 @@ class DaemonStore:
 
     def abandon(self, item_id: str, reason: str, now: float) -> WorkItem:
         """Operator abandon: queued/running/blocked/gated/awaiting_review/
-        paused_review → failed. ``run_id`` is
+        paused_review/awaiting_answers → failed. ``run_id`` is
         kept so the ledger and ``sbxloop logs`` still tie the item to the run
         that made the operator give up on it; the loop treats "abandoned
         while pinned to my run" as its cue to cancel that run. The source is
@@ -2477,7 +2478,15 @@ class DaemonStore:
         return self._transition(
             item_id,
             now,
-            ("queued", "running", "blocked", "gated", "awaiting_review", "paused_review"),
+            (
+                "queued",
+                "running",
+                "blocked",
+                "gated",
+                "awaiting_review",
+                "paused_review",
+                "awaiting_answers",
+            ),
             lambda item: f"{item_id} is already {item.state}",
             state="failed",
             last_error=reason[:2000],
@@ -2765,6 +2774,31 @@ class DaemonStore:
             state="queued",
             not_before=None,
             last_error=reason[:2000],
+        )
+
+    def mark_awaiting_answers(self, item_id: str, now: float) -> None:
+        """A plan run parked on its clarifying questions (#2345): a waiting
+        state like ``awaiting_review`` — run pinned, invisible to dispatch —
+        ended by a person's answers or skip (``resume_for_answers``) or by
+        ``abandon``. The source hears nothing: the breakdown is in hand."""
+        self._update(item_id, now, state="awaiting_answers", last_error=None, not_before=None)
+
+    def resume_for_answers(self, item_id: str, run_id: str, now: float, by: str) -> WorkItem:
+        """A person answered (or skipped) a parked plan run's questions
+        (#2345): the item goes back to the queue with its run *pinned* and
+        no backoff, so the next tick resumes it — the run finds its
+        questions settled and proposes. Same attempt, as a release is."""
+        item = self._require(item_id)
+        if item.run_id != run_id:
+            raise ValueError(f"{item_id} is not pinned to run {run_id} (its run is {item.run_id})")
+        return self._transition(
+            item_id,
+            now,
+            ("awaiting_answers",),
+            lambda it: f"{item_id} is {it.state}; only an item awaiting answers resumes for them",
+            state="queued",
+            not_before=None,
+            last_error=f"answered by {by}"[:2000],
         )
 
     def resume_for_release(self, item_id: str, run_id: str, now: float, by: str) -> WorkItem:

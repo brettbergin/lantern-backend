@@ -627,3 +627,32 @@ def test_a_resumed_run_keeps_its_count_and_its_cap(tmp_path: Any) -> None:
         "Finished task 1 of 5: Step 1",
         "Finished task 2 of 5: Step 2",
     ]
+
+
+def test_a_plan_runs_questions_are_told_once_and_its_park_is_not_an_end() -> None:
+    """A plan run that asks before it proposes (#2345) says what it asks,
+    with the choices, as a notice from the lead — the channel's clients
+    answer from the plan — and its park is not reported as the run ending."""
+    clock = Clock()
+    chronicle, poster = _chronicle(clock, config=_config(chronicle="quiet"))
+    asked = Event.now(
+        HostEventTypes.RUN_AWAITING_ANSWERS,
+        RUN,
+        plan_id="plan_1",
+        node_id="node_1",
+        questions=[
+            {
+                "id": "q1",
+                "prompt": "Which flour?",
+                "choices": [{"value": "rye", "label": "Rye"}, {"value": "spelt", "label": "Spelt"}],
+            }
+        ],
+    )
+    chronicle.on_event(asked)
+    chronicle.on_event(asked)
+    chronicle.on_event(Event.now(HostEventTypes.RUN_END, RUN, state="awaiting_answers"))
+
+    (post,) = poster.posts
+    assert (post.kind, post.author_agent) == ("notice", "chef")
+    assert "Before I propose, I have 1 question" in post.text
+    assert "1. Which flour? (Rye / Spelt)" in post.text

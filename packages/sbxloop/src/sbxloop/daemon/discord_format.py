@@ -100,6 +100,7 @@ STATE_MARKER = {
     "gated": "⏸",
     "awaiting_review": "👀",
     "held": "⏸",
+    "awaiting_answers": "❓",
 }
 STATE_COLOR = {
     "merged": COLOR_OK,
@@ -110,6 +111,7 @@ STATE_COLOR = {
     "gated": COLOR_WARN,
     "awaiting_review": COLOR_WARN,
     "held": COLOR_WARN,
+    "awaiting_answers": COLOR_WARN,
 }
 # How a post-build stage reads in the chronology when the run enters it.
 STAGE_MARKER = {
@@ -2323,6 +2325,7 @@ ITEM_STATE_MARKER = {
     "gated": "⏸",
     "awaiting_review": "👀",
     "paused_review": "💤",
+    "awaiting_answers": "❓",
 }
 
 

@@ -2,9 +2,11 @@
 
 A plan run's promise is narrow: one sandbox, a checkout the host cut, one
 planner turn (two when the first answer is sent back), and a delivery to the
-plan record — never a github sandbox, never a forge write. This test drives
-the canonical plan scripts (a proposal delivered, a proposal invalid twice)
-and compares the ordered trail each leaves against
+plan record — never a github sandbox, never a forge write. A run allowed to
+ask first adds one clarifying turn over the same checkout, and parks on its
+questions holding nothing. This test drives the canonical plan scripts (a
+proposal delivered, a proposal invalid twice, a clarifying turn that is
+ready, one that parks on its questions) and compares the ordered trail each leaves against
 ``tests/fixtures/plan_run_trail/<scenario>.json``, the way
 ``test_code_run_trail.py`` holds a code run and ``test_tool_run_trail.py`` a
 tool run.
@@ -27,7 +29,17 @@ from tests.conftest import FakeSbx
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_code_run_trail import trail
 from tests.unit.test_engine import Harness
-from tests.unit.test_engine_plan import REPO, RecordingDesk, answer, code_task, engine
+from tests.unit.test_engine_plan import (
+    READY,
+    REPO,
+    RecordingDesk,
+    answer,
+    asks,
+    code_task,
+    engine,
+    epic_brief,
+    question,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "plan_run_trail"
 
@@ -58,9 +70,27 @@ def scenario_invalid_twice(harness: Harness) -> str:
     return result.run_id
 
 
+def scenario_clarified_ready(harness: Harness) -> str:
+    harness.script([READY, answer(code_task("c1"))])
+    desk = RecordingDesk(plan_brief=epic_brief(max_questions=2))
+    result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+    assert result.state == "completed", result.reason
+    return result.run_id
+
+
+def scenario_parked_for_answers(harness: Harness) -> str:
+    harness.script([asks(question("fmt", "Which formats?", "csv", "pdf"))])
+    desk = RecordingDesk(plan_brief=epic_brief(max_questions=2))
+    result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+    assert result.state == "awaiting_answers", result.reason
+    return result.run_id
+
+
 SCENARIOS = {
     "proposal_delivered": scenario_proposal_delivered,
     "invalid_twice": scenario_invalid_twice,
+    "clarified_ready": scenario_clarified_ready,
+    "parked_for_answers": scenario_parked_for_answers,
 }
 
 
@@ -97,4 +127,4 @@ def test_no_forge_write_appears_in_any_trail() -> None:
         assert not any(t.startswith(("run.deliver", "land.", "review.", "ci.")) for t in types)
         roles = {entry.get("role") for entry in recorded["sandbox_events"]}
         assert "github" not in roles, (name, roles)
-        assert "proposing" in recorded["states"]
+        assert "proposing" in recorded["states"] or "awaiting_answers" in recorded["states"]

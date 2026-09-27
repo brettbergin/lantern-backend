@@ -1162,11 +1162,15 @@ task's `needs` declared by name — "never its value" — and the criteria as
 mechanical evidence; a failing verdict must "quote the criterion"). They
 are sent as the whole system prompt rather than appended to the coding
 agent's preset (`JobRequest.system_preset = False`), so the operator and
-the judge present as themselves. A plan run renders plan_propose.md as the
-`plan` phase (the planner's persona and `[agent.models] plan`): one level of
-a plan node, read-only ("changes nothing", "writes nothing to the forge"),
-each task sized to "one run" and its verify commands authored under
-decompose.md's rules ("workspace root", "no shell variables"). The one ecosystem-specific example — the config-override that decompose.md warns
+the judge present as themselves. A plan run renders plan_clarify.md and
+plan_propose.md as the `plan` phase (the planner's persona and
+`[agent.models] plan`): first `ready` or at most `[planning] max_questions`
+questions in the chat choice question's shape, asking only what "would
+change what you propose"; then one level of a plan node, read-only
+("changes nothing", "writes nothing to the forge"), a person's answers
+followed as decisions, each task sized to "one run" and its verify commands
+authored under decompose.md's rules ("workspace root", "no shell
+variables"). The one ecosystem-specific example — the config-override that decompose.md warns
 against and review.md's wrong-check section describes — is rendered per run:
 `verifylint.config_override_example` picks the story for the first resolved
 language that has one (mypy `files`; `tsc` ignoring `tsconfig.json` when
@@ -1615,13 +1619,18 @@ the cap leaves, the children that stay, the configured workload profiles,
 the repositories to read) and the record it hands the validated proposal to.
 The daemon's desk is `plans/generation.py` over the plan service, built per
 item in `_launch`; `start(kind="plan")` without one is refused. The run
-seeds one task, `propose`, and walks one stage, `proposing`:
+seeds one task, `propose`, and walks `clarifying` → (`awaiting_answers`) →
+`proposing` (`PLAN_STAGES`, #2345):
 
 ```
 provision (agent box only, data dir mounted, no toolchains)
-  ─▶ PROPOSING: brief ─▶ cut checkouts on the host ─▶ steer boundary
-       ─▶ plan_propose (read-only, validated, one retry) ─▶ persist on the task
-       ─▶ deliver to the plan record ─▶ completed
+  ─▶ CLARIFYING: brief ─▶ cut checkouts on the host ─▶ steer boundary
+       ─▶ plan_clarify (read-only, validated, one retry)
+       ├─ ready ──────────────────────────────────────────────┐
+       └─ questions ─▶ desk.ask (on the plan node) ─▶ AWAITING_ANSWERS (parked)
+                         … a person answers or skips ─▶ resume ┤
+  ─▶ PROPOSING: brief (answers in it) ─▶ plan_propose (read-only, validated,
+       one retry) ─▶ persist on the task ─▶ deliver to the plan record ─▶ completed
 ```
 
 - **Read-only, no credential.** Provisioning treats it like a workload or
@@ -1656,11 +1665,52 @@ provision (agent box only, data dir mounted, no toolchains)
   `plan.generation.failed` when the run ends any other way (a provider hold
   is a pause, not an end), each scoped to the run, its item and its
   channel.
-- **The clarify seam.** The clarifying turn and the wait for a person's
-  answers go in front of `proposing` as stages of their own (`PLAN_STAGES`),
-  reading the same brief; `_plan_stages` takes the stage a resume re-enters
-  at, and `plan_propose` is rendered as the `plan` phase that
-  `plan_clarify` will share.
+- **Clarifying, and the park.** With `[planning] max_questions` above 0
+  (the repository's own under `[vcs.repos.planning]`, carried on the
+  brief), the planner's first turn reads the same checkout and answers
+  `PlanClarification`: `ready`, or up to that many questions in the chat
+  choice question's shape (`daemon/chat_choices.py`: two to five choices,
+  free text unless ruled out), held to the cap with the same one retry.
+  Questions go to the plan through `PlanDesk.ask` — the node's
+  `generation` (revision 0045: the run that asked, the questions, the
+  answers, `awaiting_answers` / `answered` / `skipped` / `withdrawn`), with
+  `plan.generation.questions` in the same write — and the run ends
+  `awaiting_answers`, a park shaped like `held`: terminal for liveness and
+  resumable, the pair torn down, no sandbox kept, nothing spent while it
+  waits. The daemon settles it (`_settle_awaiting_answers`): the item goes
+  `awaiting_answers` (invisible to dispatch, like `awaiting_review`), the
+  breaker resets, and `run.awaiting_answers` asks the requester and the
+  run's watchers. An answer is `DaemonLoop.answer_plan_questions`, the one
+  path the API route and chat share: `PlanService.answer_questions` holds
+  each answer to its question (a choice it offers, free text only where
+  allowed) and writes `plan.generation.answered` once the questions are
+  settled (the route's submit, a skip, or chat's last open question
+  answered), and `resume_for_answers` puts the item back in the queue with
+  its run pinned. The next tick resumes it outside the crash-resume budget
+  (the run's own state says it is not an interruption); `_stage_clarify`
+  finds this run's questions settled on the record and goes on without a
+  second turn, and the brief carries the answers into `plan_propose`. A
+  resume that is not an answer finds them open and parks again without a
+  turn; a restart changes nothing, since the item, the run and the
+  questions are all durable (recovery settles a park the process died
+  before settling). A node's earlier answers ride into the next
+  breakdown's clarifying turn so they are not asked again. Abandoning a
+  waiting item withdraws its questions (`plan.generation.failed`).
+- **Answered from chat.** The engine emits `run.awaiting_answers` with the
+  questions; each chat bridge holds it until the run's finish card is out
+  and then posts the questions in the run's thread through
+  `_send_choices`, one message per question — buttons where the service
+  has them, numbered prose where not — remembering each posted message for
+  clicks. A click (`_answer_choice`) or a reply to the bot in the thread (a
+  number, a choice's name, the person's own words, or `skip`; `_steer`
+  finds no live engine and hands it to `_plan_reply`) answers through the
+  same loop path, one question at a time, and the run resumes once every
+  question has an answer. A reply is matched against the plan record, so
+  it still answers after a restart has emptied the bridge's memory of what
+  it posted; a click on a pre-restart button is refused like any expired
+  choice. In a collaboration channel the run's chronicle posts the
+  questions as a notice, and the channel-scoped `plan.generation.questions`
+  event carries them for the client's questions card.
 
 `tests/unit/test_plan_run_trail.py` holds a plan run's chronology the way
 the code and tool trails hold theirs, and asserts no github sandbox and no
@@ -2568,7 +2618,8 @@ upserts and deletes, bumps the revision and records its `plan.*` events in
 routes (`api/routes/plans.py`) only translate; the planner, publishing and
 epic runs call the same service. The planner's breakdown is a `plan` run
 ([Plan runs](#plan-runs)) whose desk (`plans/generation.py`) reads the node
-through `PlanService.brief` and writes the level through
+through `PlanService.brief`, puts the planner's clarifying questions on the
+node through `PlanService.ask_questions`, and writes the level through
 `PlanService.deliver_proposal`, which applies the same section rules in one
 revision.
 

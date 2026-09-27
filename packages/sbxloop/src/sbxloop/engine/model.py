@@ -47,7 +47,9 @@ RunState = Literal[
     "executing",
     "judging",
     "publishing",
-    # the plan stage: the planner reads the checkout and proposes a level
+    # the plan stages: the planner reads the checkout and asks what it
+    # needs to know, then proposes a level
+    "clarifying",
     "proposing",
     # terminal
     "merged",
@@ -58,6 +60,7 @@ RunState = Literal[
     "gated",
     "awaiting_review",
     "held",
+    "awaiting_answers",
 ]
 
 # The post-build stages in order. `runs.stage` records the last non-terminal
@@ -93,13 +96,17 @@ TOOL_STAGES: tuple[str, ...] = (
     "publishing",
 )
 
-# A `plan` run's stages in order: the planner's turn over the checkout and
-# the delivery of what it proposed to the plan record, as one stage —
-# `proposing` re-enters itself on resume, and a proposal already validated
-# and persisted on the run's task is delivered without asking again. The
-# clarifying turn and the wait for a person's answers belong in front of it,
-# each a stage of its own, when a plan run asks questions.
-PLAN_STAGES: tuple[str, ...] = ("proposing",)
+# A `plan` run's stages in order (#2345). `clarifying` is the planner's
+# first turn over the checkout: it answers `ready` or asks a person up to
+# `[planning] max_questions` questions. `awaiting_answers` is the park
+# between the two, like `held`: the questions are on the plan record, no
+# sandbox is kept, and an answer (or a skip) is a resume — the resumed run
+# re-enters `clarifying`, finds its questions settled on the record, and
+# goes on without a second turn. `proposing` is the planner's turn over the
+# checkout and the delivery of what it proposed to the plan record, as one
+# stage: it re-enters itself on resume, and a proposal already validated
+# and persisted on the run's task is delivered without asking again.
+PLAN_STAGES: tuple[str, ...] = ("clarifying", "awaiting_answers", "proposing")
 
 TaskState = Literal[
     "pending",
@@ -132,8 +139,21 @@ TERMINAL_TASK_STATES: frozenset[str] = frozenset({"done", "failed", "skipped"})
 # `publish = "hold"` (#760): the result is judged and persisted, no sandbox
 # is kept, and a person releases it. Terminal for liveness; resumable,
 # because the release IS a `resume` at the publishing stage.
+# `awaiting_answers` is a plan run parked on its clarifying questions
+# (#2345): the questions are on the plan record, no sandbox is kept, and a
+# person's answer or skip resumes it. Terminal for liveness; resumable.
 TERMINAL_RUN_STATES: frozenset[str] = frozenset(
-    {"merged", "completed", "failed", "blocked", "cancelled", "gated", "awaiting_review", "held"}
+    {
+        "merged",
+        "completed",
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "held",
+        "awaiting_answers",
+    }
 )
 RESUMABLE_RUN_STATES: frozenset[str] = frozenset(
     {
@@ -168,7 +188,9 @@ Phase = Literal[
     "plan",
     "execute",
     "judge",
-    # A plan run's one agent phase: the planner's proposal of a level.
+    # A plan run's agent phases: the planner's clarifying questions (or its
+    # `ready`), and its proposal of a level.
+    "clarify",
     "propose",
 ]
 

@@ -29,7 +29,10 @@ from sbxloop.ghids import normalize_item_id
 # cannot give: the run stays pinned, the daemon polls the PR slowly, and a
 # person on GitHub ends it. ``paused_review`` is that wait past
 # ``[landing] review_wait_s``: nothing polls, the run stays pinned, and
-# ``resume <item>`` puts the wait back up.
+# ``resume <item>`` puts the wait back up. ``awaiting_answers`` (#2345) is a
+# plan run parked on its clarifying questions: the run stays pinned, no
+# sandbox is kept, and a person's answer or skip — from the app or the
+# run's thread — puts the item back in the queue to resume it.
 ItemState = Literal[
     "queued",
     "running",
@@ -40,6 +43,7 @@ ItemState = Literal[
     "gated",
     "awaiting_review",
     "paused_review",
+    "awaiting_answers",
 ]
 # A decision the source has not been told about yet. ``abandoned`` /
 # ``requeued`` are operator decisions from another process (the row-only
@@ -272,6 +276,7 @@ TickOutcome = Literal[
     "gated",
     "awaiting_review",
     "held",
+    "awaiting_answers",
     "interrupted",
     "cancelled",
     "requeued",
@@ -385,6 +390,8 @@ NoticeKind = Literal[
     "run.awaiting_review",
     "run.held",
     "run.released",
+    "run.awaiting_answers",
+    "run.answered",
     "run.review_paused",
     "run.review_resumed",
     "run.cancelled",
@@ -421,6 +428,7 @@ TERMINAL_NOTICE_KINDS: frozenset[str] = frozenset(
         "run.gated",
         "run.awaiting_review",
         "run.held",
+        "run.awaiting_answers",
         "run.review_paused",
         "run.cancelled",
         "run.requeued",

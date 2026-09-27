@@ -151,6 +151,8 @@ class RunChronicle:
             self._run_end(event, data)
         elif event.type in (HostEventTypes.RUN_BLOCKED, HostEventTypes.RUN_GATED):
             self._notice(event, data)
+        elif event.type == HostEventTypes.RUN_AWAITING_ANSWERS:
+            self._questions(event, data)
 
     # -- each kind ---------------------------------------------------------
 
@@ -275,6 +277,9 @@ class RunChronicle:
         if state in _DELIVERED_STATES:
             self._delivery(event, data)
             return
+        if state == "awaiting_answers":
+            # The questions said it (see ``_questions``): the run waits.
+            return
         reason = str(data.get("reason") or "").strip()
         text = f"Run ended: {state or 'stopped'}." + (f" {reason}" if reason else "")
         self._post(
@@ -303,6 +308,37 @@ class RunChronicle:
             "notice",
             text,
             dedupe=f"{event.run_id}:notice:{state}{self._segment}",
+            agent=self._lead(),
+        )
+
+    def _questions(self, event: Event, data: dict[str, Any]) -> None:
+        """A plan run asks before it proposes (#2345): the questions, with
+        their choices numbered, as a notice from the lead — the channel's
+        clients render the structured questions from the plan and answer
+        them there. Posted whatever the cap says: the run is waiting on a
+        person, and a wait nobody hears about is a wait forever."""
+        raw = data.get("questions")
+        questions = [q for q in raw if isinstance(q, dict)] if isinstance(raw, list) else []
+        lines = [
+            f"Before I propose, I have {_plural(len(questions), 'question')} — answer or skip "
+            "them in the plan, or in the run's thread:"
+        ]
+        for index, question in enumerate(questions, start=1):
+            choices = question.get("choices")
+            labels = [
+                str(c.get("label") or c.get("value") or "")
+                for c in (choices if isinstance(choices, list) else [])
+                if isinstance(c, dict)
+            ]
+            lines.append(
+                f"{index}. {str(question.get('prompt') or '').strip()}"
+                + (f" ({' / '.join(label for label in labels if label)})" if labels else "")
+            )
+        self._post(
+            event,
+            "notice",
+            "\n".join(lines),
+            dedupe=f"{event.run_id}:questions",
             agent=self._lead(),
         )
 

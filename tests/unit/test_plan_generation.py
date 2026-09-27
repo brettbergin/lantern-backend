@@ -35,7 +35,7 @@ from tests.conftest import FakeSbx
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_daemon_loop import FakeSource
 from tests.unit.test_engine import Harness
-from tests.unit.test_engine_plan import answer, code_task, workload_task
+from tests.unit.test_engine_plan import READY, answer, asks, code_task, question, workload_task
 
 REPO = "o/app"
 PERSON = {"kind": "client", "id": "c1", "display": "Pat", "via": "api"}
@@ -71,15 +71,8 @@ class World:
         # The forge's source sees every GitHub call the daemon makes; the
         # plan item is an API item, so it is routed to the API source.
         self.github = FakeSource()
-        self.loop = DaemonLoop(
-            self.config,
-            store=self.store,
-            dstore=self.dstore,
-            source=CompositeSource(self.github, None, None, ApiSource()),
-            sbx=SbxCLI(binary=str(harness.fake_sbx.binary)),
-            worker_python=sys.executable,
-            install_workers=False,
-        )
+        self.harness = harness
+        self.loop = self.new_loop()
         plan = self.plans.create(
             level="epic",
             repository=REPO,
@@ -122,6 +115,17 @@ class World:
         )
         self.revision = plan.revision
 
+    def new_loop(self) -> DaemonLoop:
+        return DaemonLoop(
+            self.config,
+            store=self.store,
+            dstore=self.dstore,
+            source=CompositeSource(self.github, None, None, ApiSource()),
+            sbx=SbxCLI(binary=str(self.harness.fake_sbx.binary)),
+            worker_python=sys.executable,
+            install_workers=False,
+        )
+
     def admit(self, note: str = "") -> str:
         item = plan_item(
             self.loop,
@@ -143,7 +147,9 @@ class World:
 def test_a_breakdown_runs_in_the_sandbox_and_lands_in_the_plan(harness: Harness) -> None:
     world = World(harness)
     item_id = world.admit(note="CSV only")
-    harness.script([answer(code_task("c1"), code_task("c2", deps=["c1"]), workload_task("c3"))])
+    harness.script(
+        [READY, answer(code_task("c1"), code_task("c2", deps=["c1"]), workload_task("c3"))]
+    )
 
     result = world.loop.tick()
 
@@ -159,6 +165,7 @@ def test_a_breakdown_runs_in_the_sandbox_and_lands_in_the_plan(harness: Harness)
     # is gone, the planner's three are proposed with their links mapped.
     plan = world.plans.get(world.plan_id)
     assert plan.revision == world.revision + 1, "one write, one revision"
+    assert plan.node(world.epic_id).generation is None, "a ready planner asked nothing"
     children = plan.children(world.epic_id)
     assert [c.title for c in children] == ["Person's task", "Task c1", "Task c2", "Survey c3"]
     kept, c1, c2, c3 = children
@@ -197,7 +204,7 @@ def test_a_proposal_invalid_twice_is_a_failed_generation(harness: Harness) -> No
     world = World(harness, daemon={"max_attempts_per_item": 1})
     item_id = world.admit()
     bad = answer(code_task("c1", acceptance_criteria=[]))
-    harness.script([bad, bad])
+    harness.script([READY, bad, bad])
 
     result = world.loop.tick()
 
@@ -225,3 +232,237 @@ def test_a_node_already_being_broken_down_is_not_queued_twice(harness: Harness) 
         )
     assert refused.value.code == "already_in_progress"
     assert refused.value.detail["plan_code"] == "generation_in_progress"
+
+
+# -- clarifying questions (#2345) -------------------------------------------------
+
+FORMATS = question("fmt", "Which formats?", "csv", "pdf")
+READERS = question("who", "Who downloads them?", "staff", "public")
+
+
+def _park(world: World, *questions: dict[str, Any]) -> str:
+    """Admit a breakdown whose planner asks ``questions``; tick it to its
+    park. The item id."""
+    item_id = world.admit()
+    world.harness.script([asks(*(questions or (FORMATS,)))])
+    result = world.loop.tick()
+    assert result.outcome == "awaiting_answers", result
+    return item_id
+
+
+def test_questions_park_the_run_until_they_are_answered(harness: Harness) -> None:
+    from sbxloop.engine.planning import PlanAnswer
+
+    world = World(harness, keep_sandboxes=True)
+    item_id = _park(world, FORMATS, READERS)
+
+    # Parked: the item waits, the run holds nothing, the plan holds the
+    # questions, and the questions went out as an event scoped to the run.
+    item = world.dstore.get(item_id)
+    assert item is not None and item.state == "awaiting_answers" and item.run_id is not None
+    run_id = item.run_id
+    assert world.store.get_run(run_id).state == "awaiting_answers"
+    plan = world.plans.get(world.plan_id)
+    waiting = plan.node(world.epic_id).generation
+    assert waiting is not None and waiting.status == "awaiting_answers"
+    assert waiting.run_id == run_id and [q.id for q in waiting.questions] == ["fmt", "who"]
+    assert plan.revision == world.revision + 1
+    (asked,) = world.events("plan.generation.questions")
+    data = json.loads(asked.data_json or "{}")
+    assert data["run_id"] == f"run_{run_id}" and data["node_id"] == world.epic_id
+    assert [q["id"] for q in data["questions"]] == ["fmt", "who"]
+    assert data["questions"][0]["choices"][0] == {
+        "value": "csv",
+        "label": "CSV",
+        "description": "about csv",
+    }
+    assert asked.run_id == run_id and asked.item_id == item_id
+    assert world.events("plan.generation.failed") == []
+    # A second breakdown of the node waits for this one.
+    with pytest.raises(ControlError) as refused:
+        plan_item(
+            world.loop,
+            PlanAdmission(world.plan_id, world.epic_id, expected_revision=plan.revision),
+            item_id=api_item_id("plan:k2"),
+        )
+    assert refused.value.code == "already_in_progress"
+    # Nothing to do while it waits: dispatch does not see it.
+    assert world.loop.tick().dispatched is None
+
+    outcome = world.loop.answer_plan_questions(
+        world.plan_id,
+        world.epic_id,
+        answers={"fmt": PlanAnswer(value="pdf"), "who": PlanAnswer(text="the finance team")},
+        skip=False,
+        actor=PERSON,
+    )
+    assert outcome.resumed and outcome.item_id == item_id
+    assert outcome.clarification.status == "answered"
+    assert outcome.clarification.answered_by == "Pat"
+    item = world.dstore.get(item_id)
+    assert item is not None and item.state == "queued" and item.run_id == run_id
+    (answered,) = world.events("plan.generation.answered")
+    assert json.loads(answered.data_json or "{}")["answers"] == {
+        "fmt": {"value": "pdf"},
+        "who": {"text": "the finance team"},
+    }
+
+    harness.script([answer(code_task("c1"))])
+    result = world.loop.tick()
+    assert result.outcome == "done", result
+    assert world.store.get_run(run_id).state == "completed"
+    assert harness.consumed() == 1, "the questions are not asked again"
+    prompts = [j["prompt"] for j in harness.agent_jobs(run_id) if j["kind"] == "agent.session"]
+    (propose,) = prompts
+    assert "Answer: PDF (`pdf`)" in propose
+    assert "Answer: in their words: the finance team" in propose
+    children = world.plans.get(world.plan_id).children(world.epic_id)
+    assert [c.title for c in children] == ["Person's task", "Task c1"]
+
+
+def test_a_skip_proposes_with_no_answers(harness: Harness) -> None:
+    world = World(harness, keep_sandboxes=True)
+    item_id = _park(world)
+    outcome = world.loop.answer_plan_questions(
+        world.plan_id, world.epic_id, answers={}, skip=True, actor=PERSON
+    )
+    assert outcome.resumed and outcome.clarification.status == "skipped"
+    harness.script([answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "done"
+    item = world.dstore.get(item_id)
+    assert item is not None and item.run_id is not None
+    (propose,) = [
+        j["prompt"] for j in harness.agent_jobs(item.run_id) if j["kind"] == "agent.session"
+    ]
+    assert "The person skipped these questions" in propose
+
+
+def test_no_questions_allowed_means_no_clarifying_turn(harness: Harness) -> None:
+    world = World(harness, planning={"max_questions": 0})
+    item_id = world.admit()
+    harness.script([answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "done"
+    assert harness.consumed() == 1
+    item = world.dstore.get(item_id)
+    assert item is not None and item.run_id is not None
+    assert world.events("plan.generation.questions") == []
+
+
+def test_the_repositorys_question_cap_is_the_planners(harness: Harness) -> None:
+    world = World(
+        harness,
+        planning={"max_questions": 4},
+        github={"repos": [{"repo": REPO, "planning": {"max_questions": 1}}]},
+        keep_sandboxes=True,
+    )
+    world.admit()
+    harness.script([READY, answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "done"
+    item = next(i for i in world.dstore.items() if i.kind == "plan")
+    assert item.run_id is not None
+    prompts = [j["prompt"] for j in harness.agent_jobs(item.run_id) if j["kind"] == "agent.session"]
+    clarify = next(p for p in prompts if p.startswith("# Before you propose"))
+    assert "**at most 1** questions" in " ".join(clarify.split())
+
+
+def test_a_restart_while_waiting_keeps_the_wait_and_takes_the_answer(harness: Harness) -> None:
+    from sbxloop.engine.planning import PlanAnswer
+
+    world = World(harness)
+    item_id = _park(world)
+    item = world.dstore.get(item_id)
+    assert item is not None and item.run_id is not None
+    run_id = item.run_id
+
+    # The daemon goes away and comes back: recovery leaves the wait alone.
+    world.loop = world.new_loop()
+    world.loop.recover()
+    item = world.dstore.get(item_id)
+    assert item is not None and item.state == "awaiting_answers" and item.run_id == run_id
+    assert world.loop.tick().dispatched is None
+
+    world.loop.answer_plan_questions(
+        world.plan_id,
+        world.epic_id,
+        answers={"fmt": PlanAnswer(value="csv")},
+        skip=False,
+        actor=PERSON,
+    )
+    harness.script([answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "done"
+    assert world.store.get_run(run_id).state == "completed"
+
+
+def test_a_park_the_daemon_died_before_settling_is_settled_at_recovery(harness: Harness) -> None:
+    world = World(harness)
+    item_id = _park(world)
+    # As if the process died between the engine's park and the settle.
+    world.dstore._update(item_id, 9.0, state="running")
+    world.loop = world.new_loop()
+    world.loop.recover()
+    item = world.dstore.get(item_id)
+    assert item is not None and item.state == "awaiting_answers"
+
+
+def test_abandoning_a_waiting_run_withdraws_its_questions(harness: Harness) -> None:
+    from sbxloop.engine.planning import PlanAnswer
+    from sbxloop.plans.service import PlanRefusal
+
+    world = World(harness)
+    item_id = _park(world)
+    world.loop.abandon_item(item_id, "not now")
+    waiting = world.plans.get(world.plan_id).node(world.epic_id).generation
+    assert waiting is not None and waiting.status == "withdrawn"
+    (failed,) = world.events("plan.generation.failed")
+    assert "not now" in json.loads(failed.data_json or "{}")["reason"]
+    with pytest.raises(PlanRefusal) as refused:
+        world.loop.answer_plan_questions(
+            world.plan_id,
+            world.epic_id,
+            answers={"fmt": PlanAnswer(value="csv")},
+            skip=False,
+            actor=PERSON,
+        )
+    assert refused.value.code == "already_answered"
+
+
+def test_answers_are_held_to_the_questions(harness: Harness) -> None:
+    from sbxloop.engine.planning import PlanAnswer
+    from sbxloop.plans.service import PlanRefusal
+
+    world = World(harness)
+    _park(world, FORMATS, question("strict", "Pick one", "a", "b", free=False))
+    for answers, skip, detail in (
+        ({"nope": PlanAnswer(value="csv")}, False, "no question 'nope'"),
+        ({"fmt": PlanAnswer(value="xml")}, False, "'xml' is not a choice"),
+        ({"strict": PlanAnswer(text="neither")}, False, "takes one of its choices"),
+        ({"fmt": PlanAnswer()}, False, "names no choice and has no text"),
+        ({"fmt": PlanAnswer(value="csv")}, True, "not both"),
+        ({}, False, "answer at least one question"),
+    ):
+        with pytest.raises(PlanRefusal) as refused:
+            world.loop.answer_plan_questions(
+                world.plan_id, world.epic_id, answers=answers, skip=skip, actor=PERSON
+            )
+        assert refused.value.status == 422 and detail in refused.value.detail, detail
+    # One answer from chat is recorded and the run keeps waiting for the
+    # other; the second settles it.
+    first = world.loop.answer_plan_questions(
+        world.plan_id,
+        world.epic_id,
+        answers={"fmt": PlanAnswer(value="csv")},
+        skip=False,
+        actor=PERSON,
+        settle=False,
+    )
+    assert not first.resumed and first.clarification.status == "awaiting_answers"
+    second = world.loop.answer_plan_questions(
+        world.plan_id,
+        world.epic_id,
+        answers={"strict": PlanAnswer(value="b")},
+        skip=False,
+        actor=PERSON,
+        settle=False,
+    )
+    assert second.resumed and second.clarification.status == "answered"
+    assert set(second.clarification.answers) == {"fmt", "strict"}

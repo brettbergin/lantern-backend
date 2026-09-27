@@ -94,6 +94,9 @@ def features(config: Config) -> list[str]:
         served.append("push.apns_relay")
     if planning_available(config):
         served.append("planning")
+        # The clarifying step and its answers route ride every plan run
+        # (#2345); `[planning] max_questions = 0` only means none are asked.
+        served.append("planning.clarify")
     return served
 
 

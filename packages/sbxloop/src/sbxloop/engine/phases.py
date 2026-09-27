@@ -52,7 +52,13 @@ from sbxloop.engine.model import (
     VerifyReauthor,
     WorkloadPlan,
 )
-from sbxloop.engine.planning import PlanBrief, PlanProposal, proposal_problems
+from sbxloop.engine.planning import (
+    PlanBrief,
+    PlanClarification,
+    PlanProposal,
+    clarification_problems,
+    proposal_problems,
+)
 from sbxloop.engine.prompts import bullet_list, render
 from sbxloop.engine.repocontext import repo_conventions
 from sbxloop.engine.review import ReviewGuard, ReviewVerdict
@@ -1707,7 +1713,50 @@ class PhaseRunner:
         )
         return verdict
 
-    # -- a plan run's phase -------------------------------------------------
+    # -- a plan run's phases ------------------------------------------------
+
+    def clarify_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanClarification:
+        """The planner's clarifying turn, read-only, over the same checkout
+        the proposal will read: ``ready``, or at most ``max_questions``
+        questions in the chat choice question's shape, with the answers a
+        person already gave for this node in front of it so it never asks
+        them again. Held to the cap with one retry;
+        :class:`InvalidOutputTwice` when both answers break it."""
+
+        def check(answer: PlanClarification) -> None:
+            problems = clarification_problems(answer, brief)
+            if problems:
+                raise ValueError("the answer breaks these rules:\n" + "\n".join(problems))
+
+        answer, _ = self._agent_json(
+            PlanClarification,
+            "plan_clarify",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "note": brief.note.strip() or "(none)",
+                "kept": bullet_list(brief.kept),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "answers": plan_answers_section(brief),
+                "max_questions": str(brief.max_questions),
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return answer
 
     def propose_plan(
         self,
@@ -1748,6 +1797,7 @@ class PhaseRunner:
                 "profiles": _plan_profiles(brief),
                 "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
                 "note": brief.note.strip() or "(none)",
+                "answers": plan_answers_section(brief),
                 "work_dir": self._work_dir(),
                 "user_guidance": self._guidance(),
                 "repo_conventions": repo_conventions(
@@ -1912,6 +1962,35 @@ def _plan_node_section(brief: PlanBrief) -> str:
     if brief.acceptance_criteria:
         lines.append("**Acceptance criteria:**\n\n" + bullet_list(brief.acceptance_criteria))
     return "\n\n".join(lines)
+
+
+def plan_answers_section(brief: PlanBrief) -> str:
+    """The node's clarifying questions and what a person answered, as the
+    planner reads them: each question, then the choice picked (its label
+    and value) or the person's own words — or that they skipped."""
+    found = brief.clarification
+    if found is None or not found.settled:
+        return "(no questions were asked)"
+    lines: list[str] = []
+    if found.status == "skipped":
+        lines.append(
+            "The person skipped these questions and left the decisions to you; "
+            "decide from the node and the repository."
+        )
+    for question in found.questions:
+        lines.append(f"- **{question.prompt}**")
+        answer = found.answers.get(question.id)
+        choice = question.choice(answer.value) if answer and answer.value else None
+        if choice is not None:
+            said = f"{choice.label} (`{choice.value}`)"
+            if answer is not None and answer.text.strip():
+                said += f" — {' '.join(answer.text.split())}"
+        elif answer is not None and answer.text.strip():
+            said = f"in their words: {' '.join(answer.text.split())}"
+        else:
+            said = "not answered"
+        lines.append(f"  Answer: {said}")
+    return "\n".join(lines)
 
 
 def _plan_profiles(brief: PlanBrief) -> str:

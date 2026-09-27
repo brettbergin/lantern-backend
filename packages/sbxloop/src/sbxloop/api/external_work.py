@@ -52,6 +52,7 @@ ATTENTION_STATES = {
     "held": "action_required",
     "awaiting_review": "action_required",
     "paused_review": "action_required",
+    "awaiting_answers": "action_required",
 }
 
 
