@@ -650,3 +650,116 @@ class TestIssueWording:
         h = _harness(tmp_path, ops)
         h.loop.source.report_abandoned(self._epic_item(h.loop.source, claimed=False), "stopped")
         assert [c for c in ops.raw_calls if c[0] != "GET"] == []
+
+
+class ClosingOps(RecordingOps):
+    """The recording stand-in, with an issue close that sticks the way
+    GitHub's does: what completion reads back after a merge report."""
+
+    def raw(self, method: str, path: str, body: Any = None) -> Any:
+        answer = super().raw(method, path, body)
+        if method == "PATCH" and (body or {}).get("state") == "closed":
+            number = path.rsplit("/", 1)[-1]
+            if number in self.issues:
+                self.issues[number]["state"] = "closed"
+        return answer
+
+
+def _closing(*numbers: int) -> ClosingOps:
+    ops = ClosingOps({str(n): issue(n, "sbx:task") for n in numbers})
+    ops.issues[str(EPIC_NUMBER)] = issue(EPIC_NUMBER, "sbx:epic")
+    return ops
+
+
+def _summaries(ops: RecordingOps) -> list[str]:
+    return [b for n, b in ops.comments if n == EPIC_NUMBER and "sbx-plan-summary" in b]
+
+
+def _epic_closes(ops: RecordingOps) -> list[Any]:
+    return [
+        b
+        for m, p, b in ops.raw_calls
+        if m == "PATCH" and p == f"/repos/o/r/issues/{EPIC_NUMBER}" and (b or {}).get("state")
+    ]
+
+
+class TestClosingTheEpic:
+    def test_a_completed_run_summarises_and_closes_its_epic(self, tmp_path: Path) -> None:
+        ops = _closing(11, 12)
+        h = _harness(tmp_path, ops)
+        h.loop.epic_runs.forge = lambda: ops
+        _plan(h, _node("a", 11), _node("b", 12, depends_on=("a",)))
+        run = _start(h)
+        _drain(h)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+        (summary,) = _summaries(ops)
+        assert "<!-- sbx-plan-summary: plan_1/epic -->" in summary
+        assert "- #11 A — landed" in summary and "- #12 B — landed" in summary
+        assert f"Epic run `{run.id}`, started by Ada." in summary
+        assert _epic_closes(ops) == [{"state": "closed", "state_reason": "completed"}]
+        plan = PlanStore(h.dstore).get("plan_1")
+        assert plan is not None
+        assert {n.id: n.forge.state for n in plan.nodes if n.forge} == {
+            "epic": "closed",
+            "a": "closed",
+            "b": "closed",
+        }
+        changes = [(d["node_id"], d["change"]) for _, d in _events(h, "plan.node.changed")]
+        assert changes == [("a", "closed"), ("b", "closed"), ("epic", "completed")]
+        # Later ticks and sweeps write nothing more.
+        h.clock.t += 3600
+        _drain(h, 3)
+        assert len(_summaries(ops)) == 1 and len(_epic_closes(ops)) == 1
+
+    def test_a_skipped_task_left_open_holds_the_epic_until_a_person_closes_it(
+        self, tmp_path: Path
+    ) -> None:
+        ops = _closing(11, 12)
+        h = _harness(tmp_path, ops, daemon={"max_attempts_per_item": 1})
+        h.loop.epic_runs.forge = lambda: ops
+        _plan(h, _node("a", 11), _node("b", 12))
+        h.outcomes = ["failed", "merged"]
+        run = _start(h)
+        _drain(h)
+        h.loop.epic_runs.skip("plan_1", "a", actor=ACTOR, now=h.clock())
+        _drain(h, 3)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+        # The run is done, but A's issue is still open on the forge.
+        assert ops.issues["11"]["state"] == "open"
+        assert _summaries(ops) == [] and _epic_closes(ops) == []
+
+        ops.issues["11"]["state"] = "closed"  # a person closes it
+        h.clock.t += 601  # the sweep looks again
+        h.loop.tick()
+        (summary,) = _summaries(ops)
+        assert "- #11 A — skipped in the epic run, then closed on the forge" in summary
+        assert len(_epic_closes(ops)) == 1
+
+    def test_close_completed_off_leaves_the_epic_open(self, tmp_path: Path) -> None:
+        ops = _closing(11)
+        h = _harness(tmp_path, ops, planning={"close_completed": False})
+        h.loop.epic_runs.forge = lambda: ops
+        _plan(h, _node("a", 11))
+        run = _start(h)
+        _drain(h)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+        assert _summaries(ops) == [] and _epic_closes(ops) == []
+
+    def test_a_task_that_lands_outside_an_epic_run_can_finish_its_epic(
+        self, tmp_path: Path
+    ) -> None:
+        ops = _closing(11)
+        h = _harness(tmp_path, ops)
+        h.loop.epic_runs.forge = lambda: ops
+        _plan(h, _node("a", 11))
+        # A person started the task on its own, with the trigger label.
+        ops.issues["11"]["labels"].append({"name": "sbxloop:run"})
+        _drain(h, 3)
+        assert [(i.source_key, i.state) for i in h.dstore.items()] == [("11", "done")]
+        assert h.loop.epic_runs.runs.latest("plan_1", "epic") is None
+        (summary,) = _summaries(ops)
+        assert "No epic run took part" in summary and "- #11 A — closed" in summary
+        assert len(_epic_closes(ops)) == 1

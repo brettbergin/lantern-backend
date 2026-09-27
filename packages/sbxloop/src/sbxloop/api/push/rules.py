@@ -14,6 +14,23 @@ a turn, who may decide a gate — instead of what a client can infer:
 - **gate**: a job's ``action_required`` attention, or a merge gate
   opening, to the people who may approve it and can see where it is.
 
+Planning (#2349) adds three notices, each for **one person** and nobody
+else — never the rest of the workspace, never the channel:
+
+- **questions waiting for you** (``plan.generation.questions``, pushed as
+  ``gate``: the planner is waiting on your answers) and **a proposal ready
+  for you** (``plan.generation.proposed``, pushed as ``work``: the level
+  you asked for arrived), to the person who asked for the breakdown — the
+  author of the chat message behind the ``plan`` run's item, else the
+  person whose ``item.admit`` operation queued it;
+- **an epic run you started paused** (``plan.run.paused``, pushed as
+  ``failure``), to the person who started the epic run — for a task that
+  failed, or for someone else pausing it (never for your own pause).
+
+They ride the existing kinds, so a device's ``gates``, ``work`` and
+``failures`` switches govern them and the relay, which accepts only those
+kinds, carries them unchanged.
+
 Historical events (a job imported from before the daemon knew it) are
 never news. :func:`allowed` then narrows by a device's own preferences.
 """
@@ -29,15 +46,16 @@ from typing import Any
 from sqlalchemy import select
 
 from sbxloop.api.collaboration import CollaborationStore, Member, _message
-from sbxloop.api.publicids import run_public_id
+from sbxloop.api.publicids import parse_run_id, run_public_id
 from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES
+from sbxloop.db.api_models import OperationRow
 from sbxloop.db.collaboration_models import (
     ChannelMemberRow,
     ChannelRow,
     MessageRow,
     TurnRow,
 )
-from sbxloop.db.daemon_models import WorkItemRow
+from sbxloop.db.daemon_models import PlanEpicRunRow, PlanNodeRow, WorkItemRow
 
 MESSAGE_CREATED = "collaboration.message.created"
 WORK_DELIVERED = "collaboration.work.delivered"
@@ -45,9 +63,22 @@ TURN_COMPLETED = "collaboration.turn.completed"
 TURN_FAILED = "collaboration.turn.failed"
 ATTENTION = "collaboration.external_work.attention"
 GATE_OPENED = "gate.opened"
+PLAN_QUESTIONS = "plan.generation.questions"
+PLAN_PROPOSED = "plan.generation.proposed"
+PLAN_PAUSED = "plan.run.paused"
 #: Every event type a notice can come from.
 TYPES: frozenset[str] = frozenset(
-    {MESSAGE_CREATED, WORK_DELIVERED, TURN_COMPLETED, TURN_FAILED, ATTENTION, GATE_OPENED}
+    {
+        MESSAGE_CREATED,
+        WORK_DELIVERED,
+        TURN_COMPLETED,
+        TURN_FAILED,
+        ATTENTION,
+        GATE_OPENED,
+        PLAN_QUESTIONS,
+        PLAN_PROPOSED,
+        PLAN_PAUSED,
+    }
 )
 
 #: A work state that means the work did not get done.
@@ -81,6 +112,8 @@ class Event:
     run_id: str | None
     item_id: str | None
     data: Mapping[str, Any] = field(default_factory=dict)
+    #: Who the event is attributed to (its ``actor``), when anyone.
+    actor: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +183,10 @@ class NoticeRules:
             return self._attention(session, event)
         if event.type == GATE_OPENED:
             return self._gate(session, event)
+        if event.type in (PLAN_QUESTIONS, PLAN_PROPOSED):
+            return self._breakdown(session, event)
+        if event.type == PLAN_PAUSED:
+            return self._paused(session, event)
         return []
 
     # -- who ---------------------------------------------------------------------
@@ -359,6 +396,160 @@ class NoticeRules:
             )
             for member in members
             if _can_decide(member)
+        ]
+
+    # -- planning (#2349) -----------------------------------------------------------
+
+    def _person(self, session: Any, who: str | None) -> str | None:
+        """The active member ``who`` names — a user id, or the id of the
+        client a person signs in with (what a principal carries)."""
+        if not who:
+            return None
+        found = self._members(session)
+        for member in found:
+            if member.user.id == who or member.user.client_id == who:
+                return member.user.id
+        return None
+
+    def _plan_item(self, session: Any, event: Event) -> WorkItemRow | None:
+        """The ``plan`` run's work item: the event's own, else the one its
+        run was dispatched for."""
+        if event.item_id:
+            row = session.get(WorkItemRow, event.item_id)
+            if row is not None:
+                return row  # type: ignore[no-any-return]
+        runs = {str(event.run_id or "")}
+        public = str(event.data.get("run_id") or "")
+        runs |= {public, parse_run_id(public) or ""}
+        runs.discard("")
+        if not runs:
+            return None
+        return session.scalars(  # type: ignore[no-any-return]
+            select(WorkItemRow).where(WorkItemRow.run_id.in_(sorted(runs))).limit(1)
+        ).first()
+
+    def _breakdown_asker(self, session: Any, event: Event) -> str | None:
+        """The person who asked for the breakdown: the author of the chat
+        message behind the ``plan`` item, else the person whose operation
+        admitted it, else the requester it names. Nobody when none of these
+        is an active member: a planning notice is never broadcast."""
+        item = self._plan_item(session, event)
+        if item is None:
+            return None
+        if item.message_id:
+            message = session.get(MessageRow, item.message_id)
+            if message is not None:
+                author = _message(session, message).author
+                if author.kind == "human":
+                    return self._person(session, author.id)
+        admitted = session.scalars(
+            select(OperationRow)
+            .where(
+                OperationRow.action == "item.admit",
+                OperationRow.target_kind == "item",
+                OperationRow.target_key == item.item_id,
+            )
+            .order_by(OperationRow.accepted_at.asc())
+            .limit(1)
+        ).first()
+        if admitted is not None:
+            actor = json.loads(admitted.actor_json or "{}")
+            person = self._person(session, str(actor.get("id") or "") or None)
+            if person is not None:
+                return person
+        return self._person(session, item.requested_by)
+
+    @staticmethod
+    def _node_title(session: Any, node_id: Any) -> str:
+        row = session.get(PlanNodeRow, str(node_id or "")) if node_id else None
+        return " ".join(str(row.title).split()) if row is not None and row.title else ""
+
+    def _visible_channel(self, session: Any, channel_id: str | None, user_id: str) -> str | None:
+        """``channel_id`` when ``user_id`` can open it, else none."""
+        channel = self._channel(session, channel_id)
+        if channel is None:
+            return None
+        if all(member.user.id != user_id for member in self._viewers(session, channel)):
+            return None
+        return str(channel.id)
+
+    def _breakdown(self, session: Any, event: Event) -> list[Notice]:
+        asker = self._breakdown_asker(session, event)
+        if asker is None:
+            return []
+        data = event.data
+        node = session.get(PlanNodeRow, str(data.get("node_id") or ""))
+        what = " ".join(str(node.title).split()) if node is not None and node.title else ""
+        what = what or "your plan"
+        child = {"initiative": "epic", "epic": "task"}.get(
+            str(node.level) if node is not None else "", "item"
+        )
+        channel = self._visible_channel(session, event.channel_id, asker)
+        if event.type == PLAN_QUESTIONS:
+            questions = data.get("questions")
+            asked = len(questions) if isinstance(questions, list) else 0
+            many = "a question" if asked == 1 else f"{asked} questions" if asked else "questions"
+            return [
+                Notice(
+                    asker,
+                    "gate",
+                    channel,
+                    None,
+                    "Questions waiting for you",
+                    excerpt(
+                        f"The planner has {many} about {what} before it proposes its {child}s."
+                    ),
+                )
+            ]
+        count = data.get("count")
+        proposed = (
+            f"{count} {child if count == 1 else child + 's'}"
+            if isinstance(count, int) and count > 0
+            else f"the {child}s"
+        )
+        return [
+            Notice(
+                asker,
+                "work",
+                channel,
+                None,
+                "A proposal is ready for you",
+                excerpt(f"The planner proposed {proposed} for {what}. Review and approve it."),
+            )
+        ]
+
+    def _paused(self, session: Any, event: Event) -> list[Notice]:
+        data = event.data
+        row = session.get(PlanEpicRunRow, str(data.get("epic_run_id") or ""))
+        if row is None:
+            return []
+        starter = self._person(session, row.started_by)
+        if starter is None:
+            return []
+        epic = self._node_title(session, row.node_id) or "your epic"
+        if data.get("reason") == "task_failed":
+            task = self._node_title(session, data.get("task_node_id")) or "a task"
+            error = str(data.get("error") or "").strip().rstrip(".")
+            body = f"{task} failed in {epic}" + (f": {error}." if error else ".")
+            body += " Retry or skip it; what depends on it waits."
+            title = "Your epic run needs you"
+        elif data.get("reason") == "person":
+            if self._person(session, str(event.actor.get("id") or "") or None) == starter:
+                return []  # your own pause is not news to you
+            who = str(data.get("by") or "Someone")
+            body = f"{who} paused {epic}. Nothing new starts until it is resumed."
+            title = "Your epic run was paused"
+        else:
+            return []
+        return [
+            Notice(
+                starter,
+                "failure",
+                None,
+                None,
+                title,
+                excerpt(body),
+            )
         ]
 
 

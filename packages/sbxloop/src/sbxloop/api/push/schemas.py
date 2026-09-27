@@ -47,9 +47,12 @@ class NotificationKind(StrEnum):
     """What a push is about.
 
     ``mention``: another person named you in a channel. ``gate``: work is
-    waiting on a decision you can make. ``work``: work or a reply you asked
-    for arrived. ``failure``: work or a reply you asked for could not
-    finish. ``test``: a test push you asked for.
+    waiting on a decision you can make, or a plan breakdown you asked for
+    is waiting on your answers. ``work``: work or a reply you asked for
+    arrived, or a plan breakdown you asked for proposed its level.
+    ``failure``: work or a reply you asked for could not finish, or an
+    epic run you started paused (a task failed, or someone else paused
+    it). ``test``: a test push you asked for.
     """
 
     MENTION = "mention"
@@ -64,10 +67,21 @@ class DevicePrefs(ApiModel):
     absent from ``per_channel`` gets ``all``."""
 
     mentions: bool = Field(default=True, description="Another person mentioned you.")
-    gates: bool = Field(default=True, description="Work is waiting on your decision.")
-    work: bool = Field(default=True, description="Work or a reply you asked for arrived.")
+    gates: bool = Field(
+        default=True,
+        description=(
+            "Work is waiting on your decision, or a breakdown you asked for on your answers."
+        ),
+    )
+    work: bool = Field(
+        default=True,
+        description="Work, a reply or a plan proposal you asked for arrived.",
+    )
     failures: bool = Field(
-        default=True, description="Work or a reply you asked for could not finish."
+        default=True,
+        description=(
+            "Work or a reply you asked for could not finish, or an epic run you started paused."
+        ),
     )
     per_channel: dict[str, ChannelNotify] = Field(
         default_factory=dict,

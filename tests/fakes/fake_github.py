@@ -240,6 +240,10 @@ class FakeGithub(GithubOps):
         # Comments on an issue by number (the workload issue sink answering
         # on the issue that asked, #760).
         self.issue_answers: list[tuple[int, str]] = []
+        # The same comments as the issue's comment listing serves them back
+        # (a plan's completion summary finding its own marker, #2349), by
+        # ``(repo, number)``; the listing adds them after the PR's.
+        self.issue_comment_rows: dict[tuple[str, int], list[dict[str, Any]]] = {}
         # Whether the repository has Issues enabled (#631): False makes the
         # payload say so and ``issue_create`` answer GitHub's 410; None
         # leaves the payload silent (the 410 alone then decides).
@@ -711,8 +715,13 @@ class FakeGithub(GithubOps):
         if method == "GET" and path.endswith("/reviews"):
             return list(self.reviews_payload)
         if method == "GET" and "/issues/" in path and path.endswith("/comments"):
-            # The PR-as-issue comment listing: what pr_issue_comment posted.
-            return [{"body": body} for body in self.issue_comments_posted]
+            # The PR-as-issue comment listing: what pr_issue_comment posted,
+            # then what issue_comment posted on that very issue.
+            posted = [{"body": body} for body in self.issue_comments_posted]
+            if found := re.fullmatch(r"/repos/([^/]+/[^/]+)/issues/(\d+)/comments", path):
+                key = (found.group(1).casefold(), int(found.group(2)))
+                posted += [dict(row) for row in self.issue_comment_rows.get(key, [])]
+            return posted
         if method == "GET" and path.endswith("/comments"):
             return list(self.comments_payload)
         if method == "GET" and path.endswith("/pulls") and "state=open&head=" in query:
@@ -1092,6 +1101,9 @@ class FakeGithub(GithubOps):
     def issue_comment(self, repo: str, number: int, body: str) -> str:
         self._maybe_fail("issue_comment")
         self.issue_answers.append((number, body))
+        self.issue_comment_rows.setdefault((repo.casefold(), int(number)), []).append(
+            {"id": 7000 + len(self.issue_answers), "body": body}
+        )
         return f"https://github.com/{repo}/issues/{number}#issuecomment-{len(self.issue_answers)}"
 
     def pr_get(self, repo: str, number: int) -> dict[str, Any]:

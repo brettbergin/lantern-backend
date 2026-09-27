@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+**A finished epic or initiative is closed with a summary, and planning
+sends three push notices.** When the issue of every published task of an
+epic is closed on the forge, sbxloop comments a summary on the epic — each
+task landed, closed or skipped, with its pull request or delivery link
+where known, and the epic run — and closes it as completed; when every
+epic of an initiative is closed it does the same with a rollup. Both sit
+behind `[planning] close_completed` (per repository), and a hidden marker
+keeps the summary from being posted twice. A task an epic run skipped but
+nobody closed keeps its epic open until its issue is closed. On GitLab each
+closed task is ticked in its parent's managed checklist, and every node
+whose issue closes is recorded with a `plan.node.changed` event
+(`closed`, `reopened`, `completed`). The daemon looks when an epic run's
+task lands or closes, when the run completes, again every ten minutes for
+two weeks while its epic stays open, and when a plan's task lands outside
+an epic run. The push dispatcher gains "questions waiting for you" and "a
+proposal ready for you" for the person who asked for a breakdown, and "an
+epic run you started paused" for the person who started it — to nobody
+else — on the existing `gate`, `work` and `failure` kinds and switches.
+(#2349)
+
 **A failed task of an epic run holds back only what depends on it, and a
 person can pause, resume, stop, retry and skip.** A task that fails blocks
 its dependents, directly or through another task, each naming the

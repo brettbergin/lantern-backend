@@ -68,6 +68,12 @@ class _Job:
     attempts: int = field(default=0, compare=False)
 
 
+def _actor(text: str | None) -> dict[str, Any]:
+    """An event's recorded actor, or nobody."""
+    actor = json.loads(text) if text else None
+    return actor if isinstance(actor, dict) else {}
+
+
 class PushDispatcher:
     def __init__(
         self,
@@ -161,6 +167,7 @@ class PushDispatcher:
                         run_id=row.run_id,
                         item_id=row.item_id,
                         data=json.loads(row.data_json) if row.data_json else {},
+                        actor=_actor(row.actor_json),
                     ),
                     float(row.recorded_at),
                 )

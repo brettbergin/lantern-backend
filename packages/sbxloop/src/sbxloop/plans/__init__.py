@@ -14,8 +14,9 @@ the rows, :mod:`~sbxloop.plans.hierarchy` what each forge can hold,
 after publish, :mod:`~sbxloop.plans.direct` a person's edits, attaches and
 detaches written to the forge after publish, :mod:`~sbxloop.plans.replan` a
 re-plan's approved diff applied through the publish path and the direct
-edit's write, and :mod:`~sbxloop.plans.service` the rules every surface goes
-through.
+edit's write, :mod:`~sbxloop.plans.complete` the summary and close of a
+finished epic or initiative, and :mod:`~sbxloop.plans.service` the rules
+every surface goes through.
 """
 
 from __future__ import annotations

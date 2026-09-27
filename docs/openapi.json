@@ -2737,13 +2737,13 @@
         "properties": {
           "failures": {
             "default": true,
-            "description": "Work or a reply you asked for could not finish.",
+            "description": "Work or a reply you asked for could not finish, or an epic run you started paused.",
             "title": "Failures",
             "type": "boolean"
           },
           "gates": {
             "default": true,
-            "description": "Work is waiting on your decision.",
+            "description": "Work is waiting on your decision, or a breakdown you asked for on your answers.",
             "title": "Gates",
             "type": "boolean"
           },
@@ -2764,7 +2764,7 @@
           },
           "work": {
             "default": true,
-            "description": "Work or a reply you asked for arrived.",
+            "description": "Work, a reply or a plan proposal you asked for arrived.",
             "title": "Work",
             "type": "boolean"
           }
@@ -5243,7 +5243,7 @@
         "type": "object"
       },
       "NotificationKind": {
-        "description": "What a push is about.\n\n``mention``: another person named you in a channel. ``gate``: work is\nwaiting on a decision you can make. ``work``: work or a reply you asked\nfor arrived. ``failure``: work or a reply you asked for could not\nfinish. ``test``: a test push you asked for.",
+        "description": "What a push is about.\n\n``mention``: another person named you in a channel. ``gate``: work is\nwaiting on a decision you can make, or a plan breakdown you asked for\nis waiting on your answers. ``work``: work or a reply you asked for\narrived, or a plan breakdown you asked for proposed its level.\n``failure``: work or a reply you asked for could not finish, or an\nepic run you started paused (a task failed, or someone else paused\nit). ``test``: a test push you asked for.",
         "enum": [
           "mention",
           "gate",
