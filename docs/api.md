@@ -672,7 +672,8 @@ imported entry, `api`), `created_by`, `created_at` and `restart_required`.
 
 Every entry also carries `labels`: whether the repository carries the labels
 the loop applies — the seven lifecycle labels under this repository's own
-names and the follow-up label. `state` is `compliant` (it carries every one
+names, the planning level labels where `[planning]` is on for it, and the
+follow-up label. `state` is `compliant` (it carries every one
 of them, as of `checked_at`), `incomplete` (`missing` names the ones it does
 not), or `unknown` — nobody has been able to look yet, the forge would not
 answer, or the configured names have changed since the last look. `unknown`
@@ -745,7 +746,7 @@ any write to the plan or any node bumps it, and a stale one is `409 stale_revisi
 says that before anyone types: `planning: {hierarchy, reason}`, where
 `hierarchy` is `native` (GitHub sub-issues), `checklist` (GitLab: level
 labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
-repository's forge can't hold plans: Gitea is not supported"). Changes emit
+repository's forge can't hold plans: Gitea is not supported"; or `[planning] enabled = false` for it: "planning is off for this repository"). Changes emit
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
 `deleted`).

@@ -3820,6 +3820,9 @@ class TestDoctorBranchProtection:
             "sbxloop:blocked",
             "sbxloop:awaiting-merge",
             "sbxloop:workload",
+            "sbx:initiative",
+            "sbx:epic",
+            "sbx:task",
             "sbxloop:follow-up",
         )
 
@@ -4132,9 +4135,10 @@ class TestDoctorPermissions:
 
 
 class TestInitRepo:
-    """``sbxloop init-repo`` (#630): the six lifecycle labels plus the
-    follow-up label, colored and described, created through a github-ops
-    sandbox and left alone when already present."""
+    """``sbxloop init-repo`` (#630): the lifecycle labels, the planning
+    level labels (#2343) and the follow-up label, colored and described,
+    created through a github-ops sandbox and left alone when already
+    present."""
 
     def _patch_box(self, mp: pytest.MonkeyPatch, fake: FakeGithub) -> list[str]:
         import sbxloop.daemon.github as github_module
@@ -4171,6 +4175,9 @@ class TestInitRepo:
             "sbxloop:blocked",
             "sbxloop:awaiting-merge",
             "sbxloop:workload",
+            "sbx:initiative",
+            "sbx:epic",
+            "sbx:task",
             "sbxloop:follow-up",
         ]
         created = [
@@ -4185,9 +4192,12 @@ class TestInitRepo:
             "1d76db",
             "c5def5",
             "0052cc",
+            "5319e7",
+            "0075ca",
+            "bfdadc",
         }
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
-        assert "7 label(s) created, 1 already present" in plain
+        assert "10 label(s) created, 1 already present" in plain
         assert closed == ["acme/alpha"], "the sandbox is torn down"
 
     def test_a_second_run_creates_nothing(self, workdir: Path) -> None:
@@ -4197,12 +4207,12 @@ class TestInitRepo:
             self._patch_box(mp, fake)
             first = runner.invoke(app, ["init-repo", "acme/alpha"])
             assert first.exit_code == 0, first.output
-            assert len(fake.labels_created) == 8
+            assert len(fake.labels_created) == 11
             second = runner.invoke(app, ["init-repo", "acme/alpha"])
         assert second.exit_code == 0, second.output
-        assert len(fake.labels_created) == 8
+        assert len(fake.labels_created) == 11
         plain = re.sub(r"\x1b\[[0-9;]*m", "", second.output)
-        assert "0 label(s) created, 8 already present" in plain
+        assert "0 label(s) created, 11 already present" in plain
 
     def test_a_repository_outside_the_config_gets_the_daemon_wide_labels(
         self, workdir: Path
@@ -4233,7 +4243,7 @@ class TestInitRepo:
             result = runner.invoke(app, ["init-repo", "acme/alpha"])
         assert result.exit_code == 1
         plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
-        assert "8 label(s) could not be created" in plain
+        assert "11 label(s) could not be created" in plain
         assert "permission to write issue labels" in plain
 
     def test_a_malformed_repository_is_rejected(self, workdir: Path) -> None:
@@ -4283,10 +4293,13 @@ class TestInitRepoGitlab:
             "sbxloop:blocked",
             "sbxloop:awaiting-merge",
             "sbxloop:workload",
+            "sbx:initiative",
+            "sbx:epic",
+            "sbx:task",
             "sbxloop:follow-up",
         ]
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
-        assert "8 label(s) created, 0 already present" in plain
+        assert "11 label(s) created, 0 already present" in plain
         assert closed == ["acme/widgets"], "the sandbox is torn down"
 
     def test_the_boot_banner_names_gitlab_not_github(self, workdir: Path) -> None:
@@ -4318,7 +4331,7 @@ class TestInitRepoGitlab:
             result = runner.invoke(app, ["init-repo", "acme/widgets"])
         assert result.exit_code == 1
         plain = " ".join(re.sub(r"\x1b\[[0-9;]*m", "", result.output).split())
-        assert "8 label(s) could not be created" in plain
+        assert "11 label(s) could not be created" in plain
         assert "GitHub App" not in plain
         assert "classic PAT" not in plain
         assert "api" in plain and "scope" in plain

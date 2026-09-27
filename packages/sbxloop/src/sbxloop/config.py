@@ -215,6 +215,8 @@ class AgentModels(_ConfigModel):
     operator_plan: str | None = None
     operator_execute: str | None = None
     operator_judge: str | None = None
+    # The planner that breaks an initiative or an epic into its next level.
+    plan: str | None = None
 
     @field_validator("*")
     @classmethod
@@ -951,6 +953,33 @@ class LabelSet(NamedTuple):
     blocked: str
     gated: str
     workload: str
+    # The planning level labels (#2343): what a published plan node is on
+    # the forge. Empty where planning is off, and then not part of the set
+    # a repository is expected to carry.
+    initiative: str = ""
+    epic: str = ""
+    task: str = ""
+
+    @property
+    def levels(self) -> dict[str, str]:
+        """The level labels in force, by level."""
+        return {kind: getattr(self, kind) for kind in LEVEL_KINDS if getattr(self, kind)}
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        """Every label in force: the seven lifecycle labels, then the level
+        labels where planning is on."""
+        return tuple(getattr(self, kind) for kind in LABEL_KINDS) + tuple(self.levels.values())
+
+
+# The three planning levels, and the label a published node of each carries.
+# Fixed names: a plan is recognisable as one on any repository.
+LEVEL_KINDS = ("initiative", "epic", "task")
+LEVEL_LABELS: dict[str, str] = {
+    "initiative": "sbx:initiative",
+    "epic": "sbx:epic",
+    "task": "sbx:task",
+}
 
 
 def _check_label_set(labels: Sequence[str], where: str) -> None:
@@ -998,6 +1027,39 @@ def _check_api_root(value: str, key: str, example: str, *, allow_http: bool = Fa
     return value
 
 
+class PlanningConfig(_ConfigModel):
+    """Planning work into the forge: initiatives, epics and tasks (#2343).
+
+    On by default wherever the forge can hold a plan. The caps bound what
+    one breakdown may propose and what one parent may hold; a person still
+    publishes every level and starts every epic run. ``close_completed``
+    comments a summary on an epic whose tasks are all closed and closes it,
+    and does the same for an initiative whose epics are all closed.
+    """
+
+    enabled: bool = True
+    max_epics_per_initiative: int = Field(default=8, ge=1, le=50)
+    max_tasks_per_epic: int = Field(default=12, ge=1, le=50)
+    #: Clarifying questions one generation may ask; 0 never asks.
+    max_questions: int = Field(default=5, ge=0, le=10)
+    close_completed: bool = True
+
+
+class PlanningOverride(_ConfigModel):
+    """`[vcs.repos.planning]`: sparse per-repository overrides of
+    `[planning]`; omit a key to inherit."""
+
+    enabled: bool | None = None
+    max_epics_per_initiative: int | None = Field(default=None, ge=1, le=50)
+    max_tasks_per_epic: int | None = Field(default=None, ge=1, le=50)
+    max_questions: int | None = Field(default=None, ge=0, le=10)
+    close_completed: bool | None = None
+
+    def over(self, base: PlanningConfig) -> PlanningConfig:
+        """``base`` with every key set here written over it."""
+        return base.model_copy(update=self.model_dump(exclude_none=True))
+
+
 class RepoConfig(_ConfigModel):
     """One repository sbxloop works with.
 
@@ -1019,6 +1081,9 @@ class RepoConfig(_ConfigModel):
     # Sparse `[agent.openai]` overrides for this repository; `Config.openai_for`
     # resolves the effective endpoint.
     openai: OpenAIEndpointOverride = Field(default_factory=OpenAIEndpointOverride)
+    # Sparse `[planning]` overrides for this repository; `Config.planning_for`
+    # resolves the effective settings.
+    planning: PlanningOverride = Field(default_factory=PlanningOverride)
     # The host checkout of *this* repository that runs clone and refresh.
     # None falls back to the legacy ``[sandbox] workspace``, but only when
     # that checkout demonstrably belongs to this repo (see
@@ -2020,7 +2085,7 @@ class DaemonConfig(_ConfigModel):
 
     @model_validator(mode="after")
     def _check(self) -> DaemonConfig:
-        _check_label_set(self.labels_for(), "daemon")
+        _check_label_set(self.labels_for().names, "daemon")
         for name in (
             "max_runs_per_day",
             "max_attempts_per_item",
@@ -3247,6 +3312,8 @@ class Config(_ConfigModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     # Push notifications to people's devices through a push relay.
     push: PushConfig = Field(default_factory=PushConfig)
+    # Planning initiatives, epics and tasks into the forge (#2343).
+    planning: PlanningConfig = Field(default_factory=PlanningConfig)
     entrygraph: EntrygraphConfig = Field(default_factory=EntrygraphConfig)
     # Named bounds for workload runs (#758) and the one a run gets by
     # default; a code run ignores both.
@@ -3652,7 +3719,7 @@ class Config(_ConfigModel):
         that renames one onto another (`failed_label = "sbxloop:blocked"`)
         would mark two states with one label."""
         for entry in self.github.repos:
-            _check_label_set(self.daemon.labels_for(entry), f"github.repos[{entry.repo}]")
+            _check_label_set(self.daemon.labels_for(entry).names, f"github.repos[{entry.repo}]")
         return self
 
     def review_notify_for(self, repo: str | None = None) -> list[str]:
@@ -3668,8 +3735,20 @@ class Config(_ConfigModel):
         """The lifecycle labels for ``repo`` (its ``[[vcs.repos]]``
         overrides over the ``[daemon]`` defaults, #630); ``None`` resolves
         the default repository, and a repository with no entry gets the
-        daemon-wide set."""
-        return self.daemon.labels_for(self.github.effective_repo(repo))
+        daemon-wide set. Where planning is on, the set carries the three
+        level labels too (#2343)."""
+        labels = self.daemon.labels_for(self.github.effective_repo(repo))
+        if not self.planning_for(repo).enabled:
+            return labels
+        return labels._replace(**LEVEL_LABELS)
+
+    def planning_for(self, repo: str | None = None) -> PlanningConfig:
+        """The effective `[planning]` settings for ``repo``: the entry's
+        `[vcs.repos.planning]` overrides over the global block."""
+        entry = self.github.effective_repo(repo)
+        if entry is None:
+            return self.planning
+        return entry.planning.over(self.planning)
 
     def sandbox_resources_for(
         self, purpose: ResourcePurpose, repo: str | None = None

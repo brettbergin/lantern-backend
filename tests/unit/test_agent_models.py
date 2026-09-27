@@ -447,7 +447,7 @@ def test_status_reports_model_policy_with_source_and_snapshot_scope(
         "model": "initial" if terminal else "live",
         "source": "agent.models.build",
     }
-    assert len(policy["roles"]) == 8 and policy["backend"] == "copilot"
+    assert len(policy["roles"]) == 9 and policy["backend"] == "copilot"
 
 
 def test_list_models_names_repository_and_concierge_choices(tmp_path, monkeypatch):

@@ -15,7 +15,13 @@ import pytest
 from pydantic import BaseModel
 
 from sbxloop.chatservices import CHAT_SERVICES
-from sbxloop.config import RESERVED_ENV_KEYS, Config, load_config, load_secrets_env
+from sbxloop.config import (
+    RESERVED_ENV_KEYS,
+    Config,
+    PlanningConfig,
+    load_config,
+    load_secrets_env,
+)
 from sbxloop.data import DEFAULT_CONFIG_TOML, config_presets, render_config_template
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -562,6 +568,9 @@ def test_every_commented_key_is_a_real_config_key() -> None:
         elif section in ("vcs.repos.agent_models", "github.repos.agent_models"):
             top = section.split(".")[0]
             doc = {top: {"repos": [{"repo": "you/your-repo", "agent_models": parsed}]}}
+        elif section in ("vcs.repos.planning", "github.repos.planning"):
+            top = section.split(".")[0]
+            doc = {top: {"repos": [{"repo": "you/your-repo", "planning": parsed}]}}
         elif section in ("vcs.repos.openai", "github.repos.openai"):
             top = section.split(".")[0]
             doc = {top: {"repos": [{"repo": "you/your-repo", "openai": parsed}]}}
@@ -896,6 +905,45 @@ def test_example_push_section_documents_the_defaults() -> None:
         "max_devices_per_user",
     }
     assert Config.model_validate({"push": block}).push == Config().push
+
+
+def test_example_planning_section_documents_the_defaults() -> None:
+    """The commented `[planning]` block, uncommented whole, loads and equals
+    the model's defaults, and carries every key the model has."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[planning]":
+            in_block = True
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+        elif in_block and not line.strip():
+            break
+    block = tomllib.loads(text)
+    assert set(block) == set(PlanningConfig.model_fields)
+    assert Config.model_validate({"planning": block}).planning == Config().planning
+
+
+def test_example_repo_planning_block_names_every_override() -> None:
+    """`[vcs.repos.planning]` documents every key `[planning]` has, and each
+    loads as a sparse override."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[vcs.repos.planning]":
+            in_block = True
+        elif in_block and stripped.startswith("["):
+            break
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+    block = tomllib.loads(text)
+    assert set(block) == set(PlanningConfig.model_fields)
+    config = Config.model_validate(
+        {"vcs": {"repos": [{"repo": "you/your-repo", "planning": block}]}}
+    )
+    assert config.planning_for("you/your-repo").enabled is False
 
 
 def test_example_documents_the_ambient_model_as_an_opt_in() -> None:

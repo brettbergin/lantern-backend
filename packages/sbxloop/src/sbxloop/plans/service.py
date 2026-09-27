@@ -16,7 +16,7 @@ from typing import Any
 
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
-from sbxloop.plans.hierarchy import repository_planning
+from sbxloop.plans.hierarchy import repository_planning_for
 from sbxloop.plans.model import Level, Plan, PlanNode, child_level
 from sbxloop.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision, new_id
 
@@ -370,7 +370,7 @@ class PlanService:
                 f"{name} is not a repository configured on this server",
                 repository=name,
             )
-        planning = repository_planning(str(config.vcs_kind_for(entry.repo)))
+        planning = repository_planning_for(config, entry.repo)
         if not planning.supported:
             raise PlanRefusal(
                 409,
