@@ -455,8 +455,11 @@ class EpicRunTaskOut(ApiModel):
     not closed yet), ``ready`` (about to be admitted, or the forge could
     not be read), ``queued``, ``running``, ``landed`` (its code run merged
     or its workload delivered, and its issue was closed), ``closed`` (its
-    issue was already closed), ``failed`` (``reason`` says why) or
-    ``blocked`` (a dependency failed, so it is not admitted). ``item_id``
+    issue was already closed), ``failed`` (``reason`` says why; retry or
+    skip it), ``blocked`` (a dependency failed or is blocked, so it is not
+    admitted; ``reason`` names which), ``skipped`` (a person treated it as
+    done; its issue is left as it is) or ``cancelled`` (the run was stopped
+    before it was admitted, or while its item was still queued). ``item_id``
     is the item it was admitted as and ``run_id`` the run that item last
     started — the run's thread."""
 
@@ -466,7 +469,18 @@ class EpicRunTaskOut(ApiModel):
     workload_profile: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     forge: PlanForge | None = None
-    state: Literal["waiting", "ready", "queued", "running", "landed", "closed", "failed", "blocked"]
+    state: Literal[
+        "waiting",
+        "ready",
+        "queued",
+        "running",
+        "landed",
+        "closed",
+        "failed",
+        "blocked",
+        "skipped",
+        "cancelled",
+    ]
     item_id: str | None = None
     run_id: str | None = None
     reason: str | None = None
@@ -476,7 +490,11 @@ class EpicRunTaskOut(ApiModel):
 
 class EpicRunOut(ApiModel):
     """An epic run: the daemon admitting an epic's ready tasks as issue
-    runs, in dependency order, with ``parent_item_id`` naming it."""
+    runs, in dependency order, with ``parent_item_id`` naming it. ``state``
+    is ``running`` (admitting), ``paused`` (a person paused it: what is
+    queued or running goes on, nothing new is admitted), ``completed``
+    (every task landed, closed or skipped) or ``cancelled`` (stopped:
+    nothing more is admitted; a run already under way finishes)."""
 
     id: str
     plan_id: str
@@ -493,6 +511,16 @@ class EpicRunOut(ApiModel):
 class EpicRunStarted(EpicRunOut):
     """The epic run as it stands after its first pass. ``replayed`` is true
     when the answer is a replay of an earlier call under the same
+    ``Idempotency-Key`` (the run as it is now)."""
+
+    operation_id: str | None = None
+    replayed: bool = False
+
+
+class EpicRunChanged(EpicRunOut):
+    """The epic run after a control — pause, resume, cancel, or a task's
+    retry or skip — and the pass it made. ``replayed`` is true when the
+    answer is a replay of an earlier call under the same
     ``Idempotency-Key`` (the run as it is now)."""
 
     operation_id: str | None = None

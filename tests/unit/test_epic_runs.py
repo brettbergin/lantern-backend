@@ -26,7 +26,7 @@ from sbxloop.plans.model import ForgeRef, Plan, PlanNode
 from sbxloop.plans.service import PlanRefusal
 from sbxloop.plans.store import PlanStore
 from tests.unit.test_daemon_loop import Harness
-from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue
+from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue, report
 
 ACTOR = {"kind": "client", "id": "c1", "display": "Ada"}
 EPIC_NUMBER = 10
@@ -333,3 +333,320 @@ class TestRules:
         assert source.claim(mine) is True
         assert _labels_added(ops) == {"sbxloop:in-progress"}
         assert not any(m == "DELETE" and "/labels/" in p for m, p, _ in ops.raw_calls)
+
+
+# -- pausing, retrying, skipping and stopping (#2348) ---------------------------------
+
+
+def _types(h: Harness, since: int = 0) -> list[str]:
+    return [t for t, _ in _events(h)[since:]]
+
+
+def _failed_chain(tmp_path: Path) -> tuple[Harness, RecordingOps, EpicRun]:
+    """A fails (one attempt); B depends on A, C on B; D is a sibling and E
+    depends on D. After the drain A is failed and D and E have landed."""
+    ops = _issues(11, 12, 13, 14, 15)
+    h = _harness(tmp_path, ops, daemon={"max_attempts_per_item": 1})
+    _plan(
+        h,
+        _node("a", 11),
+        _node("b", 12, depends_on=("a",)),
+        _node("c", 13, depends_on=("b",)),
+        _node("d", 14),
+        _node("e", 15, depends_on=("d",)),
+    )
+    h.outcomes = ["failed"]
+    run = _start(h)
+    _drain(h)
+    return h, ops, run
+
+
+class TestAFailure:
+    def test_only_the_failed_tasks_dependents_are_blocked(self, tmp_path: Path) -> None:
+        h, _, run = _failed_chain(tmp_path)
+        assert _states(h, run) == {
+            "a": "failed",
+            "b": "blocked",
+            "c": "blocked",
+            "d": "landed",
+            "e": "landed",
+        }
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "running"
+        # Each blocked task names the dependency it waits on a person for.
+        assert final.task("b").reason == "blocked by A (failed)"  # type: ignore[union-attr]
+        assert final.task("c").reason == "blocked by B (blocked)"  # type: ignore[union-attr]
+        events = _events(h)
+        (failed,) = [d for t, d in events if t == "plan.run.task_failed"]
+        assert failed["task_node_id"] == "a" and failed["from"] == "queued"
+        assert failed["reason"]
+        blocked = {d["task_node_id"]: d for t, d in events if t == "plan.run.task_blocked"}
+        assert blocked["b"]["blocked_by"] == ["a"] and blocked["c"]["blocked_by"] == ["b"]
+        # The run is not paused — D and E went on — but the person who
+        # started it hears that it needs them.
+        (paused,) = [d for t, d in events if t == "plan.run.paused"]
+        assert paused["reason"] == "task_failed" and paused["state"] == "running"
+        assert paused["task_node_id"] == "a" and paused["blocked"] == ["b", "c"]
+        assert paused["error"] == failed["reason"]
+        landed = [d["task_node_id"] for t, d in events if t == "plan.run.task_landed"]
+        assert landed == ["d", "e"]
+        running = [d["task_node_id"] for t, d in events if t == "plan.run.task_running"]
+        assert running == []  # the harness runs a dispatch to its end within one tick
+
+    def test_every_task_move_records_one_event(self, tmp_path: Path) -> None:
+        h, _, run = _failed_chain(tmp_path)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None
+        moves: dict[str, list[str]] = {}
+        for kind, data in _events(h):
+            if kind.startswith("plan.run.task_"):
+                moves.setdefault(data["task_node_id"], []).append(data["state"])
+        # The states each task passed through, as its events tell them,
+        # end where the run says each task is.
+        assert {k: v[-1] for k, v in moves.items()} == _states(h, run)
+        # A run's tasks start out waiting; E is admitted once D landed.
+        assert moves["e"] == ["queued", "landed"]
+
+
+class TestRetry:
+    def test_retry_requeues_the_item_and_its_dependents_wait_on_it(self, tmp_path: Path) -> None:
+        h, ops, run = _failed_chain(tmp_path)
+        (item_a,) = [i for i in h.dstore.items() if i.source_key == "11"]
+        assert item_a.state == "failed" and item_a.claimed
+        since = len(_events(h))
+        retried = h.loop.epic_runs.retry("plan_1", "a", actor=ACTOR, now=h.clock())
+        assert {t.node_id: t.state for t in retried.tasks} == {
+            "a": "queued",
+            "b": "waiting",
+            "c": "waiting",
+            "d": "landed",
+            "e": "landed",
+        }
+        fresh = h.dstore.get(item_a.item_id)
+        assert fresh is not None and fresh.state == "queued" and fresh.attempts == 0
+        assert fresh.parent_item_id == run.id
+        events = _events(h)[since:]
+        assert [t for t, _ in events] == [
+            "plan.run.task_retried",
+            "plan.run.task_waiting",
+            "plan.run.task_waiting",
+        ]
+        assert events[0][1]["via"] == "item" and events[0][1]["by"] == "Ada"
+        # The item retry told the issue who asked and cleared the failed label.
+        assert any(f"Re-queued by Ada (epic run {run.id})" in b for _, b in ops.comments)
+        assert ("DELETE", "/repos/o/r/issues/11/labels/sbxloop%3Afailed") in {
+            (m, p) for m, p, _ in ops.raw_calls
+        }
+        _drain(h)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+        assert _types(h)[-1] == "plan.run.completed"
+
+    def test_a_refused_admission_is_admitted_afresh(self, tmp_path: Path) -> None:
+        ops = _issues(11, 12)
+        ops.issues["11"]["pull_request"] = {"url": "x"}
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 11), _node("b", 12, depends_on=("a",)))
+        run = _start(h)
+        assert _states(h, run) == {"a": "failed", "b": "blocked"}
+        assert h.dstore.items() == []
+        del ops.issues["11"]["pull_request"]
+        since = len(_events(h))
+        retried = h.loop.epic_runs.retry("plan_1", "a", actor=ACTOR, now=h.clock())
+        assert {t.node_id: t.state for t in retried.tasks} == {"a": "queued", "b": "waiting"}
+        assert _types(h, since) == [
+            "plan.run.task_retried",
+            "plan.run.task_admitted",
+            "plan.run.task_waiting",
+        ]
+        assert _events(h)[since][1]["via"] == "admission"
+        (item,) = h.dstore.items()
+        assert item.parent_item_id == run.id
+
+    def test_only_a_failed_task_is_retried(self, tmp_path: Path) -> None:
+        h, _, _ = _failed_chain(tmp_path)
+        driver = h.loop.epic_runs
+        with pytest.raises(PlanRefusal) as blocked:
+            driver.retry("plan_1", "c", actor=ACTOR, now=h.clock())
+        assert blocked.value.code == "task_blocked"
+        assert blocked.value.extra["blocked_by"] == ["b"]
+        with pytest.raises(PlanRefusal) as landed:
+            driver.retry("plan_1", "d", actor=ACTOR, now=h.clock())
+        assert landed.value.code == "task_not_failed"
+        with pytest.raises(PlanRefusal) as epic:
+            driver.retry("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert epic.value.status == 422
+
+
+class TestSkip:
+    def test_skip_treats_the_task_as_done_and_leaves_its_issue(self, tmp_path: Path) -> None:
+        h, ops, run = _failed_chain(tmp_path)
+        writes = [c for c in ops.raw_calls if c[0] != "GET" and "/issues/11" in c[1]]
+        since = len(_events(h))
+        skipped = h.loop.epic_runs.skip("plan_1", "a", actor=ACTOR, now=h.clock())
+        states = {t.node_id: t.state for t in skipped.tasks}
+        assert states["a"] == "skipped" and states["b"] == "queued"
+        assert skipped.task("a").reason == "skipped by Ada"  # type: ignore[union-attr]
+        types = _types(h, since)
+        assert types[0] == "plan.run.task_skipped"
+        assert types[1:] == ["plan.run.task_admitted", "plan.run.task_waiting"]
+        _drain(h)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+        (_, completed) = _events(h)[-1]
+        assert completed["skipped"] == ["a"]
+        # The skipped task's issue and item are as its failure left them.
+        assert [c for c in ops.raw_calls if c[0] != "GET" and "/issues/11" in c[1]] == writes
+        (item_a,) = [i for i in h.dstore.items() if i.source_key == "11"]
+        assert item_a.state == "failed"
+
+    def test_a_task_under_way_or_done_is_not_skipped(self, tmp_path: Path) -> None:
+        ops = _issues(11, 12)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 11), _node("b", 12, depends_on=("a",)))
+        _start(h)
+        with pytest.raises(PlanRefusal) as queued:
+            h.loop.epic_runs.skip("plan_1", "a", actor=ACTOR, now=h.clock())
+        assert queued.value.code == "task_in_progress"
+        # A waiting task can be skipped: B is done without running.
+        skipped = h.loop.epic_runs.skip("plan_1", "b", actor=ACTOR, now=h.clock())
+        assert skipped.task("b").state == "skipped"  # type: ignore[union-attr]
+        with pytest.raises(PlanRefusal) as again:
+            h.loop.epic_runs.skip("plan_1", "b", actor=ACTOR, now=h.clock())
+        assert again.value.code == "task_settled"
+
+
+class TestPause:
+    def test_pause_stops_admission_and_resume_restarts_it(self, tmp_path: Path) -> None:
+        ops = _issues(11, 12)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 11), _node("b", 12, depends_on=("a",)))
+        run = _start(h)
+        since = len(_events(h))
+        paused = h.loop.epic_runs.pause("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert paused.state == "paused"
+        assert _events(h)[since] == (
+            "plan.run.paused",
+            {
+                "plan_id": "plan_1",
+                "node_id": "epic",
+                "epic_run_id": run.id,
+                "reason": "person",
+                "state": "paused",
+                "by": "Ada",
+            },
+        )
+        with pytest.raises(PlanRefusal) as twice:
+            h.loop.epic_runs.pause("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert twice.value.code == "already_paused"
+        # What was queued goes on and is followed; what it made ready is
+        # not admitted while the run is paused.
+        _drain(h, 4)
+        assert _states(h, run) == {"a": "landed", "b": "ready"}
+        assert [i.source_key for i in h.dstore.items()] == ["11"]
+        since = len(_events(h))
+        resumed = h.loop.epic_runs.resume("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert resumed.state == "running"
+        assert resumed.task("b").state == "queued"  # type: ignore[union-attr]
+        assert _types(h, since) == ["plan.run.resumed", "plan.run.task_admitted"]
+        with pytest.raises(PlanRefusal) as not_paused:
+            h.loop.epic_runs.resume("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert not_paused.value.code == "not_paused"
+        _drain(h, 3)
+        final = h.loop.epic_runs.runs.get(run.id)
+        assert final is not None and final.state == "completed"
+
+    def test_only_an_epic_is_paused(self, tmp_path: Path) -> None:
+        h = _harness(tmp_path, _issues(11))
+        _plan(h, _node("a", 11))
+        _start(h)
+        with pytest.raises(PlanRefusal) as task:
+            h.loop.epic_runs.pause("plan_1", "a", actor=ACTOR, now=h.clock())
+        assert task.value.status == 422
+
+
+class TestCancel:
+    def test_cancel_withdraws_queued_items_and_admits_nothing_more(self, tmp_path: Path) -> None:
+        ops = _issues(11, 12, 13)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 11), _node("b", 12), _node("c", 13, depends_on=("a",)))
+        _start(h)
+        before = list(ops.raw_calls)
+        since = len(_events(h))
+        cancelled = h.loop.epic_runs.cancel("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert cancelled.state == "cancelled" and cancelled.completed_at
+        assert {t.node_id: t.state for t in cancelled.tasks} == {
+            "a": "cancelled",
+            "b": "cancelled",
+            "c": "cancelled",
+        }
+        assert cancelled.task("a").reason.startswith("withdrawn: ")  # type: ignore[union-attr]
+        assert cancelled.task("c").reason.startswith("never admitted: ")  # type: ignore[union-attr]
+        assert {i.source_key: i.state for i in h.dstore.items()} == {"11": "failed", "12": "failed"}
+        # Nothing had been written to the issues, and nothing is now.
+        assert [c for c in ops.raw_calls[len(before) :] if c[0] != "GET"] == []
+        events = _events(h)[since:]
+        assert [t for t, _ in events] == ["plan.run.task_cancelled"] * 3 + ["plan.run.cancelled"]
+        assert events[-1][1]["withdrawn"] == ["a", "b"] and events[-1][1]["running"] == []
+        _drain(h, 3)
+        assert h.runs == [] and len(h.dstore.items()) == 2
+        with pytest.raises(PlanRefusal) as ended:
+            h.loop.epic_runs.retry("plan_1", "a", actor=ACTOR, now=h.clock())
+        assert ended.value.code == "run_ended"
+        with pytest.raises(PlanRefusal) as again:
+            h.loop.epic_runs.cancel("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert again.value.code == "run_ended"
+
+    def test_a_task_under_way_is_left_to_finish_and_followed(self, tmp_path: Path) -> None:
+        ops = _issues(11, 12)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 11), _node("b", 12, depends_on=("a",)))
+        run = _start(h)
+        (item,) = h.dstore.items()
+        h.dstore.mark_running(item.item_id, "run-a", h.clock())
+        cancelled = h.loop.epic_runs.cancel("plan_1", "epic", actor=ACTOR, now=h.clock())
+        assert {t.node_id: t.state for t in cancelled.tasks} == {"a": "running", "b": "cancelled"}
+        (_, stopped) = _events(h)[-1]
+        assert stopped["withdrawn"] == [] and stopped["running"] == ["a"]
+        still = h.dstore.get(item.item_id)
+        assert still is not None and still.state == "running"
+        # The run is still followed until that task settles; its failure is
+        # recorded, but a stopped run asks nobody for anything.
+        assert [r.id for r in h.loop.epic_runs.runs.active()] == [run.id]
+        h.dstore.abandon(item.item_id, "gave up", h.clock())
+        since = len(_events(h))
+        h.loop.epic_runs.tick(h.clock())
+        assert _types(h, since) == ["plan.run.task_failed"]
+        assert h.loop.epic_runs.runs.active() == []
+
+
+class TestIssueWording:
+    def _epic_item(self, source: GitHubIssueSource, *, claimed: bool) -> WorkItem:
+        item = source.admit("o/r", "11", "code", label=False)
+        return item.model_copy(
+            update={"parent_item_id": "erun_0123456789abcdef", "claimed": claimed}
+        )
+
+    def test_an_epic_runs_task_is_sent_back_to_its_plan(self, tmp_path: Path) -> None:
+        ops = _issues(11)
+        h = _harness(tmp_path, ops)
+        source = h.loop.source
+        item = self._epic_item(source, claimed=False)
+        assert source.claim(item) is True
+        (claim,) = [b for _, b in ops.comments if "sbxloop-claim" in b]
+        assert "Started as a task of epic run `erun_0123456789abcdef`" in claim
+        claimed = item.model_copy(update={"claimed": True})
+        source.report_abandoned(claimed, "tests failed")
+        source.report_blocked(claimed, "branch protection refused", None, "")
+        source.report_cancelled(claimed, report(state="cancelled", pr=None))
+        _, abandoned, blocked, cancelled = [b for _, b in ops.comments]
+        for body in (abandoned, blocked, cancelled):
+            assert "epic run `erun_0123456789abcdef`" in body
+            assert "retry it from its plan" in body
+            assert "Re-add" not in body and "re-add" not in body
+
+    def test_a_withdrawn_unclaimed_task_writes_nothing(self, tmp_path: Path) -> None:
+        ops = _issues(11)
+        h = _harness(tmp_path, ops)
+        h.loop.source.report_abandoned(self._epic_item(h.loop.source, claimed=False), "stopped")
+        assert [c for c in ops.raw_calls if c[0] != "GET"] == []

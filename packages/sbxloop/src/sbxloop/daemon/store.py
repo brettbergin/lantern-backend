@@ -2466,7 +2466,9 @@ class DaemonStore:
 
     # -- operator controls (#229) ------------------------------------------------
 
-    def abandon(self, item_id: str, reason: str, now: float) -> WorkItem:
+    def abandon(
+        self, item_id: str, reason: str, now: float, *, queued_only: bool = False
+    ) -> WorkItem:
         """Operator abandon: queued/running/blocked/gated/awaiting_review/
         paused_review/awaiting_answers → failed. ``run_id`` is
         kept so the ledger and ``sbxloop logs`` still tie the item to the run
@@ -2474,11 +2476,13 @@ class DaemonStore:
         while pinned to my run" as its cue to cancel that run. The source is
         owed a report (``pending_report``): whoever delivers it — the loop's
         settle path, recovery, or the tick sweep after a row-only CLI
-        abandon — clears the debt."""
-        return self._transition(
-            item_id,
-            now,
-            (
+        abandon — clears the debt. ``queued_only`` withdraws an item that
+        has not started (an epic run's stop, #2348): an item a dispatch took
+        between the caller's read and this write is refused, not abandoned."""
+        allowed: tuple[str, ...] = (
+            ("queued",)
+            if queued_only
+            else (
                 "queued",
                 "running",
                 "blocked",
@@ -2486,7 +2490,12 @@ class DaemonStore:
                 "awaiting_review",
                 "paused_review",
                 "awaiting_answers",
-            ),
+            )
+        )
+        return self._transition(
+            item_id,
+            now,
+            allowed,
             lambda item: f"{item_id} is already {item.state}",
             state="failed",
             last_error=reason[:2000],

@@ -2786,6 +2786,36 @@ queue's, the holds' and the usage pool's business, and the start is a
 `plan.run` operation that `reconcile_operations` settles from whether the
 run was recorded.
 
+A person steers an epic run (#2348) through five more `plans:publish`
+routes, each a `plan.run.<verb>` operation and each one method of the
+driver taken under the same lock as the pass. A failure holds back only
+what depends on it: `plans/epicrun.py::readiness` blocks a task whose
+dependency is failed or blocked, `blocked_by` names which (the task's
+reason), and `dependents` walks the chain for the notice; every other task
+is admitted as usual. `pause` sets the run `paused`: `EpicRunStore.active`
+still returns it, and the pass follows what was admitted and says what is
+ready but admits nothing; nothing queued or running is touched. `resume`
+sets it `running` and makes a pass. `cancel` sets it `cancelled`: tasks not
+admitted become `cancelled`, a task whose item is still waiting in the
+queue (no run started or pinned) has it withdrawn through
+`DaemonLoop.abandon_item(queued_only=True)` — the store's abandon narrowed
+to `queued`, so an item a dispatch took in between is refused rather than
+killed — and a task under way is left to finish; `active` keeps returning a
+cancelled run while one of its tasks is queued or running, and the pass
+only follows it. Running runs are never cancelled from here: the run
+controls (`runs:control`) do that. `retry` re-queues a failed task's item
+through `DaemonLoop.retry_item` (attempts reset, run unpinned, the
+source's `requeued` report on the issue), or admits it afresh when it has
+none; its dependents fall back to waiting on the next placement. `skip`
+records `skipped`, which counts as done (`DONE`), and writes nothing to the
+issue or the item. Every task move records one `plan.run.task_*` event
+from the diff of a pass (`_task_event`), and a task that newly fails in a
+live run records `plan.run.paused` with `reason: "task_failed"` — the
+notice a person is owed — while the run itself keeps running. The issue
+source words an epic-run item's claim, abandon, blocked and cancel
+comments around the plan (retry or skip it there) rather than the trigger
+label, and says nothing when a stop withdraws an item it never claimed.
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

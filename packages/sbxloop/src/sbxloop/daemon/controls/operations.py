@@ -71,6 +71,11 @@ EFFECTS: dict[str, str] = {
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
     "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
     "plan.run": "the epic run is recorded and its ready tasks are admitted",
+    "plan.run.pause": "the epic run is paused: nothing new is admitted",
+    "plan.run.resume": "the epic run is running again and admits its ready tasks",
+    "plan.run.cancel": "the epic run is cancelled and its queued items withdrawn",
+    "plan.run.retry": "the task is re-queued or admitted afresh",
+    "plan.run.skip": "the task is recorded as skipped",
 }
 
 
@@ -631,6 +636,38 @@ def _judge(
         if run is not None and run.created_at >= op.accepted_at:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the epic run was not started"
+    if op.action.startswith("plan.run."):
+        # Each control is one transaction on the run (a retry's item is
+        # re-queued first, and the next pass follows it): the run's
+        # state, or the task's, says whether it happened.
+        from sbxloop.plans.epicrun import EpicRunStore
+
+        runs = EpicRunStore(loop.dstore)
+        node_id = str((op.request or {}).get("node_id") or "")
+        verb = op.action.removeprefix("plan.run.")
+        if verb in ("pause", "resume", "cancel"):
+            run = runs.latest(op.target_key, node_id)
+            wanted = {"pause": ("paused",), "resume": ("running", "completed")}.get(
+                verb, ("cancelled",)
+            )
+            if run is not None and run.state in wanted:
+                return "succeeded", None, None
+            done = {"pause": "paused", "resume": "resumed"}.get(verb, "cancelled")
+            return "failed", "interrupted_before_effect", f"the epic run was not {done}"
+        run = runs.for_task(op.target_key, node_id)
+        task = run.task(node_id) if run is not None else None
+        if task is not None and (
+            task.state == "skipped" if verb == "skip" else task.state not in ("failed", "blocked")
+        ):
+            return "succeeded", None, None
+        if verb == "retry" and task is not None and task.item_id is not None:
+            # Re-queued before the task row was written: the next pass
+            # follows the item and records the retry.
+            item = loop.dstore.get(task.item_id)
+            if item is not None and item.state in ("queued", "running"):
+                return "succeeded", None, None
+        done = "skipped" if verb == "skip" else "retried"
+        return "failed", "interrupted_before_effect", f"the task was not {done}"
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:
