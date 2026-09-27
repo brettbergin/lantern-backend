@@ -1608,6 +1608,59 @@ class GithubOps:
         (#1017); GitHub addresses them by id alone."""
         self.raw("DELETE", f"/repos/{repo}/issues/comments/{comment_id}")
 
+    def issue_update(
+        self,
+        repo: str,
+        number: int | str,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> dict[str, Any]:
+        """Rewrite the issue's title and/or body; the issue as it now is.
+        Only the fields given are sent, so a title edit leaves the body
+        (and every person's edit in it) alone."""
+        fields: dict[str, Any] = {}
+        if title is not None:
+            fields["title"] = title
+        if body is not None:
+            fields["body"] = body
+        if not fields:
+            raise ValueError("issue_update needs a title or a body to write")
+        path = f"/repos/{repo}/issues/{number}"
+        return self._dict(f"PATCH {path}", self.raw("PATCH", path, fields))
+
+    def _issue_id(self, repo: str, number: int | str) -> int:
+        """The issue's database id, which the sub-issue endpoints address a
+        child by (its number is only unique within its repository)."""
+        issue = self.issue_get(repo, number)
+        issue_id = issue.get("id")
+        if not isinstance(issue_id, int):
+            raise GithubOpsError(f"issue {repo}#{number} answered with no id")
+        return issue_id
+
+    def sub_issue_add(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None:
+        """Link ``child_repo#child_number`` under issue ``number`` as a
+        native sub-issue; the child may live in another repository. A child
+        that already has a parent is GitHub's 422, raised: moving it is a
+        person's decision, never this call's."""
+        child_id = self._issue_id(child_repo, child_number)
+        self.raw("POST", f"/repos/{repo}/issues/{number}/sub_issues", {"sub_issue_id": child_id})
+
+    def sub_issue_remove(
+        self, repo: str, number: int | str, *, child_repo: str, child_number: int | str
+    ) -> None:
+        """Unlink the child from issue ``number``; the child issue stays."""
+        child_id = self._issue_id(child_repo, child_number)
+        self.raw("DELETE", f"/repos/{repo}/issues/{number}/sub_issue", {"sub_issue_id": child_id})
+
+    def sub_issues_list(self, repo: str, number: int | str) -> list[Any]:
+        """Issue ``number``'s sub-issues, in the parent's order, across
+        every page; each is an issue payload (``html_url`` says which
+        repository it lives in)."""
+        return raw_pages(self, f"/repos/{repo}/issues/{number}/sub_issues")
+
     # -- pull requests -------------------------------------------------------
 
     def pr_list_open(self, repo: str, *, head: str) -> list[Any]:
@@ -1754,6 +1807,10 @@ class GithubOps:
         "required_checks_introspection": Capability.SUPPORTED,
         "bot_identity": Capability.SUPPORTED,
         "signed_api_commits": Capability.UNKNOWN,
+        # Verified for a personal account's token, across repositories
+        # (#2338); an App installation that does not cover both
+        # repositories of a cross-repository link is field-unverified.
+        "sub_issues": Capability.SUPPORTED,
     }
 
     def capabilities(self) -> dict[str, Capability]:

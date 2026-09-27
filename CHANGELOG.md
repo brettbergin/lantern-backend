@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+**The forge layer can rewrite an issue and link a child under a parent.**
+Both backends answer `issue_update` (title and/or body, only the fields
+given). GitHub gains `sub_issue_add`, `sub_issue_remove` and
+`sub_issues_list`, which address the child by its issue id and may link
+across repositories, and a new forge capability `sub_issues` says which
+forge links natively: GitHub `supported`, GitLab `unsupported` by policy,
+where the operations refuse by name. These are what publishing a plan
+builds on. Cross-repository links under a GitHub App installation that does
+not cover both repositories are field-unverified. (#2338)
+
 **Native Windows installs can bootstrap Docker Sandboxes.** `sbxloop init`
 uses Astral's PowerShell uv installer and Docker's pinned per-user MSI,
 checks `sbx.exe version`, and records the installed version only after that
