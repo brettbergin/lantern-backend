@@ -100,6 +100,39 @@ class PlanGenerationOut(ApiModel):
     answered_by: str | None = None
 
 
+class PlanReplanEntryOut(ApiModel):
+    """One entry of a re-plan's diff, waiting for a person.
+
+    ``add``: ``node_id`` is the id the new child will have and ``sections``
+    the whole child (``depends_on`` naming node ids). ``modify``:
+    ``node_id`` is the child changed, ``sections`` only what changes and
+    ``before`` those sections as the child had them when the diff was
+    proposed. ``suggest_close``: ``node_id`` is the child the planner would
+    close. ``forge_version`` (``modify``, ``suggest_close``) is the child's
+    issue version when the diff was proposed: a change is written only
+    while the issue still reads so. ``error`` is why the last approval of
+    this entry failed."""
+
+    id: str
+    action: Literal["add", "modify", "suggest_close"]
+    node_id: str
+    sections: dict[str, Any] = Field(default_factory=dict)
+    before: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = ""
+    error: str | None = None
+    forge_version: str | None = None
+
+
+class PlanReplanOut(ApiModel):
+    """A re-plan's diff waiting on a published node: the ``plan`` run that
+    proposed it, when, and the entries not yet approved or discarded."""
+
+    id: str
+    run_id: str | None = None
+    proposed_at: str
+    entries: list[PlanReplanEntryOut]
+
+
 class PlanNodeOut(ApiModel):
     id: str
     parent_id: str | None = None
@@ -126,6 +159,8 @@ class PlanNodeOut(ApiModel):
     updated_at: str
     #: What the forge changed that nobody has marked seen, oldest first.
     drift: list[PlanDrift] = Field(default_factory=list)
+    #: A re-plan's diff waiting for a person, or null.
+    replan: PlanReplanOut | None = None
 
 
 class PlanRollup(ApiModel):
@@ -364,3 +399,46 @@ class PlanAnswersAccepted(ApiModel):
     plan: PlanOut
     run_id: str
     resumed: bool
+
+
+class PlanReplanApprove(ApiModel):
+    """Apply a waiting re-plan: every entry, or the ones ``entry_ids``
+    names. The ``Idempotency-Key`` header is required."""
+
+    expected_revision: int = Field(ge=1)
+    entry_ids: list[str] | None = Field(default=None, max_length=100)
+
+
+class PlanReplanDiscard(ApiModel):
+    """Drop a waiting re-plan: every entry, or the ones ``entry_ids``
+    names. Nothing is written to the forge."""
+
+    expected_revision: int = Field(ge=1)
+    entry_ids: list[str] | None = Field(default=None, max_length=100)
+
+
+class PlanReplanResult(ApiModel):
+    """What approving one entry did: an addition ``created`` (or ``found``,
+    the issue an interrupted attempt filed, by its marker), a child
+    ``updated`` or ``closed``, or ``failed`` with why in ``error`` — the
+    entry stays in the diff. ``reason`` notes what went wrong beside a
+    success (a checklist fallback, a comment that could not be posted)."""
+
+    entry_id: str
+    action: Literal["add", "modify", "suggest_close"]
+    outcome: Literal["created", "found", "updated", "closed", "failed"]
+    node_id: str
+    number: int | None = None
+    url: str | None = None
+    error: str | None = None
+    reason: str | None = None
+
+
+class PlanReplanApplied(ApiModel):
+    """The plan as it now is, and what happened to each entry approved.
+    ``replayed`` is true for a replay under the same ``Idempotency-Key``."""
+
+    plan: PlanOut
+    results: list[PlanReplanResult]
+    operation_id: str | None = None
+    replayed: bool = False

@@ -320,12 +320,12 @@ _PLAN_CODES: dict[int, ErrorCode] = {
 
 def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     """The ``plan`` item a breakdown queues: the node checked against the
-    plan service's rules — a task has no children, a node on the forge with
-    children is re-planned, planning must be on for its repository, the
-    level must have room — and against a breakdown of it already queued or
-    running."""
+    plan service's rules — a task has no children, planning must be on for
+    its repository, a breakdown's level must have room — and against a
+    breakdown of it already queued or running. A node on the forge with
+    children there is re-planned: its run proposes a diff (#2346)."""
     from sbxloop.plans.model import child_level
-    from sbxloop.plans.service import PlanRefusal, PlanService
+    from sbxloop.plans.service import PlanRefusal, PlanService, replanned
     from sbxloop.plans.store import PlanStore
 
     service = PlanService(PlanStore(loop.dstore), lambda: loop.config)
@@ -353,7 +353,10 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     return WorkItem(
         item_id=item_id,
         source_key=item_id.partition(":")[2],
-        title=_title(f"Propose the {noun} of “{node.title}”", "plan"),
+        title=_title(
+            f"{'Re-plan' if replanned(plan, node) else 'Propose'} the {noun} of “{node.title}”",
+            "plan",
+        ),
         body=request.note.strip(),
         kind="plan",
         repo=node.repository,

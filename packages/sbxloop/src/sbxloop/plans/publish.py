@@ -27,7 +27,7 @@ The rules that refuse a level before anything is written live in
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -93,15 +93,22 @@ class _Failed(Exception):
     """One node could not be published; the message says why."""
 
 
-def level_targets(plan: Plan, node_id: str) -> list[PlanNode]:
+def level_targets(
+    plan: Plan, node_id: str, *, only: Collection[str] | None = None
+) -> list[PlanNode]:
     """What publishing ``node_id``'s level writes, in order: the node when
-    it is not published yet, then its ``approved`` children, each after the
-    siblings it depends on and otherwise in the children's order."""
+    it is not published yet, then its ``approved`` children (those ``only``
+    names, when it is given — an approved re-plan's additions), each after
+    the siblings it depends on and otherwise in the children's order."""
     node = plan.node(node_id)
     if node is None:
         return []
     out: list[PlanNode] = [] if node.state == "published" else [node]
-    pending = [c for c in plan.children(node.id) if c.state == "approved"]
+    pending = [
+        c
+        for c in plan.children(node.id)
+        if c.state == "approved" and (only is None or c.id in only)
+    ]
     waiting = {c.id for c in pending}
     while pending:
         ready = next(
@@ -310,14 +317,16 @@ def publish_level(
     node_id: str,
     clock: Callable[[], float],
     actor: Mapping[str, Any] | None,
+    only: Collection[str] | None = None,
 ) -> LevelResult:
     """Publish ``node_id``'s level of ``plan`` through ``ops``: the plan as
-    it now is and what happened to each node. Recording a
-    ``plan.published`` event is the caller's, with the result."""
+    it now is and what happened to each node. ``only`` narrows the level to
+    the approved children it names. Recording a ``plan.published`` event is
+    the caller's, with the result."""
     walk = _Walk(ops, store=store, config=config, plan=plan, clock=clock, actor=actor)
     blocked: set[str] = set()
     results: list[NodeResult] = []
-    for node in level_targets(plan, node_id):
+    for node in level_targets(plan, node_id, only=only):
         result = walk.publish(node, blocked)
         if result.outcome == "failed":
             blocked.add(node.id)

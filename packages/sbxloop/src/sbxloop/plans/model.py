@@ -11,6 +11,11 @@ After publish the forge wins (#2342): reconciliation folds a person's
 forge edits into the node and records each as a :class:`Drift` entry until
 someone marks it seen, and a node whose issue left its parent (or the
 forge) is *detached* — kept, said so, never recreated.
+
+A published node may carry a pending :class:`Replan` (#2346): the planner's
+diff against its children — children to add, changes to a child's
+sections, children to close — waiting for a person to approve or discard
+each entry. Nothing in it is on the forge until it is approved.
 """
 
 from __future__ import annotations
@@ -101,6 +106,69 @@ class Drift:
         }
 
 
+ReplanAction = Literal["add", "modify", "suggest_close"]
+
+
+@dataclass(frozen=True, slots=True)
+class ReplanEntry:
+    """One entry of a re-plan's diff.
+
+    ``add``: ``node_id`` is the id the new child will have (minted with the
+    diff, so its issue's marker is the same on every attempt) and
+    ``sections`` are the whole child's, ``depends_on`` naming node ids.
+    ``modify``: ``node_id`` is the child changed, ``sections`` only what
+    changes, and ``before`` those sections as the child had them when the
+    diff was proposed (``forge_version`` is that version of its issue).
+    ``suggest_close``: ``node_id`` is the child to close. ``error`` is why
+    the last attempt to apply it failed."""
+
+    id: str
+    action: ReplanAction
+    node_id: str
+    sections: dict[str, Any] = field(default_factory=dict)
+    before: dict[str, Any] = field(default_factory=dict)
+    rationale: str = ""
+    error: str | None = None
+    #: A ``modify`` or ``suggest_close``: the child's issue version
+    #: (:func:`content_version`) when the diff was proposed — a change is
+    #: written only while the issue still reads so.
+    forge_version: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "action": self.action,
+            "node_id": self.node_id,
+            "sections": dict(self.sections),
+            "before": dict(self.before),
+            "rationale": self.rationale,
+            "error": self.error,
+            "forge_version": self.forge_version,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Replan:
+    """A re-plan's diff waiting on a node: the run that proposed it, when,
+    and the entries not yet applied or discarded."""
+
+    id: str
+    run_id: str | None
+    proposed_at: float
+    entries: tuple[ReplanEntry, ...] = ()
+
+    def entry(self, entry_id: str) -> ReplanEntry | None:
+        return next((e for e in self.entries if e.id == entry_id), None)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "proposed_at": self.proposed_at,
+            "entries": [e.as_dict() for e in self.entries],
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class PlanNode:
     id: str
@@ -129,6 +197,8 @@ class PlanNode:
     #: The latest clarifying questions a breakdown of this node asked, and
     #: what a person answered (#2345); None until one asks.
     generation: Clarification | None = None
+    #: A re-plan's diff waiting for a person (#2346), or ``None``.
+    replan: Replan | None = None
 
     @property
     def followed(self) -> bool:

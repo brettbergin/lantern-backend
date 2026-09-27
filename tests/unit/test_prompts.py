@@ -354,6 +354,20 @@ RENDER_CONTEXTS: dict[str, dict[str, str]] = {
         "work_dir": "`/data`",
         "user_guidance": "(none)",
     },
+    # A re-plan of a published node: a diff against its children (#2346).
+    "plan_replan": {
+        "level": "epic",
+        "children": "tasks",
+        "node": "**Epic:** Export reports\n\n**Repository:** o/app",
+        "current": "### `node_1` — Export as CSV\n\no/app#1, open; may be changed or closed.",
+        "room": "2",
+        "profiles": "- `research` — reads the web",
+        "checkouts": "- `/data/app` — o/app, the repository this level lives in",
+        "note": "split the slow one",
+        "answers": "- **Which format first?**\n  Answer: CSV (`csv`)",
+        "work_dir": "`/data`",
+        "user_guidance": "(none)",
+    },
 }
 
 
@@ -987,3 +1001,37 @@ def test_plan_clarify_carries_the_answers_and_retry() -> None:
     )
     assert "- **Which readers?**" in text and "run make check" in text
     assert text.rstrip().endswith("## Previous attempt was invalid")
+
+
+# -- a re-plan of a published node (#2346) --------------------------------------
+
+
+def test_plan_replan_is_a_diff_never_a_replacement() -> None:
+    """A re-plan proposes changes against the children the forge has, named
+    by id, and never files a child that exists a second time."""
+    text = render("plan_replan", **RENDER_CONTEXTS["plan_replan"])
+    plain = " ".join(text.split())
+    assert text.startswith("# Re-plan the tasks of one epic")
+    assert "**a diff**" in plain and "**never a replacement**" in plain
+    assert "**Never add a child that exists.**" in plain
+    assert "**by its id**" in plain
+    assert "### `node_1` — Export as CSV" in text
+    assert "`add` at most 2 tasks" in plain
+    assert '"suggest_close": [' in plain and '"target":' in plain
+    assert "split the slow one" in text
+
+
+def test_plan_replan_changes_nothing() -> None:
+    plain = " ".join(render("plan_replan", **RENDER_CONTEXTS["plan_replan"]).split())
+    assert "**changes nothing**" in plain and "writes nothing to the forge" in plain
+    assert "approves each entry before anything reaches the forge" in plain
+    assert "not yours to plan now" in plain
+    assert "Answer: CSV (`csv`)" in plain and "Their answers are decisions" in plain
+
+
+def test_plan_replan_carries_the_task_rules() -> None:
+    plain = " ".join(render("plan_replan", **RENDER_CONTEXTS["plan_replan"]).split())
+    assert "sized to **one run**" in plain
+    assert "**workspace root**" in plain and "**no shell variables**" in plain
+    assert "(no `sh -c`, `bash -c`)" in plain
+    assert "- `research` — reads the web" in plain

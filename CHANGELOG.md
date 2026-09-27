@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+**A published node can be re-planned, and the planner's changes reach the
+forge only as a diff a person approves.** A breakdown of a node that is on
+the forge with children there now queues a re-plan instead of being
+refused: the plan is read from the forge first, the planner is given every
+current child by id and answers with a diff — `add`, `modify`,
+`suggest_close`, each with a rationale — never a replacement, and an
+addition that repeats a child that exists is sent back. The diff waits on
+the node as `replan` and nothing is written.
+`POST /v1/plans/{id}/nodes/{node_id}/replan/approve` (`plans:publish`,
+`Idempotency-Key` required, every entry or `entry_ids`) applies it through
+the publish path: an addition is published with its marker, level label and
+sub-issue or checklist link, found by its marker rather than filed twice; a
+change goes through the same write as a person's direct edit of a published
+node — only the title and the sections it changes, refused when the child's
+issue moved on the forge since the diff was proposed; a close closes the
+issue as not planned and comments why. `POST .../replan/discard`
+(`plans:create`) drops entries. The proposal is `plan.generation.proposed`
+with `kind: "replan"` and its counts; an approval records `plan.published`.
+Migration 0046 stores the waiting diff. (#2346)
+
 **The planner asks before it proposes, and takes the answers.** A `plan`
 run now starts with a clarifying turn over the same read-only checkout
 (`plan_clarify.md`): it says it is ready, or asks up to `[planning] max_questions` questions (`0` never asks) in the chat choice question's

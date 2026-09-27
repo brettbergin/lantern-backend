@@ -32,6 +32,7 @@ from sbxloop.plans.service import PlanService
 from sbxloop.plans.store import PlanStore
 from sbxloop.sbx.cli import SbxCLI
 from tests.conftest import FakeSbx
+from tests.fakes.fake_github import FakeGithub
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_daemon_loop import FakeSource
 from tests.unit.test_engine import Harness
@@ -192,6 +193,7 @@ def test_a_breakdown_runs_in_the_sandbox_and_lands_in_the_plan(harness: Harness)
         "plan_id": world.plan_id,
         "node_id": world.epic_id,
         "run_id": public,
+        "kind": "breakdown",
         "count": 3,
     }
     assert proposed.run_id == item.run_id and proposed.item_id == item_id
@@ -466,3 +468,164 @@ def test_answers_are_held_to_the_questions(harness: Harness) -> None:
     )
     assert second.resumed and second.clarification.status == "answered"
     assert set(second.clarification.answers) == {"fmt", "strict"}
+
+
+# -- a re-plan (#2346) ------------------------------------------------------------
+
+
+class _Provisioner:
+    def clone_token(self, repo: str) -> None:
+        return None
+
+    def gh_bot_login(self, repo: str) -> None:
+        return None
+
+
+class ForgeBox:
+    """The daemon's forge connection, answered by a fake."""
+
+    kind = "github"
+    provisioned = True
+
+    def __init__(self, ops: FakeGithub) -> None:
+        self.ops_obj = ops
+        self.provisioner = _Provisioner()
+
+    def ops(self) -> FakeGithub:
+        return self.ops_obj
+
+    def call(self, fn: Any) -> Any:
+        return fn(self.ops_obj)
+
+    def note_failure(self, exc: BaseException) -> bool:
+        return False
+
+
+def _published_epic(world: World, fake: FakeGithub) -> tuple[str, str, int]:
+    """A second plan: an epic with tasks A and B, published to ``fake``;
+    its id, the epic's and its revision."""
+    plan = world.plans.create(
+        level="epic",
+        repository=REPO,
+        sections={"title": "Import reports"},
+        now=10.0,
+        actor=PERSON,
+    )
+    for title in ("A", "B"):
+        plan, _ = world.plans.add_node(
+            plan.id,
+            expected_revision=plan.revision,
+            parent_id=plan.root_id,
+            repository=None,
+            sections={
+                "title": title,
+                "kind": "code",
+                "acceptance_criteria": [f"{title} works"],
+                "verify_commands": ["make test"],
+            },
+            position=None,
+            now=11.0,
+            actor=PERSON,
+        )
+    plan = world.plans.approve(
+        plan.id,
+        plan.root_id,
+        expected_revision=plan.revision,
+        node_ids=None,
+        now=12.0,
+        actor=PERSON,
+    )
+    level = world.plans.publish(
+        plan.id,
+        plan.root_id,
+        expected_revision=plan.revision,
+        forge_kind="github",
+        connect=lambda: fake,
+        clock=lambda: 13.0,
+        actor=PERSON,
+    )
+    assert [r.outcome for r in level.results] == ["created", "created", "created"]
+    return plan.id, plan.root_id, level.plan.revision
+
+
+def test_a_replan_reads_the_forge_first_and_leaves_a_diff_on_the_plan(harness: Harness) -> None:
+    world = World(harness)
+    fake = FakeGithub()
+    plan_id, epic_id, revision = _published_epic(world, fake)
+    world.loop.github = ForgeBox(fake)
+    plan = world.plans.get(plan_id)
+    a, b = plan.children(epic_id)
+    assert a.forge is not None
+    # A person renames A on the forge before the re-plan runs.
+    fake.person_edits(REPO, a.forge.number, title="A, renamed")
+    item = plan_item(
+        world.loop,
+        PlanAdmission(plan_id, epic_id, expected_revision=revision, note="B is done elsewhere"),
+        item_id=api_item_id("plan:replan"),
+    )
+    assert item.title == "Re-plan the tasks of “Import reports”"
+    world.dstore.upsert_new(item, 14.0)
+    writes = len([c for c in fake.raw_calls if c[0] != "GET"])
+    created = len(fake.issues_created)
+    harness.script(
+        [
+            READY,
+            {
+                "json": {
+                    "add": [code_task("c1") | {"rationale": "a step is missing"}],
+                    "modify": [{"target": a.id, "goal": "A, sharper", "rationale": "r"}],
+                    "suggest_close": [{"target": b.id, "rationale": "done elsewhere"}],
+                }
+            },
+        ]
+    )
+
+    result = world.loop.tick()
+
+    assert result.dispatched == item.item_id
+    assert result.outcome == "done", result
+    run_item = world.dstore.get(item.item_id)
+    assert run_item is not None and run_item.run_id is not None
+    plan = world.plans.get(plan_id)
+    # The forge was read before the planner was asked: A's new title is in.
+    assert plan.node(a.id) is not None and plan.node(a.id).title == "A, renamed"  # type: ignore[union-attr]
+    epic = plan.node(epic_id)
+    assert epic is not None and epic.replan is not None
+    assert [e.action for e in epic.replan.entries] == ["add", "modify", "suggest_close"]
+    assert epic.replan.run_id == f"run_{run_item.run_id}"
+    assert [c.title for c in plan.children(epic_id)] == ["A, renamed", "B"], "nothing added yet"
+    (proposed,) = world.events("plan.generation.proposed")
+    data = json.loads(proposed.data_json or "{}")
+    assert (data["kind"], data["add"], data["modify"], data["suggest_close"]) == (
+        "replan",
+        1,
+        1,
+        1,
+    )
+    assert proposed.run_id == run_item.run_id
+    # Nothing was written to the forge: the run only read it.
+    assert len([c for c in fake.raw_calls if c[0] != "GET"]) == writes
+    assert len(fake.issues_created) == created and fake.issues_closed == []
+
+
+def test_a_replan_that_cannot_read_the_forge_fails_named(harness: Harness) -> None:
+    world = World(harness, daemon={"max_attempts_per_item": 1})
+    fake = FakeGithub()
+    plan_id, epic_id, revision = _published_epic(world, fake)
+    world.loop.github = None
+    item = plan_item(
+        world.loop,
+        PlanAdmission(plan_id, epic_id, expected_revision=revision),
+        item_id=api_item_id("plan:replan"),
+    )
+    world.dstore.upsert_new(item, 14.0)
+    harness.script([READY])
+
+    result = world.loop.tick()
+
+    assert result.outcome == "failed", result
+    (failed,) = world.events("plan.generation.failed")
+    reason = json.loads(failed.data_json or "{}")["reason"]
+    assert reason.startswith("the forge could not be read before re-planning:")
+    assert "no forge connection" in reason
+    assert world.plans.get(plan_id).node(epic_id).replan is None  # type: ignore[union-attr]

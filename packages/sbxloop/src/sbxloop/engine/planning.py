@@ -22,6 +22,14 @@ choice question has (two to five choices, and free text unless it says
 otherwise), so every client renders them the way chat already does. The
 questions go to the plan record, the run parks ``awaiting_answers``, and a
 person's answers — or their skip — ride into the proposal's prompt.
+
+A **re-plan** (#2346) is the same run on a node that is on the forge and
+already has children there: the brief carries those children (as the
+forge last had them), and the answer is a :class:`PlanReplan` — a diff of
+``add``, ``modify`` and ``suggest_close`` entries against them, never a
+replacement. A child is named by its node id, and an ``add`` that repeats
+a child that exists is sent back, so nothing the forge has is proposed
+twice. The diff waits on the plan for a person's approval.
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from graphlib import CycleError, TopologicalSorter
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -57,6 +65,9 @@ ClarificationStatus = Literal["awaiting_answers", "answered", "skipped", "withdr
 
 ParentLevel = Literal["initiative", "epic"]
 ChildLevel = Literal["epic", "task"]
+#: What a plan run is asked for: a node's next level, or a diff against the
+#: children a published node already has.
+PlanMode = Literal["breakdown", "replan"]
 
 # A shell variable or substitution: `$NAME`, `${…}`, `$(…)`. `$?` alone is
 # the exit status of the previous command and names nothing in the caller's
@@ -203,12 +214,45 @@ def clarification_problems(answer: PlanClarification, brief: PlanBrief) -> list[
     return []
 
 
+class CurrentChild(_Model):
+    """A child a re-planned node already has, as the planner reads it: its
+    node id (the name a ``modify`` or ``suggest_close`` targets), where it
+    is on the forge, and its sections."""
+
+    id: str
+    title: str
+    state: str
+    origin: str
+    #: ``owner/name#N`` when it is on the forge.
+    issue: str = ""
+    #: ``open`` or ``closed`` as the forge last said; ``None`` off the forge.
+    forge_state: str | None = None
+    #: On the forge, followed and open: a diff may change or close it.
+    changeable: bool = False
+    #: Its body carries the plan's rendered sections (a child a person
+    #: filed on the forge has only their own text): a ``modify`` may
+    #: rewrite them.
+    owned: bool = True
+    goal: str = ""
+    context: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    kind: Literal["code", "workload"] | None = None
+    workload_profile: str | None = None
+    verify_commands: list[str] = Field(default_factory=list)
+    depends_on: list[str] = Field(default_factory=list)
+    non_goals: str = ""
+    constraints: str = ""
+
+
 class PlanBrief(_Model):
     """What one plan run is asked: the node, the level under it, the room
     the level's cap leaves, the children that stay, the workload profiles a
     task may name, and the repositories to read. Read from the plan record
     when the run proposes — never persisted with the run, because the plan
-    is the record."""
+    is the record. A ``replan`` brief also carries the node's current
+    children, and its answer is a :class:`PlanReplan`."""
+
+    mode: PlanMode = "breakdown"
 
     plan_id: str
     node_id: str
@@ -227,9 +271,9 @@ class PlanBrief(_Model):
     #: The children that stay whatever is proposed (a person's drafts and
     #: approvals), by title.
     kept: list[str] = Field(default_factory=list)
-    #: How many children this proposal may hold: the level's cap less the
-    #: children that stay.
-    room: int = Field(ge=1)
+    #: How many children this proposal may hold (a re-plan: how many it may
+    #: add): the level's cap less the children that stay.
+    room: int = Field(ge=0)
     #: The level's cap itself, for the prompt.
     cap: int = Field(ge=1)
     profiles: list[ProfileRef] = Field(default_factory=list)
@@ -252,24 +296,36 @@ class PlanBrief(_Model):
         found = self.clarification
         return found if found is not None and found.run_id == run_id else None
 
+    #: A re-plan's current children, in the order a person reads them.
+    current: list[CurrentChild] = Field(default_factory=list)
+
     @property
     def child_noun(self) -> str:
         return "epics" if self.child_level == "epic" else "tasks"
 
     def task_title(self) -> str:
+        if self.mode == "replan":
+            return f"Re-plan the {self.child_noun} of “{self.title}”"
         return f"Propose the {self.child_noun} of “{self.title}”"
+
+    def child(self, node_id: str) -> CurrentChild | None:
+        return next((c for c in self.current if c.id == node_id), None)
 
 
 def plan_task(brief: PlanBrief) -> TaskSpec:
     """The seeded task a plan run carries."""
-    return TaskSpec(
-        id=PROPOSE_TASK_ID,
-        title=brief.task_title(),
-        description=(
+    if brief.mode == "replan":
+        description = (
+            f"Read {brief.repository} and propose the changes the {brief.level} "
+            f"“{brief.title}” needs to its {len(brief.current)} current "
+            f"{brief.child_noun}: at most {brief.room} to add, and which to change or close."
+        )
+    else:
+        description = (
             f"Read {brief.repository} and propose at most {brief.room} "
             f"{brief.child_noun} for the {brief.level} “{brief.title}”."
-        ),
-    )
+        )
+    return TaskSpec(id=PROPOSE_TASK_ID, title=brief.task_title(), description=description)
 
 
 def _text(value: object) -> str:
@@ -378,6 +434,67 @@ def _resolve(ref: str | int, by_id: dict[str, int], count: int) -> int | None:
     return ref - 1 if 1 <= ref <= count else None
 
 
+def _child_problems(
+    child: ProposedChild,
+    label: str,
+    brief: PlanBrief,
+    lint: Callable[[Sequence[str]], list[str]] | None,
+) -> list[str]:
+    """Every rule one child of ``brief``'s level breaks."""
+    problems: list[str] = []
+    if brief.child_level == "epic":
+        stray = [
+            name
+            for name, present in (
+                ("kind", child.kind is not None),
+                ("workload_profile", child.workload_profile is not None),
+                ("verify_commands", bool(child.verify_commands)),
+                ("depends_on", bool(child.depends_on)),
+            )
+            if present
+        ]
+        if stray:
+            problems.append(f"{label}: only a task carries {', '.join(stray)}")
+        return problems
+    profiles = {profile.name for profile in brief.profiles}
+    if not child.acceptance_criteria:
+        problems.append(f"{label}: a task needs at least one acceptance criterion")
+    if child.kind is None:
+        problems.append(f"{label}: a task needs a kind, `code` or `workload`")
+    elif child.kind == "workload":
+        if child.verify_commands:
+            problems.append(
+                f"{label}: a workload task has no verify commands; its acceptance "
+                "criteria are its exam"
+            )
+        if child.workload_profile is None:
+            problems.append(f"{label}: a workload task names the profile it runs under")
+        elif child.workload_profile not in profiles:
+            known = ", ".join(sorted(profiles)) or "none is configured"
+            problems.append(
+                f"{label}: workload profile `{child.workload_profile}` is not configured "
+                f"(configured: {known})"
+            )
+    else:
+        if child.workload_profile is not None:
+            problems.append(f"{label}: only a workload task names a workload profile")
+        if not child.verify_commands:
+            problems.append(
+                f"{label}: a code task needs at least one verify command that exits 0 "
+                "only when the task is done"
+            )
+        for command in child.verify_commands:
+            if _SHELL_VARIABLE.search(command):
+                problems.append(
+                    f"{label}: verify command `{command}` uses a shell variable; it runs "
+                    "from the workspace root of a later run whose environment this plan "
+                    "cannot see, so name every path and value outright"
+                )
+        if lint is not None:
+            problems.extend(f"{label}: {message}" for message in lint(child.verify_commands))
+    return problems
+
+
 def proposal_problems(
     proposal: PlanProposal,
     brief: PlanBrief,
@@ -393,62 +510,281 @@ def proposal_problems(
     count = len(proposal.children)
     if count > brief.room:
         problems.append(f"propose at most {brief.room} {brief.child_noun}; this answer has {count}")
-    profiles = {profile.name for profile in brief.profiles}
     for index, child in enumerate(proposal.children):
         label = f"{brief.child_level} {child.id or index + 1} ({child.title})"
-        if brief.child_level == "epic":
-            stray = [
-                name
-                for name, present in (
-                    ("kind", child.kind is not None),
-                    ("workload_profile", child.workload_profile is not None),
-                    ("verify_commands", bool(child.verify_commands)),
-                    ("depends_on", bool(child.depends_on)),
-                )
-                if present
-            ]
-            if stray:
-                problems.append(f"{label}: only a task carries {', '.join(stray)}")
-            continue
-        if not child.acceptance_criteria:
-            problems.append(f"{label}: a task needs at least one acceptance criterion")
-        if child.kind is None:
-            problems.append(f"{label}: a task needs a kind, `code` or `workload`")
-        elif child.kind == "workload":
-            if child.verify_commands:
-                problems.append(
-                    f"{label}: a workload task has no verify commands; its acceptance "
-                    "criteria are its exam"
-                )
-            if child.workload_profile is None:
-                problems.append(f"{label}: a workload task names the profile it runs under")
-            elif child.workload_profile not in profiles:
-                known = ", ".join(sorted(profiles)) or "none is configured"
-                problems.append(
-                    f"{label}: workload profile `{child.workload_profile}` is not configured "
-                    f"(configured: {known})"
-                )
-        else:
-            if child.workload_profile is not None:
-                problems.append(f"{label}: only a workload task names a workload profile")
-            if not child.verify_commands:
-                problems.append(
-                    f"{label}: a code task needs at least one verify command that exits 0 "
-                    "only when the task is done"
-                )
-            for command in child.verify_commands:
-                if _SHELL_VARIABLE.search(command):
-                    problems.append(
-                        f"{label}: verify command `{command}` uses a shell variable; it runs "
-                        "from the workspace root of a later run whose environment this plan "
-                        "cannot see, so name every path and value outright"
-                    )
-            if lint is not None:
-                problems.extend(f"{label}: {message}" for message in lint(child.verify_commands))
+        problems.extend(_child_problems(child, label, brief, lint))
     try:
         proposal.dependencies()
     except ValueError as exc:
         problems.append(str(exc))
+    return problems
+
+
+# -- a re-plan's diff (#2346) ----------------------------------------------------
+
+
+def fold_title(title: str) -> str:
+    """A title as two children are compared by: whitespace and case folded."""
+    return " ".join(title.split()).casefold()
+
+
+class ReplanAddition(ProposedChild):
+    """A child the re-plan adds: a whole child, and why."""
+
+    rationale: str = ""
+
+
+#: The sections a ``modify`` may change, as a plan node names them.
+CHANGEABLE = (
+    "title",
+    "goal",
+    "context",
+    "acceptance_criteria",
+    "kind",
+    "workload_profile",
+    "verify_commands",
+    "depends_on",
+    "non_goals",
+    "constraints",
+)
+
+
+class ReplanChange(_Model):
+    """A change to one current child: ``target`` names it by node id, and
+    only the sections given change (``null`` or absent leaves one as it
+    is; an empty string or list empties it)."""
+
+    target: str
+    rationale: str = ""
+    title: str | None = None
+    goal: str | None = None
+    context: str | None = None
+    acceptance_criteria: list[str] | None = None
+    kind: Literal["code", "workload"] | None = None
+    workload_profile: str | None = None
+    verify_commands: list[str] | None = None
+    depends_on: list[str] | None = None
+    non_goals: str | None = None
+    constraints: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _fold_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        folded = " ".join(str(value).split())
+        if not folded:
+            raise ValueError("a changed title cannot be empty")
+        return folded
+
+    @field_validator("non_goals", "constraints", "goal", "context", mode="before")
+    @classmethod
+    def _prose(cls, value: object) -> str | None:
+        return None if value is None else _text(value)
+
+    @field_validator("acceptance_criteria", "verify_commands", "depends_on")
+    @classmethod
+    def _strip_items(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else [item.strip() for item in value if item.strip()]
+
+    def changes(self) -> dict[str, Any]:
+        """The sections this entry sets, by name."""
+        return {key: getattr(self, key) for key in CHANGEABLE if getattr(self, key) is not None}
+
+
+class ReplanClose(_Model):
+    """A current child the planner thinks is no longer needed, and why."""
+
+    target: str
+    rationale: str
+
+    @field_validator("rationale")
+    @classmethod
+    def _said(cls, value: str) -> str:
+        text = " ".join(value.split())
+        if not text:
+            raise ValueError("say why the child is no longer needed")
+        return text
+
+
+class PlanReplan(_Model):
+    """The planner's re-plan: a diff against the node's current children.
+    Every list may be empty; an answer with none of them says the children
+    already cover the node."""
+
+    add: list[ReplanAddition] = Field(default_factory=list)
+    modify: list[ReplanChange] = Field(default_factory=list)
+    suggest_close: list[ReplanClose] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> PlanReplan:
+        ids = [child.id for child in self.add if child.id]
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"addition ids must be unique: {ids}")
+        return self
+
+    @property
+    def count(self) -> int:
+        return len(self.add) + len(self.modify) + len(self.suggest_close)
+
+    def add_dependencies(self, current: Sequence[str]) -> list[list[int | str]]:
+        """Each addition's dependencies: a position among the additions, or
+        the node id of a current child. An addition's ``depends_on`` names a
+        sibling addition by its ``id`` or position (the first addition is
+        1), or a current child by its node id; anything else, a dependency
+        on itself and a cycle among the additions are refused, named."""
+        known = set(current)
+        by_id = {child.id: index for index, child in enumerate(self.add) if child.id}
+        resolved: list[list[int | str]] = []
+        problems: list[str] = []
+        for index, child in enumerate(self.add):
+            label = child.id or f"addition {index + 1}"
+            deps: list[int | str] = []
+            for ref in child.depends_on:
+                if isinstance(ref, str) and ref.strip() in known and ref.strip() not in by_id:
+                    target: int | str | None = ref.strip()
+                else:
+                    target = _resolve(ref, by_id, len(self.add))
+                if target is None:
+                    problems.append(
+                        f"{label} depends on {ref!r}, which is neither an addition nor a "
+                        "current child"
+                    )
+                elif target == index:
+                    problems.append(f"{label} depends on itself")
+                elif target not in deps:
+                    deps.append(target)
+            resolved.append(deps)
+        if problems:
+            raise ValueError("; ".join(problems))
+        graph = {i: {d for d in deps if isinstance(d, int)} for i, deps in enumerate(resolved)}
+        try:
+            TopologicalSorter(graph).prepare()
+        except CycleError as exc:
+            raise ValueError(f"those dependencies make a cycle: {exc.args[1]}") from exc
+        return resolved
+
+
+def replan_problems(
+    replan: PlanReplan,
+    brief: PlanBrief,
+    *,
+    lint: Callable[[Sequence[str]], list[str]] | None = None,
+) -> list[str]:
+    """Every rule a re-plan breaks, as sentences fed back to the planner
+    verbatim; empty when it may be delivered. A child that exists is never
+    added again: an addition whose title or ``id`` is a current child's is
+    refused, and so is an entry naming no current child, a child changed or
+    closed twice, and a change to a child that is closed, off the forge, or
+    a person's own issue."""
+    problems: list[str] = []
+    noun = brief.child_noun
+    if len(replan.add) > brief.room:
+        problems.append(
+            f"add at most {brief.room} {noun} (the level's cap is {brief.cap}); "
+            f"this answer adds {len(replan.add)}"
+        )
+    titles = {fold_title(c.title): c for c in brief.current}
+    ids = [c.id for c in brief.current]
+    for index, child in enumerate(replan.add):
+        label = f"addition {child.id or index + 1} ({child.title})"
+        same = titles.get(fold_title(child.title))
+        if same is not None:
+            problems.append(
+                f"{label} repeats the current child {same.id} (“{same.title}”); "
+                "never add a child that exists — `modify` it by its id instead"
+            )
+        if child.id and child.id in ids:
+            problems.append(
+                f"{label}: `{child.id}` is a current child's id; `modify` it rather than add it"
+            )
+        problems.extend(_child_problems(child, label, brief, lint))
+    try:
+        replan.add_dependencies(ids)
+    except ValueError as exc:
+        problems.append(str(exc))
+    seen: dict[str, str] = {}
+    entries: list[tuple[ReplanChange | ReplanClose, str]] = [
+        *((e, "modify") for e in replan.modify),
+        *((e, "suggest_close") for e in replan.suggest_close),
+    ]
+    for entry, action in entries:
+        target = brief.child(entry.target)
+        label = f"{action} {entry.target}"
+        if target is None:
+            problems.append(f"{label}: no current child has that id ({', '.join(ids) or 'none'})")
+            continue
+        if entry.target in seen:
+            problems.append(
+                f"{label}: {entry.target} is already in this diff ({seen[entry.target]}); "
+                "one entry per child"
+            )
+            continue
+        seen[entry.target] = action
+        if not target.changeable:
+            problems.append(
+                f"{label}: “{target.title}” is closed or not followed on the forge; leave it"
+            )
+            continue
+        if isinstance(entry, ReplanChange):
+            problems.extend(_change_problems(entry, target, brief, label, lint))
+    return problems
+
+
+def _change_problems(
+    entry: ReplanChange,
+    target: CurrentChild,
+    brief: PlanBrief,
+    label: str,
+    lint: Callable[[Sequence[str]], list[str]] | None,
+) -> list[str]:
+    """What one ``modify`` breaks, judged on the child as it would be."""
+    changes = entry.changes()
+    if not target.owned:
+        return [
+            f"{label}: “{target.title}” is an issue a person filed on the forge in their own "
+            "words; do not rewrite it (suggest closing it, or add what is missing)"
+        ]
+    if not changes:
+        return [f"{label}: name at least one section to change"]
+    problems: list[str] = []
+    deps = changes.get("depends_on")
+    if isinstance(deps, list):
+        for dep in deps:
+            if dep == target.id:
+                problems.append(f"{label}: a child cannot depend on itself")
+            elif brief.child(dep) is None:
+                problems.append(
+                    f"{label}: depends on {dep!r}, which is not a current child "
+                    "(a change may depend only on children that exist)"
+                )
+    merged = ProposedChild(
+        id=target.id,
+        title=str(changes.get("title") or target.title),
+        goal=target.goal,
+        context=target.context,
+        acceptance_criteria=list(changes.get("acceptance_criteria", target.acceptance_criteria)),
+        kind=changes.get("kind", target.kind),
+        workload_profile=changes.get("workload_profile", target.workload_profile),
+        verify_commands=list(changes.get("verify_commands", target.verify_commands)),
+        depends_on=[],
+    )
+    if brief.child_level == "epic":
+        stray = [
+            k for k in ("kind", "workload_profile", "verify_commands", "depends_on") if k in changes
+        ]
+        if stray:
+            problems.append(f"{label}: only a task carries {', '.join(stray)}")
+        return problems
+    # A kind that changes to workload drops the verify commands it had, and
+    # one that changes to code drops its profile, unless the entry says
+    # otherwise.
+    if merged.kind == "workload" and "verify_commands" not in changes and "kind" in changes:
+        merged = merged.model_copy(update={"verify_commands": []})
+    if merged.kind == "code" and "workload_profile" not in changes and "kind" in changes:
+        merged = merged.model_copy(update={"workload_profile": None})
+    checked = lint if "verify_commands" in changes else None
+    problems.extend(_child_problems(merged, label, brief, checked))
     return problems
 
 
@@ -463,14 +799,18 @@ class PlanDelivery:
 class PlanDesk(Protocol):
     """The plan record one plan run reads its brief from and delivers to.
 
-    Every method answers for the run's own node. ``brief``, ``ask`` and
-    ``deliver`` raise :class:`~sbxloop.errors.PlanDeliveryError` with a sentence a
-    person reads when the record will not serve (the plan was deleted, the
-    node was published under the run); ``started`` and ``failed`` are
-    notices and never fail the run.
+    Every method answers for the run's own node. ``brief``, ``ask``,
+    ``deliver`` and ``deliver_replan`` raise
+    :class:`~sbxloop.errors.PlanDeliveryError` with a sentence a person reads
+    when the record will not serve (the plan was deleted, the node was
+    published under the run); ``started`` and ``failed`` are notices and
+    never fail the run. ``brief(fresh=True)`` is the brief the planner is
+    about to be asked: a re-plan's children are read from the forge first
+    (on the host, reading only), and a forge that cannot be read fails it
+    named rather than re-plan against a stale tree.
     """
 
-    def brief(self) -> PlanBrief: ...
+    def brief(self, *, fresh: bool = False) -> PlanBrief: ...
 
     def started(self, run_id: str) -> None: ...
 
@@ -482,5 +822,7 @@ class PlanDesk(Protocol):
         ...
 
     def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery: ...
+
+    def deliver_replan(self, run_id: str, replan: PlanReplan) -> PlanDelivery: ...
 
     def failed(self, run_id: str, reason: str) -> None: ...

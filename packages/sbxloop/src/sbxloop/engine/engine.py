@@ -137,6 +137,7 @@ from sbxloop.engine.planning import (
     PlanBrief,
     PlanDesk,
     PlanProposal,
+    PlanReplan,
     plan_task,
 )
 from sbxloop.engine.reconcile import (
@@ -2316,13 +2317,16 @@ class LoopEngine:
             # A resume after the delivery landed: the record has it.
             return None
         try:
-            brief = desk.brief()
+            brief = desk.brief(fresh=True)
         except PlanDeliveryError as exc:
             return str(exc)
-        proposal: PlanProposal | None = None
-        if task.output is not None and task.output.data.get("proposal") is not None:
-            proposal = PlanProposal.model_validate(task.output.data["proposal"])
-        if proposal is None:
+        replan = brief.mode == "replan"
+        key = "replan" if replan else "proposal"
+        answer: PlanProposal | PlanReplan | None = None
+        if task.output is not None and task.output.data.get(key) is not None:
+            model: type[PlanProposal] | type[PlanReplan] = PlanReplan if replan else PlanProposal
+            answer = model.model_validate(task.output.data[key])
+        if answer is None:
             self._check_cancelled_and_clock(run_id, p.deadline)
             self._set_task_state(run_id, task, "executing")
             self.bus.emit(
@@ -2337,7 +2341,10 @@ class LoopEngine:
             self._check_cancelled_and_clock(run_id, p.deadline)
             started = time.time()
             try:
-                proposal = phases.propose_plan(brief, checkouts=checkouts, home=home)
+                if replan:
+                    answer = phases.replan_plan(brief, checkouts=checkouts, home=home)
+                else:
+                    answer = phases.propose_plan(brief, checkouts=checkouts, home=home)
             except InvalidOutputTwice as exc:
                 spend = phases.drain_spend()
                 self._record_phase(
@@ -2359,16 +2366,14 @@ class LoopEngine:
                 task_id=task.spec.id,
                 attempt=1,
                 status="ok",
-                output_json=proposal.model_dump_json(),
+                output_json=answer.model_dump_json(),
                 started_at=started,
                 usage=spend.usage,
                 turns=spend.turns,
             )
-            count = len(proposal.children)
             task.output = TaskOutput(
-                summary=f"Proposed {count} {brief.child_noun if count != 1 else brief.child_level} "
-                f"for the {brief.level} “{brief.title}”; they wait in the plan for review",
-                data={"proposal": proposal.model_dump(mode="json")},
+                summary=_plan_summary(brief, answer),
+                data={key: answer.model_dump(mode="json")},
             )
             self.bus.emit(
                 HostEventTypes.PHASE_END,
@@ -2390,7 +2395,10 @@ class LoopEngine:
             self._emit_task_end(run_id, task)
         self._check_cancelled_and_clock(run_id, p.deadline)
         try:
-            delivered = desk.deliver(run_id, proposal)
+            if isinstance(answer, PlanReplan):
+                delivered = desk.deliver_replan(run_id, answer)
+            else:
+                delivered = desk.deliver(run_id, answer)
         except PlanDeliveryError as exc:
             return f"the plan would not take the proposal: {exc}"
         entry = Published(
@@ -5997,6 +6005,26 @@ def _last_line(output: str, limit: int = 300) -> str:
     if len(line) > limit:
         line = line[: limit - 1] + "…"
     return f" — {line}"
+
+
+def _plan_summary(brief: PlanBrief, answer: PlanProposal | PlanReplan) -> str:
+    """What a plan run's one task produced, as its output's summary."""
+    if isinstance(answer, PlanReplan):
+        if not answer.count:
+            return (
+                f"Re-planned the {brief.level} “{brief.title}”: its "
+                f"{brief.child_noun} already cover it, so nothing is proposed"
+            )
+        return (
+            f"Re-planned the {brief.level} “{brief.title}”: {len(answer.add)} to add, "
+            f"{len(answer.modify)} to change, {len(answer.suggest_close)} to close; the diff "
+            "waits in the plan for review"
+        )
+    count = len(answer.children)
+    return (
+        f"Proposed {count} {brief.child_noun if count != 1 else brief.child_level} "
+        f"for the {brief.level} “{brief.title}”; they wait in the plan for review"
+    )
 
 
 def _invalid_twice_reason(exc: InvalidOutputTwice, what: str = "proposal") -> str:

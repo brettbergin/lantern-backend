@@ -56,8 +56,10 @@ from sbxloop.engine.planning import (
     PlanBrief,
     PlanClarification,
     PlanProposal,
+    PlanReplan,
     clarification_problems,
     proposal_problems,
+    replan_problems,
 )
 from sbxloop.engine.prompts import bullet_list, render
 from sbxloop.engine.repocontext import repo_conventions
@@ -1810,6 +1812,52 @@ class PhaseRunner:
         )
         return proposal
 
+    def replan_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanReplan:
+        """The planner's re-plan of a published node (#2346): a diff —
+        ``add``, ``modify``, ``suggest_close`` — against the children the
+        brief carries, read-only, held to the level's rules and cap with
+        one retry as :meth:`propose_plan` is. An addition that repeats a
+        current child is sent back, never delivered."""
+        lint = self._plan_lint(home)
+
+        def check(replan: PlanReplan) -> None:
+            problems = replan_problems(replan, brief, lint=lint)
+            if problems:
+                raise ValueError(
+                    "the re-plan breaks these rules:\n" + "\n".join(f"- {p}" for p in problems)
+                )
+
+        replan, _ = self._agent_json(
+            PlanReplan,
+            "plan_replan",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "current": _plan_current(brief),
+                "room": str(brief.room),
+                "profiles": _plan_profiles(brief),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "note": brief.note.strip() or "(none)",
+                "answers": plan_answers_section(brief),
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return replan
+
     def _plan_lint(self, home: Path | None) -> Callable[[Sequence[str]], list[str]]:
         """The verify-command lint for the repository being planned: its
         own toolchains and project shape, not this read-only sandbox's."""
@@ -1991,6 +2039,45 @@ def plan_answers_section(brief: PlanBrief) -> str:
             said = "not answered"
         lines.append(f"  Answer: {said}")
     return "\n".join(lines)
+
+
+def _plan_current(brief: PlanBrief) -> str:
+    """A re-plan's current children, each under its id, with what a diff
+    may do to it and its sections."""
+    if not brief.current:
+        return "(none)"
+    blocks: list[str] = []
+    for child in brief.current:
+        where = child.issue or "not on the forge"
+        state = child.forge_state or child.state
+        if child.changeable and child.owned:
+            may = "may be changed or closed"
+        elif child.changeable:
+            may = "filed by a person in their own words: may be closed, not rewritten"
+        else:
+            may = "closed or not followed: leave it"
+        lines = [f"### `{child.id}` — {child.title}", "", f"{where}, {state}; {may}."]
+        for heading, text in (
+            ("Goal", child.goal),
+            ("Context", child.context),
+            ("Non-goals", child.non_goals),
+            ("Constraints", child.constraints),
+        ):
+            if text.strip():
+                lines += ["", f"**{heading}:** {text.strip()}"]
+        if child.acceptance_criteria:
+            lines += ["", "**Acceptance criteria:**", bullet_list(child.acceptance_criteria)]
+        if child.kind:
+            kind = child.kind + (
+                f" (workload profile `{child.workload_profile}`)" if child.workload_profile else ""
+            )
+            lines += ["", f"**Kind:** {kind}"]
+        if child.verify_commands:
+            lines += ["", "**Verify commands:**", bullet_list(child.verify_commands)]
+        if child.depends_on:
+            lines += ["", "**Depends on:** " + ", ".join(f"`{d}`" for d in child.depends_on)]
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _plan_profiles(brief: PlanBrief) -> str:

@@ -717,24 +717,26 @@ included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
 and owners) publishes to the forge and edits, attaches and detaches its issues.
 
-| Route                                           | Body                                                          | Result                                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `GET /v1/plans`                                 | `?repository=&level=&state=`                                  | `200 {data: [plan summary]}`, most recent first                         |
-| `POST /v1/plans`                                | `{level, repository, title, goal?, acceptance_criteria?, …}`  | `201`, the plan with its root node                                      |
-| `GET /v1/plans/{id}`                            | none                                                          | `200`, the plan and every node                                          |
-| `PATCH /v1/plans/{id}`                          | `{expected_revision, …sections}`                              | `200`, the root node's sections edited                                  |
-| `DELETE /v1/plans/{id}`                         | `?expected_revision=`                                         | `200 {id, outcome: deleted \| archived}`                                |
-| `POST /v1/plans/{id}/nodes`                     | `{expected_revision, parent_id, title, repository?, …}`       | `201`, the plan; `Location` names the new node                          |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`          | `{expected_revision, position?, forge_version?, …sections}`   | `200`, the plan (a published node: its issue written)                   |
-| `DELETE /v1/plans/{id}/nodes/{node_id}`         | `?expected_revision=`                                         | `200`, the plan without the node and its subtree                        |
-| `POST /v1/plans/{id}/nodes/{node_id}/breakdown` | `{expected_revision, note?, channel_id?}`                     | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
-| `POST /v1/plans/{id}/nodes/{node_id}/answers`   | `{expected_revision?, answers: {id: {value?, text?}}, skip?}` | `200 {plan, run_id, resumed}`, the waiting run back in the queue        |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve`   | `{expected_revision, node_ids?}`                              | `200`, the plan with those children approved                            |
-| `POST /v1/plans/{id}/nodes/{node_id}/publish`   | `{expected_revision}` and an `Idempotency-Key` header         | `200 {plan, results, operation_id, replayed}`                           |
-| `POST /v1/plans/{id}/nodes/{node_id}/attach`    | `{expected_revision, repository?, number?, url?}`             | `200 {plan, node_id, linked, reason}`                                   |
-| `POST /v1/plans/{id}/nodes/{node_id}/detach`    | `{expected_revision}`                                         | `200`, the plan with the child detached                                 |
-| `POST /v1/plans/{id}/sync`                      | none                                                          | `200`, the plan reconciled from the forge now                           |
-| `POST /v1/plans/{id}/drift/ack`                 | `{expected_revision, node_ids?}`                              | `200`, the plan with that drift marked seen                             |
+| Route                                                | Body                                                              | Result                                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `GET /v1/plans`                                      | `?repository=&level=&state=`                                      | `200 {data: [plan summary]}`, most recent first                         |
+| `POST /v1/plans`                                     | `{level, repository, title, goal?, acceptance_criteria?, …}`      | `201`, the plan with its root node                                      |
+| `GET /v1/plans/{id}`                                 | none                                                              | `200`, the plan and every node                                          |
+| `PATCH /v1/plans/{id}`                               | `{expected_revision, …sections}`                                  | `200`, the root node's sections edited                                  |
+| `DELETE /v1/plans/{id}`                              | `?expected_revision=`                                             | `200 {id, outcome: deleted \| archived}`                                |
+| `POST /v1/plans/{id}/nodes`                          | `{expected_revision, parent_id, title, repository?, …}`           | `201`, the plan; `Location` names the new node                          |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`               | `{expected_revision, position?, forge_version?, …sections}`       | `200`, the plan (a published node: its issue written)                   |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`              | `?expected_revision=`                                             | `200`, the plan without the node and its subtree                        |
+| `POST /v1/plans/{id}/nodes/{node_id}/breakdown`      | `{expected_revision, note?, channel_id?}`                         | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
+| `POST /v1/plans/{id}/nodes/{node_id}/answers`        | `{expected_revision?, answers: {id: {value?, text?}}, skip?}`     | `200 {plan, run_id, resumed}`, the waiting run back in the queue        |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve`        | `{expected_revision, node_ids?}`                                  | `200`, the plan with those children approved                            |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish`        | `{expected_revision}` and an `Idempotency-Key` header             | `200 {plan, results, operation_id, replayed}`                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/attach`         | `{expected_revision, repository?, number?, url?}`                 | `200 {plan, node_id, linked, reason}`                                   |
+| `POST /v1/plans/{id}/nodes/{node_id}/detach`         | `{expected_revision}`                                             | `200`, the plan with the child detached                                 |
+| `POST /v1/plans/{id}/sync`                           | none                                                              | `200`, the plan reconciled from the forge now                           |
+| `POST /v1/plans/{id}/drift/ack`                      | `{expected_revision, node_ids?}`                                  | `200`, the plan with that drift marked seen                             |
+| `POST /v1/plans/{id}/nodes/{node_id}/replan/approve` | `{expected_revision, entry_ids?}` and an `Idempotency-Key` header | `200 {plan, results, operation_id, replayed}`                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/replan/discard` | `{expected_revision, entry_ids?}`                                 | `200`, the plan without those re-plan entries                           |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -759,7 +761,8 @@ repository's forge can't hold plans: Gitea is not supported"; or `[planning] ena
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
 `deleted`, `approved` with `node_ids`, `published` with `number`,
-`issue_edited`, `attached` and `detached` — see below).
+`issue_edited`, `attached` and `detached` — see below; a re-plan's `closed`
+with `number` and `replan_discarded` with `entry_ids`).
 
 **Approving and publishing a level (#2341).** `approve` (`plans:create`) is
 a person's "this is right": the node's `draft` and `proposed` children —
@@ -881,14 +884,11 @@ delivered to the plan, never to the forge: it replaces the node's previous
 `proposed` children (and anything under them), leaves the children a person
 made or approved where they are, and adds each proposed child as `proposed`
 with `origin: "planner"` and its dependencies mapped to the new ids — one
-write, one revision. Refused: a task (`422`, it has no children); a node on
-the forge that already has children (`409 replan_required`); a repository
-planning is off for or no longer configured (`409 planning_unsupported`,
-`409 unknown_repository`); a level at its cap (`409 level_full`); a
-breakdown of the node already queued or running (`409 already_in_progress`,
-`plan_code: generation_in_progress`); a stale `expected_revision`. The
-generation emits `plan.generation.started` `{plan_id, node_id, run_id}` when
-the run starts, then `plan.generation.proposed` `{plan_id, node_id, run_id, count}` when the plan holds the proposal, or `plan.generation.failed`
+write, one revision. Refused: a task (`422`, it has no children); a
+repository planning is off for or no longer configured (`409 planning_unsupported`, `409 unknown_repository`); a level at its cap (`409 level_full`); a breakdown of the node already queued or running (`409 already_in_progress`, `plan_code: generation_in_progress`); a stale
+`expected_revision`. The generation emits `plan.generation.started`
+`{plan_id, node_id, run_id}` when the run starts, then
+`plan.generation.proposed` `{plan_id, node_id, run_id, kind: "breakdown", count}` when the plan holds the proposal, or `plan.generation.failed`
 `{plan_id, node_id, run_id, reason}` when the run ends without one; each is
 scoped to the run, its item and its channel.
 
@@ -992,6 +992,70 @@ attach or detach never shows as drift. **field-unverified**: GitHub's 422
 for a sub-issue that already has a parent is the documented answer; the
 exact status GitHub gives a cross-repository refusal is not, and any other
 refusal of a cross-repository link falls back to the checklist.
+
+**Re-plan (#2346).** A breakdown of a node that is on the forge with at
+least one child followed there is a re-plan: the item is titled "Re-plan
+the tasks of …" and the run proposes a diff against the node's current
+children, never a replacement (a published node whose children are all
+still drafts or proposals is broken down as before). When the run starts
+proposing, the daemon reconciles the plan from the forge first — reading
+only — so the planner is given every current child as the forge has it
+now, by node id, with its issue, its state and its sections; a forge that
+cannot be read fails the generation named ("the forge could not be read
+before re-planning: …"). The answer is `{add, modify, suggest_close}`:
+`add` whole children (at most the level's cap less the children it has),
+`modify` a current child by id with only the sections that change,
+`suggest_close` a current child by id with a rationale; every entry says
+why. It is held to the level's rules with one retry, as a breakdown is, and
+an addition whose title or id is a current child's is sent back — a child
+that exists is never proposed twice. Only an open, followed child can be
+changed or closed, and a child a person filed on the forge in their own
+words (`origin: forge`) can be closed but not rewritten. A full level does
+not refuse a re-plan.
+
+The diff is kept on the node as `replan` `{id, run_id, proposed_at, entries}` and nothing else changes: each entry is `{id, action, node_id, sections, before, rationale, error, forge_version}` — for `add`, `node_id` is the id the
+child will have (minted now, so its issue's marker is the same on every
+attempt) and `sections` the whole child with `depends_on` as node ids; for
+`modify`, `sections` holds only what changes and `before` those sections as
+the child had them, and for `modify` and `suggest_close` `forge_version`
+is the child's issue version then; `error` is why the last approval of the
+entry failed.
+A new re-plan replaces the diff waiting; an empty one clears it. Delivery
+leaves out an addition that repeats a child the node has meanwhile and an
+entry whose child left the forge. It is recorded as
+`plan.generation.proposed` `{plan_id, node_id, run_id, kind: "replan", replan_id, count, add, modify, suggest_close, skipped}`.
+
+`POST .../replan/approve` (`plans:publish`) applies every entry, or those
+`entry_ids` names, through the publish path. The plan is reconciled from the forge
+first. Each `modify` is written the way a person's direct edit of a
+published node is (`PATCH .../nodes/{node_id}` above): the diff recorded
+the child's `forge.version` when it was proposed, and the issue is read and
+refused when it no longer reads so — a child a person changed on the forge
+since fails naming what moved, and nothing is written; otherwise only the
+title (when it changes) and the sections that change are rewritten, so a
+person's own text, the sections not changed, the marker and a managed
+checklist are kept, and it is recorded as `plan.node.changed` `change: issue_edited` with `via: "replan"`. Each
+`suggest_close` closes the issue as not planned (GitHub's `state_reason`;
+GitLab records no reason), then comments the rationale and who approved it;
+the node stays in the plan, closed, and an issue already closed is left
+alone. Each `add` becomes an `approved` child with its minted id and is
+published by the level walk narrowed to the additions: looked for by its
+marker first (an interrupted approval's issue is `found`, never filed
+twice), created with its level label, linked as a sub-issue or checklist
+line; an addition whose title a child now has is refused. Each result is
+`{entry_id, action, outcome, node_id, number?, url?, error?, reason?}` with
+`outcome` `created`, `found`, `updated`, `closed` or `failed`. An entry that
+lands leaves the diff; one that fails stays with its `error`. Refused before
+the forge is touched: no diff waiting (`409 no_replan`), an entry not in it
+(`422`), a disabled or unplannable repository, additions past the cap (`409 too_many_children`), an addition depending on one not approved with it
+(`409 dependency_unpublished`), no forge connection (`503 source_unavailable`), a plan being published (`409 already_in_progress`). The
+`Idempotency-Key` behaves as publish's; an approval the daemon died during
+is settled `failed` (`interrupted_before_effect`) and approving again
+resumes it. Each call records `plan.published` `{plan_id, node_id, replan: true, published, modified, closed, failed}` (node ids) and a
+`plan.node.changed` per child written (`added`, `issue_edited` or `closed`,
+with `via: "replan"`). `POST .../replan/discard` (`plans:create`) drops entries and writes
+nothing to the forge (`plan.node.changed` `change: replan_discarded` with
+`entry_ids`).
 
 ### Workspace people
 
@@ -1479,82 +1543,84 @@ rechecked when it arrives) and a `revision` a command may pin.
 
 ## Endpoint catalog
 
-| Method   | Path                                         | Capability             | Purpose                                                               |
-| -------- | -------------------------------------------- | ---------------------- | --------------------------------------------------------------------- |
-| `GET`    | `/health/live`, `/health/ready`              | none                   | Liveness; readiness with generation and projection lag                |
-| `GET`    | `/v1/capabilities`, `/v1/me`                 | any                    | Contract, features, limits; the client's own grant                    |
-| `GET`    | `/v1/openapi.json`                           | none                   | The contract of record                                                |
-| `POST`   | `/v1/auth/token`, `/v1/auth/revoke`          | none / any             | Mint and refresh; revoke the presented token                          |
-| `POST`   | `/v1/auth/local/register`, `/login`          | none                   | One local user's onboarding and login                                 |
-| `GET`    | `/v1/auth/providers`                         | none                   | The sign-ins a signed-out client may offer                            |
-| `POST`   | `/v1/auth/oidc/token`                        | none                   | Redeem an OpenID Connect authorization code for a token pair          |
-| `GET`    | `/v1/users/me`, `/v1/agents[/{slug}]`        | collaboration read     | Local profile and product agent catalog                               |
-| `GET`    | `/v1/users`                                  | workspace member       | The workspace directory                                               |
-| `PATCH`  | `/v1/workspace/members/{user_id}`            | workspace admin        | Change a role; deactivate or reactivate a user                        |
-| `DELETE` | `/v1/workspace/members/{user_id}`            | workspace admin        | End a membership                                                      |
-| `POST`   | `/v1/workspace/invites`                      | workspace admin        | Create an invite; the raw token appears only here                     |
-| `GET`    | `/v1/workspace/invites`                      | workspace admin        | List invites                                                          |
-| `DELETE` | `/v1/workspace/invites/{id}`                 | workspace admin        | Withdraw an invite                                                    |
-| `POST`   | `/v1/agents`, `/v1/agents/{slug}/archive`    | collaboration write    | Save a person's own agent; archive it                                 |
-| `PATCH`  | `/v1/agents/{slug}`                          | collaboration write    | Edit a saved agent at the revision last read                          |
-| CRUD     | `/v1/teams`, `/v1/channels`, `/v1/workflows` | collaboration          | Local teams, durable conversations, and workflow definitions          |
-| CRUD     | `/v1/agents/{slug}/memories[/{id}]`          | collaboration          | An agent's long-term memory, scoped by source channel                 |
-| `GET`    | `/v1/channels/{id}/messages`                 | collaboration read     | Immutable ordered conversation history                                |
-| `POST`   | `/v1/channels/{id}/turns`                    | collaboration delegate | Accept an idempotent conversation/delegation turn                     |
-| CRUD     | `/v1/channels/{id}/members`, `/participants` | collaboration          | The people and agents in a channel                                    |
-| `GET`    | `/v1/bridges`                                | collaboration read     | The chat services a channel can be linked to                          |
-| CRUD     | `/v1/channels/{id}/links`                    | collaboration          | The bridge surfaces mirroring a channel                               |
-| CRUD     | `/v1/users/me/identities[/{backend}]`        | collaboration          | Who you are on a bridge, and the code that proves it                  |
-| CRUD     | `/v1/users/me/devices[/{id}[/test]]`         | collaboration          | Devices registered for push notifications; a test push                |
-| `GET`    | `/v1/users/me/notifications/{ref}`           | collaboration read     | What a push was about                                                 |
-| CRUD     | `/v1/prompts`, `/v1/connections`             | collaboration          | User preferences; redacted connections and owner management           |
-| `GET`    | `/v1/status`                                 | `runs:read`            | Live state: current run, queue, holds, breaker, stopping, watermark   |
-| `GET`    | `/v1/items[/{id}]`, `/v1/queue`              | `runs:read`            | Work items; the queue in dispatch order                               |
-| `POST`   | `/v1/items`                                  | `items:create`         | Admit an issue, a workload ask or a tool recipe                       |
-| `POST`   | \`/v1/items/{id}/retry                       | requeue                | abandon\`                                                             |
-| `GET`    | `/v1/runs[/{id}]`, `…/tasks`                 | `runs:read`            | Runs and their tasks                                                  |
-| `POST`   | \`/v1/runs/{id}/cancel                       | resume\`               | `runs:control`                                                        |
-| `POST`   | `/v1/runs/{id}/steering`                     | `runs:steer`           | Direction for the run in flight                                       |
-| `GET`    | `/v1/runs/{id}/steering`                     | `runs:read`            | Every instruction and its fate                                        |
-| `POST`   | `/v1/runs/{id}/round-grants`                 | `budgets:grant`        | More review rounds for an exhausted run                               |
-| `POST`   | `/v1/runs/{id}/review-wait/resume`           | `runs:control`         | Re-arm a run parked for review                                        |
-| `GET`    | `/v1/gates[/{id}]`                           | `runs:read`            | Merge and publication gates                                           |
-| `POST`   | `/v1/gates/{id}/approve`                     | `gates:approve`        | Endorse and release a gate at a revision                              |
-| `GET`    | `/v1/events`, `/v1/runs/{id}/events`         | `runs:read`            | The chronology after a cursor                                         |
-| `GET`    | `/v1/events/stream`                          | `runs:read`            | The same, as server-sent events                                       |
-| `WS`     | `/v1/ws`                                     | `runs:read`            | Events and commands on one socket                                     |
-| `GET`    | `/v1/runs/{id}/artifacts`                    | `artifacts:read`       | The run's artifact catalog and where it published                     |
-| `GET`    | `/v1/artifacts/{id}[/content]`               | `artifacts:read`       | One entry; its bytes as an attachment                                 |
-| `GET`    | `/v1/runs/{id}/usage`, `/v1/usage`           | `runs:read`            | Reported tokens and turns; never a bill                               |
-| `GET`    | `/v1/usage/pool`                             | `runs:read`            | Today's runs and tokens against the daily cap and budget              |
-| `GET`    | `/v1/operations[/{id}]`                      | `audit:read`           | Every command any surface recorded                                    |
-| `GET`    | `/v1/repositories`, `/profiles`, `/recipes`  | `runs:read`            | What work may be admitted against                                     |
-| `POST`   | `/v1/repositories/{id}/resume`               | `daemon:manage`        | Poll a suspended repository again                                     |
-| `POST`   | `/v1/repositories/{id}/labels/sync`          | `daemon:manage`        | Create the labels the loop applies that the repository is missing     |
-| `GET`    | `/v1/repositories/available`                 | owner role             | What the host's forge credential can see, to pick one to register     |
-| `POST`   | `/v1/repositories`                           | `daemon:manage`        | Register a repository; polled from the next start                     |
-| `PATCH`  | `/v1/repositories/{id}`                      | `daemon:manage`        | Enable, disable or re-base a registered repository                    |
-| `DELETE` | `/v1/repositories/{id}`                      | `daemon:manage`        | Forget a registration; queued and running work is untouched           |
-| `GET`    | `/v1/daemon/holds`                           | `runs:read`            | Standing holds and whose they are                                     |
-| `POST`   | `/v1/daemon/holds`                           | `daemon:manage`        | Take a hold attributed to this client                                 |
-| `DELETE` | `/v1/daemon/holds/{name}`                    | `daemon:manage`        | Release your hold; `?force=true` overrides another's                  |
-| `POST`   | `/v1/daemon/stop`, `/v1/daemon/restart`      | `daemon:manage`        | Graceful stop; a stop the supervisor undoes                           |
-| `GET`    | `/v1/schedules[/{name}]`                     | `runs:read`            | Schedules with cadence, last and next due                             |
-| `PATCH`  | `/v1/schedules/{name}`                       | `daemon:manage`        | Atomically replace or rename a schedule while preserving run history  |
-| `POST`   | \`/v1/schedules\[/{name}/pause               | resume\]\`             | `daemon:manage`                                                       |
-| `DELETE` | `/v1/schedules/{name}`                       | `daemon:manage`        | Remove                                                                |
-| `GET`    | `/v1/logs`, `/v1/configuration`              | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance |
-| `GET`    | `/v1/plans[/{id}]`                           | `runs:read`            | Plans and their nodes, drafts included                                |
-| CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`       | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes               |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`     | `plans:create`         | Approve a node's draft and proposed children                          |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`     | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required            |
-| `PATCH`  | `/v1/plans/{id}/nodes/{node_id}` (published) | `plans:publish`        | Edit a published node's sections: writes its issue                    |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/attach`      | `plans:publish`        | Attach an existing open issue as a child                              |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/detach`      | `plans:publish`        | Unlink a child from its parent; its issue stays open                  |
-| `POST`   | `/v1/plans/{id}/sync`                        | `plans:create`         | Reconcile the plan from the forge now                                 |
-| `POST`   | `/v1/plans/{id}/drift/ack`                   | `plans:create`         | Mark the forge's changes to a plan seen                               |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/breakdown`   | `plans:create`         | Queue a `plan` run proposing the node's next level                    |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/answers`     | `plans:create`         | Answer or skip a breakdown's clarifying questions; resumes its run    |
+| Method   | Path                                            | Capability             | Purpose                                                                     |
+| -------- | ----------------------------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| `GET`    | `/health/live`, `/health/ready`                 | none                   | Liveness; readiness with generation and projection lag                      |
+| `GET`    | `/v1/capabilities`, `/v1/me`                    | any                    | Contract, features, limits; the client's own grant                          |
+| `GET`    | `/v1/openapi.json`                              | none                   | The contract of record                                                      |
+| `POST`   | `/v1/auth/token`, `/v1/auth/revoke`             | none / any             | Mint and refresh; revoke the presented token                                |
+| `POST`   | `/v1/auth/local/register`, `/login`             | none                   | One local user's onboarding and login                                       |
+| `GET`    | `/v1/auth/providers`                            | none                   | The sign-ins a signed-out client may offer                                  |
+| `POST`   | `/v1/auth/oidc/token`                           | none                   | Redeem an OpenID Connect authorization code for a token pair                |
+| `GET`    | `/v1/users/me`, `/v1/agents[/{slug}]`           | collaboration read     | Local profile and product agent catalog                                     |
+| `GET`    | `/v1/users`                                     | workspace member       | The workspace directory                                                     |
+| `PATCH`  | `/v1/workspace/members/{user_id}`               | workspace admin        | Change a role; deactivate or reactivate a user                              |
+| `DELETE` | `/v1/workspace/members/{user_id}`               | workspace admin        | End a membership                                                            |
+| `POST`   | `/v1/workspace/invites`                         | workspace admin        | Create an invite; the raw token appears only here                           |
+| `GET`    | `/v1/workspace/invites`                         | workspace admin        | List invites                                                                |
+| `DELETE` | `/v1/workspace/invites/{id}`                    | workspace admin        | Withdraw an invite                                                          |
+| `POST`   | `/v1/agents`, `/v1/agents/{slug}/archive`       | collaboration write    | Save a person's own agent; archive it                                       |
+| `PATCH`  | `/v1/agents/{slug}`                             | collaboration write    | Edit a saved agent at the revision last read                                |
+| CRUD     | `/v1/teams`, `/v1/channels`, `/v1/workflows`    | collaboration          | Local teams, durable conversations, and workflow definitions                |
+| CRUD     | `/v1/agents/{slug}/memories[/{id}]`             | collaboration          | An agent's long-term memory, scoped by source channel                       |
+| `GET`    | `/v1/channels/{id}/messages`                    | collaboration read     | Immutable ordered conversation history                                      |
+| `POST`   | `/v1/channels/{id}/turns`                       | collaboration delegate | Accept an idempotent conversation/delegation turn                           |
+| CRUD     | `/v1/channels/{id}/members`, `/participants`    | collaboration          | The people and agents in a channel                                          |
+| `GET`    | `/v1/bridges`                                   | collaboration read     | The chat services a channel can be linked to                                |
+| CRUD     | `/v1/channels/{id}/links`                       | collaboration          | The bridge surfaces mirroring a channel                                     |
+| CRUD     | `/v1/users/me/identities[/{backend}]`           | collaboration          | Who you are on a bridge, and the code that proves it                        |
+| CRUD     | `/v1/users/me/devices[/{id}[/test]]`            | collaboration          | Devices registered for push notifications; a test push                      |
+| `GET`    | `/v1/users/me/notifications/{ref}`              | collaboration read     | What a push was about                                                       |
+| CRUD     | `/v1/prompts`, `/v1/connections`                | collaboration          | User preferences; redacted connections and owner management                 |
+| `GET`    | `/v1/status`                                    | `runs:read`            | Live state: current run, queue, holds, breaker, stopping, watermark         |
+| `GET`    | `/v1/items[/{id}]`, `/v1/queue`                 | `runs:read`            | Work items; the queue in dispatch order                                     |
+| `POST`   | `/v1/items`                                     | `items:create`         | Admit an issue, a workload ask or a tool recipe                             |
+| `POST`   | \`/v1/items/{id}/retry                          | requeue                | abandon\`                                                                   |
+| `GET`    | `/v1/runs[/{id}]`, `…/tasks`                    | `runs:read`            | Runs and their tasks                                                        |
+| `POST`   | \`/v1/runs/{id}/cancel                          | resume\`               | `runs:control`                                                              |
+| `POST`   | `/v1/runs/{id}/steering`                        | `runs:steer`           | Direction for the run in flight                                             |
+| `GET`    | `/v1/runs/{id}/steering`                        | `runs:read`            | Every instruction and its fate                                              |
+| `POST`   | `/v1/runs/{id}/round-grants`                    | `budgets:grant`        | More review rounds for an exhausted run                                     |
+| `POST`   | `/v1/runs/{id}/review-wait/resume`              | `runs:control`         | Re-arm a run parked for review                                              |
+| `GET`    | `/v1/gates[/{id}]`                              | `runs:read`            | Merge and publication gates                                                 |
+| `POST`   | `/v1/gates/{id}/approve`                        | `gates:approve`        | Endorse and release a gate at a revision                                    |
+| `GET`    | `/v1/events`, `/v1/runs/{id}/events`            | `runs:read`            | The chronology after a cursor                                               |
+| `GET`    | `/v1/events/stream`                             | `runs:read`            | The same, as server-sent events                                             |
+| `WS`     | `/v1/ws`                                        | `runs:read`            | Events and commands on one socket                                           |
+| `GET`    | `/v1/runs/{id}/artifacts`                       | `artifacts:read`       | The run's artifact catalog and where it published                           |
+| `GET`    | `/v1/artifacts/{id}[/content]`                  | `artifacts:read`       | One entry; its bytes as an attachment                                       |
+| `GET`    | `/v1/runs/{id}/usage`, `/v1/usage`              | `runs:read`            | Reported tokens and turns; never a bill                                     |
+| `GET`    | `/v1/usage/pool`                                | `runs:read`            | Today's runs and tokens against the daily cap and budget                    |
+| `GET`    | `/v1/operations[/{id}]`                         | `audit:read`           | Every command any surface recorded                                          |
+| `GET`    | `/v1/repositories`, `/profiles`, `/recipes`     | `runs:read`            | What work may be admitted against                                           |
+| `POST`   | `/v1/repositories/{id}/resume`                  | `daemon:manage`        | Poll a suspended repository again                                           |
+| `POST`   | `/v1/repositories/{id}/labels/sync`             | `daemon:manage`        | Create the labels the loop applies that the repository is missing           |
+| `GET`    | `/v1/repositories/available`                    | owner role             | What the host's forge credential can see, to pick one to register           |
+| `POST`   | `/v1/repositories`                              | `daemon:manage`        | Register a repository; polled from the next start                           |
+| `PATCH`  | `/v1/repositories/{id}`                         | `daemon:manage`        | Enable, disable or re-base a registered repository                          |
+| `DELETE` | `/v1/repositories/{id}`                         | `daemon:manage`        | Forget a registration; queued and running work is untouched                 |
+| `GET`    | `/v1/daemon/holds`                              | `runs:read`            | Standing holds and whose they are                                           |
+| `POST`   | `/v1/daemon/holds`                              | `daemon:manage`        | Take a hold attributed to this client                                       |
+| `DELETE` | `/v1/daemon/holds/{name}`                       | `daemon:manage`        | Release your hold; `?force=true` overrides another's                        |
+| `POST`   | `/v1/daemon/stop`, `/v1/daemon/restart`         | `daemon:manage`        | Graceful stop; a stop the supervisor undoes                                 |
+| `GET`    | `/v1/schedules[/{name}]`                        | `runs:read`            | Schedules with cadence, last and next due                                   |
+| `PATCH`  | `/v1/schedules/{name}`                          | `daemon:manage`        | Atomically replace or rename a schedule while preserving run history        |
+| `POST`   | \`/v1/schedules\[/{name}/pause                  | resume\]\`             | `daemon:manage`                                                             |
+| `DELETE` | `/v1/schedules/{name}`                          | `daemon:manage`        | Remove                                                                      |
+| `GET`    | `/v1/logs`, `/v1/configuration`                 | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance       |
+| `GET`    | `/v1/plans[/{id}]`                              | `runs:read`            | Plans and their nodes, drafts included                                      |
+| CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`          | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes                     |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`        | `plans:create`         | Approve a node's draft and proposed children                                |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`        | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required                  |
+| `PATCH`  | `/v1/plans/{id}/nodes/{node_id}` (published)    | `plans:publish`        | Edit a published node's sections: writes its issue                          |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/attach`         | `plans:publish`        | Attach an existing open issue as a child                                    |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/detach`         | `plans:publish`        | Unlink a child from its parent; its issue stays open                        |
+| `POST`   | `/v1/plans/{id}/sync`                           | `plans:create`         | Reconcile the plan from the forge now                                       |
+| `POST`   | `/v1/plans/{id}/drift/ack`                      | `plans:create`         | Mark the forge's changes to a plan seen                                     |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/breakdown`      | `plans:create`         | Queue a `plan` run proposing the node's next level                          |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/answers`        | `plans:create`         | Answer or skip a breakdown's clarifying questions; resumes its run          |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/replan/approve` | `plans:publish`        | Apply a re-plan's diff through the publish path; `Idempotency-Key` required |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/replan/discard` | `plans:create`         | Discard a re-plan's diff                                                    |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The
