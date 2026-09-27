@@ -97,6 +97,13 @@ descriptor the worker needs.
   `CapabilityUnsupported` by name. Cross-repository sub-issues are verified
   for a personal account's token; under a GitHub App installation that
   does not cover both repositories they are **field-unverified**.
+  `vcs/checklist.py` is that checklist (#2339): one block between
+  `<!-- sbx-plan:children -->` and `<!-- /sbx-plan:children -->`, one
+  `- [ ] group/project#N title` line per child, ticked when the child
+  closes. It rewrites that block and nothing else, writes the description
+  back only when it changed, and reports a block a person broke (a marker
+  missing, a second block, a line that is not a child) as
+  `ChecklistMangled` rather than repairing it.
 
 - **The generic transport is private to the backend package.** `GithubOps.raw`,
   `raw_lookup` and the `raw_pages` walker spell a path by hand, and fifty
