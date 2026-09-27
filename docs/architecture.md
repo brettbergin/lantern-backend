@@ -1741,6 +1741,28 @@ provision (agent box only, data dir mounted, no toolchains)
 the code and tool trails hold theirs, and asserts no github sandbox and no
 delivery appears in it.
 
+**From chat.** An ask too big for one run is offered a plan rather than
+admitted as one oversized run: the concierge prompt tells the concierge to
+offer (Draft a plan / Run it as one piece / Cancel) and never to draft on
+silence, and its `draft_plan` tool (`daemon/concierge.py`) writes on the
+person's yes alone — their words quoted in `confirmation`, as `close_issue`
+and `set_config` take them. It is offered only where a configured
+repository can hold a plan, and it answers to the turn's principal: it
+needs `plans:create`, and the draft goes through `PlanService.create` with
+the asker as the actor (`created_by` is their id; `plan.created` carries
+them, `via: "concierge"`), so the plan service's rules — the level, a
+plannable repository, the sections — hold for chat exactly as for the
+form. The sections are the conversation's (`goal`, `acceptance_criteria`,
+`constraints`, `non_goals`, `context`), refused by name when longer than
+the API accepts, never clipped; a replayed call finds the asker's same
+draft and links it instead of writing a second. It writes a draft and
+nothing else — no breakdown, approval, publish or run, no forge call.
+The reply links the draft as `/plans/<plan_id>`: the path Angie serves a
+plan at on its own origin, and the path Lantern opens from a message as its
+plan screen. The daemon knows no client origin, so the link is the path,
+not an absolute URL; on a chat surface where a relative link cannot open,
+the reply also names the plan id to find in Plans.
+
 ## The home
 
 Every path sbxloop touches on a host hangs off one directory, the **home**:
@@ -2355,7 +2377,8 @@ change schedules answer to it the same way: `start_workload` and
 `start_entrygraph` take `items:create`, as `POST /v1/items` does (a workload
 for a channel also takes what a write to that channel does), and
 `create_schedule` and `delete_schedule` take `daemon:manage`, as the schedule
-routes do; a refusal names the missing capability and writes nothing. The
+routes do, and `draft_plan` takes `plans:create`, as `POST /v1/plans` does;
+a refusal names the missing capability and writes nothing. The
 API hands over the same
 principal a stop or a steer from chat uses (`_chat_principal`); a chat
 bridge, whose control channel the operator restricted, hands over an

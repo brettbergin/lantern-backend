@@ -56,6 +56,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, cast, get_args
+from urllib.parse import quote
 
 from sbxloop.agentmodels import ModelSelection, model_for_phase, refreshed_models
 from sbxloop.agents.tools import UNGUARDED_START_TOOLS, WORK_TOOL_NAMES, AgentTool
@@ -106,6 +107,9 @@ from sbxloop.events import EventBus
 from sbxloop.ghids import chat_item_id, issue_item_id, normalize_item_id
 from sbxloop.ids import new_job_id, new_run_id
 from sbxloop.log import get_logger
+from sbxloop.plans import Plan, PlanRefusal, PlanService
+from sbxloop.plans.hierarchy import repository_planning_for
+from sbxloop.plans.store import PlanStore
 from sbxloop.provider import ProviderHeldError, ProviderHold, ProviderRecovery
 from sbxloop.vcs.github.ops import MalformedResponse
 from sbxloop.vcs.model import CloseReason
@@ -168,6 +172,16 @@ CHAT_NAMES: dict[str, str] = {
     "slack": "Slack",
     "local": "the operator console",
 }
+#: How long a drafted plan's sections may be, as ``POST /v1/plans`` bounds
+#: them (``api/plan_schemas.py``), so chat drafts nothing the form refuses.
+_PLAN_TEXT_LIMITS: dict[str, int] = {
+    "title": 256,
+    "goal": 8000,
+    "context": 16000,
+    "non_goals": 4000,
+    "constraints": 4000,
+}
+_PLAN_CRITERIA_MAX = 50
 
 
 def concierge_run_id(session_key: str | None) -> str:
@@ -1735,6 +1749,7 @@ class Concierge:
                 self._tool_start_workload,
             ),
             *self._entrygraph_tools(),
+            *self._plan_tools(),
             HostTool(
                 HostToolSpec(
                     name="create_schedule",
@@ -2634,6 +2649,135 @@ class Concierge:
             lines.append("The breaker is OPEN — nothing runs until it resets.")
         return "\n".join(lines)
 
+    def _plan_tools(self) -> list[HostTool]:
+        """The plan hand-off, where a configured repository can hold a plan.
+
+        Removed rather than refused where none can (planning off, a forge
+        that cannot hold one, no repository to draft in), as the entrygraph
+        tool is: a tool the model can see but never use reads, to the
+        person, as a capability.
+        """
+        if not any(
+            repository_planning_for(self.config, entry.repo).supported
+            for entry in self.config.repo_list()
+        ):
+            return []
+        text = {"type": "string"}
+        return [
+            HostTool(
+                HostToolSpec(
+                    name="draft_plan",
+                    description=(
+                        "Draft a PLAN for an ask too big for one run — work that needs "
+                        "several pull requests or deliveries, in an order, with decisions "
+                        "along the way — and hand it to the person to break down in "
+                        "Plans. Only after you OFFERED a plan and the person said yes: "
+                        "quote their words in `confirmation`; never on your own "
+                        "initiative, never on silence. Writes one DRAFT plan pre-filled "
+                        "from the conversation, as the person who asked: `level` "
+                        "`initiative` (several epics, possibly across repositories; "
+                        "`repo` is its home) or `epic` (one body of work in one "
+                        "repository); `title`; `goal` (what and why); "
+                        "`acceptance_criteria` (checkable statements of success); "
+                        "`constraints`; `non_goals`; `context` (what the conversation "
+                        "established that the planner should know). It never publishes, "
+                        "approves, breaks the plan down or starts a run: nothing reaches "
+                        "the forge and nothing is queued. The reply carries the link that "
+                        "opens the draft in Plans; relay it as given."
+                    ),
+                    parameters=_schema(
+                        {
+                            "level": {"type": "string", "enum": ["initiative", "epic"]},
+                            "title": {**text, "maxLength": _PLAN_TEXT_LIMITS["title"]},
+                            "goal": {**text, "maxLength": _PLAN_TEXT_LIMITS["goal"]},
+                            "acceptance_criteria": {
+                                "type": "array",
+                                "items": text,
+                                "maxItems": _PLAN_CRITERIA_MAX,
+                            },
+                            "constraints": {
+                                **text,
+                                "maxLength": _PLAN_TEXT_LIMITS["constraints"],
+                            },
+                            "non_goals": {**text, "maxLength": _PLAN_TEXT_LIMITS["non_goals"]},
+                            "context": {**text, "maxLength": _PLAN_TEXT_LIMITS["context"]},
+                            "repo": text,
+                            "confirmation": text,
+                        },
+                        ["level", "title", "confirmation"],
+                    ),
+                ),
+                self._tool_draft_plan,
+            )
+        ]
+
+    def _tool_draft_plan(self, args: dict[str, Any], by: str) -> str:
+        """A draft plan for the person who asked, on their yes (#2351).
+
+        As ``POST /v1/plans`` drafts one: ``plans:create``, held by the
+        asker, and the plan service's rules (the level, a configured
+        repository whose forge can hold a plan, the sections). The plan is
+        theirs — ``created_by`` is their id, and ``plan.created`` carries
+        them as the actor, via the concierge. Nothing else: no breakdown,
+        no approval, no publish, no run.
+        """
+        refused = self._turn_refusal(
+            by, "draft_plan", "the plan is not drafted", ("plans:create",), "Nothing was drafted."
+        )
+        if refused is not None:
+            return refused
+        asker = self._turn.principal
+        assert asker is not None  # nosec B101 - a turn with none holds no plans:create
+        confirmation = _one_line(str(args.get("confirmation") or ""), 200)
+        if not confirmation:
+            return (
+                "draft_plan needs the person's own words agreeing to a plan. Offer it — "
+                "what the plan would cover and that it is a draft for them to break down "
+                "and publish — and pass what they answered as `confirmation`. "
+                "Nothing was drafted."
+            )
+        level = str(args.get("level") or "").strip()
+        if level not in ("initiative", "epic"):
+            return "a plan starts at an initiative or an epic. Nothing was drafted."
+        sections, problem = _plan_sections(args)
+        if problem is not None:
+            return f"{problem}. Nothing was drafted."
+        repo, repo_error = self._resolve_repo(args)
+        if repo_error is not None:
+            return f"{repo_error}. Nothing was drafted."
+        assert repo is not None  # nosec B101 - resolved above
+        actor = {
+            "kind": asker.kind,
+            "id": asker.id,
+            "display": asker.display or asker.id,
+            "via": "concierge",
+        }
+        service = PlanService(PlanStore(self.dstore), lambda: self.config)
+        existing = _same_draft(service, asker.id, level, repo, sections["title"])
+        if existing is not None:
+            return f"{_plan_link(existing)} is already drafted for them — nothing new was written."
+        try:
+            plan = service.create(
+                level=level, repository=repo, sections=sections, now=self.clock(), actor=actor
+            )
+        except PlanRefusal as exc:
+            return f"the plan is not drafted: {exc.detail}. Nothing was drafted."
+        log.info(
+            "concierge.plan_drafted",
+            plan=plan.id,
+            level=level,
+            repository=plan.root.repository,
+            by=by,
+            principal=asker.audit(),
+            confirmation=confirmation,
+        )
+        return (
+            f"drafted {_plan_link(plan)}. It is a draft only: nothing is published and "
+            "nothing is queued. Opening the link shows it in Plans, where the person "
+            "edits it, asks for its breakdown and publishes it; where a link cannot be "
+            f"opened, they find it in Plans as `{plan.id}`."
+        )
+
     def _tool_create_schedule(self, args: dict[str, Any], by: str) -> str:
         # A schedule is recurring, unattended work: `daemon:manage`, as
         # `POST /v1/schedules` requires.
@@ -3361,6 +3505,61 @@ def _visible_tool_arguments(call: HostToolCall) -> dict[str, Any]:
         # often enough that it belongs on the same side of this line.
         arguments["query"] = "<redacted query>"
     return arguments
+
+
+def _plan_sections(args: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """The sections ``draft_plan`` was given, or why they cannot be drafted.
+
+    Too long is refused by name rather than clipped: a plan is the brief
+    every run under it reads, and a silently shortened goal is a different
+    one.
+    """
+    sections: dict[str, Any] = {}
+    for key, limit in _PLAN_TEXT_LIMITS.items():
+        value = str(args.get(key) or "").strip()
+        if len(value) > limit:
+            return {}, f"`{key}` is {len(value)} characters; a plan's {key} holds at most {limit}"
+        if value:
+            sections[key] = value
+    if "title" not in sections:
+        return {}, "a plan needs a title"
+    raw = args.get("acceptance_criteria") or []
+    criteria = [" ".join(str(c).split()) for c in (raw if isinstance(raw, list) else [raw])]
+    criteria = [c for c in criteria if c]
+    if len(criteria) > _PLAN_CRITERIA_MAX:
+        return {}, f"a plan holds at most {_PLAN_CRITERIA_MAX} acceptance criteria"
+    if criteria:
+        sections["acceptance_criteria"] = criteria
+    return sections, None
+
+
+def _same_draft(
+    service: PlanService, created_by: str, level: str, repository: str, title: str
+) -> Plan | None:
+    """The asker's draft this call would repeat — a replayed turn must not
+    leave a second one — or ``None``."""
+    for plan in service.find(repository=repository, level=level, state="draft"):
+        root = plan.root
+        if (
+            plan.created_by == created_by
+            and root.repository.casefold() == repository.casefold()
+            and root.title.casefold() == title.casefold()
+        ):
+            return plan
+    return None
+
+
+def _plan_link(plan: Plan) -> str:
+    """The draft as a link both clients open: Angie serves a plan at
+    ``/plans/<plan_id>`` on its own origin, and Lantern opens the same path
+    from a message as its plan screen — so the path, not an absolute URL
+    the daemon has no configured origin for."""
+    root = plan.root
+    title = root.title.replace("[", "(").replace("]", ")")
+    return (
+        f"{root.level} `{plan.id}` in {root.repository}: "
+        f"[{title}](/plans/{quote(plan.id, safe='')})"
+    )
 
 
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:

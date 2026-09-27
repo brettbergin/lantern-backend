@@ -77,6 +77,7 @@ CONCIERGE_TOOLS: frozenset[str] = frozenset(
         "daemon_log",
         "start_workload",
         "start_entrygraph",
+        "draft_plan",
         "create_schedule",
         "delete_schedule",
         "config_keys",

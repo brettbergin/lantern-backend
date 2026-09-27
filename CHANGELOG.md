@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+**The concierge offers a plan when an ask is too big for one run.** Instead
+of filing or queueing work that cannot honestly end in one pull request or
+one delivery, the concierge offers a plan (Draft a plan / Run it as one
+piece / Cancel). On the person's explicit yes — never on silence — its new
+`draft_plan` tool writes a draft initiative or lone epic pre-filled from the
+conversation (title, goal, acceptance criteria, constraints, non-goals,
+context) through the plan service as the person who asked: it needs their
+`plans:create` and is refused by name without it, the plan's `created_by`
+is theirs, and `plan.created` names them via the concierge. The reply links
+the draft as `/plans/<plan_id>`, which opens it in Plans in Angie and in
+Lantern. It never publishes, approves, breaks down or runs anything, and it
+is offered only where a configured repository can hold a plan. (#2351)
+
 **A published node can be re-planned, and the planner's changes reach the
 forge only as a diff a person approves.** A breakdown of a node that is on
 the forge with children there now queues a re-plan instead of being

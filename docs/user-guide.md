@@ -1955,6 +1955,23 @@ lists the prefixes chat may read but not change (egress, tool grants and
 credential names by default), and the chat sections and the gate itself
 are never changed from chat whatever it says.
 
+Ask for something too big for one run — work that needs several pull
+requests or deliveries, several repositories, or steps that depend on what
+earlier ones decide — and the concierge offers a **plan** instead of filing
+one oversized run: it says why, what the plan would cover and at which
+level (an initiative, or a lone epic in one repository), and offers **Draft
+a plan** / **Run it as one piece** / **Cancel**. On your yes, and only then,
+its `draft_plan` tool writes a draft plan pre-filled from the conversation
+(title, goal, acceptance criteria, constraints, non-goals and context) as
+you — it needs your `plans:create`, which members hold, and is refused by
+name without it — and replies with a link, `/plans/<plan_id>`, that opens
+the draft in Plans in Angie and in Lantern (on a chat service where that
+link cannot open, find the plan id it names in Plans). From there you edit
+it, ask for its breakdown and publish it; the concierge never publishes,
+approves, breaks down or runs a plan, and it never drafts one on silence.
+The tool is offered only where a configured repository can hold a plan
+(`[planning] enabled`, on a forge that supports it).
+
 It finishes triage too: "reply on #12 that we're waiting on upstream"
 posts a comment signed with your name, and "close #12 as a duplicate of
 #7" comments and closes it as *not planned* (or *completed*) — but only
