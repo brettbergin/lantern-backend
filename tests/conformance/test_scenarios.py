@@ -85,6 +85,27 @@ class TestIssues:
         issue = ops.issue_get(repo, ref.number)
         assert issue["title"] == "the settled title" and issue["body"] == "only the body"
 
+    def test_a_managed_checklist_rewrites_only_its_block(self, subject: Subject) -> None:
+        from sbxloop.vcs.checklist import (
+            ChecklistEntry,
+            add_child,
+            parse_checklist,
+            set_child_closed,
+            update_checklist,
+        )
+
+        ops, repo = subject.ops, subject.repo
+        person = "A person's own words.\n\n- [ ] a person's own item"
+        parent = ops.issue_create(repo, "an epic", person)
+        child = ChecklistEntry(f"{repo}#{parent.number + 1000}", "a task")
+        assert update_checklist(ops, repo, parent.number, lambda b: add_child(b, child))
+        assert update_checklist(
+            ops, repo, parent.number, lambda b: set_child_closed(b, child.ref, closed=True)
+        )
+        body = str(ops.issue_get(repo, parent.number)["body"])
+        assert body.startswith(person)
+        assert parse_checklist(body) == [ChecklistEntry(child.ref, child.title, closed=True)]
+
 
 class TestSubIssues:
     @pytest.mark.needs("sub_issues")

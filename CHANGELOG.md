@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+**A parent issue on GitLab can list its children in a managed checklist.**
+`vcs/checklist.py` keeps one block between `<!-- sbx-plan:children -->`
+markers in a parent's description, one `- [ ] group/project#N title` line
+per child: adding, removing and closing a child rewrite that block and
+nothing else, the description is written back only when it changed, and a
+block a person broke is reported as `ChecklistMangled`, never repaired.
+Publishing a plan on GitLab builds on it. (#2339)
+
 **`[planning]` configures planning, per repository where it matters.**
 `enabled` (on), `max_epics_per_initiative` (8), `max_tasks_per_epic` (12),
 `max_questions` (5) and `close_completed` (on), each narrowable under
