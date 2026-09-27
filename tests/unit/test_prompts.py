@@ -417,7 +417,14 @@ def test_concierge_prompt_carries_contract() -> None:
     # triage's other half: a reply is direct, a close never is
     assert "`comment_on_issue`" in text and "`close_issue`" in text
     assert "pass **their own words** as `confirmation`" in text
-    assert "The two exceptions are\n  `close_issue`" in text and "and\n  `set_config`" in text
+    assert "The three exceptions are\n  `close_issue`" in text and "\n  `set_config`, which" in text
+    # an ask too big for one run is offered a plan, drafted only on a yes
+    assert "**An ask too big for one run**" in text and "**offered a plan**" in text
+    assert "**Draft a\n  plan** / **Run it as one piece** / **Cancel**" in text
+    assert "ONE `draft_plan` call\n  quoting their words as `confirmation`" in text
+    assert "and `draft_plan`, which always needs an explicit yes" in text
+    assert "a plan is never\n  drafted on silence" in text
+    assert "never say you did" in text and "Relay the link the tool returns" in text
     # a configuration change: the card first, the four choices, one call, never on silence
     assert "**A request to change a setting**" in text
     for label in (

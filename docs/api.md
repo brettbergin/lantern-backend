@@ -863,6 +863,14 @@ that a GitHub issue this server's credential can no longer see answers
 404 like a deleted one — such a node is detached, and attached again once
 it is listed again.
 
+**From chat.** The concierge's `draft_plan` tool drafts a plan through the
+same service, on the asking person's yes and with their `plans:create`: the
+plan's `created_by` is their id, and `plan.created` names them as the actor
+with `via: "concierge"`. It writes only the draft. Its reply links the draft
+as the relative path `/plans/<plan_id>` (the id URL-encoded), which a client
+opens as its plan screen: Angie serves the page at that path on its own
+origin, and Lantern opens the same path from a message.
+
 **Breakdown.** `POST /v1/plans/{id}/nodes/{node_id}/breakdown`
 (`plans:create`) asks the planner for the node's next level — an
 initiative's epics or an epic's tasks. It queues a run of the fourth run
