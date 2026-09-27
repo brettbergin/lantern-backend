@@ -553,6 +553,10 @@ class PlanRow(Base):
     created_at: Mapped[float] = mapped_column(REAL, nullable=False)
     updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+    # When the forge was last read into the plan (#2342), and what stopped
+    # the last attempt, if anything. Neither bumps the revision.
+    reconciled_at: Mapped[float | None] = mapped_column(REAL)
+    reconcile_error: Mapped[str | None] = mapped_column(Text)
 
 
 class PlanNodeRow(Base):
@@ -596,3 +600,14 @@ class PlanNodeRow(Base):
     forge_state: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(REAL, nullable=False)
     updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    # What reconciliation last read (#2342): the issue's updated_at, why the
+    # node no longer follows its issue, whether its marker is gone, why its
+    # managed children checklist could not be read.
+    forge_updated_at: Mapped[str | None] = mapped_column(Text)
+    forge_detached: Mapped[str | None] = mapped_column(Text)
+    forge_marker_missing: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=sql_text("0")
+    )
+    forge_checklist_error: Mapped[str | None] = mapped_column(Text)
+    # The forge's changes nobody has marked seen, as a JSON array.
+    drift_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'[]'"))

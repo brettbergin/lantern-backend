@@ -1035,6 +1035,11 @@ class PlanningConfig(_ConfigModel):
     publishes every level and starts every epic run. ``close_completed``
     comments a summary on an epic whose tasks are all closed and closes it,
     and does the same for an initiative whose epics are all closed.
+    ``reconcile_interval_s`` is how stale a published plan may be before
+    opening it reads the forge again (#2342): one read per issue in the
+    tree, so a client that refetches on every event does not spend the
+    forge's rate limit on each refetch. ``0`` reads only on an explicit
+    sync. The plan's home repository's override applies.
     """
 
     enabled: bool = True
@@ -1043,6 +1048,7 @@ class PlanningConfig(_ConfigModel):
     #: Clarifying questions one generation may ask; 0 never asks.
     max_questions: int = Field(default=5, ge=0, le=10)
     close_completed: bool = True
+    reconcile_interval_s: int = Field(default=120, ge=0, le=86400)
 
 
 class PlanningOverride(_ConfigModel):
@@ -1054,6 +1060,7 @@ class PlanningOverride(_ConfigModel):
     max_tasks_per_epic: int | None = Field(default=None, ge=1, le=50)
     max_questions: int | None = Field(default=None, ge=0, le=10)
     close_completed: bool | None = None
+    reconcile_interval_s: int | None = Field(default=None, ge=0, le=86400)
 
     def over(self, base: PlanningConfig) -> PlanningConfig:
         """``base`` with every key set here written over it."""

@@ -196,6 +196,10 @@ class TestPublishingOnGithub:
             "number": a,
             "url": f"https://github.com/o/r/issues/{a}",
             "state": "open",
+            "updated_at": None,
+            "detached": None,
+            "marker_missing": False,
+            "checklist_error": None,
         }
         assert body["replayed"] is False and body["operation_id"]
 

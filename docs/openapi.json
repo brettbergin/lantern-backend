@@ -5775,10 +5775,120 @@
         "title": "PlanDeleted",
         "type": "object"
       },
+      "PlanDrift": {
+        "additionalProperties": false,
+        "description": "One change the forge made to a node that nobody has marked seen.\n``title``, ``sections`` and ``state`` carry ``before`` (as a person\nlast saw it) and ``after`` (as the forge has it now), keyed by field,\nfor a diff; ``adopted``, ``moved`` and ``reattached`` carry the parent\nin ``after`` (and ``before``); ``detached``, ``marker_removed`` and\n``checklist_mangled`` say why in ``reason``.",
+        "properties": {
+          "after": {
+            "additionalProperties": true,
+            "title": "After",
+            "type": "object"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "before": {
+            "additionalProperties": true,
+            "title": "Before",
+            "type": "object"
+          },
+          "change": {
+            "enum": [
+              "title",
+              "sections",
+              "state",
+              "adopted",
+              "moved",
+              "detached",
+              "reattached",
+              "marker_removed",
+              "checklist_mangled"
+            ],
+            "title": "Change",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "change",
+          "at"
+        ],
+        "title": "PlanDrift",
+        "type": "object"
+      },
+      "PlanDriftAck": {
+        "additionalProperties": false,
+        "description": "Mark the forge's changes seen: on every node, or the nodes\n``node_ids`` names.",
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "node_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Ids"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "PlanDriftAck",
+        "type": "object"
+      },
       "PlanForge": {
         "additionalProperties": false,
-        "description": "The issue a published node became, as the forge last said.",
+        "description": "The issue a published node became, as the forge last said.\n``updated_at`` is the issue's version as last read. ``detached`` says\nwhy the node no longer follows its issue (it left its parent, or the\nforge); ``marker_missing`` that its body lost the ``sbx-plan`` marker;\n``checklist_error`` why its managed children checklist could not be\nread. None of these is repaired by sbxloop.",
         "properties": {
+          "checklist_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checklist Error"
+          },
+          "detached": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detached"
+          },
+          "marker_missing": {
+            "default": false,
+            "title": "Marker Missing",
+            "type": "boolean"
+          },
           "number": {
             "title": "Number",
             "type": "integer"
@@ -5797,6 +5907,17 @@
               }
             ],
             "title": "State"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
           },
           "url": {
             "title": "Url",
@@ -6014,6 +6135,13 @@
               "type": "string"
             },
             "title": "Depends On",
+            "type": "array"
+          },
+          "drift": {
+            "items": {
+              "$ref": "#/components/schemas/PlanDrift"
+            },
+            "title": "Drift",
             "type": "array"
           },
           "forge": {
@@ -6334,6 +6462,11 @@
             ],
             "title": "Created By Display"
           },
+          "drift": {
+            "default": 0,
+            "title": "Drift",
+            "type": "integer"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -6352,6 +6485,28 @@
             },
             "title": "Nodes",
             "type": "array"
+          },
+          "reconcile_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconcile Error"
+          },
+          "reconciled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciled At"
           },
           "repository": {
             "title": "Repository",
@@ -6597,6 +6752,11 @@
             ],
             "title": "Created By Display"
           },
+          "drift": {
+            "default": 0,
+            "title": "Drift",
+            "type": "integer"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -6608,6 +6768,28 @@
             ],
             "title": "Level",
             "type": "string"
+          },
+          "reconcile_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconcile Error"
+          },
+          "reconciled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciled At"
           },
           "repository": {
             "title": "Repository",
@@ -14617,6 +14799,7 @@
         ]
       },
       "get": {
+        "description": "The plan and every node. A plan with anything on the forge whose\nlast reading is older than ``[planning] reconcile_interval_s`` is\nreconciled first; a forge that cannot be read never fails the read \u2014\nthe stored plan is served with ``reconciled_at`` and the reason in\n``reconcile_error``.",
         "operationId": "get_plan_v1_plans__plan_id__get",
         "parameters": [
           {
@@ -14705,6 +14888,58 @@
           }
         },
         "summary": "Edit a plan",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/drift/ack": {
+      "post": {
+        "description": "Clear the drift of every node, or of the nodes ``node_ids`` names:\nsomeone looked, and the next forge edit is diffed against what they\nsaw. Nothing to clear changes nothing.",
+        "operationId": "ack_drift_v1_plans__plan_id__drift_ack_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDriftAck"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Mark the forge's changes to a plan seen",
         "tags": [
           "plans"
         ]
@@ -15002,6 +15237,58 @@
           }
         },
         "summary": "Publish a node's level to the forge",
+        "tags": [
+          "plans"
+        ]
+      }
+    },
+    "/v1/plans/{plan_id}/sync": {
+      "post": {
+        "description": "Read the plan's tree on the forge now and fold it in: titles,\nsections under the rendered headings, open or closed, children adopted,\nmoved or detached \u2014 each change a ``plan.drift`` event. Never writes to\nthe forge. A forge that cannot be reached at all is ``503\nsource_unavailable``; issues it would not answer are named in\n``reconcile_error``. An archived plan is ``409 plan_archived``, one\nbeing published or read right now ``409 already_in_progress``.",
+        "operationId": "sync_plan_v1_plans__plan_id__sync_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Reconcile a plan from the forge now",
         "tags": [
           "plans"
         ]

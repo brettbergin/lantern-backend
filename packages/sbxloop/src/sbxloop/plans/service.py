@@ -5,7 +5,8 @@ plans here, so the rules hold once: a node breaks down one level at a time
 (initiative → epic → task), a task lives in its epic's repository, a
 dependency names a sibling task and never makes a cycle, a repository
 whose forge cannot hold a plan is refused by name, a published node is not
-edited here, and every mutation names the revision it read.
+edited here, and every mutation names the revision it read. After publish
+the forge wins: :meth:`PlanService.reconcile` folds it in (#2342).
 """
 
 from __future__ import annotations
@@ -18,10 +19,19 @@ from typing import Any
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
 from sbxloop.errors import SbxloopError
+from sbxloop.log import get_logger
 from sbxloop.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from sbxloop.plans.model import Level, Plan, PlanNode, child_level
 from sbxloop.plans.publish import LevelResult, level_targets, publish_level
-from sbxloop.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision, new_id
+from sbxloop.plans.reconcile import Reconciliation, reconcile_plan
+from sbxloop.plans.store import (
+    PlanEvent,
+    PlanGone,
+    PlanStore,
+    Reconciled,
+    StaleRevision,
+    new_id,
+)
 from sbxloop.vcs.protocol import IssueOps
 
 #: The sections a person may set on a node, as the API and the store name
@@ -40,6 +50,12 @@ SECTIONS: tuple[str, ...] = (
 )
 #: Sections only a task carries.
 TASK_SECTIONS = frozenset({"kind", "workload_profile", "verify_commands", "depends_on"})
+#: Why opening a plan did not read the forge although it was due: nothing
+#: has needed the forge sandbox yet, and a read never boots it.
+IDLE = "the forge connection is not up yet; a sync reads the forge now"
+NO_FORGE = "the daemon has no forge connection"
+
+log = get_logger(__name__)
 
 
 class PlanRefusal(Exception):
@@ -74,6 +90,10 @@ class PlanService:
         # both miss the other's issues and create them twice.
         self._publishing: set[str] = set()
         self._publishing_lock = threading.Lock()
+        # Plans being reconciled now, and when each was last attempted (a
+        # forge that is down is not asked again on every open).
+        self._reconciling: set[str] = set()
+        self._attempted: dict[str, float] = {}
 
     # -- reads ----------------------------------------------------------------
 
@@ -496,6 +516,168 @@ class PlanService:
         finally:
             with self._publishing_lock:
                 self._publishing.discard(plan.id)
+
+    # -- the forge wins ---------------------------------------------------------
+
+    def open(
+        self,
+        plan_id: str,
+        *,
+        forge_kind: str | None,
+        ready: bool,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any] | None,
+    ) -> Reconciliation:
+        """The plan as a client opens it: reconciled first when it has
+        anything on the forge and its last reading is older than
+        ``[planning] reconcile_interval_s``. Never fails for the forge: a
+        forge that is down, or a reading that goes wrong, serves the stored
+        plan with the reason."""
+        plan = self.get(plan_id)
+        try:
+            return self.reconcile(
+                plan_id,
+                forge_kind=forge_kind,
+                connect=connect,
+                clock=clock,
+                actor=actor,
+                force=False,
+                ready=ready,
+            )
+        except PlanRefusal as exc:
+            if exc.status == 404:
+                raise
+            return Reconciliation(plan, 0, exc.detail)
+        except Exception as exc:  # a read never fails for the forge
+            log.warning("plans.reconcile_failed", plan_id=plan_id, error=repr(exc))
+            return Reconciliation(plan, 0, f"could not read the forge: {type(exc).__name__}: {exc}")
+
+    def reconcile(
+        self,
+        plan_id: str,
+        *,
+        forge_kind: str | None,
+        connect: Callable[[], IssueOps],
+        clock: Callable[[], float],
+        actor: Mapping[str, Any] | None,
+        force: bool,
+        ready: bool = True,
+    ) -> Reconciliation:
+        """Read the plan's tree on the forge and fold it in (see
+        :mod:`~sbxloop.plans.reconcile`); never writes to the forge.
+        ``force`` is a sync a person asked for: it skips the interval and
+        refuses what an open would quietly skip (an archived plan, a plan
+        being published or reconciled, no forge)."""
+        plan = self.get(plan_id)
+        stored = Reconciliation(plan, 0, plan.reconcile_error)
+        if plan.archived:
+            if force:
+                raise PlanRefusal(409, "plan_archived", "this plan is archived")
+            return stored
+        if not plan.root.followed:
+            # Nothing on the forge, or a root whose issue is gone: there is
+            # no tree to read from.
+            return stored
+        if not force:
+            interval = self._config().planning_for(plan.root.repository).reconcile_interval_s
+            last = max(self._attempted.get(plan.id, 0.0), plan.reconciled_at or 0.0)
+            if interval <= 0 or clock() - last < interval:
+                return stored
+            if not ready:
+                return Reconciliation(plan, 0, IDLE)
+        with self._publishing_lock:
+            busy = plan.id in self._publishing or plan.id in self._reconciling
+            if busy:
+                if force:
+                    raise PlanRefusal(
+                        409,
+                        "already_in_progress",
+                        "this plan is being published or read from the forge right now",
+                    )
+                return stored
+            self._reconciling.add(plan.id)
+        try:
+            self._attempted[plan.id] = clock()
+            if forge_kind is None:
+                return self._unreachable(plan, NO_FORGE, force)
+            try:
+                ops = connect()
+            except SbxloopError as exc:
+                return self._unreachable(plan, f"could not reach the forge: {exc}", force)
+            try:
+                return reconcile_plan(
+                    ops,
+                    store=self.store,
+                    config=self._config(),
+                    plan=plan,
+                    clock=clock,
+                    actor=actor,
+                )
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+        finally:
+            with self._publishing_lock:
+                self._reconciling.discard(plan.id)
+
+    def _unreachable(self, plan: Plan, reason: str, force: bool) -> Reconciliation:
+        """The forge could not be read at all: said on the plan, which keeps
+        its last reading; a sync is ``503``."""
+        try:
+            marked = self.store.mark_reconciled(plan.id, Reconciled(None, reason))
+        except PlanGone as exc:
+            raise _not_found(plan.id) from exc
+        if force:
+            raise PlanRefusal(503, "source_unavailable", reason)
+        return Reconciliation(marked, 0, reason)
+
+    def ack_drift(
+        self,
+        plan_id: str,
+        *,
+        expected_revision: int,
+        node_ids: Sequence[str] | None,
+        now: float,
+        actor: Mapping[str, Any],
+    ) -> Plan:
+        """Someone looked: the drift of every node — or of the nodes named —
+        is marked seen, so the next forge edit is diffed against what they
+        saw. Nothing to mark changes nothing."""
+        plan = self.get(plan_id)
+        self._check_revision(plan, expected_revision)
+        chosen = list(plan.nodes)
+        if node_ids is not None:
+            unknown = sorted(set(node_ids) - {n.id for n in plan.nodes})
+            if unknown:
+                raise PlanRefusal(
+                    422,
+                    "invalid_argument",
+                    f"not nodes of {plan.id}: {', '.join(unknown)}",
+                    node_ids=unknown,
+                )
+            wanted = set(node_ids)
+            chosen = [n for n in plan.nodes if n.id in wanted]
+        seen = [replace(n, drift=()) for n in chosen if n.drift]
+        if not seen:
+            return plan
+        return self._write(
+            plan,
+            expected_revision,
+            now,
+            upsert=seen,
+            events=[
+                PlanEvent(
+                    "plan.node.changed",
+                    {
+                        "plan_id": plan.id,
+                        "node_id": None,
+                        "change": "drift_seen",
+                        "node_ids": [n.id for n in seen],
+                    },
+                )
+            ],
+            actor=actor,
+        )
 
     # -- the rules ------------------------------------------------------------
 

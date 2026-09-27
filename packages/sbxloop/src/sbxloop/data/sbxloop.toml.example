@@ -616,6 +616,7 @@ service_memory = "2g"
 # max_tasks_per_epic = 6       # unset uses [planning]'s
 # max_questions = 3            # unset uses [planning]'s
 # close_completed = false      # leave finished epics here open for a person
+# reconcile_interval_s = 600   # unset uses [planning]'s
 # [vcs.repos.openai]
 # Sparse per-repository overrides over [agent.openai] for a repository whose
 # code must stay on a private endpoint; omit a key to inherit. The endpoint
@@ -1075,6 +1076,7 @@ service_memory = "2g"
 # max_tasks_per_epic = 12          # the most tasks one epic may hold
 # max_questions = 5                # clarifying questions per generation; 0 = never ask
 # close_completed = true           # summarise and close a finished epic or initiative
+# reconcile_interval_s = 120       # re-read a published plan on open when older; 0 = sync only
 
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask

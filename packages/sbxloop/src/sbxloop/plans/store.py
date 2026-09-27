@@ -21,6 +21,8 @@ from sbxloop.daemon.store import DaemonStore
 from sbxloop.db.api_models import ApiEventRow
 from sbxloop.db.daemon_models import PlanNodeRow, PlanRow
 from sbxloop.plans.model import (
+    Drift,
+    DriftChange,
     ForgeRef,
     ForgeState,
     Level,
@@ -56,6 +58,39 @@ class PlanEvent:
     data: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class Reconciled:
+    """A forge read of a plan: ``at`` when it succeeded (``None`` when it
+    could not happen at all, which keeps the last success), and what
+    stopped it or part of it."""
+
+    at: float | None
+    error: str | None = None
+
+
+def _stamp(row: PlanRow, reconciled: Reconciled) -> None:
+    if reconciled.at is not None:
+        row.reconciled_at = reconciled.at
+    row.reconcile_error = reconciled.error
+
+
+def _drift(raw: str | None) -> tuple[Drift, ...]:
+    out: list[Drift] = []
+    for entry in json.loads(raw or "[]"):
+        if not isinstance(entry, dict):
+            continue
+        out.append(
+            Drift(
+                change=cast(DriftChange, entry.get("change")),
+                at=float(entry.get("at") or 0.0),
+                before=dict(entry.get("before") or {}),
+                after=dict(entry.get("after") or {}),
+                reason=entry.get("reason"),
+            )
+        )
+    return tuple(out)
+
+
 def _node(row: PlanNodeRow) -> PlanNode:
     forge = None
     if row.forge_number is not None:
@@ -63,6 +98,10 @@ def _node(row: PlanNodeRow) -> PlanNode:
             number=int(row.forge_number),
             url=str(row.forge_url or ""),
             state=cast(ForgeState | None, row.forge_state),
+            updated_at=row.forge_updated_at,
+            detached=row.forge_detached,
+            marker_missing=bool(row.forge_marker_missing),
+            checklist_error=row.forge_checklist_error,
         )
     return PlanNode(
         id=str(row.node_id),
@@ -86,6 +125,7 @@ def _node(row: PlanNodeRow) -> PlanNode:
         forge=forge,
         created_at=float(row.created_at),
         updated_at=float(row.updated_at),
+        drift=_drift(row.drift_json),
     )
 
 
@@ -112,6 +152,11 @@ def _columns(node: PlanNode) -> dict[str, Any]:
         "forge_number": None if node.forge is None else node.forge.number,
         "forge_url": None if node.forge is None else node.forge.url,
         "forge_state": None if node.forge is None else node.forge.state,
+        "forge_updated_at": None if node.forge is None else node.forge.updated_at,
+        "forge_detached": None if node.forge is None else node.forge.detached,
+        "forge_marker_missing": int(node.forge is not None and node.forge.marker_missing),
+        "forge_checklist_error": None if node.forge is None else node.forge.checklist_error,
+        "drift_json": json.dumps([d.as_dict() for d in node.drift], default=str),
         "created_at": node.created_at,
         "updated_at": node.updated_at,
     }
@@ -149,6 +194,8 @@ def _plan(row: PlanRow, nodes: Iterable[PlanNodeRow]) -> Plan:
         updated_at=float(row.updated_at),
         revision=int(row.revision),
         nodes=_ordered(str(row.root_node_id), (_node(n) for n in nodes)),
+        reconciled_at=None if row.reconciled_at is None else float(row.reconciled_at),
+        reconcile_error=row.reconcile_error,
     )
 
 
@@ -235,9 +282,11 @@ class PlanStore:
         archived: bool | None = None,
         events: Sequence[PlanEvent] = (),
         actor: dict[str, Any] | None = None,
+        reconciled: Reconciled | None = None,
     ) -> Plan:
         """Write one change to a plan, against the revision the caller
-        read; the plan as it now is."""
+        read; the plan as it now is. ``reconciled`` records the forge read
+        the change came from, in the same transaction."""
         with self.dstore.transaction() as session:
             row = session.get(PlanRow, plan_id)
             if row is None:
@@ -260,6 +309,8 @@ class PlanStore:
                         setattr(existing, key, value)
             if archived is not None:
                 row.state = "archived" if archived else "active"
+            if reconciled is not None:
+                _stamp(row, reconciled)
             row.revision = int(row.revision) + 1
             row.updated_at = now
             for event in events:
@@ -268,6 +319,20 @@ class PlanStore:
         if changed is None:
             raise PlanGone(plan_id)
         return changed
+
+    def mark_reconciled(self, plan_id: str, reconciled: Reconciled) -> Plan:
+        """Record a forge read that changed nothing (or could not happen):
+        when, and what stopped it. The revision stays where it is, so a
+        client's ``expected_revision`` is not made stale by a read."""
+        with self.dstore.transaction() as session:
+            row = session.get(PlanRow, plan_id)
+            if row is None:
+                raise PlanGone(plan_id)
+            _stamp(row, reconciled)
+        plan = self.get(plan_id)
+        if plan is None:
+            raise PlanGone(plan_id)
+        return plan
 
     def note(
         self,

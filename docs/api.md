@@ -728,6 +728,8 @@ and owners) publishes to the forge.
 | `DELETE /v1/plans/{id}/nodes/{node_id}`       | `?expected_revision=`                                        | `200`, the plan without the node and its subtree |
 | `POST /v1/plans/{id}/nodes/{node_id}/approve` | `{expected_revision, node_ids?}`                             | `200`, the plan with those children approved     |
 | `POST /v1/plans/{id}/nodes/{node_id}/publish` | `{expected_revision}` and an `Idempotency-Key` header        | `200 {plan, results, operation_id, replayed}`    |
+| `POST /v1/plans/{id}/sync`                    | none                                                         | `200`, the plan reconciled from the forge now    |
+| `POST /v1/plans/{id}/drift/ack`               | `{expected_revision, node_ids?}`                             | `200`, the plan with that drift marked seen      |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -798,6 +800,59 @@ results with the plan as it is now and `replayed: true`, or the refusal it
 recorded; a different body under the same key is `409 idempotency_conflict`. A publish the daemon died during is settled `failed`
 (`interrupted_before_effect`) at the next start; publishing again resumes
 it. Each call records `plan.published` `{plan_id, node_id, published, failed}` (node ids) with its result.
+
+**The forge wins after publish (#2342).** sbxloop re-reads a published
+plan's tree from the forge and folds it in; it never writes to the forge
+doing so, so a person's edit there is never overwritten. `GET /v1/plans/{id}` does it first when the plan has anything on the forge and its
+last reading is older than `[planning] reconcile_interval_s` (default 120
+seconds; `0` only on sync), and never fails for the forge: a forge that is
+down, or a daemon with no forge connection, serves the stored plan with
+`reconciled_at` (the last reading that succeeded) and the reason in
+`reconcile_error`. A read never boots an idle forge sandbox; it says so
+and a sync does. `POST /v1/plans/{id}/sync` (`plans:create`: it writes
+the plan record and spends the forge's rate limit on demand, where a
+read's reconcile is paced) does it now: `503 source_unavailable` when the
+forge cannot be reached at all, issues it would not answer named in
+`reconcile_error`, `409 plan_archived` for an archived plan and `409 already_in_progress` while the plan is published or read. Per published
+node, the forge's title, the sections under the rendered headings (text
+outside them is a person's and is not read; a ticked criterion is the same
+criterion; `Depends on` references become sibling ids) and the issue's
+state (`open`/`closed` in `forge.state`) update the node, with the
+issue's `updated_at` as `forge.updated_at`; a child a person
+added — a sub-issue or checklist line whose issue carries no marker of this
+plan, or one naming a node the plan no longer has — is adopted one level
+down as `published` with `origin: forge`, its sections read from its body
+where it has our headings and its whole text as the goal where it has
+none; a known node listed under another parent of the right level is
+moved; a node its parent no longer lists, or whose issue is gone (GitHub
+410/404, GitLab 404), is detached — `forge.detached` names why, it is not
+followed any more (its subtree is left as it was) and nothing is
+recreated; one listed again is attached again. A removed marker sets
+`forge.marker_missing`; a managed checklist a person broke sets
+`forge.checklist_error` on the parent and none of its children is judged;
+neither is repaired. A GitLab checklist tick is not written by a reconcile.
+A sub-issue under a task is not part of the plan (a task is one run), and
+the forge's order of children is not read.
+
+Each change is recorded on its node as `drift`, `[{change, at, before, after, reason}]`, until someone marks it seen: `title`, `sections` and
+`state` carry `before` (as a person last saw it) and `after` (as the forge
+has it), keyed by field, and a second edit before anyone looks moves
+`after` and keeps `before` (an edit back to what was seen clears it);
+`adopted`, `moved` and `reattached` carry the parent; `detached`,
+`marker_removed` and `checklist_mangled` carry `reason`. A plan's `drift`
+counts its nodes with unseen drift (the badge). Each change is also a
+`plan.drift` event `{plan_id, node_id, change, …}` (`before`/`after` for
+`title` and `state`, `fields` for `sections`, `parent_id` and `number` for
+`adopted`, `reason` for the reported kinds), in the same transaction as the
+fold; a reading that changes nothing bumps no revision. `POST .../drift/ack`
+(`plans:create`) marks the drift of every node, or of those `node_ids`
+names, seen (`422` for a name not in the plan; nothing to mark changes
+nothing) and records `plan.node.changed` with `change: drift_seen` and
+`node_ids`. **field-unverified**: that GitHub's sub-issue listing carries
+each child's body (the reconcile reads the issue when it does not), and
+that a GitHub issue this server's credential can no longer see answers
+404 like a deleted one — such a node is detached, and attached again once
+it is listed again.
 
 ### Workspace people
 
@@ -1354,6 +1409,8 @@ rechecked when it arrives) and a `revision` a command may pin.
 | CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`       | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes               |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`     | `plans:create`         | Approve a node's draft and proposed children                          |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`     | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required            |
+| `POST`   | `/v1/plans/{id}/sync`                        | `plans:create`         | Reconcile the plan from the forge now                                 |
+| `POST`   | `/v1/plans/{id}/drift/ack`                   | `plans:create`         | Mark the forge's changes to a plan seen                               |
 
 Every collection pages by an opaque `cursor` bound to its filters
 (`limit` up to 200; `{"data": […], "next_cursor": …, "has_more": …}`). The

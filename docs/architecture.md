@@ -2514,6 +2514,33 @@ route records the call as a `plan.publish` operation, so its
 settles one the daemon died during as `failed` — safe, since publishing
 again resumes it.
 
+After publish the forge wins (#2342). `reconcile.py` reads a plan's tree
+back through `IssueOps` — `issue_get` and `sub_issues_list` only, never a
+write — and folds it into the store in two steps: `read_forge`
+walks from the root's issue down (a GitHub parent's sub-issues plus any
+line in its managed checklist, a GitLab parent's checklist), then reads on
+its own each followed node the walk did not reach, so a node removed from
+its parent is told from a deleted one; `fold`, which is pure, compares that reading with
+the plan. A title, the sections under our rendered headings
+(`render.parse_sections`, compared as the parser reads both the forge's body
+and the body sbxloop would render, so text the parser reads imperfectly is
+never an edit nobody made) and the open/closed state update the node; a
+child the plan does not know is adopted with `origin = forge`; a node its
+parent no longer lists, or whose issue is gone, is detached
+(`forge.detached` names why; its subtree is left as it was, and nothing is
+recreated); a removed marker or a broken checklist is reported and the
+broken checklist's children are not judged at all. Each change is a
+`Drift` entry on the node — `before` as a person last saw it, `after` as
+the forge has it, merged until someone marks it seen — and a `plan.drift`
+event in the same transaction; a plan edited in sbxloop meanwhile is
+folded again from the same reading. A reading that changes nothing stamps
+`reconciled_at` without bumping the revision, so a read never makes a
+client's `expected_revision` stale. `PlanService.open` reconciles on
+`GET /v1/plans/{id}` when the last reading is older than `[planning] reconcile_interval_s` and never fails the read (the stored plan comes back
+with the reason), and never boots an idle forge sandbox; `reconcile` is the
+sync route's, and `reconcile_plan` is the entry point an epic run's slow
+poll will call (#2347 wires it).
+
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read
 (`ControlService.log_records`, bounded by `LOG_TAIL_MAX`) and masks every

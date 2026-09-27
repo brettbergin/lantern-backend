@@ -293,6 +293,11 @@ class FakeGithub(GithubOps):
         # GitHub App installation covering only one of the two answers a
         # cross-repository sub-issue with a 403 (field-unverified shape).
         self.refuse_cross_repo_sub_issues = False
+        # Issues a person deleted on the forge (#2342): reading one is
+        # GitHub's 410, and it leaves every parent's sub-issue list.
+        self.deleted_issues: set[tuple[str, int]] = set()
+        self._person_issues = 0
+        self._edits = 0
         self.resolved: list[str] = []
         self._comment_id = 0
         self._commits = 0
@@ -619,6 +624,15 @@ class FakeGithub(GithubOps):
             }
         if method == "GET" and re.fullmatch(r"/repos/[^/]+/[^/]+/issues/\d+", path):
             self._maybe_fail("issue_read")
+            repo_part, _, number_part = path.removeprefix("/repos/").rpartition("/issues/")
+            if (repo_part.casefold(), int(number_part)) in self.deleted_issues:
+                raise self._failed(
+                    "raw.api",
+                    method,
+                    path,
+                    410,
+                    f"gh api GET {path}: This issue was deleted (HTTP 410)",
+                )
             issue = self._issue_at(path)
             if issue is not None:
                 return dict(issue)
@@ -912,6 +926,7 @@ class FakeGithub(GithubOps):
             )
         children = self.sub_issues.setdefault(parent, [])
         if method == "GET" and path.endswith("/sub_issues"):
+            self._maybe_fail("sub_issues_list")
             found = []
             for child_repo, child_number in children:
                 issue = self._issue_at(f"/repos/{child_repo}/issues/{child_number}")
@@ -955,6 +970,83 @@ class FakeGithub(GithubOps):
             return dict(located[1])
         raise AssertionError(f"FakeGithub: unexpected sub-issue call {method} {path}")
 
+    # -- what a person does on the forge (#2342) ---------------------------------
+    #
+    # None of these is an operation sbxloop asks for, so none is ledgered:
+    # a test asserting "sbxloop wrote nothing" still sees an empty ledger.
+
+    def person_files(
+        self, repo: str, title: str, body: str = "", *, labels: Sequence[str] = ()
+    ) -> int:
+        """A person opens an issue on the forge; its number."""
+        self._person_issues += 1
+        number = 5000 + self._person_issues
+        self.existing_issues.append(
+            {
+                "number": number,
+                "id": 70000 + number,
+                "title": title,
+                "body": body,
+                "state": "open",
+                "state_reason": None,
+                "html_url": f"https://github.com/{repo}/issues/{number}",
+                "labels": [{"name": label} for label in labels],
+                "updated_at": self._stamp(),
+            }
+        )
+        return number
+
+    def person_edits(
+        self,
+        repo: str,
+        number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+        state: str | None = None,
+    ) -> None:
+        """A person edits an issue's title or body, or closes or reopens
+        it, on the forge; its ``updated_at`` moves."""
+        issue = self._issue_at(f"/repos/{repo}/issues/{number}")
+        assert issue is not None, (repo, number)
+        if title is not None:
+            issue["title"] = title
+        if body is not None:
+            issue["body"] = body
+        if state is not None:
+            issue["state"] = state
+        issue["updated_at"] = self._stamp()
+
+    def person_deletes(self, repo: str, number: int) -> None:
+        """A person deletes an issue: it is gone from listings and from its
+        parent, and reading it is a 410."""
+        issue = self._issue_at(f"/repos/{repo}/issues/{number}")
+        assert issue is not None, (repo, number)
+        self.existing_issues.remove(issue)
+        child = (repo, number)
+        self.deleted_issues.add((repo.casefold(), number))
+        for siblings in self.sub_issues.values():
+            if child in siblings:
+                siblings.remove(child)
+        self.sub_issue_parent.pop(child, None)
+
+    def person_links(self, repo: str, parent: int, child_repo: str, child: int) -> None:
+        """A person adds a sub-issue under ``parent`` on the forge."""
+        link = (child_repo, child)
+        assert link not in self.sub_issue_parent, link
+        self.sub_issues.setdefault((repo, parent), []).append(link)
+        self.sub_issue_parent[link] = (repo, parent)
+
+    def person_unlinks(self, repo: str, parent: int, child_repo: str, child: int) -> None:
+        """A person removes a sub-issue from ``parent`` on the forge."""
+        link = (child_repo, child)
+        self.sub_issues[(repo, parent)].remove(link)
+        self.sub_issue_parent.pop(link, None)
+
+    def _stamp(self) -> str:
+        self._edits += 1
+        return f"2026-09-27T12:{self._edits // 60:02d}:{self._edits % 60:02d}Z"
+
     # -- the pull request ----------------------------------------------------
 
     def issue_create(
@@ -982,6 +1074,7 @@ class FakeGithub(GithubOps):
                 "state_reason": None,
                 "html_url": f"https://github.com/{repo}/issues/{number}",
                 "labels": [{"name": label} for label in labels or []],
+                "updated_at": self._stamp(),
             }
         )
         return IssueRef(number=number, url=f"https://github.com/{repo}/issues/{number}")

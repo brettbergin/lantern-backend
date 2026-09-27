@@ -32,6 +32,8 @@ class TestDefaults:
             ("max_tasks_per_epic", 51),
             ("max_questions", -1),
             ("max_questions", 11),
+            ("reconcile_interval_s", -1),
+            ("reconcile_interval_s", 86401),
         ],
     )
     def test_bounds_are_refused_at_load(self, key: str, value: int) -> None:
@@ -45,6 +47,7 @@ class TestPerRepository:
         here = config.planning_for("o/r")
         assert here.max_tasks_per_epic == 4 and here.close_completed is False
         assert here.max_epics_per_initiative == 8 and here.enabled is True
+        assert here.reconcile_interval_s == 120
         assert config.planning_for("o/s") == config.planning
 
     def test_an_unset_global_value_is_what_a_repository_inherits(self) -> None:

@@ -8,9 +8,11 @@ visible to anyone in the workspace who may read runs.
 
 :mod:`~sbxloop.plans.model` holds the shapes, :mod:`~sbxloop.plans.store`
 the rows, :mod:`~sbxloop.plans.hierarchy` what each forge can hold,
-:mod:`~sbxloop.plans.render` a node as its issue body,
-:mod:`~sbxloop.plans.publish` the walk that writes a level to the forge, and
-:mod:`~sbxloop.plans.service` the rules every surface goes through.
+:mod:`~sbxloop.plans.render` a node as its issue body (and back),
+:mod:`~sbxloop.plans.publish` the walk that writes a level to the forge,
+:mod:`~sbxloop.plans.reconcile` the reading that folds the forge back in
+after publish, and :mod:`~sbxloop.plans.service` the rules every surface
+goes through.
 """
 
 from __future__ import annotations
