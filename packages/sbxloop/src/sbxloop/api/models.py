@@ -61,7 +61,7 @@ class Capabilities(ApiModel):
     server_version: str
     workspace_id: str = WORKSPACE_ID
     features: list[str]
-    run_kinds: list[str] = Field(default_factory=lambda: ["code", "workload", "tool"])
+    run_kinds: list[str] = Field(default_factory=lambda: ["code", "workload", "tool", "plan"])
     capabilities: list[str]
     limits: Limits
     retention: Retention

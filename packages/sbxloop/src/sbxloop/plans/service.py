@@ -20,8 +20,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from typing import Any
 
+from sbxloop.api.publicids import run_public_id
 from sbxloop.config import Config
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
+from sbxloop.engine.planning import PlanBrief, PlanProposal, ProfileRef
 from sbxloop.errors import SbxloopError
 from sbxloop.log import get_logger
 from sbxloop.plans.direct import (
@@ -732,6 +734,279 @@ class PlanService:
             ],
             actor=actor,
         )
+
+    # -- the planner ------------------------------------------------------------
+
+    def breakdown_target(
+        self, plan_id: str, node_id: str, *, expected_revision: int | None = None
+    ) -> tuple[Plan, PlanNode]:
+        """The plan and the node a breakdown proposes the next level of,
+        refused by name when the node cannot take one: a task has no
+        children; a node on the forge that already has children is
+        re-planned, not broken down again; a repository planning is off for
+        (or no longer configured) cannot hold the level; a level at its cap
+        has no room."""
+        plan = self.get(plan_id)
+        if expected_revision is not None:
+            self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        node = self._node(plan, node_id)
+        level = child_level(node.level)
+        if level is None:
+            raise PlanRefusal(
+                422, "invalid_argument", "a task has no children to propose", node_id=node.id
+            )
+        if node.state == "published" and plan.children(node.id):
+            raise PlanRefusal(
+                409,
+                "replan_required",
+                "this node is on the forge and already has children; re-plan it rather "
+                "than breaking it down again",
+                node_id=node.id,
+            )
+        config = self._config()
+        if config.find_repo(node.repository) is None:
+            raise PlanRefusal(
+                409,
+                "unknown_repository",
+                f"{node.repository} is no longer a repository configured on this server",
+                repository=node.repository,
+            )
+        planning = repository_planning_for(config, node.repository)
+        if not planning.supported:
+            raise PlanRefusal(
+                409,
+                "planning_unsupported",
+                planning.reason or "this repository's forge can't hold plans",
+                repository=node.repository,
+            )
+        cap = self._cap(node)
+        kept = _kept(plan, node)
+        if len(kept) >= cap:
+            raise PlanRefusal(
+                409,
+                "level_full",
+                f"this {node.level} already holds {len(kept)} of the {cap} "
+                f"{_noun(level)} [planning] allows; remove one to propose more",
+                node_id=node.id,
+            )
+        return plan, node
+
+    def brief(self, plan_id: str, node_id: str, *, note: str = "") -> PlanBrief:
+        """What a plan run is asked, read from the plan as it is now."""
+        plan, node = self.breakdown_target(plan_id, node_id)
+        level = child_level(node.level)
+        assert level is not None  # nosec B101 - breakdown_target refused a task
+        kept = _kept(plan, node)
+        parent = plan.node(node.parent_id) if node.parent_id else None
+        cap = self._cap(node)
+        return PlanBrief(
+            plan_id=plan.id,
+            node_id=node.id,
+            level=node.level,  # type: ignore[arg-type]
+            child_level=level,  # type: ignore[arg-type]
+            repository=node.repository,
+            title=node.title,
+            goal=node.goal,
+            context=node.context,
+            acceptance_criteria=list(node.acceptance_criteria),
+            non_goals=node.non_goals,
+            constraints=node.constraints,
+            parent=(
+                f"the {parent.level} “{parent.title}”"
+                + (f" — {parent.goal.strip()}" if parent.goal.strip() else "")
+                if parent is not None
+                else ""
+            ),
+            kept=[child.title for child in kept],
+            room=cap - len(kept),
+            cap=cap,
+            profiles=[
+                ProfileRef(name=profile.name, description=profile.description or "")
+                for profile in self._config().workloads
+            ],
+            repositories=sorted(
+                {
+                    child.repository
+                    for child in kept
+                    if child.repository.casefold() != node.repository.casefold()
+                },
+                key=str.casefold,
+            ),
+            note=note,
+        )
+
+    def deliver_proposal(
+        self,
+        plan_id: str,
+        node_id: str,
+        proposal: PlanProposal,
+        *,
+        run_id: str,
+        now: float,
+        item_id: str | None = None,
+        channel_id: str | None = None,
+    ) -> tuple[Plan, int]:
+        """Write a plan run's proposal under its node: the node's previous
+        ``proposed`` children (and anything under them) are replaced, the
+        children a person made or approved stay where they are, and each
+        proposed child is added as ``proposed`` with ``origin = planner``
+        and its dependencies mapped to the new ids — one write, one
+        revision, held to the same rules a person's edit is. The plan may
+        have moved while the planner worked, so the write is made against
+        the revision it reads, and read again when another write won."""
+        for _ in range(3):
+            plan, node = self.breakdown_target(plan_id, node_id)
+            upsert, remove = self._proposed_children(plan, node, proposal, now)
+            try:
+                changed = self.store.apply(
+                    plan.id,
+                    expected_revision=plan.revision,
+                    now=now,
+                    upsert=upsert,
+                    remove=remove,
+                    events=[
+                        PlanEvent(
+                            "plan.generation.proposed",
+                            {
+                                "plan_id": plan.id,
+                                "node_id": node.id,
+                                "run_id": run_public_id(run_id),
+                                "count": len(proposal.children),
+                            },
+                            run_id=run_id,
+                            item_id=item_id,
+                            channel_id=channel_id,
+                        )
+                    ],
+                    actor=dict(PLANNER),
+                )
+            except StaleRevision:
+                continue
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+            return changed, len(proposal.children)
+        raise PlanRefusal(
+            409, "stale_revision", "the plan kept changing while the proposal was written"
+        )
+
+    def generation_event(
+        self,
+        type_: str,
+        plan_id: str,
+        node_id: str,
+        *,
+        run_id: str,
+        now: float,
+        item_id: str | None = None,
+        channel_id: str | None = None,
+        **data: Any,
+    ) -> None:
+        """Record ``plan.generation.started`` or ``.failed`` for a run: a
+        notice about the plan that changes none of it."""
+        self.store.record(
+            [
+                PlanEvent(
+                    type_,
+                    {
+                        "plan_id": plan_id,
+                        "node_id": node_id,
+                        "run_id": run_public_id(run_id),
+                        **data,
+                    },
+                    run_id=run_id,
+                    item_id=item_id,
+                    channel_id=channel_id,
+                )
+            ],
+            now=now,
+            actor=dict(PLANNER),
+        )
+
+    def _cap(self, node: PlanNode) -> int:
+        planning = self._config().planning_for(node.repository)
+        if node.level == "initiative":
+            return planning.max_epics_per_initiative
+        return planning.max_tasks_per_epic
+
+    def _proposed_children(
+        self, plan: Plan, node: PlanNode, proposal: PlanProposal, now: float
+    ) -> tuple[list[PlanNode], list[str]]:
+        """The node upserts and removals that put ``proposal`` under ``node``."""
+        level = child_level(node.level)
+        assert level is not None  # nosec B101 - breakdown_target refused a task
+        kept = _kept(plan, node)
+        room = self._cap(node) - len(kept)
+        if len(proposal.children) > room:
+            raise PlanRefusal(
+                409,
+                "level_full",
+                f"the {node.level} now has room for {max(room, 0)} more {_noun(level)}, "
+                f"and {len(proposal.children)} were proposed",
+                node_id=node.id,
+            )
+        replaced = [child for child in plan.children(node.id) if child.state == "proposed"]
+        gone = [n for child in replaced for n in (child, *plan.descendants(child.id))]
+        if any(n.state == "published" for n in gone):
+            raise PlanRefusal(
+                409,
+                "node_published",
+                "a proposed child has something on the forge under it; detach it first",
+                node_id=node.id,
+            )
+        removed = {n.id for n in gone}
+        stays = [
+            replace(
+                child,
+                position=index,
+                depends_on=tuple(d for d in child.depends_on if d not in removed),
+            )
+            for index, child in enumerate(kept)
+        ]
+        try:
+            order = proposal.dependencies()
+        except ValueError as exc:
+            raise PlanRefusal(422, "invalid_argument", str(exc)) from exc
+        repository = self._child_repository(node, level, None)
+        fresh: list[PlanNode] = []
+        for offset, child in enumerate(proposal.children):
+            sections: dict[str, Any] = {
+                "title": child.title,
+                "goal": child.goal,
+                "context": child.context,
+                "acceptance_criteria": child.acceptance_criteria,
+                "non_goals": child.non_goals,
+                "constraints": child.constraints,
+            }
+            if level == "task":
+                sections |= {
+                    "kind": child.kind,
+                    "workload_profile": child.workload_profile,
+                    "verify_commands": child.verify_commands,
+                }
+            base = PlanNode(
+                id=new_id("node_"),
+                plan_id=plan.id,
+                parent_id=node.id,
+                position=len(stays) + offset,
+                level=level,
+                repository=repository,
+                state="proposed",
+                origin="planner",
+                title="",
+                created_at=now,
+                updated_at=now,
+            )
+            fresh.append(self._with_sections(base, sections, siblings=[]))
+        ids = [n.id for n in fresh]
+        linked = [
+            replace(n, depends_on=tuple(ids[d] for d in order[index]))
+            for index, n in enumerate(fresh)
+        ]
+        for n in linked:
+            if n.depends_on:
+                self._check_dependencies(n, [*stays, *(o for o in linked if o.id != n.id)])
+        return [*stays, *linked], sorted(removed)
 
     # -- a person's direct writes (#2350) ---------------------------------------
 
@@ -1551,6 +1826,25 @@ class PlanService:
             raise _stale(exc) from exc
         except PlanGone as exc:
             raise _not_found(plan.id) from exc
+
+
+#: Who a plan run's writes are attributed to.
+PLANNER: Mapping[str, str] = {
+    "kind": "system",
+    "id": "planner",
+    "display": "the planner",
+    "via": "plan run",
+}
+
+
+def _kept(plan: Plan, node: PlanNode) -> list[PlanNode]:
+    """The children of ``node`` a proposal leaves where they are: every one
+    a person made, edited or approved — all but the planner's ``proposed``."""
+    return [child for child in plan.children(node.id) if child.state != "proposed"]
+
+
+def _noun(level: str) -> str:
+    return "epics" if level == "epic" else "tasks"
 
 
 def _node_changed(plan_id: str, node_id: str, change: str) -> PlanEvent:

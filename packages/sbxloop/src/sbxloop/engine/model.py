@@ -20,9 +20,12 @@ from sbxloop.paths import SbxloopHome
 # plan → execute → judge → publish, and its result is whatever the ask
 # named, not a PR. A `tool` run is a fixed recipe with no agent in it:
 # one command the host chose, its checks, its files to a sink — the same
-# sandbox, chronology and publication, and not one model turn. Persisted
-# with the run; a resume never re-derives it.
-RunKind = Literal["code", "workload", "tool"]
+# sandbox, chronology and publication, and not one model turn. A `plan`
+# run proposes one level of a plan — an initiative's epics, an epic's
+# tasks — from a read-only checkout, and delivers the proposal to the plan
+# record, never to the forge. Persisted with the run; a resume never
+# re-derives it.
+RunKind = Literal["code", "workload", "tool", "plan"]
 
 RunState = Literal[
     "provider_held",
@@ -44,6 +47,8 @@ RunState = Literal[
     "executing",
     "judging",
     "publishing",
+    # the plan stage: the planner reads the checkout and proposes a level
+    "proposing",
     # terminal
     "merged",
     "completed",
@@ -88,6 +93,14 @@ TOOL_STAGES: tuple[str, ...] = (
     "publishing",
 )
 
+# A `plan` run's stages in order: the planner's turn over the checkout and
+# the delivery of what it proposed to the plan record, as one stage —
+# `proposing` re-enters itself on resume, and a proposal already validated
+# and persisted on the run's task is delivered without asking again. The
+# clarifying turn and the wait for a person's answers belong in front of it,
+# each a stage of its own, when a plan run asks questions.
+PLAN_STAGES: tuple[str, ...] = ("proposing",)
+
 TaskState = Literal[
     "pending",
     "executing",
@@ -131,6 +144,7 @@ RESUMABLE_RUN_STATES: frozenset[str] = frozenset(
         "building",
         *PIPELINE_STAGES,
         *WORKLOAD_STAGES,
+        *PLAN_STAGES,
         "failed",
         "blocked",
         "cancelled",
@@ -154,6 +168,8 @@ Phase = Literal[
     "plan",
     "execute",
     "judge",
+    # A plan run's one agent phase: the planner's proposal of a level.
+    "propose",
 ]
 
 # What a fix round is for. `review` rounds are charged to the review budget;
@@ -620,13 +636,24 @@ def tool_summary(tasks: Sequence[TaskRecord], title: str | None = None) -> str:
 
 def run_summary(kind: RunKind, tasks: Sequence[TaskRecord], title: str | None) -> str | None:
     """The closing line a run of ``kind`` gets: a workload's and a tool's
-    are composed from their tasks' outputs; a code run has none — its
-    result is the pull request."""
+    are composed from their tasks' outputs, a plan run's is what it
+    proposed; a code run has none — its result is the pull request."""
     if kind == "workload":
         return workload_summary(tasks, title)
     if kind == "tool":
         return tool_summary(tasks, title)
+    if kind == "plan":
+        return plan_summary(tasks)
     return None
+
+
+def plan_summary(tasks: Sequence[TaskRecord]) -> str:
+    """A plan run's closing line: its task's persisted output, which names
+    what was proposed and where it waits."""
+    for task in tasks:
+        if task.output is not None and task.output.summary:
+            return task.output.summary
+    return "nothing was proposed"
 
 
 def workload_summary(tasks: Sequence[TaskRecord], title: str | None = None) -> str:
@@ -822,7 +849,7 @@ def artifacts_dir(run: RunRecord | RunResult, home: SbxloopHome) -> Path | None:
     """
     if run.workspace is None:
         return None
-    if run.kind in ("workload", "tool"):
+    if run.kind != "code":
         return home.run_artifacts(run.run_id)
     if run.mounted:
         return run.workspace

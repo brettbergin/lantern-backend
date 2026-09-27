@@ -42,6 +42,7 @@ from sbxloop.daemon.controls.eligibility import Subject, check as check_eligibil
 from sbxloop.daemon.controls.intake import (
     AdmitRequest,
     IssueAdmission,
+    PlanAdmission,
     ToolAdmission,
     WorkloadAdmission,
 )
@@ -221,6 +222,32 @@ async def admit(
     def apply() -> AdmitOutcome:
         return service.admit(principal, _admission(ctx, auth, body), idempotency=pair)
 
+    return await _admitted(ctx, apply)
+
+
+async def admit_plan(
+    ctx: ApiContext,
+    auth: Authenticated,
+    request: PlanAdmission,
+    pair: tuple[str, str] | None,
+) -> Admitted:
+    """Queue a breakdown of a plan node as a ``plan`` run; the command
+    behind ``POST /v1/plans/{id}/nodes/{node_id}/breakdown``. The channel
+    it names is checked as any admission's is; the node's rules are the
+    plan service's, applied inside the recorded operation."""
+    principal = auth.principal
+    service = ctx.service()
+
+    def apply() -> AdmitOutcome:
+        _check_channel(ctx, auth, request.channel_id)
+        return service.admit(principal, request, idempotency=pair)
+
+    return await _admitted(ctx, apply)
+
+
+async def _admitted(ctx: ApiContext, apply: Callable[[], AdmitOutcome]) -> Admitted:
+    """Run an admission and answer with the item and its operation — the
+    existing ones on a replay."""
     try:
         outcome = await run_command(ctx, apply)
     except Replayed as replay:

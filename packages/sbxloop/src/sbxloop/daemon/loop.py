@@ -145,6 +145,9 @@ from sbxloop.ghids import (
 )
 from sbxloop.ids import new_run_id
 from sbxloop.log import bind_run, clear_run, get_logger
+from sbxloop.plans.generation import PlanGeneration
+from sbxloop.plans.service import PlanService
+from sbxloop.plans.store import PlanStore
 from sbxloop.provider import ProviderHeldError, ProviderRecovery
 from sbxloop.recipes import get_recipe
 from sbxloop.sbx.cli import SbxCLI
@@ -1801,7 +1804,9 @@ class DaemonLoop:
         """A warm set's run id for a fresh run of ``item``, or None: no pool,
         nothing ready, or a tool run (its recipe stages the workspace the
         sandbox must mount, which no warm set has)."""
-        if self._warmer is None or item.recipe is not None or item.kind == "tool":
+        if self._warmer is None or item.recipe is not None or item.kind in ("tool", "plan"):
+            # A plan run's data directory is cut for its checkout, which no
+            # warm set carries either.
             return None
         try:
             return self._warmer.claim()
@@ -3151,6 +3156,15 @@ class DaemonLoop:
                 WorkspaceChannelVisibility(self.dstore),
                 item_config.memory,
                 self.clock,
+            ),
+            # A plan item's run reads its brief from, and delivers to, the
+            # plan record — never the forge.
+            plan_desk=(
+                PlanGeneration(
+                    PlanService(PlanStore(self.dstore), lambda: self.config), item, self.clock
+                )
+                if item.kind == "plan"
+                else None
             ),
         )
         handle = RunHandle(
@@ -4953,6 +4967,19 @@ class DaemonLoop:
         explicit line saying the discussion is missing — the run goes on
         with the ask itself rather than waiting on a GitHub read.
         """
+        if item.kind == "plan":
+            # A breakdown: what it proposes, the person's note, where from.
+            # The node itself reaches the planner from the plan, as it is
+            # when the run proposes.
+            note = item.body.strip()
+            return "\n\n".join(
+                [
+                    item.title.strip(),
+                    *([note] if note else []),
+                    f"---\nThis work item came from: a breakdown of plan {item.plan_id} "
+                    "requested through the remote API.",
+                ]
+            )
         if is_local_id(item.item_id):
             # A chat ask (#760), a schedule tick (#761) or a remote API ask:
             # the ask is the whole ask, and there is no issue discussion to
@@ -5040,6 +5067,16 @@ class DaemonLoop:
         engine = handle.engine
         if resume:
             return engine.resume(run_id, release_provider_hold=False)
+        if item.kind == "plan":
+            # A breakdown: the planner reads a checkout and proposes one
+            # level to the plan record its desk names (set in _launch).
+            return engine.start(
+                self.outcome_text(item),
+                run_id=run_id,
+                repo=self._item_repo(item),
+                kind="plan",
+                assignment=_item_assignment(item),
+            )
         if item.recipe is not None:
             recipe = get_recipe(item.recipe)
             target = item.recipe_target or ""

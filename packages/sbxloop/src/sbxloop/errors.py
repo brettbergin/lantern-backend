@@ -208,3 +208,8 @@ class RunCancelledError(StateError):
 class DaemonError(SbxloopError):
     """The daemon could not start or continue (misconfiguration, no work
     sources, an unrecoverable ops sandbox)."""
+
+
+class PlanDeliveryError(SbxloopError):
+    """A plan run's record would not serve it: the plan or its node is gone,
+    or the node moved where a proposal no longer applies."""

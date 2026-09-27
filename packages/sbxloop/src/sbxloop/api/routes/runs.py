@@ -17,7 +17,7 @@ from sbxloop.engine.model import RunRecord, RunState
 router = APIRouter(prefix="/v1", tags=["runs"])
 
 RUN_STATES: tuple[str, ...] = RunState.__args__  # type: ignore[attr-defined]
-RUN_KINDS: tuple[str, ...] = ("code", "workload", "tool")
+RUN_KINDS: tuple[str, ...] = ("code", "workload", "tool", "plan")
 
 
 @router.get("/runs", response_model=Page[Run])

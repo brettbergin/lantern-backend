@@ -2,9 +2,10 @@
 forge one level at a time (#2334).
 
 Feature ``planning``. Every plan, drafts included, is readable by anyone
-holding ``runs:read``; drafting and editing need ``plans:create``. Every
-mutation names the ``expected_revision`` it read; a stale one is ``409
-stale_revision`` with the plan's current revision.
+holding ``runs:read``; drafting, editing and asking the planner for a
+breakdown need ``plans:create``. Every mutation names the
+``expected_revision`` it read; a stale one is ``409 stale_revision`` with
+the plan's current revision.
 
 After publish the forge wins (#2342): reading a plan folds in what changed
 on the forge when its last reading is stale, ``POST .../sync`` does it now,
@@ -20,8 +21,8 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
-from sbxloop.api.auth.deps import Authenticated, get_ctx, require
-from sbxloop.api.commands import idempotency, replayed_problem
+from sbxloop.api.auth.deps import Authenticated, get_ctx, ready_daemon, require
+from sbxloop.api.commands import admit_plan, idempotency, replayed_problem
 from sbxloop.api.context import ApiContext
 from sbxloop.api.errors import Problem
 from sbxloop.api.models import rfc3339
@@ -30,6 +31,8 @@ from sbxloop.api.plan_schemas import (
     PlanApprove,
     PlanAttach,
     PlanAttached,
+    PlanBreakdown,
+    PlanBreakdownAccepted,
     PlanCreate,
     PlanDeleted,
     PlanDetach,
@@ -47,6 +50,7 @@ from sbxloop.api.plan_schemas import (
     PlanSummary,
     PlanUpdate,
 )
+from sbxloop.daemon.controls.intake import PlanAdmission
 from sbxloop.daemon.controls.operations import (
     IdempotencyConflict,
     Operation,
@@ -758,3 +762,65 @@ async def publish_children(
     published = await ctx.call(run)
     ctx.hub.notify()
     return published
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/breakdown",
+    response_model=PlanBreakdownAccepted,
+    status_code=202,
+    summary="Propose a node's next level",
+    responses={403: _PROBLEM, 404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+)
+async def breakdown_node(
+    plan_id: str,
+    node_id: str,
+    body: PlanBreakdown,
+    request: Request,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanBreakdownAccepted:
+    """Start a ``plan`` run that reads a read-only checkout of the node's
+    repository and proposes its next level — an initiative's epics or an
+    epic's tasks, at most the level's cap. The run is queued like any work
+    (it appears in the queue and History, can be cancelled, and answers to
+    ``channel_id`` when one is named); ``202`` names its work item, whose
+    ``run_id`` is set once it is dispatched. The proposal is delivered to
+    the plan, never to the forge: it replaces the node's previous
+    ``proposed`` children and arrives as ``plan.generation.proposed``; a
+    run that proposes nothing ends with ``plan.generation.failed``.
+
+    Refused: a task (``422``: it has no children); a node on the forge that
+    already has children (``409 replan_required``); a repository planning
+    is off for (``409 planning_unsupported``); a level at its cap (``409
+    level_full``); a breakdown of the node already queued or running
+    (``409 already_in_progress``); a stale ``expected_revision``."""
+
+    def check() -> None:
+        ctx.plans.breakdown_target(plan_id, node_id, expected_revision=body.expected_revision)
+
+    try:
+        await ctx.call(check)
+    except PlanRefusal as exc:
+        raise _problem(exc) from exc
+    pair = idempotency(
+        request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/breakdown", required=False
+    )
+    admitted = await admit_plan(
+        ctx,
+        auth,
+        PlanAdmission(
+            plan_id=plan_id,
+            node_id=node_id,
+            expected_revision=body.expected_revision,
+            note=body.note or "",
+            channel_id=body.channel_id,
+        ),
+        pair,
+    )
+    return PlanBreakdownAccepted(
+        plan_id=plan_id,
+        node_id=node_id,
+        item=admitted.item,
+        operation=admitted.operation,
+        created=admitted.created,
+    )

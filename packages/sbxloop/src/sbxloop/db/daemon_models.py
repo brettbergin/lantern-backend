@@ -66,6 +66,9 @@ class WorkItemRow(Base):
         # cannot index, so every delivery read cost one pass over the
         # messages table per work item.
         Index("idx_daemon_items_message", "message_id"),
+        # A breakdown asks whether its node already has a generation
+        # queued or running (revision 0044).
+        Index("idx_daemon_items_plan_node", "plan_node_id"),
     )
 
     item_id: Mapped[str] = mapped_column(Text, primary_key=True, nullable=True)
@@ -118,6 +121,10 @@ class WorkItemRow(Base):
     # predate the column. NULL for work an issue, a schedule or an inbox
     # file asked for: those name no message and link by channel instead.
     message_id: Mapped[str | None] = mapped_column(Text)
+    # The plan node a `plan` item proposes the next level of (revision
+    # 0044); NULL for every other kind.
+    plan_id: Mapped[str | None] = mapped_column(Text)
+    plan_node_id: Mapped[str | None] = mapped_column(Text)
 
 
 class DaemonRunRow(Base):

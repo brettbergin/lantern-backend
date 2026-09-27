@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from sbxloop.api.models import ApiModel
+from sbxloop.api.models import ApiModel, Item, OperationOut
 from sbxloop.daemon.controls.principal import WORKSPACE_ID
 
 
@@ -263,3 +263,27 @@ class PlanPublished(ApiModel):
     results: list[PlanPublishResult]
     operation_id: str | None = None
     replayed: bool = False
+
+
+class PlanBreakdown(ApiModel):
+    """Start a breakdown: a ``plan`` run proposing the node's next level."""
+
+    expected_revision: int = Field(ge=1)
+    #: What the person wants the planner to keep in mind for this level.
+    note: str | None = Field(default=None, max_length=8000)
+    #: The channel the run answers to: its chronology is told there and a
+    #: person there can steer it.
+    channel_id: str | None = Field(default=None, max_length=128)
+
+
+class PlanBreakdownAccepted(ApiModel):
+    """The breakdown was queued as a ``plan`` run: the work item (its
+    ``run_id`` once dispatched) and the operation that admitted it. The
+    proposal arrives on the plan as ``plan.generation.proposed``."""
+
+    plan_id: str
+    node_id: str
+    item: Item
+    operation: OperationOut
+    #: ``False`` when the same request had already queued it.
+    created: bool
