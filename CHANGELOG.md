@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+**Members who registered before a capability existed now hold it.** A
+member's API client stores its capabilities, written at registration and on
+a role change, so the `plans:create` and `plans:publish` the owner, admin
+and member roles gained never reached accounts made before them: an owner
+signed in to Angie was refused a plan with "lacks plans:create". The API
+now brings every active member's client up to its role's current set as it
+starts, and the next token refresh (or sign-in) carries it. Deactivated
+members keep holding nothing.
+
 **A finished epic or initiative is closed with a summary, and planning
 sends three push notices.** When the issue of every published task of an
 epic is closed on the forge, sbxloop comments a summary on the epic — each

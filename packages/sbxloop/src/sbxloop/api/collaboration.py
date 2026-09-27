@@ -1972,6 +1972,37 @@ class CollaborationStore:
                 role = _role(str(member.role))
         return row, role
 
+    def sync_role_grants(self) -> int:
+        """Bring every active member's API client up to what their role
+        grants today; how many clients changed.
+
+        A client stores its capabilities, written at registration and on a
+        role change, so a capability a release adds to a role never reached
+        the members who registered before it (an owner was refused
+        ``plans:create``). The API calls this as it starts; tokens minted
+        from a client afterwards carry the role's current set. A
+        deactivated member's client keeps holding nothing."""
+        changed = 0
+        with self.dstore.transaction() as session:
+            rows = session.execute(
+                select(WorkspaceMemberRow, LocalUserRow).join(
+                    LocalUserRow, LocalUserRow.id == WorkspaceMemberRow.user_id
+                )
+            ).all()
+            for member, user in rows:
+                if not user.active:
+                    continue
+                client = session.get(ClientRow, user.client_id)
+                if client is None:
+                    continue
+                wanted = _capabilities_json(ROLE_CAPABILITIES[_role(str(member.role))])
+                if client.capabilities_json != wanted:
+                    client.capabilities_json = wanted
+                    changed += 1
+        if changed:
+            log.info("collaboration.role_grants_synced", clients=changed)
+        return changed
+
     @staticmethod
     def _grant_role(session: Any, user: LocalUserRow, role: Role | None) -> None:
         """Rewrite the user's API client to hold what ``role`` grants
