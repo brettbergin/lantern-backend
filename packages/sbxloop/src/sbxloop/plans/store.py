@@ -296,6 +296,18 @@ class PlanStore:
                 nodes.setdefault(str(node.plan_id), []).append(node)
             return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
 
+    def published_at(self, repo: str, number: int) -> list[tuple[str, PlanNode]]:
+        """Every ``(plan_id, node)`` whose issue is ``number`` of ``repo``
+        (matched without case, as the forge does)."""
+        wanted = repo.casefold()
+        with self.dstore.read() as session:
+            rows = session.scalars(select(PlanNodeRow).where(PlanNodeRow.forge_number == number))
+            return [
+                (str(row.plan_id), _node(row))
+                for row in rows
+                if str(row.repository).casefold() == wanted
+            ]
+
     def create(
         self,
         plan: Plan,

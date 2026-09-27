@@ -11,6 +11,7 @@ over HTTP; retries are driven by moving the test clock.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -22,6 +23,11 @@ import pytest
 from sbxloop.api.chronology import DAEMON_ACTOR
 from sbxloop.api.collaboration import LocalUser, _event
 from sbxloop.api.publicids import run_public_id
+from sbxloop.db.api_models import ApiEventRow, OperationRow
+from sbxloop.db.daemon_models import WorkItemRow
+from sbxloop.plans.epicrun import EpicRun, EpicRunStore
+from sbxloop.plans.model import Plan, PlanNode
+from sbxloop.plans.store import PlanStore
 from tests.api.conftest import Api
 from tests.api.test_push_devices import (
     TOKEN_A,
@@ -584,3 +590,275 @@ def test_old_notifications_are_pruned_with_the_chronology(room: Room) -> None:
     assert room.api.ctx.push.notification(room.owner.id, ping["ref"]) is not None
     room.api.ctx.push.dispatcher.prune()
     assert room.api.ctx.push.notification(room.owner.id, ping["ref"]) is None
+
+
+# -- planning (#2349) -------------------------------------------------------------------
+
+
+def _plan_node(room: Room) -> None:
+    """A plan with one epic, E-Checkout, for the notices to name."""
+    store = PlanStore(room.api.harness.dstore)
+    now = room.api.clock()
+    epic = PlanNode(
+        id="nod_epic",
+        plan_id="pln_1",
+        parent_id=None,
+        position=0,
+        level="epic",
+        repository="o/r",
+        state="published",
+        origin="person",
+        title="Checkout",
+    )
+    task = PlanNode(
+        id="nod_task",
+        plan_id="pln_1",
+        parent_id="nod_epic",
+        position=0,
+        level="task",
+        repository="o/r",
+        state="published",
+        origin="person",
+        title="Store the cart",
+    )
+    store.create(
+        Plan(
+            id="pln_1",
+            workspace_id="default",
+            root_id="nod_epic",
+            archived=False,
+            created_by=None,
+            created_by_display=None,
+            created_at=now,
+            updated_at=now,
+            revision=1,
+            nodes=(epic, task),
+        ),
+        events=[],
+        actor=None,
+    )
+
+
+def _plan_item(
+    room: Room, *, admitted_by: LocalUser | None = None, message_id: str | None = None
+) -> str:
+    """The ``plan`` run's work item, run ``run_plan``, admitted by an API
+    operation of ``admitted_by`` or asked for by the chat ``message_id``."""
+    item_id = "api:plan:pln_1-nod_epic"
+    now = room.api.clock()
+    with room.api.harness.dstore.transaction() as session:
+        session.add(
+            WorkItemRow(
+                item_id=item_id,
+                source_key="plan:pln_1-nod_epic",
+                title="Break down Checkout",
+                state="running",
+                run_id="run_plan",
+                run_kind="plan",
+                repo="o/r",
+                message_id=message_id,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        if admitted_by is not None:
+            session.add(
+                OperationRow(
+                    id="op_admit",
+                    action="item.admit",
+                    target_kind="item",
+                    target_key=item_id,
+                    state="succeeded",
+                    actor_json=json.dumps({"kind": "client", "id": admitted_by.client_id}),
+                    accepted_at=now,
+                )
+            )
+    return item_id
+
+
+def _plan_event(
+    room: Room,
+    type_: str,
+    data: dict[str, Any],
+    *,
+    item_id: str | None = None,
+    run_id: str | None = None,
+    channel_id: str | None = None,
+    actor: dict[str, Any] | None = None,
+) -> None:
+    now = room.api.clock()
+    with room.api.harness.dstore.transaction() as session:
+        session.add(
+            ApiEventRow(
+                recorded_at=now,
+                occurred_at=now,
+                type=type_,
+                run_id=run_id,
+                item_id=item_id,
+                actor_json=json.dumps(actor) if actor is not None else None,
+                data_json=json.dumps(data),
+                channel_id=channel_id,
+            )
+        )
+
+
+def _questions(room: Room, item_id: str, channel_id: str | None = None) -> None:
+    _plan_event(
+        room,
+        "plan.generation.questions",
+        {
+            "plan_id": "pln_1",
+            "node_id": "nod_epic",
+            "run_id": run_public_id("run_plan"),
+            "questions": [{"id": "q1"}, {"id": "q2"}],
+        },
+        item_id=item_id,
+        run_id="run_plan",
+        channel_id=channel_id,
+    )
+
+
+def _proposed(room: Room, item_id: str | None) -> None:
+    _plan_event(
+        room,
+        "plan.generation.proposed",
+        {
+            "plan_id": "pln_1",
+            "node_id": "nod_epic",
+            "run_id": run_public_id("run_plan"),
+            "count": 3,
+        },
+        item_id=item_id,
+        run_id="run_plan",
+    )
+
+
+def test_breakdown_notices_go_only_to_the_person_who_asked(room: Room) -> None:
+    _plan_node(room)
+    item_id = _plan_item(room, admitted_by=room.owner)
+    _questions(room, item_id, channel_id=room.channel_id)
+    _proposed(room, None)  # found through its run
+    room.step()
+
+    questions, proposal = room.pushes_to(TOKEN_A)
+    assert (questions["k"], questions["thread"]) == ("gate", room.channel_id)
+    assert (proposal["k"], proposal["thread"]) == ("work", "")
+    first = room.notification(questions["ref"])
+    assert (first["title"], first["body"]) == (
+        "Questions waiting for you",
+        "The planner has 2 questions about Checkout before it proposes its tasks.",
+    )
+    second = room.notification(proposal["ref"])
+    assert (second["title"], second["body"]) == (
+        "A proposal is ready for you",
+        "The planner proposed 3 tasks for Checkout. Review and approve it.",
+    )
+    # Bob is in the channel and in the workspace: neither is his to hear.
+    assert room.pushes_to(TOKEN_B) == []
+
+
+def test_a_breakdown_asked_for_in_the_chat_goes_to_the_messages_author(room: Room) -> None:
+    _plan_node(room)
+    turn = room.say(room.bob, "break the checkout epic down")
+    item_id = _plan_item(room, message_id=turn.input_message_id)
+    _proposed(room, item_id)
+    room.step()
+    [ping] = room.pushes_to(TOKEN_B)
+    assert ping["k"] == "work"
+    assert room.pushes_to(TOKEN_A) == []
+
+
+def test_a_breakdown_nobody_asked_for_is_not_broadcast(room: Room) -> None:
+    _plan_node(room)
+    item_id = _plan_item(room)  # a host-trusted operator, say: no member
+    _questions(room, item_id)
+    _proposed(room, item_id)
+    room.step()
+    assert room.relay.sent == []
+
+
+def test_breakdown_notices_answer_to_the_gates_and_work_switches(room: Room) -> None:
+    _plan_node(room)
+    item_id = _plan_item(room, admitted_by=room.owner)
+    room.prefs("owner", gates=False)
+    _questions(room, item_id)
+    _proposed(room, item_id)
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == ["work"]
+    room.prefs("owner", gates=True, work=False)
+    _questions(room, item_id)
+    _proposed(room, item_id)
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == ["work", "gate"]
+
+
+def _epic_run(room: Room, started_by: LocalUser) -> None:
+    run = EpicRun(
+        id="erun_1",
+        plan_id="pln_1",
+        node_id="nod_epic",
+        state="running",
+        started_by=started_by.client_id,
+        started_by_display=started_by.username,
+        created_at=room.api.clock(),
+        updated_at=room.api.clock(),
+    )
+    EpicRunStore(room.api.harness.dstore).create(run, events=[], actor={})
+
+
+def _paused(room: Room, reason: str, *, actor: LocalUser | None = None) -> None:
+    ids = {"plan_id": "pln_1", "node_id": "nod_epic", "epic_run_id": "erun_1"}
+    if reason == "task_failed":
+        data = {
+            **ids,
+            "reason": "task_failed",
+            "state": "running",
+            "task_node_id": "nod_task",
+            "item_id": "gh:issue:11",
+            "error": "tests failed",
+            "blocked": [],
+        }
+    else:
+        data = {**ids, "reason": "person", "state": "paused", "by": "Owner"}
+    who = None if actor is None else {"kind": "client", "id": actor.client_id}
+    _plan_event(room, "plan.run.paused", data, actor=who)
+
+
+def test_a_paused_epic_run_pings_only_the_person_who_started_it(room: Room) -> None:
+    _plan_node(room)
+    _epic_run(room, started_by=room.bob)
+    _paused(room, "task_failed")
+    _paused(room, "person", actor=room.owner)
+    room.step()
+
+    failed, paused = room.pushes_to(TOKEN_B)
+    assert (failed["k"], paused["k"]) == ("failure", "failure")
+    first = room.notification(failed["ref"], who="bob")
+    assert (first["title"], first["body"]) == (
+        "Your epic run needs you",
+        "Store the cart failed in Checkout: tests failed. "
+        "Retry or skip it; what depends on it waits.",
+    )
+    second = room.notification(paused["ref"], who="bob")
+    assert (second["title"], second["body"]) == (
+        "Your epic run was paused",
+        "Owner paused Checkout. Nothing new starts until it is resumed.",
+    )
+    assert room.pushes_to(TOKEN_A) == []
+
+
+def test_pausing_your_own_epic_run_is_not_news(room: Room) -> None:
+    _plan_node(room)
+    _epic_run(room, started_by=room.bob)
+    _paused(room, "person", actor=room.bob)
+    room.step()
+    assert room.relay.sent == []
+
+
+def test_a_paused_epic_run_answers_to_the_failures_switch(room: Room) -> None:
+    _plan_node(room)
+    _epic_run(room, started_by=room.bob)
+    room.prefs("bob", failures=False)
+    _paused(room, "task_failed")
+    room.step()
+    assert room.relay.sent == []

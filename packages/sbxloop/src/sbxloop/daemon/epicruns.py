@@ -36,6 +36,13 @@ followed; ``retry`` re-queues a failed task's item through the item retry
 
 Nothing here decides how many run at once: an admitted task is a queued
 item like any other, held back by the queue, the holds and the usage pool.
+
+Completion (#2349, :mod:`sbxloop.plans.complete`) is looked at through the
+daemon's forge whenever a pass sees a task land or close and when the run
+completes; again every :data:`SWEEP_S` for :data:`SWEEP_WINDOW_S` after a
+run completed while its epic is still open (a forge hiccup, or a skipped
+task a person closes later); and when the source reports an issue of a
+plan's task closed outside any live epic run (:meth:`issue_closed`).
 """
 
 from __future__ import annotations
@@ -49,8 +56,9 @@ from sbxloop.daemon.controls.intake import IssueAdmission, admit_issue, upsert
 from sbxloop.daemon.controls.results import ControlError
 from sbxloop.daemon.model import WorkItem
 from sbxloop.daemon.store import TERMINAL_ITEM_STATES
-from sbxloop.errors import ConfigError
+from sbxloop.errors import ConfigError, SbxloopError
 from sbxloop.log import get_logger
+from sbxloop.plans.complete import CompletionResult, complete
 from sbxloop.plans.epicrun import (
     DONE,
     LIVE_RUN_STATES,
@@ -69,8 +77,14 @@ from sbxloop.plans.epicrun import (
 from sbxloop.plans.model import Plan, PlanNode
 from sbxloop.plans.service import PlanRefusal
 from sbxloop.plans.store import PlanEvent, PlanStore
+from sbxloop.vcs.protocol import IssueOps
 
 log = get_logger(__name__)
+
+#: How often completed runs whose epic is still open are looked at again.
+SWEEP_S = 600.0
+#: For how long after a run completed its epic is looked at again.
+SWEEP_WINDOW_S = 14 * 86400.0
 
 
 class EpicRunDriver:
@@ -83,6 +97,12 @@ class EpicRunDriver:
         # One pass at a time: a start from the API and the loop's tick
         # would otherwise both admit the same ready task.
         self._lock = threading.Lock()
+        # One completion look at a time: the tick and a source's report
+        # would otherwise both find an epic finished and comment twice.
+        self._completing = threading.Lock()
+        self._last_sweep: float | None = None
+        #: Opens the forge completion reads and writes: the daemon's own.
+        self.forge: Callable[[], IssueOps | None] = self._loop_forge
 
     # -- reads -----------------------------------------------------------------
 
@@ -224,6 +244,9 @@ class EpicRunDriver:
                     self._drive(run.id, now)
                 except Exception:
                     log.warning("epic_run.drive_failed", epic_run=run.id, exc_info=True)
+            if self._last_sweep is None or now - self._last_sweep >= SWEEP_S:
+                self._last_sweep = now
+                self._sweep(now)
         finally:
             self._lock.release()
 
@@ -284,6 +307,16 @@ class EpicRunDriver:
                 state=state,
                 events=events,
             )
+        closing = any(
+            t.state in ("landed", "closed") and before[k].state != t.state
+            for k, t in changed.items()
+            if k in before
+        )
+        if closing or state == "completed":
+            # A task closed: its line ticked, its epic closed when it was
+            # the last. Recorded first, so a forge that fails here only
+            # delays that to the next look.
+            self._complete(run.plan_id, run.node_id, now)
 
     def _place(
         self,
@@ -400,6 +433,103 @@ class EpicRunDriver:
             )
         state, reason = seen
         return replace(task, state=state, reason=reason, run_id=item.run_id or task.run_id)
+
+    # -- completion (#2349) ----------------------------------------------------
+
+    def _loop_forge(self) -> IssueOps | None:
+        """The daemon's forge, or ``None`` when it has none."""
+        github = getattr(self.loop, "github", None)
+        if github is None:
+            return None
+        try:
+            ops: IssueOps = github.ops()
+        except SbxloopError as exc:
+            note = getattr(github, "note_failure", None)
+            if callable(note):
+                note(exc)
+            raise
+        return ops
+
+    def _complete(self, plan_id: str, epic_id: str, now: float) -> CompletionResult | None:
+        """Look at one epic's completion; never raises."""
+        run = self.runs.latest(plan_id, epic_id)
+
+        def link(task: PlanNode, ran: str | None) -> str | None:
+            held = run.task(task.id) if run is not None else None
+            run_id = held.run_id if held is not None and held.run_id else None
+            if run_id is None and task.forge is not None:
+                run_id = self._last_run(task.repository, task.forge.number)
+            return self._result_link(run_id) if run_id else None
+
+        try:
+            with self._completing:
+                return complete(
+                    self.forge,
+                    store=self.plans,
+                    config=self.loop.config,
+                    clock=lambda: now,
+                    plan_id=plan_id,
+                    epic_id=epic_id,
+                    epic_run=run,
+                    link=link,
+                )
+        except Exception:
+            log.warning("epic_run.completion_failed", plan=plan_id, epic=epic_id, exc_info=True)
+            return None
+
+    def _sweep(self, now: float) -> None:
+        """Look again at each recently completed run's epic that is still
+        open where ``close_completed`` would close it."""
+        seen: set[tuple[str, str]] = set()
+        for run in self.runs.completed_since(now - SWEEP_WINDOW_S):
+            key = (run.plan_id, run.node_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            plan = self.plans.get(run.plan_id)
+            epic = None if plan is None else plan.node(run.node_id)
+            if epic is None or epic.forge is None or epic.forge.state == "closed":
+                continue
+            if not self.loop.config.planning_for(epic.repository).close_completed:
+                continue
+            self._complete(run.plan_id, run.node_id, now)
+
+    def issue_closed(self, repo: str, number: int, now: float) -> None:
+        """The source closed issue ``number`` of ``repo`` (a run landed or
+        delivered): when it is a plan's task outside a live epic run (a
+        live run's own pass looks), look at its epic."""
+        for plan_id, task in self.plans.published_at(repo, number):
+            if task.level != "task" or task.parent_id is None:
+                continue
+            held = self.runs.for_task(plan_id, task.id)
+            if held is not None and held.state in LIVE_RUN_STATES:
+                continue
+            self._complete(plan_id, task.parent_id, now)
+
+    def _last_run(self, repo: str, number: int) -> str | None:
+        """The run of the newest finished item for issue ``number``."""
+        wanted = repo.casefold()
+        found = [
+            item
+            for item in self.loop.dstore.items()
+            if item.source_key == str(number)
+            and (item.repo or "").casefold() == wanted
+            and item.state == "done"
+            and item.run_id
+        ]
+        found.sort(key=lambda item: item.updated_at)
+        return found[-1].run_id if found else None
+
+    def _result_link(self, run_id: str) -> str | None:
+        """Where a run's result is: its pull request, else the first
+        delivery that is a web address."""
+        report = self.loop.report_for(run_id)
+        if report.pr is not None and report.pr[1]:
+            return str(report.pr[1])
+        for published in report.published:
+            if str(published.location).startswith(("https://", "http://")):
+                return str(published.location)
+        return None
 
     # -- controls (#2348) ------------------------------------------------------
 

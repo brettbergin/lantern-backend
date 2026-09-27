@@ -276,6 +276,15 @@ class EpicRunStore:
         )
         return [run for run in (self.get(i) for i in reversed(ids)) if run is not None]
 
+    def completed_since(self, since: float) -> list[EpicRun]:
+        """Every run that completed at or after ``since``, newest first:
+        the epics a completion sweep looks at again (#2349)."""
+        ids = self._ids(
+            PlanEpicRunRow.state == "completed",
+            PlanEpicRunRow.completed_at >= since,
+        )
+        return [run for run in (self.get(i) for i in ids) if run is not None]
+
     def create(self, run: EpicRun, *, events: Sequence[PlanEvent], actor: dict[str, Any]) -> None:
         with self.dstore.transaction() as session:
             session.add(

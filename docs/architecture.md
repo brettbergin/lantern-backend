@@ -2649,7 +2649,10 @@ streams are) reads `api_events` *live*: its cursor lives in memory and starts
 at the head, so history and a restart's replay are never pushed. The rules
 (`api/push/rules.py`) are the chat clients' notice rules decided with what
 the daemon knows first-hand — a message's author, a turn's asker, a role's
-right to approve a gate. Delivery never runs on a request thread; retries
+right to approve a gate, and for planning (#2349) the person behind a
+`plan` run's item (its chat message's author, else the principal of the
+`item.admit` operation, mapped from client id to user) or the epic run's
+`started_by`. Delivery never runs on a request thread; retries
 back off exponentially (honouring `Retry-After`), a `410` forgets the
 device and a `400` drops the push. The relay only ever sees references.
 
@@ -2815,6 +2818,22 @@ notice a person is owed — while the run itself keeps running. The issue
 source words an epic-run item's claim, abandon, blocked and cancel
 comments around the plan (retry or skip it there) rather than the trigger
 label, and says nothing when a stop withdraws an item it never claimed.
+
+Completion (#2349) is `plans/complete.py`'s `Completion`, over `IssueOps`
+and the plan store and nothing else: it reads each published child's issue
+state, ticks the parent's managed checklist to match (`set_child_closed`,
+one write at most), records the states that moved, and — when every child
+is closed and `[planning] close_completed` is on for the node's repository —
+comments the summary (found again by its `sbx-plan-summary` marker, so it
+is written once) and closes the issue, then looks at the parent. "Closed"
+is the forge's word, not the run's: a skipped task whose issue is open
+holds its epic. The driver decides when to look, under a lock of its own
+(`_completing`) so the tick and a report cannot both comment: after a pass
+in which a task landed or closed or the run completed; in a sweep every
+`SWEEP_S` over runs completed within `SWEEP_WINDOW_S` whose epic is still
+open; and from `DaemonLoop._plan_task_closed`, after a merged or completed
+report closes an issue that is a plan's task outside a live run. It uses
+the loop's own forge connection (`EpicRunDriver.forge`).
 
 **Diagnostics and administration (#1040).** `api/diagnostics.py` reads the
 same in-process log ring `ctl log` and the concierge read

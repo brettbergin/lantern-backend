@@ -1521,6 +1521,8 @@ class DaemonLoop:
         if kind in ("merged", "blocked", "gated", "completed", "held"):
             if self._report_outcome(item, kind):
                 self.dstore.take_pending_report(item.item_id)
+                if kind in ("merged", "completed"):
+                    self._plan_task_closed(item)
             return
         if not self.dstore.take_pending_report(item.item_id):
             return
@@ -1544,6 +1546,17 @@ class DaemonLoop:
                 item=item.item_id,
                 by=who,
             )
+
+    def _plan_task_closed(self, item: WorkItem) -> None:
+        """A merged or delivered issue item closed its issue: when that
+        issue is a plan's task, its epic may be finished (#2349). Never
+        fails the report it follows."""
+        if not item.repo or not item.source_key.isdigit():
+            return
+        try:
+            self.epic_runs.issue_closed(item.repo, int(item.source_key), self.clock())
+        except Exception:
+            log.warning("epic_run.issue_closed_failed", item=item.item_id, exc_info=True)
 
     def _report_outcome(self, item: WorkItem, kind: str) -> bool:
         """Pay a merged/blocked/completed/held report; True when the source

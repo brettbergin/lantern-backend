@@ -2485,7 +2485,12 @@ With `[push] enabled = true` and `relay_url` set, a signed-in person can
 register a phone for lock-screen notifications: somebody else mentioning
 them, work or a reply they asked for arriving or failing, and — for
 workspace owners and admins who can see where it happened — work waiting on
-a decision. `GET /v1/capabilities` then lists `push.apns_relay`; the routes
+a decision. Planning adds three, each only for the one person concerned: a
+breakdown they asked for has **questions waiting** for them (a `gate`
+push) or a **proposal ready** (a `work` push), and an epic run they
+started **paused** because a task failed or someone else paused it (a
+`failure` push). They follow the device's `gates`, `work` and `failures`
+switches. `GET /v1/capabilities` then lists `push.apns_relay`; the routes
 are in [the API reference](api.md#push-notifications).
 
 The push relay is a small service that holds the push provider's signing

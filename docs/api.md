@@ -767,7 +767,8 @@ repository's forge can't hold plans: Gitea is not supported"; or `[planning] ena
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
 `deleted`, `approved` with `node_ids`, `published` with `number`,
 `issue_edited`, `attached` and `detached` — see below; a re-plan's `closed`
-with `number` and `replan_discarded` with `entry_ids`).
+with `number` and `replan_discarded` with `entry_ids`; and `closed`,
+`reopened` or `completed` with `number` — see "Closing what is finished").
 
 **Approving and publishing a level (#2341).** `approve` (`plans:create`) is
 a person's "this is right": the node's `draft` and `proposed` children —
@@ -1174,6 +1175,33 @@ claim comment names the epic run, and the abandon, blocked and cancel
 comments say to retry or skip the task from its plan rather than to
 re-add the trigger label.
 
+**Closing what is finished (#2349).** After publish the forge is the
+record, so an epic is finished when the issue of **every one of its
+published tasks is closed on the forge**, and an initiative when every one
+of its published epics is. A task an epic run skipped is done for the run
+(its dependents go ahead and the run can complete) but its issue stays
+open, and an open task keeps its epic open: closing that issue later
+finishes the epic then. With `[planning] close_completed` on for the
+node's repository (the default), sbxloop comments a summary on a finished
+epic — each task as `landed`, `closed` or `skipped in the epic run, then closed on the forge`, with its pull request or delivery link where
+known, and the epic run and who started it — and closes it as completed;
+the last epic of an initiative closing does the same for the initiative
+with a rollup of its epics. Each summary starts with a hidden
+`<!-- sbx-plan-summary: <plan_id>/<node_id> -->` marker, so an attempt that
+died between comment and close never comments twice, and an issue a person
+already closed gets no comment. With `close_completed = false` both stay
+open. Whatever `close_completed` says, a parent's managed checklist
+(GitLab, or GitHub's cross-repository fallback) has each child's line
+ticked as its issue closes, and each node whose issue changed state is
+recorded in `forge.state` with `plan.node.changed` — `change: "closed"`
+(or `"reopened"`) for a state read from the forge, `"completed"` for a
+node sbxloop closed with a summary, each with `number`. The daemon looks
+when a pass of an epic run sees a task land or close and when the run
+completes; every 10 minutes, for 14 days after a run completed, while its
+epic is still open; and when a merge or delivery report closes the issue
+of a plan's task outside any live epic run (a person started the task
+alone). A forge that cannot be reached is logged and looked at again.
+
 ### Workspace people
 
 A workspace holds owners, admins and members. These routes are advertised as
@@ -1551,6 +1579,23 @@ was):
 | `failure` | The same when the work ended `failed`, `blocked`, `cancelled` or `abandoned`, or `collaboration.turn.failed`; a job's `failure` attention                        | `<agent> could not finish <title>` / `<agent> could not reply` / the job's title |
 | `gate`    | A job's `action_required` attention, or `gate.opened`, to workspace owners and admins who can see where it happened; one push per gate                           | the job's title / `Decision needed`                                              |
 | `test`    | `POST …/test`                                                                                                                                                    | `Test notification`                                                              |
+
+Planning adds three notices (#2349), each to **one person only** — never to
+the channel, the rest of the workspace, or anyone else who can read the
+plan — and each on an existing kind, so the device's `gates`, `work` and
+`failures` switches govern them (and the push relay, which accepts only
+these kinds, carries them unchanged):
+
+| Notice                         | Event                       | `kind`    | Who                                                                                                                                                         | Title                                                  |
+| ------------------------------ | --------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Questions waiting for you      | `plan.generation.questions` | `gate`    | The person who asked for the breakdown: the author of the chat message behind the `plan` run's item, else the person whose `item.admit` operation queued it | `Questions waiting for you`                            |
+| A proposal ready for you       | `plan.generation.proposed`  | `work`    | The same person                                                                                                                                             | `A proposal is ready for you`                          |
+| An epic run you started paused | `plan.run.paused`           | `failure` | The person who started the epic run (`started_by`); for `reason: "person"`, only when someone else paused it                                                | `Your epic run needs you` / `Your epic run was paused` |
+
+A breakdown or epic run whose asker is not an active member of the
+workspace (a host-trusted operator, say) pushes nothing. The breakdown
+notices carry the channel the breakdown was asked in when the asker can
+open it (so per-channel preferences apply); the epic-run notice has none.
 
 Only live events are pushed: the dispatcher reads the chronology from where
 it stood when the daemon started, so historical events and a restart's replay
