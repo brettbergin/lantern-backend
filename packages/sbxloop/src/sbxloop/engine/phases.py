@@ -2003,10 +2003,9 @@ def _plan_node_section(brief: PlanBrief) -> str:
         )
     if brief.generate_root:
         lines.append(
-            "Generate the root issue AND its children. The root is an unplanned placeholder. "
-            "Return a root object with an authored title, goal, repository-grounded context, "
-            "acceptance_criteria, non_goals and constraints. Use the brief and answers as "
-            "requirements, not finished issue prose."
+            "The root is an unplanned placeholder. This plan needs an authored root and "
+            "children. The brief and clarification answers are requirements for that work, "
+            "not finished issue prose."
         )
     if brief.parent:
         lines.append(f"**Part of:** {brief.parent}")

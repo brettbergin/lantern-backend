@@ -377,11 +377,25 @@ def sessions(harness: Harness, run_id: str) -> list[str]:
 class TestClarify:
     """The clarifying turn in front of the proposal (#2345)."""
 
+    @pytest.mark.parametrize("generate_root", [False, True])
     def test_ready_goes_straight_to_proposing(
-        self, harness: Harness, upstream: list[tuple[str, str]]
+        self, harness: Harness, upstream: list[tuple[str, str]], generate_root: bool
     ) -> None:
-        desk = RecordingDesk(plan_brief=epic_brief(max_questions=3))
-        harness.script([READY, answer(code_task("c1"))])
+        brief = epic_brief(
+            max_questions=3,
+            generate_root=generate_root,
+            input={"title": "Make reports portable"} if generate_root else {},
+        )
+        desk = RecordingDesk(plan_brief=brief)
+        response = answer(code_task("c1"))
+        if generate_root:
+            response["json"]["root"] = {
+                "title": "Export reports",
+                "goal": "Download reports as CSV",
+                "context": "The reports module provides the export path",
+                "acceptance_criteria": ["The downloaded CSV preserves the displayed rows"],
+            }
+        harness.script([READY, response])
         built = engine(harness, desk, keep_sandboxes=True)
         result = built.start("plan", repo=REPO, kind="plan")
         assert result.state == "completed", result.reason
@@ -398,6 +412,11 @@ class TestClarify:
         assert "Run make test before a PR." in clarify, "the repository's own conventions"
         propose = next(p for p in prompts if p.startswith("# Propose"))
         assert "(no questions were asked)" in propose
+        if generate_root:
+            assert "Make reports portable" in clarify and "Make reports portable" in propose
+            assert "Return a root object" not in clarify
+            assert "include a `root` object" in propose
+            assert desk.delivered[0][1].source_input == brief.input
         # One checkout serves both turns.
         assert len(upstream) == 1
 
