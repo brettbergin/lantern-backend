@@ -51,6 +51,7 @@ from sbxloop.api.plan_schemas import (
     PlanDriftAck,
     PlanForge,
     PlanGenerationOut,
+    PlanInput,
     PlanNodeCreate,
     PlanNodeOut,
     PlanNodeUpdate,
@@ -219,7 +220,9 @@ def _summary_fields(plan: Plan) -> dict[str, Any]:
     return {
         "id": plan.id,
         "workspace_id": plan.workspace_id,
-        "title": root.title,
+        "title": str(plan.input.get("title", root.title))
+        if plan.generation_pending
+        else root.title,
         "level": root.level,
         "repository": root.repository,
         "state": plan.state,
@@ -240,7 +243,12 @@ def plan_out(plan: Plan, *, reconcile_error: str | None = None) -> PlanOut:
     fields = _summary_fields(plan)
     if reconcile_error is not None:
         fields["reconcile_error"] = reconcile_error
-    return PlanOut(**fields, nodes=[node_out(n) for n in plan.nodes])
+    return PlanOut(
+        **fields,
+        nodes=[node_out(n) for n in plan.nodes],
+        input=PlanInput.model_validate(plan.input) if plan.input else None,
+        generation_pending=plan.generation_pending,
+    )
 
 
 def _reconciled(result: Reconciliation) -> PlanOut:

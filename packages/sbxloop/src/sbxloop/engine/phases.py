@@ -1996,6 +1996,17 @@ class PhaseRunner:
 def _plan_node_section(brief: PlanBrief) -> str:
     """The node being broken down, section by section, as a person wrote it."""
     lines = [f"**{brief.level.capitalize()}:** {brief.title}"]
+    if brief.input:
+        lines.append(
+            "**Planning brief (input, not issue content):**\n\n"
+            + json.dumps(brief.input, ensure_ascii=False)
+        )
+    if brief.generate_root:
+        lines.append(
+            "The root is an unplanned placeholder. This plan needs an authored root and "
+            "children. The brief and clarification answers are requirements for that work, "
+            "not finished issue prose."
+        )
     if brief.parent:
         lines.append(f"**Part of:** {brief.parent}")
     lines.append(f"**Repository:** {brief.repository}")

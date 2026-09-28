@@ -131,12 +131,10 @@ class TestADraftOnTheAskersYes:
             "draft",
             "person",
         )
-        assert root.title == DRAFT["title"]
-        assert root.goal == DRAFT["goal"]
-        assert root.acceptance_criteria == tuple(DRAFT["acceptance_criteria"])
-        assert root.constraints == DRAFT["constraints"]
-        assert root.non_goals == DRAFT["non_goals"]
-        assert root.context == DRAFT["context"]
+        assert root.title == "Unplanned initiative" and root.goal == ""
+        assert root.acceptance_criteria == ()
+        for key in ("title", "goal", "acceptance_criteria", "constraints", "non_goals", "context"):
+            assert plan.input[key] == DRAFT[key]
         # A draft alone: no children proposed, nothing approved or published.
         assert plan.nodes == (root,)
         # The link Angie and Lantern open, and the plan's own words.
@@ -165,7 +163,7 @@ class TestADraftOnTheAskersYes:
             _person("admin", "u-ada", "Ada"),
         )
         (plan,) = _plans(dstore)
-        assert plan.root.level == "epic" and plan.root.title == "Export reports"
+        assert plan.root.level == "epic" and plan.input["title"] == "Export reports"
         assert f"(/plans/{plan.id})" in text
 
     def test_a_retried_call_links_the_same_draft(self, tmp_path: Path) -> None:

@@ -2345,6 +2345,8 @@ class LoopEngine:
                     answer = phases.replan_plan(brief, checkouts=checkouts, home=home)
                 else:
                     answer = phases.propose_plan(brief, checkouts=checkouts, home=home)
+                    if brief.generate_root:
+                        answer.source_input = dict(brief.input)
             except InvalidOutputTwice as exc:
                 spend = phases.drain_spend()
                 self._record_phase(
@@ -6021,6 +6023,12 @@ def _plan_summary(brief: PlanBrief, answer: PlanProposal | PlanReplan) -> str:
             "waits in the plan for review"
         )
     count = len(answer.children)
+    if brief.generate_root and answer.root is not None:
+        return (
+            f"Generated the {brief.level} “{answer.root.title}” and {count} "
+            f"{brief.child_noun if count != 1 else brief.child_level}; "
+            "they wait in the plan for review"
+        )
     return (
         f"Proposed {count} {brief.child_noun if count != 1 else brief.child_level} "
         f"for the {brief.level} “{brief.title}”; they wait in the plan for review"

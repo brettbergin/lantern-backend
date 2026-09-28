@@ -253,6 +253,8 @@ class PlanBrief(_Model):
     children, and its answer is a :class:`PlanReplan`."""
 
     mode: PlanMode = "breakdown"
+    input: dict[str, Any] = Field(default_factory=dict)
+    generate_root: bool = False
 
     plan_id: str
     node_id: str
@@ -306,6 +308,11 @@ class PlanBrief(_Model):
     def task_title(self) -> str:
         if self.mode == "replan":
             return f"Re-plan the {self.child_noun} of “{self.title}”"
+        if self.generate_root:
+            return (
+                f"Generate the {self.level} and its {self.child_noun} "
+                f"from “{self.input.get('title', '')}”"
+            )
         return f"Propose the {self.child_noun} of “{self.title}”"
 
     def child(self, node_id: str) -> CurrentChild | None:
@@ -379,13 +386,38 @@ class ProposedChild(_Model):
         return (value or "").strip() or None
 
 
+class ProposedRoot(_Model):
+    """Issue content authored from the intake brief, never a form echo."""
+
+    title: str
+    goal: str
+    context: str
+    acceptance_criteria: list[str]
+    non_goals: str = ""
+    constraints: str = ""
+
+    def problems(self) -> list[str]:
+        problems = []
+        for name in ("title", "goal", "context"):
+            if not getattr(self, name).strip():
+                problems.append(f"the generated root needs {name}")
+        if not self.acceptance_criteria or any(not a.strip() for a in self.acceptance_criteria):
+            problems.append("the generated root needs nonempty acceptance criteria")
+        return problems
+
+
 class PlanProposal(_Model):
     """The planner's answer: the children, in the order a person reads them."""
 
-    children: list[ProposedChild] = Field(min_length=1)
+    children: list[ProposedChild] = Field(default_factory=list)
+    root: ProposedRoot | None = None
+    #: Stamped by the host after inference, persisted for crash-safe delivery.
+    source_input: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _unique_ids(self) -> PlanProposal:
+        if not self.children and self.root is None:
+            raise ValueError("a proposal needs children or a generated root")
         ids = [child.id for child in self.children if child.id]
         if len(set(ids)) != len(ids):
             raise ValueError(f"child ids must be unique: {ids}")
@@ -508,6 +540,13 @@ def proposal_problems(
     toolchains (the one the in-run decompose is held to); None skips it."""
     problems: list[str] = []
     count = len(proposal.children)
+    if not brief.generate_root and count == 0:
+        problems.append("a breakdown needs at least one child")
+    if brief.generate_root:
+        if proposal.root is None:
+            problems.append("generate the root issue as well as its children from the input brief")
+        else:
+            problems.extend(proposal.root.problems())
     if count > brief.room:
         problems.append(f"propose at most {brief.room} {brief.child_noun}; this answer has {count}")
     for index, child in enumerate(proposal.children):

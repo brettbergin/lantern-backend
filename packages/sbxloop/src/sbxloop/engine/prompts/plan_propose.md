@@ -146,6 +146,15 @@ $user_guidance
 
 ## Response format
 
+When the brief says to generate the root, include a `root` object alongside
+`children`: its `title`, `goal`, `context`, `acceptance_criteria`,
+`non_goals` and `constraints`. Author the parent issue as carefully as each
+child, using the person's input and clarification answers as requirements.
+The input is not finished issue content. The root must have a meaningful
+title, goal, repository-grounded context and checkable acceptance criteria.
+Otherwise omit `root`: an existing generated or published parent stays as
+reviewed. Continue to propose only one level of children at a time.
+
 Respond with exactly one fenced JSON block, one entry per child in the
 order a person should read them:
 

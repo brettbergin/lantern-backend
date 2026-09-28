@@ -60,7 +60,16 @@ def _create(api: Api, headers: dict[str, str], **body: Any) -> dict[str, Any]:
     payload = {"level": "epic", "repository": "o/r", "title": "An epic", **body}
     response = api.client.post("/v1/plans", json=payload, headers=headers)
     assert response.status_code == 201, response.text
-    return dict(response.json())
+    # Publish tests begin after the planner authored a root. Intake itself
+    # is exercised in test_plan_input.py; these tests exercise forge writes.
+    from sbxloop.api.routes.plans import plan_out
+
+    plan = api.ctx.plans.get(response.json()["id"])
+    generated = replace(plan.root, **plan.input, origin="planner")
+    changed = api.ctx.plans.store.apply(
+        plan.id, expected_revision=plan.revision, now=api.clock(), upsert=[generated]
+    )
+    return plan_out(changed).model_dump(mode="json")
 
 
 def _add(api: Api, headers: dict[str, str], plan: dict[str, Any], **body: Any) -> dict[str, Any]:

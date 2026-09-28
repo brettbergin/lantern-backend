@@ -196,11 +196,24 @@ class PlanSummary(ApiModel):
     reconcile_error: str | None = None
 
 
+class PlanInput(ApiModel):
+    """A person's requirements for inference, separate from generated issue content."""
+
+    title: str
+    goal: str = ""
+    context: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    non_goals: str = ""
+    constraints: str = ""
+
+
 class PlanOut(PlanSummary):
     """The whole tree: the root first, then each parent's children in
     order."""
 
     nodes: list[PlanNodeOut]
+    input: PlanInput | None = None
+    generation_pending: bool = False
 
 
 class PlanSections(ApiModel):
@@ -224,8 +237,9 @@ class TaskSections(PlanSections):
 
 
 class PlanCreate(PlanSections):
-    """A new draft plan from the form: an initiative (its home repository)
-    or a lone epic (the repository it targets)."""
+    """A planning brief for inference: an initiative or a lone epic.
+    Sections are stored in the plan's input, never as root issue content.
+    A breakdown generates the parent and its immediate children."""
 
     level: Literal["initiative", "epic"]
     repository: str = Field(min_length=3, max_length=200)
@@ -233,7 +247,8 @@ class PlanCreate(PlanSections):
 
 
 class PlanUpdate(PlanSections):
-    """Edit the plan's own sections (its root node's)."""
+    """Edit the inference brief while generation_pending, otherwise the
+    generated root's sections."""
 
     expected_revision: int = Field(ge=1)
 

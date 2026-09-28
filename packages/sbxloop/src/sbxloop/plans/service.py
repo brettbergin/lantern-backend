@@ -220,7 +220,11 @@ class PlanService:
             created_at=now,
             updated_at=now,
         )
-        root = self._with_sections(root, sections, siblings=[])
+        requested = self._with_sections(root, sections, siblings=[])
+        brief = {
+            key: _plain(getattr(requested, key)) for key in SECTIONS if key not in TASK_SECTIONS
+        }
+        root = replace(root, title=f"Unplanned {level}")
         plan = Plan(
             id=plan_id,
             workspace_id=WORKSPACE_ID,
@@ -232,6 +236,7 @@ class PlanService:
             updated_at=now,
             revision=1,
             nodes=(root,),
+            input=brief,
         )
         return self.store.create(
             plan,
@@ -330,6 +335,22 @@ class PlanService:
         self._check_revision(plan, expected_revision)
         self._not_archived(plan)
         node = self._node(plan, node_id)
+        if node.id == plan.root_id and plan.generation_pending:
+            if position is not None:
+                raise PlanRefusal(422, "invalid_argument", "the plan's root has no siblings")
+            requested = self._with_sections(node, plan.input | dict(sections), siblings=[])
+            return self._write(
+                plan,
+                expected_revision,
+                now,
+                input={
+                    key: _plain(getattr(requested, key))
+                    for key in SECTIONS
+                    if key not in TASK_SECTIONS
+                },
+                events=[_node_changed(plan.id, node.id, "input_updated")],
+                actor=actor,
+            )
         if node.state == "published" and sections:
             raise PlanRefusal(
                 409,
@@ -532,6 +553,10 @@ class PlanService:
         self._not_archived(plan)
         node = self._node(plan, node_id)
         self._check_level(plan, node)
+        if plan.generation_pending:
+            raise PlanRefusal(
+                409, "generation_required", "Generate the plan from its brief before publishing it"
+            )
         targets = level_targets(plan, node.id)
         repos = list(dict.fromkeys([node.repository, *(t.repository for t in targets)]))
         for repo in repos:
@@ -789,7 +814,11 @@ class PlanService:
             )
         cap = self._cap(node)
         kept = _kept(plan, node)
-        if not replanned(plan, node) and len(kept) >= cap:
+        if (
+            not replanned(plan, node)
+            and len(kept) >= cap
+            and not (plan.generation_pending and node.id == plan.root_id)
+        ):
             raise PlanRefusal(
                 409,
                 "level_full",
@@ -812,6 +841,8 @@ class PlanService:
         parent = plan.node(node.parent_id) if node.parent_id else None
         cap = self._cap(node)
         return PlanBrief(
+            input=plan.input,
+            generate_root=plan.generation_pending and node.id == plan.root_id,
             mode="replan" if replan else "breakdown",
             current=[_current(child) for child in children] if replan else [],
             plan_id=plan.id,
@@ -1105,7 +1136,27 @@ class PlanService:
                     "re-plan it rather than breaking it down again",
                     node_id=node.id,
                 )
+            if proposal.source_input is not None and (
+                proposal.source_input != plan.input or not plan.generation_pending
+            ):
+                raise PlanRefusal(
+                    409,
+                    "stale_input",
+                    "the planning brief changed during generation; generate again",
+                )
             upsert, remove = self._proposed_children(plan, node, proposal, now)
+            if plan.generation_pending and node.id == plan.root_id:
+                if proposal.root is None:
+                    raise PlanRefusal(
+                        422, "invalid_proposal", "the planner must generate the root from the brief"
+                    )
+                problems = proposal.root.problems()
+                if problems:
+                    raise PlanRefusal(422, "invalid_proposal", "; ".join(problems))
+                generated = self._with_sections(node, proposal.root.model_dump(), siblings=[])
+                upsert.append(
+                    replace(generated, origin="planner", state="proposed", updated_at=now)
+                )
             try:
                 changed = self.store.apply(
                     plan.id,
@@ -2498,6 +2549,7 @@ class PlanService:
         upsert: Sequence[PlanNode] = (),
         remove: Sequence[str] = (),
         archived: bool | None = None,
+        input: dict[str, Any] | None = None,
         events: Sequence[PlanEvent] = (),
         actor: Mapping[str, Any],
     ) -> Plan:
@@ -2509,6 +2561,7 @@ class PlanService:
                 upsert=upsert,
                 remove=remove,
                 archived=archived,
+                input=input,
                 events=events,
                 actor=dict(actor),
             )

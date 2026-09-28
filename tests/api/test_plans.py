@@ -72,7 +72,8 @@ class TestWhoMay:
         assert [p["id"] for p in listed.json()["data"]] == [plan["id"]]
         assert listed.json()["data"][0]["state"] == "draft"
         read = api.client.get(f"/v1/plans/{plan['id']}", headers=reader)
-        assert read.status_code == 200 and read.json()["nodes"][0]["title"] == "Plan the work"
+        assert read.status_code == 200 and read.json()["input"]["title"] == "Plan the work"
+        assert read.json()["nodes"][0]["title"] == "Unplanned initiative"
 
     def test_reading_alone_does_not_draft(self, api: Api) -> None:
         response = api.client.post(
@@ -96,7 +97,8 @@ class TestTheTree:
         plan = _create(api, headers, goal="ship planning", acceptance_criteria=["it works"])
         root = plan["nodes"][0]
         assert root["level"] == "initiative" and root["state"] == "draft"
-        assert root["origin"] == "person" and root["acceptance_criteria"] == ["it works"]
+        assert root["origin"] == "person" and root["acceptance_criteria"] == []
+        assert plan["input"]["acceptance_criteria"] == ["it works"]
         plan = _add(api, headers, plan, root["id"], title="API")
         epic = _node(plan, "API")
         assert epic["level"] == "epic" and epic["repository"] == "o/r"
@@ -113,7 +115,12 @@ class TestTheTree:
         )
         store, routes = _node(plan, "Store"), _node(plan, "Routes")
         assert routes["depends_on"] == [store["id"]]
-        assert [n["title"] for n in plan["nodes"]] == ["Plan the work", "API", "Store", "Routes"]
+        assert [n["title"] for n in plan["nodes"]] == [
+            "Unplanned initiative",
+            "API",
+            "Store",
+            "Routes",
+        ]
         assert plan["rollup"] == {"epics": 1, "tasks": 2, "tasks_closed": 0, "published": 0}
         assert plan["revision"] == 4
 
@@ -228,7 +235,7 @@ class TestRevisions:
         assert stale.json()["code"] == "stale_revision"
         assert stale.json()["current_revision"] == plan["revision"] + 1
         assert (
-            api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()["nodes"][0]["goal"]
+            api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()["input"]["goal"]
             == "one"
         )
 
@@ -265,6 +272,8 @@ class TestStates:
         current = api.ctx.plans.get(plan_id)
         node = current.node(node_id)
         assert node is not None
+        if node.id == current.root_id and changes.get("state") == "published" and current.input:
+            node = replace(node, **current.input, origin="planner")
         edited: PlanNode = replace(node, **changes)
         api.ctx.plans.store.apply(
             plan_id, expected_revision=current.revision, now=api.clock(), upsert=[edited]
@@ -489,7 +498,7 @@ class TestBreakdown:
         assert body["created"] is True
         item = body["item"]
         assert item["kind"] == "plan" and item["state"] == "queued"
-        assert item["title"] == "Propose the epics of “Ship reports”"
+        assert item["title"] == "Generate the initiative and its epics from “Ship reports”"
         assert item["origin"]["kind"] == "api" and item["origin"]["repository"] == "o/r"
         assert item["run_id"] is None, "a run id is minted when the item is dispatched"
         assert body["operation"]["action"] == "item.admit"
@@ -575,9 +584,10 @@ class TestBreakdown:
 
     def test_a_full_level_and_a_stale_revision_are_refused(self, api: Api) -> None:
         from sbxloop.config import PlanningConfig
+        from tests.api.test_plans_publish import _create as generated_plan
 
         headers = api.bearer(DRAFT)
-        plan = _create(api, headers, level="epic", title="An epic")
+        plan = generated_plan(api, headers, level="epic", title="An epic")
         plan = _add(api, headers, plan, plan["root_id"], title="Only", kind="code")
         stale = api.client.post(
             f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/breakdown",
