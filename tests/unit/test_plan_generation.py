@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,22 @@ from tests.fakes.fake_github import FakeGithub
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_daemon_loop import FakeSource
 from tests.unit.test_engine import Harness
-from tests.unit.test_engine_plan import READY, answer, asks, code_task, question, workload_task
+from tests.unit.test_engine_plan import READY, asks, code_task, question, workload_task
+
+
+def answer(*children: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "json": {
+            "root": {
+                "title": "Export reports",
+                "goal": "Download reports as CSV",
+                "context": "The reports module handles exports",
+                "acceptance_criteria": ["Reports export as CSV"],
+            },
+            "children": list(children),
+        }
+    }
+
 
 REPO = "o/app"
 PERSON = {"kind": "client", "id": "c1", "display": "Pat", "via": "api"}
@@ -160,12 +176,17 @@ def test_a_breakdown_runs_in_the_sandbox_and_lands_in_the_plan(harness: Harness)
     assert item is not None and item.state == "done" and item.run_id is not None
     run = world.store.get_run(item.run_id)
     assert run.kind == "plan" and run.state == "completed"
-    assert run.outcome.startswith("Propose the tasks of “Export reports”\n\nCSV only")
+    assert run.outcome.startswith(
+        "Generate the epic and its tasks from “Export reports”\n\nCSV only"
+    )
     assert [p.sink for p in run.published] == ["plan"]
     # The level under the epic: the person's task stays, the old proposal
     # is gone, the planner's three are proposed with their links mapped.
     plan = world.plans.get(world.plan_id)
     assert plan.revision == world.revision + 1, "one write, one revision"
+    assert plan.root.origin == "planner" and plan.root.state == "proposed"
+    assert not plan.generation_pending and plan.input["title"] == "Export reports"
+    assert plan.root.goal and plan.root.context and plan.root.acceptance_criteria
     assert plan.node(world.epic_id).generation is None, "a ready planner asked nothing"
     children = plan.children(world.epic_id)
     assert [c.title for c in children] == ["Person's task", "Task c1", "Task c2", "Survey c3"]
@@ -527,6 +548,12 @@ def _published_epic(world: World, fake: FakeGithub) -> tuple[str, str, int]:
             now=11.0,
             actor=PERSON,
         )
+    plan = world.plans.store.apply(
+        plan.id,
+        expected_revision=plan.revision,
+        now=11.5,
+        upsert=[replace(plan.root, **plan.input, origin="planner")],
+    )
     plan = world.plans.approve(
         plan.id,
         plan.root_id,

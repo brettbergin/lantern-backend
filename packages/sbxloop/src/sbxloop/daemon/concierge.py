@@ -3543,7 +3543,7 @@ def _same_draft(
         if (
             plan.created_by == created_by
             and root.repository.casefold() == repository.casefold()
-            and root.title.casefold() == title.casefold()
+            and str(plan.input.get("title", root.title)).casefold() == title.casefold()
         ):
             return plan
     return None
@@ -3555,7 +3555,8 @@ def _plan_link(plan: Plan) -> str:
     from a message as its plan screen — so the path, not an absolute URL
     the daemon has no configured origin for."""
     root = plan.root
-    title = root.title.replace("[", "(").replace("]", ")")
+    title = str(plan.input.get("title", root.title) if plan.generation_pending else root.title)
+    title = title.replace("[", "(").replace("]", ")")
     return (
         f"{root.level} `{plan.id}` in {root.repository}: "
         f"[{title}](/plans/{quote(plan.id, safe='')})"

@@ -248,6 +248,7 @@ def _plan(row: PlanRow, nodes: Iterable[PlanNodeRow]) -> Plan:
         updated_at=float(row.updated_at),
         revision=int(row.revision),
         nodes=_ordered(str(row.root_node_id), (_node(n) for n in nodes)),
+        input=json.loads(row.input_json),
         reconciled_at=None if row.reconciled_at is None else float(row.reconciled_at),
         reconcile_error=row.reconcile_error,
     )
@@ -321,6 +322,7 @@ class PlanStore:
                     plan_id=plan.id,
                     workspace_id=plan.workspace_id,
                     root_node_id=plan.root_id,
+                    input_json=json.dumps(plan.input),
                     state="archived" if plan.archived else "active",
                     created_by=plan.created_by,
                     created_by_display=plan.created_by_display,
@@ -349,6 +351,7 @@ class PlanStore:
         events: Sequence[PlanEvent] = (),
         actor: dict[str, Any] | None = None,
         reconciled: Reconciled | None = None,
+        input: dict[str, Any] | None = None,
     ) -> Plan:
         """Write one change to a plan, against the revision the caller
         read; the plan as it now is. ``reconciled`` records the forge read
@@ -375,6 +378,8 @@ class PlanStore:
                         setattr(existing, key, value)
             if archived is not None:
                 row.state = "archived" if archived else "active"
+            if input is not None:
+                row.input_json = json.dumps(input)
             if reconciled is not None:
                 _stamp(row, reconciled)
             row.revision = int(row.revision) + 1

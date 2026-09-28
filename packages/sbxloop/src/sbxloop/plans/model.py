@@ -223,6 +223,12 @@ class Plan:
     #: last attempt (or part of it), if anything.
     reconciled_at: float | None = None
     reconcile_error: str | None = None
+    #: The person's planning brief, separate from every issue's content.
+    input: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def generation_pending(self) -> bool:
+        return bool(self.input) and self.root.origin == "person" and self.root.state != "published"
 
     @property
     def root(self) -> PlanNode:

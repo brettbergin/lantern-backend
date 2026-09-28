@@ -757,6 +757,25 @@ published plan archives it (its issues stay) rather than deleting it. Every
 summary carries a `rollup`: epics, tasks, tasks the forge has closed, and
 published nodes.
 
+With `planning.generated_root`, `POST /v1/plans` treats every form section
+as an inference brief. The plan detail exposes that brief as `input` and
+`generation_pending: true`; its root is an unplanned placeholder containing
+none of the person's prose. The summary uses the brief's title until the
+planner authors an issue title. Editing the pending root updates `input`,
+not issue content. Breaking it down uses the brief, repository and existing
+clarification answers to generate both the root and its immediate children
+atomically as `proposed` nodes. Subsequent breakdowns preserve the reviewed
+parent and generate the next level. The original input stays available as
+context when an initiative's epics are expanded into tasks.
+
+Publishing while `generation_pending` is true refuses with
+`409 generation_required`. A brief changed during inference refuses delivery
+with `stale_input`, including when a run resumes after saving its output.
+The user can generate again against the new brief. On upgrade, existing
+unpublished, person-authored roots move into `input`, retaining their trees
+and requiring generation before publishing; published and archived content
+is preserved.
+
 Every mutation names the plan's `revision` it read as `expected_revision`;
 any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
 says that before anyone types: `planning: {hierarchy, reason}`, where

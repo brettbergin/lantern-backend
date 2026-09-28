@@ -564,6 +564,7 @@ class PlanRow(Base):
     # the last attempt, if anything. Neither bumps the revision.
     reconciled_at: Mapped[float | None] = mapped_column(REAL)
     reconcile_error: Mapped[str | None] = mapped_column(Text)
+    input_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
 
 
 class PlanNodeRow(Base):

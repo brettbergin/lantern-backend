@@ -6407,7 +6407,7 @@
       },
       "PlanCreate": {
         "additionalProperties": false,
-        "description": "A new draft plan from the form: an initiative (its home repository)\nor a lone epic (the repository it targets).",
+        "description": "A planning brief for inference: an initiative or a lone epic.\nSections are stored in the plan's input, never as root issue content.\nA breakdown generates the parent and its immediate children.",
         "properties": {
           "acceptance_criteria": {
             "anyOf": [
@@ -6773,6 +6773,48 @@
           "asked_at"
         ],
         "title": "PlanGenerationOut",
+        "type": "object"
+      },
+      "PlanInput": {
+        "additionalProperties": false,
+        "description": "A person's requirements for inference, separate from generated issue content.",
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "constraints": {
+            "default": "",
+            "title": "Constraints",
+            "type": "string"
+          },
+          "context": {
+            "default": "",
+            "title": "Context",
+            "type": "string"
+          },
+          "goal": {
+            "default": "",
+            "title": "Goal",
+            "type": "string"
+          },
+          "non_goals": {
+            "default": "",
+            "title": "Non Goals",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "PlanInput",
         "type": "object"
       },
       "PlanNodeCreate": {
@@ -7344,9 +7386,24 @@
             "title": "Drift",
             "type": "integer"
           },
+          "generation_pending": {
+            "default": false,
+            "title": "Generation Pending",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "level": {
             "enum": [
@@ -8048,7 +8105,7 @@
       },
       "PlanUpdate": {
         "additionalProperties": false,
-        "description": "Edit the plan's own sections (its root node's).",
+        "description": "Edit the inference brief while generation_pending, otherwise the\ngenerated root's sections.",
         "properties": {
           "acceptance_criteria": {
             "anyOf": [

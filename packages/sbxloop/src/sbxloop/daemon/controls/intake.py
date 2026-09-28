@@ -325,8 +325,7 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     its repository, a breakdown's level must have room — and against a
     breakdown of it already queued or running. A node on the forge with
     children there is re-planned: its run proposes a diff (#2346)."""
-    from sbxloop.plans.model import child_level
-    from sbxloop.plans.service import PlanRefusal, PlanService, replanned
+    from sbxloop.plans.service import PlanRefusal, PlanService
     from sbxloop.plans.store import PlanStore
 
     service = PlanService(PlanStore(loop.dstore), lambda: loop.config)
@@ -349,15 +348,10 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
             plan_code="generation_in_progress",
             item=active[0].item_id,
         )
-    level = child_level(node.level)
-    noun = "epics" if level == "epic" else "tasks"
     return WorkItem(
         item_id=item_id,
         source_key=item_id.partition(":")[2],
-        title=_title(
-            f"{'Re-plan' if replanned(plan, node) else 'Propose'} the {noun} of “{node.title}”",
-            "plan",
-        ),
+        title=_title(service.brief(plan.id, node.id).task_title(), "plan"),
         body=request.note.strip(),
         kind="plan",
         repo=node.repository,
