@@ -1,8 +1,12 @@
-# Keep a `sbxloop daemon` current from PyPI, without ever restarting it
+# Keep a `sbxloop daemon` current from its GitHub Releases, without ever
+# restarting it
 # under a live run. Copy to .github/workflows/deploy-daemon.yml in the
 # repository that owns the daemon host; docs/deploy.md walks through it.
 #
-# What it does, in order: take a named pause hold on the daemon; wait —
+# What it does, in order: fetch the target release's wheels and the
+# installed one's (for a rollback), each checked against its release
+# manifest by the installed sbxloop — never installed by name from a package
+# index; take a named pause hold on the daemon; wait —
 # with no cap short of the job timeout — until nothing is running; install
 # the exact version; snapshot the operator's holds; restart the unit;
 # health-check it (unit active, version matches, `sbxloop doctor`, the
@@ -19,7 +23,8 @@
 #
 # Two settings: the repository variable SBXLOOP_DEPLOY_HOST is the runner
 # label (register the runner with `--labels <that>`) and the name notices
-# call the host; the `schedule` below is how often the host checks PyPI.
+# call the host; the `schedule` below is how often the host checks for a
+# new release.
 #
 # A THIRD ONLY IF THE HOME MOVED: the home defaults to $HOME/.sbxloop, and
 # an operator who installed under a custom SBXLOOP_HOME has two ways to
@@ -43,7 +48,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to deploy (X.Y.Z). Blank = latest on PyPI."
+        description: "Version to deploy (X.Y.Z). Blank = latest GitHub Release."
         required: false
         default: ""
 
@@ -124,7 +129,8 @@ jobs:
           if [ -n "${INPUT_VERSION}" ]; then
             version="${INPUT_VERSION#v}"
           else
-            version="$(curl -fsSL https://pypi.org/pypi/sbxloop/json | jq -r .info.version)"
+            # The installed sbxloop knows where its releases are published.
+            version="$("${VENV_PYTHON}" -m sbxloop.releases latest)"
           fi
           [ -n "${version}" ] || { echo "::error::could not resolve a version to deploy"; exit 1; }
           echo "version=${version}" >> "$GITHUB_OUTPUT"
@@ -149,6 +155,23 @@ jobs:
           set -euo pipefail
           # Detect existing login or host failures before changing the install.
           "${SBXLOOP}" doctor
+
+      - name: Fetch the release wheels
+        id: wheels
+        if: steps.installed.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+          PREV: ${{ steps.installed.outputs.current }}
+        run: |
+          set -euo pipefail
+          # Before anything changes, and with the sbxloop that is known to
+          # work: the target's wheels and the installed version's, so a
+          # rollback needs no network. Each set is checked against its
+          # release-manifest.json. No rollback wheels, no upgrade.
+          dist="$(mktemp -d)"
+          echo "dist=${dist}" >> "$GITHUB_OUTPUT"
+          "${VENV_PYTHON}" -m sbxloop.releases download "${VERSION}" "${dist}/${VERSION}"
+          "${VENV_PYTHON}" -m sbxloop.releases download "${PREV}" "${dist}/${PREV}"
 
       - name: Take the deploy hold
         id: hold
@@ -227,15 +250,18 @@ jobs:
         if: steps.installed.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.target.outputs.version }}
+          DIST: ${{ steps.wheels.outputs.dist }}
         run: |
           set -euo pipefail
           # A snapshot first (config, secrets, units, the state database), then both
-          # packages pinned to the same version; both chat extras so
-          # switching [chat] backend on the host is a config change. Then
-          # init, idempotent: it refreshes the launchers and units.
+          # release wheels together (the local worker wheel satisfies the host
+          # wheel's exact pin); both chat extras so switching [chat] backend
+          # on the host is a config change. Then init, idempotent: it
+          # refreshes the launchers and units.
           "${SBXLOOP}" backup --label "deploy-${VERSION//./-}"
           "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
-            "sbxloop[discord,slack]==${VERSION}" "sbxloop-worker==${VERSION}"
+            "${DIST}/${VERSION}/sbxloop_worker-${VERSION}-py3-none-any.whl" \
+            "${DIST}/${VERSION}/sbxloop-${VERSION}-py3-none-any.whl[discord,slack]"
           "${VENV_SBXLOOP}" --version
           # Keep the operator's sbx runtime, even when its version differs
           # from this sbxloop release's default.
@@ -280,13 +306,17 @@ jobs:
         if: failure() && steps.installed.outputs.changed == 'true' && steps.upgrade.outcome != 'skipped'
         env:
           PREV: ${{ steps.installed.outputs.current }}
+          DIST: ${{ steps.wheels.outputs.dist }}
         run: |
           set -euo pipefail
           echo "restored=false" >> "$GITHUB_OUTPUT"
           echo "::error::deploy failed — rolling back to ${PREV}"
-          # The same extras as the upgrade: dropping one rolls a host on
-          # that backend back to a build that cannot start.
-          "${UV}" pip install --python "${VENV_PYTHON}" --upgrade "sbxloop[discord,slack]==${PREV}" "sbxloop-worker==${PREV}"
+          # The wheels fetched and checked before the upgrade. The same
+          # extras as the upgrade: dropping one rolls a host on that backend
+          # back to a build that cannot start.
+          "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
+            "${DIST}/${PREV}/sbxloop_worker-${PREV}-py3-none-any.whl" \
+            "${DIST}/${PREV}/sbxloop-${PREV}-py3-none-any.whl[discord,slack]"
           "${SBXLOOP}" init --systemd --no-sbx || true
           systemctl --user reset-failed "${UNIT}" || true
           timeout 300 systemctl --user restart "${UNIT}"
@@ -311,6 +341,10 @@ jobs:
           set -euo pipefail
           "${SBXLOOP}" daemon ctl resume --hold "${HOLD}" --timeout 60 \
             || echo "::warning::could not release hold ${HOLD}"
+
+      - name: Clean up the downloaded wheels
+        if: always() && steps.wheels.outputs.dist != ''
+        run: rm -rf -- "${{ steps.wheels.outputs.dist }}"
 
       - name: Report
         if: always() && steps.installed.outputs.changed == 'true'

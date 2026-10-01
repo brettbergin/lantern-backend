@@ -107,6 +107,41 @@ def test_release_wheels_use_the_digest_checked_asset_endpoint(deploy: str) -> No
     assert "gh release download" not in fetch
 
 
+def test_rollback_fetches_the_previous_release_wheels(deploy: str) -> None:
+    """The previous version comes from its own GitHub Release, through the
+    same digest- and manifest-checked helper as the upgrade."""
+    rollback = _step(deploy, "Roll back")
+    assert rollback.count('GH_TOKEN="${ACTIONS_TOKEN}" VERSION="${PREV}" DIST="${prev_dist}"') == 2
+    assert '"${PIPELINE}" download-wheels' in rollback
+    assert '"${PIPELINE}" verify-download' in rollback
+    assert "${prev_dist}/sbxloop_worker-${PREV}-py3-none-any.whl" in rollback
+    steps = {s["name"]: s for s in yaml.safe_load(deploy)["jobs"]["deploy"]["steps"]}
+    # The Actions token reaches the helper only; host commands keep their own.
+    assert steps["Roll back"]["env"]["ACTIONS_TOKEN"] == "${{ github.token }}"
+    assert "GH_TOKEN" not in steps["Roll back"]["env"]
+
+
+def test_the_example_fetches_both_releases_before_the_hold(example: str) -> None:
+    fetch = _step(example, "Fetch the release wheels")
+    assert '-m sbxloop.releases download "${VERSION}"' in fetch
+    assert '-m sbxloop.releases download "${PREV}"' in fetch
+    assert example.index("name: Fetch the release wheels") < example.index(
+        "name: Take the deploy hold"
+    )
+    assert "${DIST}/${PREV}/sbxloop_worker-${PREV}-py3-none-any.whl" in _step(example, "Roll back")
+
+
+@pytest.mark.parametrize("fixture", ["deploy", "example"])
+def test_our_packages_are_never_installed_by_name(
+    fixture: str, request: pytest.FixtureRequest
+) -> None:
+    """Only release wheel files: the names a rename moves to are not ours on
+    any package index, so a by-name install could fetch someone else's code."""
+    text = request.getfixturevalue(fixture)
+    assert not re.search(r"""["']sbxloop(?:-worker)?(?:\[[\w,]*\])?==""", text)
+    assert "pypi.org" not in text
+
+
 @pytest.mark.parametrize("fixture", ["deploy", "example"])
 class TestAuthenticationOutage:
     def test_preflight_precedes_any_hold_or_upgrade(
@@ -130,7 +165,7 @@ class TestAuthenticationOutage:
         text = request.getfixturevalue(fixture)
         rollback = _step(text, "Roll back")
         script = textwrap.dedent(rollback.split("        run: |\n", 1)[1])
-        for command in ("sbxloop", "uv", "systemctl", "sleep"):
+        for command in ("sbxloop", "uv", "systemctl", "sleep", "python"):
             path = tmp_path / command
             path.write_text(
                 "#!/bin/sh\n"
@@ -149,7 +184,10 @@ class TestAuthenticationOutage:
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
             "SBXLOOP": str(tmp_path / "sbxloop"),
             "VENV_SBXLOOP": str(tmp_path / "sbxloop"),
-            "VENV_PYTHON": "unused",
+            "VENV_PYTHON": str(tmp_path / "python"),
+            "PIPELINE": "release_pipeline.py",
+            "ACTIONS_TOKEN": "actions-token",
+            "DIST": str(tmp_path / "dist"),
             "UV": str(tmp_path / "uv"),
             "PREV": "1.5.51",
             "UNIT": "test-daemon",
@@ -534,7 +572,7 @@ class TestHostAgnostic:
         assert not re.search(r"\bdb\b", example)
         assert "|| 'db'" not in example
         assert 'runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST }}"]' in example
-        assert "pypi.org/pypi/sbxloop/json" in _step(example, "Resolve the target version")
+        assert "-m sbxloop.releases latest" in _step(example, "Resolve the target version")
 
 
 class TestDocsSplit:
@@ -565,8 +603,9 @@ class TestDocsSplit:
     def test_systemd_upgrade_section_leads_with_the_manual_path(self, systemd_readme: str) -> None:
         section = systemd_readme.split("## Upgrading", 1)[1].split("\n## ", 1)[0]
         first_fence = section.split("```bash", 1)[1].split("```", 1)[0]
-        assert "pip install --python ~/.sbxloop/venv/bin/python" in first_fence
-        assert "--upgrade 'sbxloop[discord,slack]==X.Y.Z'" in first_fence
+        # The release's own wheels, checked — never a by-name index install.
+        assert "sbxloop init --no-sbx --version X.Y.Z" in first_fence
+        assert "pip install" not in first_fence and "==X.Y.Z" not in first_fence
         assert "sbxloop backup" in first_fence
         assert "sbxloop init --systemd --no-sbx" in first_fence
         assert "ctl status --json" in first_fence

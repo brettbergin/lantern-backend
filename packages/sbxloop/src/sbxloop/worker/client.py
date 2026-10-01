@@ -391,8 +391,10 @@ class WorkerClient:
            the right interpreter either way.
 
         ``no_deps``/``system_site_packages`` are test seams for hermetic
-        installs; production uses full dependency resolution (PyPI is
-        reachable under the balanced network policy).
+        installs; production uses full dependency resolution of the worker
+        wheel's third-party dependencies (PyPI is reachable under the
+        balanced network policy). The worker itself is always this host's
+        wheel, never fetched by name.
 
         ``ensure_dev_tools`` additionally makes the sandbox dev-ready for
         the AGENT's own work (see _ensure_dev_tools) — the engine sets it
@@ -438,13 +440,18 @@ class WorkerClient:
             self._ensure_apt_packages(apt_packages, timeout)
             self._ensure_search_fallback(timeout)
         wheel = wheel if wheel is not None else resolve_worker_wheel()
-        if wheel is not None:
-            staged = f"{STAGED_WHEEL_DIR}/{wheel.name}"
-            self.sandbox.cp_in(wheel, staged)
-            base_target = staged
-        else:
-            base_target = f"sbxloop-worker=={sbxloop.__version__}"
-        target = f"{base_target}[{extras}]" if extras else base_target
+        if wheel is None:
+            # Never `sbxloop-worker==X` from an index: the worker only ever
+            # comes from this host's own release wheel (sbxloop.releases).
+            raise WorkerError(
+                f"no sbxloop-worker {sbxloop.__version__} wheel on this host to install "
+                "into the sandbox; the installed sbxloop is missing its vendored worker "
+                "wheel — reinstall it from its GitHub Release (`sbxloop update` or the "
+                "install script)"
+            )
+        staged = f"{STAGED_WHEEL_DIR}/{wheel.name}"
+        self.sandbox.cp_in(wheel, staged)
+        target = f"{staged}[{extras}]" if extras else staged
 
         if self._create_venv(timeout, system_site_packages):
             self.python = DEFAULT_PYTHON

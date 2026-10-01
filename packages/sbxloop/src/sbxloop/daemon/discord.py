@@ -46,6 +46,7 @@ from sbxloop.daemon.discord_format import (
 from sbxloop.daemon.store import ChatThread, DaemonStore
 from sbxloop.errors import DaemonError
 from sbxloop.log import get_logger
+from sbxloop.releases import extra_install_hint
 
 log = get_logger(__name__)
 
@@ -53,8 +54,8 @@ log = get_logger(__name__)
 #: ``build_bridge`` read; the spelling lives in one place.
 TOKEN_ENV = DISCORD_TOKEN_ENV
 INSTALL_HINT = (
-    "discord.py is not installed on this host — install it with "
-    "`pip install 'sbxloop[discord]'` to enable the daemon's Discord bridge"
+    "discord.py is not installed on this host — "
+    f"{extra_install_hint('discord', 'discord.py')} to enable the daemon's Discord bridge"
 )
 
 # Re-exported for callers/tests that import the formatting names from here.

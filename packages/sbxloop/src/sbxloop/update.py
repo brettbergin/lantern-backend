@@ -1,14 +1,18 @@
 """Explicit updates of the installation owned by ``sbxloop init``.
 
-The daemon's PyPI lookup is reused, but an unavailable or invalid answer
-here is an error. Only the running home's venv can be changed: a checkout,
-pipx tool or externally managed environment belongs to its own installer.
+The daemon's GitHub Releases lookup is reused, but an unavailable or invalid
+answer here is an error. The new release is installed from its own wheel
+files, downloaded from the GitHub Release and checked against its manifest —
+never by name from a package index (:mod:`sbxloop.releases`). Only the
+running home's venv can be changed: a checkout, pipx tool or externally
+managed environment belongs to its own installer.
 """
 
 from __future__ import annotations
 
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -18,6 +22,7 @@ from pathlib import Path
 from packaging.version import InvalidVersion, Version
 
 import sbxloop
+from sbxloop import releases
 from sbxloop.daemon import versions
 from sbxloop.errors import SbxloopError
 from sbxloop.homeinit import INSTALL_EXTRAS
@@ -71,7 +76,7 @@ def _require_home_install(home: SbxloopHome) -> None:
             raise UpdateError(f"missing {path}; repair the home with `sbxloop init`")
 
 
-def _install_spec(latest: Version) -> list[str]:
+def _install_extras() -> str:
     extras = INSTALL_EXTRAS.split(",")
     # init supplies both chat bridges. Retain the optional host SDK too when
     # present, so resolving the new release also honours its SDK constraint.
@@ -81,7 +86,7 @@ def _install_spec(latest: Version) -> list[str]:
         pass
     else:
         extras.append("copilot")
-    return [f"sbxloop[{','.join(extras)}]=={latest}", f"sbxloop-worker=={latest}"]
+    return ",".join(extras)
 
 
 def update_home(
@@ -91,22 +96,26 @@ def update_home(
     dry_run: bool = False,
     say: Callable[[str], None],
     run: Runner | None = None,
+    fetch: releases.Fetcher | None = None,
 ) -> None:
-    """Check PyPI, then install and verify a newer release in this home.
+    """Check GitHub Releases, then install and verify a newer release in this home.
 
     ``--check`` works from any installation; ``--dry-run`` validates the
     destination and prints the same argv an update would execute. Neither
-    runs an installer. Running daemons are left for the operator to restart.
+    downloads a wheel or runs an installer. Running daemons are left for the
+    operator to restart.
     """
     current = _version(sbxloop.__version__, "installed")
     say(f"Installed sbxloop: {current}")
     newest = versions.fetch_latest("sbxloop")
     if newest is None:
-        raise UpdateError("could not check PyPI for the latest sbxloop release; try again later")
-    latest = _version(newest, "PyPI")
+        raise UpdateError(
+            "could not check GitHub Releases for the latest sbxloop release; try again later"
+        )
+    latest = _version(newest, "released")
     if latest.is_prerelease or latest.local is not None:
-        raise UpdateError(f"PyPI did not report a stable release: {latest}")
-    say(f"Latest sbxloop on PyPI: {latest}")
+        raise UpdateError(f"GitHub Releases did not report a stable release: {latest}")
+    say(f"Latest sbxloop release: {latest}")
     if current.is_devrelease or current.local is not None:
         message = "development build; use the checkout's installer to update it"
         if check:
@@ -124,6 +133,12 @@ def update_home(
     if check:
         return
     _require_home_install(home)
+    try:
+        version = releases.stable_version(str(latest))
+    except releases.ReleaseError as exc:
+        raise UpdateError(str(exc)) from exc
+    directory = home.tmp / f"release-v{version}"
+    wheels = releases.wheel_paths(version, directory)
     argv = [
         str(home.uv),
         "--no-config",
@@ -131,12 +146,19 @@ def update_home(
         "install",
         "--python",
         str(home.venv_python),
-        *_install_spec(latest),
+        *wheels.requirements(_install_extras()),
     ]
     if dry_run:
+        say(f"Would download {releases.download_url(version, wheels.host.name)} and its worker")
         say(f"Would run: {shlex.join(argv)}")
         return
     run = run or _run
+    say(f"Downloading sbxloop {version} from GitHub Releases...")
+    try:
+        releases.download_wheels(version, directory, fetch=fetch or releases.fetch_file)
+    except releases.ReleaseError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise UpdateError(str(exc)) from exc
     say(f"Updating {home.venv} to sbxloop {latest}...")
     step = "installation"
     try:
@@ -153,6 +175,8 @@ def update_home(
         raise UpdateError(f"{step} timed out; check the installation before retrying") from exc
     except OSError as exc:
         raise UpdateError(f"{step} could not run: {exc}") from exc
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
     try:
         installed = json.loads(result.stdout)
     except ValueError as exc:

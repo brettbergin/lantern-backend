@@ -1,7 +1,9 @@
-"""The explicit self-update command never upgrades a different installation."""
+"""The explicit self-update command never upgrades a different installation,
+and installs our packages only from their GitHub Release wheel files."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -13,7 +15,7 @@ import pytest
 from typer.testing import CliRunner
 
 import sbxloop
-from sbxloop import update
+from sbxloop import releases, update
 from sbxloop.cli.app import app
 from sbxloop.daemon import versions
 from sbxloop.paths import SbxloopHome
@@ -31,6 +33,34 @@ def test_check_reports_installed_and_available_versions(monkeypatch: pytest.Monk
     assert "available" in result.output
 
 
+class FakeFetch:
+    """GitHub Releases, served from memory: a manifest and both wheels."""
+
+    def __init__(self, version: str = "1.2.10") -> None:
+        self.urls: list[str] = []
+        self.files = {
+            releases.wheel_name("sbxloop", version): b"host wheel",
+            releases.wheel_name("sbxloop-worker", version): b"worker wheel",
+        }
+        self.manifest: dict[str, object] = {
+            "schema": 1,
+            "version": version,
+            "sha": "a" * 40,
+            "files": {name: hashlib.sha256(data).hexdigest() for name, data in self.files.items()},
+        }
+        self.failure: Exception | None = None
+
+    def __call__(self, url: str, target: Path) -> None:
+        self.urls.append(url)
+        if self.failure is not None:
+            raise self.failure
+        name = url.rsplit("/", 1)[1]
+        if name == releases.MANIFEST:
+            target.write_text(json.dumps(self.manifest))
+        else:
+            target.write_bytes(self.files[name])
+
+
 class FakeRun:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -46,8 +76,15 @@ class FakeRun:
 
 
 @pytest.fixture
+def fetch(monkeypatch: pytest.MonkeyPatch) -> FakeFetch:
+    fake = FakeFetch()
+    monkeypatch.setattr(releases, "fetch_file", fake)
+    return fake
+
+
+@pytest.fixture
 def installation(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch, fetch: FakeFetch
 ) -> tuple[SbxloopHome, FakeRun]:
     home = SbxloopHome(isolated_home / ".sbxloop")
     home.venv_python.parent.mkdir(parents=True)
@@ -77,6 +114,7 @@ def test_update_installs_exact_pair_and_verifies_before_recording(
     before = home.read_record()
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
+    wheels = home.tmp / "release-v1.2.10"
     assert run.calls == [
         [
             str(home.uv),
@@ -85,11 +123,12 @@ def test_update_installs_exact_pair_and_verifies_before_recording(
             "install",
             "--python",
             str(home.venv_python),
-            "sbxloop[discord,slack]==1.2.10",
-            "sbxloop-worker==1.2.10",
+            str(wheels / "sbxloop_worker-1.2.10-py3-none-any.whl"),
+            f"{wheels / 'sbxloop-1.2.10-py3-none-any.whl'}[discord,slack]",
         ],
         [str(home.venv_python), "-I", "-c", update.VERIFY_SCRIPT],
     ]
+    assert not wheels.exists()  # the downloaded files do not outlive the update
     record = home.read_record()
     assert before is not None and record is not None
     assert record.sbxloop_version == "1.2.10"
@@ -101,21 +140,70 @@ def test_update_installs_exact_pair_and_verifies_before_recording(
     assert "Restart any running daemon when idle" in result.output
 
 
+def test_our_packages_come_from_the_release_never_by_name_from_an_index(
+    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch
+) -> None:
+    _, run = installation
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 0, result.output
+    base = "https://github.com/brettbergin/sbxloop/releases/download/v1.2.10/"
+    assert fetch.urls == [
+        base + "release-manifest.json",
+        base + "sbxloop_worker-1.2.10-py3-none-any.whl",
+        base + "sbxloop-1.2.10-py3-none-any.whl",
+    ]
+    install = run.calls[0]
+    assert not any("==" in word for word in install)
+    assert all(word.startswith(("/", "-")) or word in ("pip", "install") for word in install[1:])
+
+
+@pytest.mark.parametrize(
+    ("tamper", "message"),
+    [
+        ("wheel", "does not match the SHA-256"),
+        ("version", "not the manifest of v1.2.10"),
+        ("missing", "has no SHA-256"),
+        ("download", "could not download"),
+    ],
+)
+def test_unverified_wheels_are_never_installed(
+    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch, tamper: str, message: str
+) -> None:
+    home, run = installation
+    record = home.record.read_bytes()
+    if tamper == "wheel":
+        fetch.files["sbxloop-1.2.10-py3-none-any.whl"] = b"something else"
+    elif tamper == "version":
+        fetch.manifest["version"] = "1.2.9"
+    elif tamper == "missing":
+        fetch.manifest["files"] = {}
+    else:
+        fetch.failure = OSError("HTTP Error 404: Not Found")
+    result = runner.invoke(app, ["update"])
+    assert result.exit_code == 1, result.output
+    assert message in result.output
+    assert not run.calls
+    assert home.record.read_bytes() == record
+    assert not (home.tmp / "release-v1.2.10").exists()
+
+
 @pytest.mark.parametrize("flag", ["--check", "--dry-run"])
 def test_previews_never_install_or_change_the_record(
-    installation: tuple[SbxloopHome, FakeRun], flag: str
+    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch, flag: str
 ) -> None:
     home, run = installation
     record = home.record.read_bytes()
     result = runner.invoke(app, ["update", flag])
     assert result.exit_code == 0, result.output
     assert not run.calls
+    assert not fetch.urls  # nothing downloaded either
     assert home.record.read_bytes() == record
     assert "Update available" in result.output
     if flag == "--dry-run":
         assert "Would run:" in result.output
-        assert "sbxloop[discord,slack]==1.2.10" in result.output
-        assert "sbxloop-worker==1.2.10" in result.output
+        assert "sbxloop_worker-1.2.10-py3-none-any.whl" in result.output
+        assert "sbxloop-1.2.10-py3-none-any.whl[discord,slack]" in result.output
+        assert "==" not in result.output
 
 
 @pytest.mark.parametrize(
@@ -183,7 +271,8 @@ def test_missing_or_invalid_release_never_installs(
     monkeypatch.setattr(versions, "fetch_latest", lambda _name: latest)
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 1, result.output
-    assert "PyPI" in result.output
+    assert "release" in result.output
+    assert "PyPI" not in result.output
     assert not run.calls
     assert home.record.read_bytes() == record
 
@@ -243,7 +332,7 @@ def test_optional_host_sdk_is_preserved(
     monkeypatch.setattr(update.metadata, "version", lambda _name: "1.0.0")
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
-    assert "sbxloop[discord,slack,copilot]==1.2.10" in run.calls[0]
+    assert run.calls[0][-1].endswith("sbxloop-1.2.10-py3-none-any.whl[discord,slack,copilot]")
 
 
 @pytest.mark.parametrize(
@@ -304,7 +393,7 @@ def test_conflicting_flags_fail_before_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def unexpected(_name: str) -> str:
-        pytest.fail("should validate options before checking PyPI")
+        pytest.fail("should validate options before checking GitHub Releases")
 
     monkeypatch.setattr(versions, "fetch_latest", unexpected)
     result = runner.invoke(app, ["update", "--check", "--dry-run"])
@@ -320,7 +409,7 @@ def test_runner_is_bounded_and_does_not_use_a_shell(monkeypatch: pytest.MonkeyPa
         return subprocess.CompletedProcess(argv, 0, json.dumps(["1.2.10", "1.2.10"]), "")
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess)
-    update._run(["/home/operator space/.sbxloop/bin/uv", "pip", "install", "sbxloop==1.2.10"])
+    update._run(["/home/operator space/.sbxloop/bin/uv", "pip", "install", "/tmp/x.whl"])
     assert len(calls) == 1
     argv, options = calls[0]
     assert argv[0] == "/home/operator space/.sbxloop/bin/uv"

@@ -8,9 +8,11 @@ One idempotent command builds everything a host needs under the home
    the home they live in, exporting no secrets;
 3. the interpreter: ``uv`` in ``bin/``, a uv-managed CPython under
    ``python/``, and ``venv/`` with ``sbxloop[discord,slack]`` and the
-   worker pinned to this exact version (skipped when init already runs
-   from that venv) — every uv command pointed at the home's own
-   directories, never the ones the invoking user's environment names;
+   worker at this exact version, both from the release's own wheel files
+   checked against its manifest, never by name from an index (skipped when
+   init already runs from that venv) — every uv command pointed at the
+   home's own directories, never the ones the invoking user's environment
+   names;
 4. Docker's ``sbx``, installed under the home on POSIX or by its per-user MSI
    on Windows, pinned to the tested series and recorded in ``sbx/VERSION``
    only once the installed executable reports it;
@@ -46,6 +48,7 @@ from importlib import resources
 from pathlib import Path
 
 import sbxloop
+from sbxloop import releases
 from sbxloop.errors import SbxloopError
 from sbxloop.hostfiles import create_private, make_private
 from sbxloop.hostprep import SBIN_PATH, HostPrep
@@ -88,8 +91,9 @@ class InitOptions:
     sbx_version: str = SBX_VERSION
     #: The sbxloop version to install into the venv; None means this one.
     version: str | None = None
-    #: A directory of wheels to install from (a deploy that fetched the
-    #: release assets), on top of the index for the dependencies.
+    #: A directory holding this version's two release wheels (a deploy that
+    #: fetched the release assets) instead of downloading them; checked
+    #: against its release-manifest.json when one is there.
     wheels: Path | None = None
     force: bool = False
     dry_run: bool = False
@@ -390,8 +394,8 @@ class HomeInit:
             steps.append(
                 (
                     "venv",
-                    f"install uv, CPython {PYTHON_SERIES} and sbxloop=={self.version} "
-                    f"into {home.venv}",
+                    f"install uv, CPython {PYTHON_SERIES} and sbxloop {self.version} "
+                    f"from {self._wheel_source()} into {home.venv}",
                 )
             )
         if self.options.sbx:
@@ -415,6 +419,11 @@ class HomeInit:
     @property
     def version(self) -> str:
         return self.options.version or sbxloop.__version__
+
+    def _wheel_source(self) -> str:
+        if self.options.wheels is not None:
+            return f"the wheels in {self.options.wheels}"
+        return "its GitHub Release wheels"
 
     @property
     def unit_names(self) -> tuple[str, ...]:
@@ -510,21 +519,55 @@ class HomeInit:
         if self._venv_is_current():
             self.report.skipped.append("venv (init runs from it)")
             return
-        if self.version == UNBUILT and self.options.wheels is None:
+        if self.version == UNBUILT:
             raise InitError(
                 "this sbxloop reports version 0.0.0 (a checkout without git metadata); "
-                "pass --version X.Y.Z to say which release to install, or --wheels DIR"
+                "pass --version X.Y.Z to say which release to install"
             )
+        version = self.version
+        if self.options.wheels is not None:
+            # Operator-supplied files (a deploy's release assets, or a CI
+            # build of this checkout, whose version may be a development one).
+            wheels = self._local_wheels(version, self.options.wheels)
+        else:
+            try:
+                releases.stable_version(version)
+            except releases.ReleaseError as exc:
+                raise InitError(f"{exc}; pass --version with a published release") from exc
         uv = self._ensure_uv()
         self._uv_run([str(uv), "python", "install", PYTHON_SERIES])
         if not self.home.venv_python.exists():
             self._uv_run([str(uv), "venv", "--python", PYTHON_SERIES, str(self.home.venv)])
-        spec = [f"sbxloop[{INSTALL_EXTRAS}]=={self.version}", f"sbxloop-worker=={self.version}"]
         argv = [str(uv), "pip", "install", "--python", str(self.home.venv_python)]
         if self.options.wheels is not None:
-            argv += ["--find-links", str(self.options.wheels)]
-        self._uv_run([*argv, *spec])
-        self.report.done.append(f"venv (sbxloop {self.version})")
+            self._uv_run([*argv, *wheels.requirements(INSTALL_EXTRAS)])
+        else:
+            # Our own packages only ever come from the release's files;
+            # their dependencies still resolve from the index.
+            directory = self.home.tmp / f"release-v{version}"
+            try:
+                wheels = releases.download_wheels(version, directory, fetch=self.fetch)
+                self._uv_run([*argv, *wheels.requirements(INSTALL_EXTRAS)])
+            except releases.ReleaseError as exc:
+                raise InitError(f"could not fetch sbxloop {version}: {exc}") from exc
+            finally:
+                shutil.rmtree(directory, ignore_errors=True)
+        self.report.done.append(f"venv (sbxloop {version})")
+
+    @staticmethod
+    def _local_wheels(version: str, directory: Path) -> releases.ReleaseWheels:
+        """This version's two wheels from an operator-supplied directory,
+        checked against the release manifest beside them when there is one."""
+        try:
+            if (directory / releases.MANIFEST).is_file():
+                return releases.verify_wheels(version, directory)
+        except releases.ReleaseError as exc:
+            raise InitError(f"--wheels {directory}: {exc}") from exc
+        wheels = releases.wheel_paths(version, directory)
+        for path in (wheels.worker, wheels.host):
+            if not path.is_file():
+                raise InitError(f"--wheels {directory} has no {path.name}")
+        return wheels
 
     def _uv_env(self) -> dict[str, str]:
         return {

@@ -156,13 +156,50 @@ class TestServiceDescriptors:
         with pytest.raises(ValueError, match=rf"unknown chat backend 'irc' \(known: {known}\)"):
             service_named("irc")
 
-    def test_missing_extra_detail_names_the_sdk_and_its_extra(self) -> None:
-        # The wording doctor printed before the descriptor existed.
-        assert (
-            service_named("discord").missing_extra_detail
-            == "discord.py missing (pip install 'sbxloop[discord]')"
+    def test_missing_extra_detail_names_the_sdk_and_its_packages(self) -> None:
+        # The third-party packages themselves, never `sbxloop[extra]`: that
+        # would send pip to a package index for our own name.
+        discord = service_named("discord").missing_extra_detail
+        assert discord.startswith("discord.py missing (install 'discord")
+        assert discord.endswith("into the venv sbxloop runs from)")
+        slack = service_named("slack").missing_extra_detail
+        assert slack.startswith("slack_sdk missing (install ")
+        assert "'slack-sdk>=" in slack and "'aiohttp>=" in slack
+        for service in CHAT_SERVICES:
+            assert "sbxloop[" not in service.missing_extra_detail
+
+
+class TestExtraInstallHint:
+    def test_names_the_extras_packages_from_the_installed_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sbxloop import releases
+
+        requires = [
+            "pydantic>=2.7",
+            "sbxloop-worker==1.2.3",
+            "discord-py>=2.3; extra == 'discord'",
+            'aiohttp>=3.9; extra == "slack"',
+            "slack-sdk>=3.44.1; extra == 'slack'",
+            "aiohttp>=3.9; extra == 'mattermost'",
+        ]
+        monkeypatch.setattr(releases.metadata, "requires", lambda _name: requires)
+        assert releases.extra_install_hint("slack", "slack-sdk") == (
+            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv sbxloop runs from"
         )
-        assert (
-            service_named("slack").missing_extra_detail
-            == "slack_sdk missing (pip install 'sbxloop[slack]')"
+        assert "discord-py>=2.3" in releases.extra_install_hint("discord", "discord.py")
+
+    def test_falls_back_to_the_named_package_without_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from importlib import metadata
+
+        from sbxloop import releases
+
+        def missing(_name: str) -> list[str]:
+            raise metadata.PackageNotFoundError
+
+        monkeypatch.setattr(releases.metadata, "requires", missing)
+        assert releases.extra_install_hint("discord", "discord.py") == (
+            "install 'discord.py' into the venv sbxloop runs from"
         )

@@ -8,8 +8,12 @@
 # over to `sbxloop init --systemd`, which lays out the rest (launchers, sbx,
 # config, units). Re-running is safe; every step is idempotent.
 #
+# sbxloop and its worker come from the GitHub Release's own wheel files,
+# each checked against the release's SHA-256 manifest — never by name from
+# a package index. Their third-party dependencies resolve from PyPI.
+#
 #   SBXLOOP_HOME=/srv/loop      install somewhere else
-#   SBXLOOP_VERSION=1.2.3       pin the release (default: the latest on PyPI)
+#   SBXLOOP_VERSION=1.2.3       pin the release (default: the latest GitHub Release)
 #   SBXLOOP_INIT_ARGS="--no-systemd --sbx-version 0.38.0"   extra init flags
 #
 # Installing needs no root: everything lands under $SBXLOOP_HOME, which this
@@ -17,7 +21,7 @@
 # it are an administrator's.
 #
 #   installation prerequisites — this script stops without them:
-#     curl, tar, git on PATH
+#     curl, tar, git on PATH, and shasum or sha256sum
 #   host preparation (Linux) — reported here, done by an administrator:
 #     e2fsprogs (mkfs.ext4, for sandboxd's block driver)
 #     /dev/kvm, openable by this account
@@ -29,12 +33,21 @@ SBXLOOP_HOME="${SBXLOOP_HOME:-$HOME/.sbxloop}"
 SBXLOOP_VERSION="${SBXLOOP_VERSION:-}"
 PYTHON_SERIES="3.13"
 EXTRAS="discord,slack"
+REPOSITORY="brettbergin/sbxloop"
 
 say() { printf '%s\n' "sbxloop install: $*"; }
 
 for tool in curl tar; do
   command -v "$tool" >/dev/null 2>&1 || { say "$tool is required"; exit 2; }
 done
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1"; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1"; }
+else
+  say "sha256sum or shasum is required, to check the release's files"
+  exit 2
+fi
 
 # Git is a *host* prerequisite, separate from the git the sandbox carries:
 # importing sbxloop pulls in GitPython, which resolves the git executable at
@@ -118,14 +131,78 @@ if [ ! -x "$SBXLOOP_HOME/venv/bin/python" ]; then
   "$uv" venv --python "$PYTHON_SERIES" "$SBXLOOP_HOME/venv"
 fi
 
+# The value of a top-level "key": "string" pair in a JSON document, by plain
+# parameter expansion: GitHub's release and manifest documents are flat
+# enough at the keys read here, and this keeps the script to curl and sh.
+json_string() {
+  rest=${1#*\"$2\"}
+  [ "$rest" != "$1" ] || return 1
+  rest=${rest#*\"}
+  printf '%s' "${rest%%\"*}"
+}
+
+api="https://api.github.com/repos/$REPOSITORY/releases"
 if [ -n "$SBXLOOP_VERSION" ]; then
-  say "installing sbxloop $SBXLOOP_VERSION"
-  "$uv" pip install --python "$SBXLOOP_HOME/venv/bin/python" \
-    "sbxloop[$EXTRAS]==$SBXLOOP_VERSION" "sbxloop-worker==$SBXLOOP_VERSION"
+  release_url="$api/tags/v${SBXLOOP_VERSION#v}"
 else
-  say "installing the latest sbxloop"
-  "$uv" pip install --upgrade --python "$SBXLOOP_HOME/venv/bin/python" "sbxloop[$EXTRAS]"
+  release_url="$api/latest"
 fi
+release="$(curl -fsSL -H 'Accept: application/vnd.github+json' "$release_url")" || {
+  say "could not read $release_url; is that a published release?"
+  exit 1
+}
+case "$release" in
+  *'"draft": false'* | *'"draft":false'*) ;;
+  *) say "$release_url is not a published release"; exit 1 ;;
+esac
+case "$release" in
+  *'"prerelease": false'* | *'"prerelease":false'*) ;;
+  *) say "$release_url is a prerelease; pin a stable SBXLOOP_VERSION"; exit 1 ;;
+esac
+tag="$(json_string "$release" tag_name)" || { say "$release_url names no tag"; exit 1; }
+version="${tag#v}"
+case "$version" in
+  "" | *[!0-9.]* | .* | *. | *..*) say "release tag '$tag' is not a vX.Y.Z version"; exit 1 ;;
+esac
+
+wheels="$SBXLOOP_HOME/tmp/release-v$version"
+rm -rf "$wheels"
+mkdir -p "$wheels"
+host_wheel="sbxloop-$version-py3-none-any.whl"
+worker_wheel="sbxloop_worker-$version-py3-none-any.whl"
+say "downloading sbxloop $version from GitHub Releases"
+download="https://github.com/$REPOSITORY/releases/download/$tag"
+manifest="$(curl -fsSL "$download/release-manifest.json")" || {
+  say "could not download release-manifest.json for $tag"
+  exit 1
+}
+for name in "$worker_wheel" "$host_wheel"; do
+  curl -fsSL -o "$wheels/$name" "$download/$name" || {
+    say "could not download $name for $tag"
+    exit 1
+  }
+done
+[ "$(json_string "$manifest" version)" = "$version" ] || {
+  say "release-manifest.json does not describe $version"
+  exit 1
+}
+for name in "$worker_wheel" "$host_wheel"; do
+  expected="$(json_string "$manifest" "$name")" || expected=""
+  case "$expected" in
+    *[!0-9a-f]* | "") say "release-manifest.json has no SHA-256 for $name"; exit 1 ;;
+  esac
+  [ "${#expected}" -eq 64 ] || { say "release-manifest.json has no SHA-256 for $name"; exit 1; }
+  actual="$(sha256 "$wheels/$name")"
+  [ "${actual%% *}" = "$expected" ] || {
+    say "$name does not match the SHA-256 in the release manifest; not installing it"
+    exit 1
+  }
+done
+
+say "installing sbxloop $version"
+"$uv" pip install --upgrade --python "$SBXLOOP_HOME/venv/bin/python" \
+  "$wheels/$worker_wheel" "$wheels/$host_wheel[$EXTRAS]"
+rm -rf "$wheels"
 
 say "laying out the home"
 # shellcheck disable=SC2086

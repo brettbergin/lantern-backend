@@ -31,7 +31,9 @@ Two distributions ship from this repo in lockstep versions:
 - **`sbxloop`** — everything above the line: the host orchestrator.
 - **`sbxloop-worker`** — the in-sandbox runtime. The host package embeds the
   worker wheel (`sbxloop/_vendor/`) at build time so sandboxes can be
-  provisioned with no dependency on PyPI availability of sbxloop itself.
+  provisioned with no package index involved for sbxloop's own code. Both
+  ship as GitHub Release wheels with a SHA-256 manifest and are never
+  installed by name from an index (`sbxloop/releases.py`).
   `github-copilot-sdk` sits behind the worker's `[copilot]` extra, so the
   host never installs the Copilot runtime.
 
@@ -844,10 +846,11 @@ process that also talks to a model, and neither box holds both tokens.
 
 One deliberate exception to "the host does not talk to the network": the
 version check (`daemon/versions.py`, the concierge's `version_status` tool
-and the startup drift notice) reads `pypi.org` from the host process. It is
-unauthenticated and carries no credential, so the split above is untouched;
-it is bounded by a short timeout, a response cap and a five-minute memo, and
-every failure degrades to "could not reach PyPI" rather than raising.
+and the startup drift notice) reads the latest GitHub Release from
+`api.github.com` in the host process. It is unauthenticated and carries no
+credential, so the split above is untouched; it is bounded by a short
+timeout, a response cap and a five-minute memo, and every failure degrades to
+"could not reach GitHub Releases" rather than raising.
 
 ## The loop
 

@@ -16,6 +16,14 @@ CI still checks every PR and push to `main`. Each release batch requires
 successful verification of its frozen commit before tagging or publishing. Both `sbxloop` and
 `sbxloop-worker` keep the same version; nothing is committed back to `main`.
 
+Releases are **GitHub Releases only**. v2.1.36 was the last version published
+to PyPI. Every install of `sbxloop` and `sbxloop-worker` — the deploy
+workflow, `scripts/install.sh`, `sbxloop update`, `sbxloop init` and a
+sandbox's worker — uses a release's own wheel files, checked against its
+`release-manifest.json`, and never asks a package index for either name: the
+names a later rename moves to are not ours on PyPI. Third-party dependencies
+still resolve from PyPI.
+
 ## How it works
 
 1. [`.github/workflows/release.yml`](.github/workflows/release.yml) observes
@@ -45,11 +53,11 @@ successful verification of its frozen commit before tagging or publishing. Both 
    Publication retries smoke the original restored files too.
 5. The two wheels and two source distributions are staged on a draft
    GitHub Release. `release-manifest.json`, uploaded last, records their
-   SHA-256 hashes, version, and tested commit. PyPI publication cannot
-   start before that marker exists.
-6. Both distributions publish through **Trusted Publishing (OIDC)**.
-   Only after the PyPI uploads succeed does the draft become a published
-   GitHub Release. Publication attestations are attached too.
+   SHA-256 hashes, version, and tested commit. Publication cannot start
+   before that marker exists.
+6. Only after the wheel smoke checks pass and the files are staged does the
+   draft become a published GitHub Release. Nothing is uploaded to a
+   package index.
 7. Every successful workflow uploads a `release-result` artifact containing
    the version, commit, and whether publication occurred. Deployment reads
    that exact run's result; it never infers the release from the triggering
@@ -101,11 +109,10 @@ merge. See [self-deploy.md](docs/self-deploy.md) for recovery and notices.
 ## Retrying a failed publication
 
 Re-run `Release`, or dispatch it manually on `main`. A draft carrying the
-manifest reuses its original files and verifies their hashes before upload.
-It never rebuilds that version, including when one package reached PyPI and
-the other did not. Existing uploads are skipped. A draft without a manifest
-was interrupted before PyPI publication could start, so staging can be rebuilt.
-Missing or corrupt files after the marker exists fail closed for repair.
+manifest reuses its original files and verifies their hashes before
+publishing; it never rebuilds that version. A draft without a manifest was
+interrupted while staging, so staging can be rebuilt. Missing or corrupt
+files after the marker exists fail closed for repair.
 
 Do not delete or edit reserved tags or staged files to force a retry. A
 legacy incomplete release created before this staging protocol needs manual
@@ -131,19 +138,19 @@ A completed release at the selected tip is a no-op, not another publication.
 
 ## Setup and policy
 
-The existing PyPI Trusted Publishers for both projects use repository
-`brettbergin/sbxloop`, workflow `release.yml`, and environment `pypi`.
-Those identities are preserved; no new publication tokens are needed.
-The publication job's `GITHUB_TOKEN` needs `contents: write` to reserve tags
-and stage releases, and `id-token: write` for PyPI Trusted Publishing.
-Verification uses `actions: read` to inspect CI evidence. Only the automatic
+No publication tokens are needed. The publication job's `GITHUB_TOKEN`
+needs only `contents: write` to reserve tags, stage releases and publish
+them; there is no `pypi` environment and no `id-token` permission. The PyPI
+projects for `sbxloop` and `sbxloop-worker` keep v2.1.36 and receive nothing
+newer. Verification uses `actions: read` to inspect CI evidence. Only the automatic
 intake needs `actions: write` to dispatch `release.yml`; its inputs preserve
 the quiet window. A normal manual dispatch still bypasses that window.
 
 The three-minute quiet window, thirty-minute batching limit, and
 thirty-minute deployment cooldown are repository workflow policy in
 `scripts/release_pipeline.py`; they are not daemon configuration options.
-The generic deployment example remains a standalone PyPI upgrade example.
+The generic deployment example fetches and checks release wheels with the
+installed sbxloop (`python -m sbxloop.releases`).
 
 GitHub's [concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 describes pending queues. Scheduled reconciliation is best-effort; see

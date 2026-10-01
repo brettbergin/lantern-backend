@@ -26,11 +26,12 @@ the internals are in [architecture.md](architecture.md#the-remote-api-listener).
 ## Installation
 
 The API runs **inside `sbxloop daemon`**: one process owns execution, and the
-listener is a second way in, never a second scheduler. Install the extra and
-switch it on:
+listener is a second way in, never a second scheduler. Install the `api`
+extra's packages into the home's venv and switch it on:
 
 ```bash
-uv tool install 'sbxloop[api]'      # or: pip install 'sbxloop[api]'
+~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python \
+  'fastapi>=0.115' 'uvicorn[standard]>=0.30' 'pyjwt[crypto]>=2.9'
 ```
 
 ```toml

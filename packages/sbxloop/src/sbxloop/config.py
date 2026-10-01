@@ -2048,7 +2048,7 @@ class DaemonConfig(_ConfigModel):
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "console"
     # The release-drift check (#641): on start (not `--once`) the daemon asks
-    # pypi.org for the latest sbxloop once, off the startup path, and posts a
+    # GitHub Releases for the latest sbxloop once, off the startup path, and posts a
     # notice to the control channel when this host is behind; the
     # concierge's `version_status` answers the same question on demand.
     # False makes zero outbound HTTP from the host for it — an air-gapped
@@ -2056,9 +2056,9 @@ class DaemonConfig(_ConfigModel):
     # where the advice would contradict the pipeline. Development builds
     # skip it regardless.
     version_check: bool = True
-    # What the drift notice tells the operator to run — `pipx upgrade
-    # sbxloop`, `uv tool upgrade sbxloop`, a deploy script. Unset, the notice
-    # says the exact command depends on how sbxloop was installed (#638).
+    # What the drift notice tells the operator to run — `sbxloop update`, a
+    # deploy script. Unset, the notice says the exact command depends on how
+    # sbxloop was installed (#638).
     upgrade_command: str | None = None
 
     @field_validator("upgrade_command")

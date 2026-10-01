@@ -103,7 +103,7 @@ class TestMissingExtra:
             importlib.reload(cli_api)
             assert not api_available()
             result = runner.invoke(app, ["api", "key", "show"])
-            assert result.exit_code == 1 and "sbxloop[api]" in result.output
+            assert result.exit_code == 1 and "`api` extra's packages" in result.output
             # Registering a client needs no cryptography: it still works.
             created = runner.invoke(app, ["api", "client", "create", "r", "--cap", "runs:read"])
             assert created.exit_code == 0, created.output
@@ -125,6 +125,6 @@ class TestMissingExtra:
         for name in ("fastapi", "uvicorn", "jwt"):
             monkeypatch.setitem(sys.modules, name, None)
         assert not api_available()
-        with pytest.raises(ConfigError, match="sbxloop\\[api\\]") as excinfo:
+        with pytest.raises(ConfigError, match="`api` extra") as excinfo:
             require_available()
         assert str(excinfo.value) == MISSING_EXTRA

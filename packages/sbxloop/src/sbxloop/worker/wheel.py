@@ -4,14 +4,13 @@ Resolution order:
 
 1. **Vendored** — the wheel embedded in the installed sbxloop package at
    ``sbxloop/_vendor/`` (placed there by the hatch build hook). This is the
-   production path and works with zero network access to PyPI for sbxloop
-   itself.
+   production path and needs no package index for sbxloop's own code.
 2. **Workspace build** — when running from a source checkout (no vendor dir),
    build the wheel from a private temp copy of the sibling
    ``packages/sbxloop-worker`` tree with ``uv build``, pinned to the host's
    version. Cached per process.
-3. **None** — the caller falls back to installing ``sbxloop-worker`` from
-   PyPI inside the sandbox at the exact lockstep version.
+3. **None** — the caller refuses to install: the worker is never fetched by
+   name from a package index (see :mod:`sbxloop.releases`).
 """
 
 from __future__ import annotations
@@ -91,7 +90,7 @@ def _workspace_build() -> Path | None:
 
 
 def resolve_worker_wheel() -> Path | None:
-    """Best available worker wheel on this host, or None to use PyPI."""
+    """Best available worker wheel on this host, or None when there is none."""
     wheel = _vendored_wheel()
     if wheel is not None:
         return wheel

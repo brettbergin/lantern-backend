@@ -14,7 +14,9 @@ builds it.
    The host needs curl, tar and git already installed — the script checks
    all three before it downloads anything, git included: sbxloop cannot
    start without one. That puts `uv`, a CPython and the
-   `sbxloop[discord,slack]` venv under the home, then runs
+   `sbxloop[discord,slack]` venv under the home — sbxloop and its worker
+   from the latest GitHub Release's wheels, checked against its SHA-256
+   manifest (`SBXLOOP_VERSION=X.Y.Z` pins one) — then runs
    `sbxloop init --systemd`, which writes the launchers
    (`~/.sbxloop/bin/sbxloop`, `~/.sbxloop/bin/sbx`), installs Docker's
    `sbx` under `~/.sbxloop/sbx`, writes `config/sbxloop.toml` and a 0600
@@ -74,24 +76,26 @@ and is picked up on the next start.
 
 By hand, as the daemon's user, once nothing is running. Take a named hold
 so the daemon stops claiming, wait for idle, snapshot, install the exact
-version into the home's venv, re-run init (idempotent: it refreshes the
-launchers and units for the new version and keeps your config), restart.
-Use `--no-sbx` to preserve the installed sandbox runtime:
+version into the home's venv — `init --version` fetches that GitHub
+Release's wheels and checks them against its manifest; sbxloop is never
+installed by name from a package index — re-run init (idempotent: it
+refreshes the launchers and units for the new version and keeps your
+config), restart. Use `--no-sbx` to preserve the installed sandbox runtime:
 
 ```bash
 sbxloop daemon ctl pause --hold upgrade
 until [ "$({ sbxloop daemon ctl status --json 2>/dev/null || echo '{}'; } | jq -r '.current // .claiming // "idle"')" = idle ]; do sleep 15; done
 
 sbxloop backup --label pre-X.Y.Z
-~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python --upgrade 'sbxloop[discord,slack]==X.Y.Z' 'sbxloop-worker==X.Y.Z'
+sbxloop init --no-sbx --version X.Y.Z
 sbxloop init --systemd --no-sbx
 systemctl --user reset-failed sbxloop-daemon && systemctl --user restart sbxloop-daemon
 ```
 
 Every command runs from any directory: the home is the home. On a host
 installed under a custom `SBXLOOP_HOME`, read `~/.sbxloop` above as that
-root — `sbxloop` reads the variable itself, so only the two explicit
-`~/.sbxloop/…` paths change. `reset-failed` matters: `StartLimitBurst=5` per
+root — `sbxloop` reads the variable itself. `sbxloop update` is the same
+install for the newest release. `reset-failed` matters: `StartLimitBurst=5` per
 600s leaves a unit that crash-looped in `failed`, where a plain `restart`
 will not revive it. The daemon comes back **unpaused** regardless — holds are in-memory only — so re-take any you want
 to keep. A downgrade is the same commands with an older version, or

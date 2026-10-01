@@ -8,22 +8,24 @@ demand, and the daemon posts :meth:`VersionProbe.drift_notice` to the control
 channel once at startup when it is behind — a tool only helps the people who
 think to ask.
 
-This is the **only outbound HTTP the host itself makes** apart from the
-optional chat bridge and ``daemon notify``; everything else, all GitHub access
-included, is deliberately proxied through a sandbox (see :mod:`sbxloop.vcs.github.ops`).
-The request is unauthenticated and carries no credential, so the credential
-split is untouched. It is bounded by a short timeout and a response cap,
-memoised for :data:`PYPI_TTL_S`, and every failure degrades to "could not reach
-PyPI" rather than raising: a version report is a nicety, never a reason to
+"Latest" is the newest published GitHub Release (drafts and prereleases never
+count), read from GitHub's REST API. This is the **only outbound HTTP the host
+itself makes** apart from the optional chat bridge and ``daemon notify``;
+everything else, all other GitHub access included, is deliberately proxied
+through a sandbox (see :mod:`sbxloop.vcs.github.ops`). The request is
+unauthenticated and carries no credential, so the credential split is
+untouched. It is bounded by a short timeout and a response cap, memoised for
+:data:`LATEST_TTL_S`, and every failure degrades to "could not reach GitHub
+Releases" rather than raising: a version report is a nicety, never a reason to
 break a turn or delay a daemon start. ``[daemon] version_check = false``
-switches the PyPI half off entirely (#641) — an air-gapped or mirror-pinned
+switches the release half off entirely (#641) — an air-gapped or mirror-pinned
 host, or one a deploy pipeline keeps current, makes no request and hears no
 advice; the installed half still answers.
 
 Upgrading is deliberately not here. A daemon that upgrades and restarts
 itself mid-run is a different, riskier feature. What the operator runs to
-upgrade depends on how sbxloop was installed — pip in a venv, pipx, ``uv
-tool``, a container image, a deploy pipeline — so the advice names
+upgrade depends on how sbxloop was installed — ``sbxloop update`` in an
+initialised home, a container image, a deploy pipeline — so the advice names
 ``[daemon] upgrade_command`` when the operator set one and otherwise says
 exactly that (#638).
 """
@@ -40,6 +42,7 @@ from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import sbxloop
 import sbxloop_worker
+from sbxloop import releases
 from sbxloop.errors import SbxError, SbxNotFoundError
 from sbxloop.log import get_logger
 
@@ -49,24 +52,21 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-PYPI_URL = "https://pypi.org/pypi/{name}/json"
-PYPI_TIMEOUT_S = 4.0
+LATEST_RELEASE_URL = releases.LATEST_RELEASE_URL
+LATEST_TIMEOUT_S = 4.0
 # The answer changes at most once per merge to main, and one turn may call the
 # tool several times: memoise successes for a few minutes. Follows the house
 # rate-limit shape (a timestamp plus a ``now - last < TTL`` guard, as in
 # DaemonGithub.note_failure) rather than introducing a cache abstraction.
-PYPI_TTL_S = 300.0
-# /pypi/<name>/json carries every release — 190 KB over 121 releases when this
-# was written — and grows with each one. Cap the read so a pathological
-# response is a miss rather than a memory problem.
+LATEST_TTL_S = 300.0
+# One release object (its notes and asset list included) is a few KB. Cap the
+# read so a pathological response is a miss rather than a memory problem.
 MAX_BYTES = 2_000_000
 # The never-built fallback in both packages' __init__: not a real version, so
 # it must not be compared against anything.
 UNBUILT = "0.0.0"
-# What the daemon host installs. Both are checked rather than inferring the
-# worker from the lockstep tag: a half-published release — sbxloop on PyPI
-# without the sbxloop-worker its metadata pins exactly — is precisely the
-# breakage worth seeing.
+# What the daemon host installs. Both are reported, though one GitHub Release
+# carries both wheels in lockstep, so they share one "latest".
 DISTRIBUTIONS = ("sbxloop", "sbxloop-worker")
 
 Verdict = Literal["behind", "current", "ahead", "dev", "unknown"]
@@ -118,7 +118,7 @@ def _has_suffix(version: str) -> bool:
 
 
 def compare(installed: str, latest: str | None) -> Verdict:
-    """How ``installed`` stands against the newest release on PyPI.
+    """How ``installed`` stands against the newest published release.
 
     Two cases refuse to answer rather than answer wrongly:
 
@@ -134,9 +134,9 @@ def compare(installed: str, latest: str | None) -> Verdict:
     if _is_dev(installed):
         return "dev"
     if _has_suffix(latest):
-        # A pre/post/dev release on PyPI is not what `pip install --upgrade`
-        # would fetch, so ranking against it would produce advice that does
-        # not work. Say nothing rather than something wrong.
+        # A pre/post/dev version is not a stable release an update would
+        # install, so ranking against it would produce advice that does not
+        # work. Say nothing rather than something wrong.
         return "unknown"
     mine, theirs = _release(installed), _release(latest)
     if mine is None or theirs is None:
@@ -162,45 +162,56 @@ def behind_by(installed: str, latest: str | None) -> int | None:
     return theirs[2] - mine[2]
 
 
-def fetch_latest(name: str, *, timeout_s: float = PYPI_TIMEOUT_S) -> str | None:
-    """The newest released version of ``name`` on PyPI, or ``None``.
+def fetch_latest(name: str, *, timeout_s: float = LATEST_TIMEOUT_S) -> str | None:
+    """The newest published release's version, or ``None``.
 
-    Never raises: every failure is an anticipated one (no egress, DNS, a PyPI
-    outage), so it is logged with ``error=`` and no traceback, per the house
-    rule, and the caller reports "could not reach PyPI".
+    Both distributions ship in one GitHub Release, so ``name`` only labels
+    the log line. The answer is the release's ``tag_name`` without its
+    leading ``v``; a draft, a prerelease or any other tag shape is no answer.
+
+    Never raises: every failure is an anticipated one (no egress, DNS, a
+    GitHub outage or rate limit), so it is logged with ``error=`` and no
+    traceback, per the house rule, and the caller reports "could not reach
+    GitHub Releases".
     """
-    url = PYPI_URL.format(name=name)
     request = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "User-Agent": f"sbxloop/{sbxloop.__version__}"},
+        LATEST_RELEASE_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"sbxloop/{sbxloop.__version__}",
+        },
     )
     try:
-        # nosec B310 - PYPI_URL is a constant https:// literal, not caller input
+        # nosec B310 - LATEST_RELEASE_URL is a constant https:// literal, not caller input
         with urllib.request.urlopen(request, timeout=timeout_s) as response:  # nosec B310
             raw = response.read(MAX_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        log.warning("versions.pypi_failed", name=name, error=f"HTTP {exc.code}")
+        log.warning("versions.latest_failed", name=name, error=f"HTTP {exc.code}")
         return None
     except urllib.error.URLError as exc:
-        log.warning("versions.pypi_failed", name=name, error=str(exc.reason))
+        log.warning("versions.latest_failed", name=name, error=str(exc.reason))
         return None
     except OSError as exc:  # socket timeouts and the rest
-        log.warning("versions.pypi_failed", name=name, error=str(exc))
+        log.warning("versions.latest_failed", name=name, error=str(exc))
         return None
     if len(raw) > MAX_BYTES:
-        log.warning("versions.pypi_failed", name=name, error=f"response over {MAX_BYTES} bytes")
+        log.warning("versions.latest_failed", name=name, error=f"response over {MAX_BYTES} bytes")
         return None
     try:
         data = json.loads(raw)
-        version = str(data["info"]["version"])
-    except (ValueError, KeyError, TypeError) as exc:
-        log.warning("versions.pypi_failed", name=name, error=f"unparseable: {exc}")
+        tag = data["tag_name"]
+        published = data.get("draft") is False and data.get("prerelease") is False
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        log.warning("versions.latest_failed", name=name, error=f"unparseable: {exc}")
         return None
-    return version or None
+    if not published or not isinstance(tag, str) or not tag.startswith("v") or len(tag) < 2:
+        log.warning("versions.latest_failed", name=name, error=f"not a published release: {tag!r}")
+        return None
+    return tag[1:]
 
 
 class VersionProbe:
-    """Installed versions, plus — best effort — the latest on PyPI.
+    """Installed versions, plus — best effort — the latest release.
 
     ``fetch`` is injected so tests never touch the network, and ``clock``
     drives the TTL memo; both follow the constructor-injection pattern the
@@ -208,7 +219,7 @@ class VersionProbe:
 
     Only *successful* lookups are memoised. Caching a failure would leave the
     tool useless for five minutes after one blip, and the cost of retrying is
-    bounded by ``PYPI_TIMEOUT_S`` and the turn's own tool-call cap.
+    bounded by ``LATEST_TIMEOUT_S`` and the turn's own tool-call cap.
     """
 
     def __init__(
@@ -218,7 +229,7 @@ class VersionProbe:
         clock: Callable[[], float] = time.monotonic,
         fetch: Callable[[str], str | None] = fetch_latest,
         sbx_timeout_s: float = 5.0,
-        check_pypi: bool = True,
+        check_releases: bool = True,
         upgrade_command: str | None = None,
     ) -> None:
         self.sbx = sbx
@@ -227,7 +238,7 @@ class VersionProbe:
         self.sbx_timeout_s = sbx_timeout_s
         # `[daemon] version_check`: False never calls `fetch`, so the host
         # makes no request and every "latest" reads as unknown-by-choice.
-        self.check_pypi = check_pypi
+        self.check_releases = check_releases
         # `[daemon] upgrade_command`: what the advice tells the operator to run.
         self.upgrade_command = upgrade_command
         self._latest: dict[str, tuple[float, str]] = {}
@@ -248,7 +259,7 @@ class VersionProbe:
 
         The three failures read differently to an operator — no handle, no
         binary, a wedged Docker — so they are not collapsed into one line.
-        None of them may sink the report: the PyPI rows are the point.
+        None of them may sink the report: the release rows are the point.
         """
         if self.sbx is None:
             return None, "not configured for this daemon"
@@ -264,14 +275,15 @@ class VersionProbe:
         return version, ""
 
     def latest(self, name: str) -> str | None:
-        """The newest release of ``name``, memoised; ``None`` when PyPI could
-        not be reached — or was never asked (``check_pypi`` off)."""
-        if not self.check_pypi:
+        """The newest release of ``name``, memoised; ``None`` when GitHub
+        Releases could not be reached — or was never asked (``check_releases``
+        off)."""
+        if not self.check_releases:
             return None
         now = self.clock()
         with self._lock:
             cached = self._latest.get(name)
-            if cached is not None and now - cached[0] < PYPI_TTL_S:
+            if cached is not None and now - cached[0] < LATEST_TTL_S:
                 return cached[1]
         version = self.fetch(name)
         if version is not None:
@@ -296,14 +308,18 @@ class VersionProbe:
             newest = self.latest(name)
             if newest is None:
                 unreachable = True
-                why = "PyPI not checked" if not self.check_pypi else "could not reach PyPI"
+                why = (
+                    "latest release not checked"
+                    if not self.check_releases
+                    else "could not reach GitHub Releases"
+                )
                 lines.append(f"{name:<15} {mine} installed · {why}")
                 continue
             verdict = compare(mine, newest)
             note = {
                 "behind": "BEHIND",
                 "current": "up to date",
-                "ahead": "ahead of PyPI",
+                "ahead": "ahead of the latest release",
                 "dev": "a development build, not a release — comparison is approximate",
                 "unknown": "cannot compare these",
             }[verdict]
@@ -312,7 +328,7 @@ class VersionProbe:
                 gap = behind_by(mine, newest)
                 if gap:
                     note += f" by {gap} patch release{'s' if gap != 1 else ''}"
-            lines.append(f"{name:<15} {mine} installed · {newest} on PyPI · {note}")
+            lines.append(f"{name:<15} {mine} installed · {newest} released · {note}")
         version, why = self._sbx()
         lines.append(f"{'sbx CLI':<15} {version or why}")
         if installed.sbxloop == UNBUILT:
@@ -320,7 +336,7 @@ class VersionProbe:
                 "The installed version reads 0.0.0, which means this tree was never built — "
                 "no upgrade advice follows from it."
             )
-        if unreachable and not self.check_pypi:
+        if unreachable and not self.check_releases:
             lines.append(
                 "The release check is off on this host ([daemon] version_check = false), so "
                 "'latest' was not looked up; the installed versions are still accurate. Whether "
@@ -328,8 +344,8 @@ class VersionProbe:
             )
         elif unreachable:
             lines.append(
-                "Could not reach PyPI, so 'latest' is unknown for the rows above that say so; "
-                "the installed versions are still accurate."
+                "Could not reach GitHub Releases, so 'latest' is unknown for the rows above "
+                "that say so; the installed versions are still accurate."
             )
         if stale:
             lines.append(
@@ -346,8 +362,8 @@ class VersionProbe:
         if self.upgrade_command:
             return f"run `{self.upgrade_command}`"
         return (
-            "the exact command depends on how sbxloop was installed (pip in a venv, pipx, "
-            "`uv tool`, a container image, a deploy pipeline)"
+            "the exact command depends on how sbxloop was installed (`sbxloop update` in an "
+            "initialised home, a container image, a deploy pipeline)"
         )
 
     def drift_notice(self) -> str | None:
@@ -361,7 +377,7 @@ class VersionProbe:
         gap = behind_by(mine, newest)
         gap_text = f", {gap} patch release{'s' if gap != 1 else ''} behind" if gap else ""
         return (
-            f"⚠️ this daemon is running sbxloop {mine}; PyPI has {newest}{gap_text}. "
+            f"⚠️ this daemon is running sbxloop {mine}; the latest release is {newest}{gap_text}. "
             f"Upgrading is an operator's step on the host — {self.upgrade_hint()} — then "
             "restart the daemon; it keeps running the code it started with until then."
         )

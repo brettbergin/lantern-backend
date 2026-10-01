@@ -2,7 +2,7 @@
 
 <p>
   <a href="https://github.com/brettbergin/sbxloop/actions/workflows/ci.yml"><img src="https://github.com/brettbergin/sbxloop/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://pypi.org/project/sbxloop/"><img src="https://img.shields.io/pypi/v/sbxloop" alt="PyPI" /></a>
+  <a href="https://github.com/brettbergin/sbxloop/releases/latest"><img src="https://img.shields.io/github/v/release/brettbergin/sbxloop" alt="Latest release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
 </p>
 
@@ -91,9 +91,14 @@ curl -fsSL https://raw.githubusercontent.com/brettbergin/sbxloop/main/scripts/in
 export PATH="$HOME/.sbxloop/bin:$PATH"
 ```
 
+sbxloop installs from its [GitHub Releases](https://github.com/brettbergin/sbxloop/releases)
+only — the release's wheels, checked against its SHA-256 manifest — never by
+name from a package index. `SBXLOOP_VERSION=X.Y.Z` pins a release.
+
 On native Windows 11 x64, install Git and uv, enable Windows Hypervisor
-Platform, then run `uvx --python 3.13 --from sbxloop sbxloop init --no-systemd`
-in PowerShell. The [platform guide](docs/user-guide.md#platform-support)
+Platform, then bootstrap `sbxloop init --no-systemd` from the latest
+release's wheels with `uvx`, as the
+[platform guide](docs/user-guide.md#platform-support) shows; it also
 explains the Docker MSI, the home launcher and current limits. WSL2 with
 Docker Desktop integration remains another installation path.
 

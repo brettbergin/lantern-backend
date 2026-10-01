@@ -507,7 +507,7 @@ def upgrade(deps: Deps) -> Action:
             return Outcome(
                 False,
                 "no [daemon] upgrade_command is configured; set it to what upgrades this "
-                "host (pip, pipx, uv tool …) and try again",
+                "host (`sbxloop update`, a deploy script …) and try again",
             )
         outcome = deps.runner.run(("sh", "-lc", command), timeout_s=UPGRADE_TIMEOUT_S)
         head = f"$ {command}\nexit {outcome.returncode}\n"

@@ -413,7 +413,7 @@ install is never judged against a service manager it did not ask for; and a
 ```bash
 curl -fsSL https://raw.githubusercontent.com/brettbergin/sbxloop/main/scripts/install.sh | sh
 export PATH="$HOME/.sbxloop/bin:$PATH"
-# (or, from an existing `pip install sbxloop`: `sbxloop init`)
+# (or, from an existing sbxloop install: `sbxloop init`)
 
 # one-time host setup
 $EDITOR ~/.sbxloop/config/secrets.env   # the tokens; sbxloop reads this file itself
@@ -434,13 +434,16 @@ sbxloop artifacts <run> --tree  # what the run produced
 To update the home installed by `sbxloop init`:
 
 ```bash
-sbxloop update --check    # show installed and latest versions from PyPI
+sbxloop update --check    # show installed and latest versions from GitHub Releases
 sbxloop update --dry-run  # also show the installation command
 sbxloop update           # install a newer release, if available
 ```
 
-`update` uses the home's `uv` to install sbxloop and its worker at the same
-version, keeps the chat extras and any installed host Copilot SDK, and
+`update` downloads the release's two wheels and its `release-manifest.json`
+from GitHub Releases, checks both wheels' SHA-256 against the manifest, and
+uses the home's `uv` to install those files — sbxloop and its worker are
+never installed by name from a package index; their third-party dependencies
+still come from PyPI. It keeps the chat extras and any installed host Copilot SDK, and
 verifies both packages before recording the new version in `home.json`.
 It leaves an equal or newer installed version alone. A failed lookup or
 installation exits nonzero; a failed installation is not automatically
@@ -452,7 +455,7 @@ any running daemon when idle to load the new version, then run
 the running installation to belong to the selected `SBXLOOP_HOME`; checkouts,
 pipx, `uv tool` and externally managed installations should use their own
 installer, or `sbxloop init` to create a home. This explicit command checks
-PyPI even when the daemon's background `version_check` is disabled.
+GitHub Releases even when the daemon's background `version_check` is disabled.
 
 `run` works on a checkout, and says which one before anything is
 provisioned: `--workspace PATH`, else the checkout the config names
@@ -510,7 +513,7 @@ Wondering what to put in `model = "..."` (or `--model`)? Ask the configured
 backend which models your credential can actually use:
 
 ```bash
-~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python 'sbxloop[copilot]'   # copilot: the SDK is optional on the host
+~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python 'github-copilot-sdk>=1.0.13'   # copilot: the SDK is optional on the host
 sbxloop list-models              # id, billing multiplier, context, reasoning, policy
 sbxloop list-models --json       # machine-readable, for scripting
 ```
@@ -519,10 +522,11 @@ Under `[agent] backend = "claude"` the same command asks the Anthropic Models
 API with `ANTHROPIC_API_KEY` (id, name, release date; no SDK needed on the
 host).
 
-Under `[agent] backend = "codex"`, install the optional host extra:
+Under `[agent] backend = "codex"`, install the `codex` extra's SDK (the version
+sbxloop pins) into the home's venv:
 
 ```bash
-~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python 'sbxloop[codex]'
+~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python 'openai-codex==0.147.0'
 ```
 
 `sbxloop list-models` then uses `OPENAI_API_KEY` and the Codex model
@@ -562,9 +566,16 @@ For a native Windows install, first install Git and uv (see the
 Then run this in PowerShell:
 
 ```powershell
-uvx --python 3.13 --from sbxloop sbxloop init --no-systemd
+$v = "X.Y.Z"   # the latest release: https://github.com/brettbergin/sbxloop/releases/latest
+$r = "https://github.com/brettbergin/sbxloop/releases/download/v$v"
+uvx --python 3.13 --with "$r/sbxloop_worker-$v-py3-none-any.whl" --from "$r/sbxloop-$v-py3-none-any.whl" sbxloop init --no-systemd
 & "$env:USERPROFILE\.sbxloop\bin\sbxloop.cmd" doctor
 ```
+
+`uvx` runs that release's wheels only to bootstrap; `init` then downloads
+them again into the home, checks them against the release's SHA-256
+manifest, and installs them into the home's venv. sbxloop is never installed
+by name from a package index.
 
 `init` fetches the pinned `DockerSandboxes.msi` from Docker's release and
 installs it for the current user. It verifies that `sbx.exe` reports the
@@ -1019,7 +1030,7 @@ daemon may run on schedules alone. `!sbx schedules` (or `sbxloop daemon ctl sche
 | `sbxloop shell RUN`                                 | Interactive shell in a run's sandbox. `--role agent\|github` picks the pair member; `-c CMD` runs one command.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `sbxloop init`                                      | Build (or repair) the home: tree, launchers, `uv` + CPython + the venv, Docker's `sbx`, `config/sbxloop.toml` and a 0600 `config/secrets.env` written once; `--systemd` renders and enables the units; `--migrate [--purge]` moves a pre-home installation in first; `--dry-run` prints the plan; `--project` writes a repository's own `sbxloop.toml` into the current directory (`--preset large-repo`, `--stdout`).                                                                                                                                                                                                                                                                                                                               |
 | `sbxloop setup`                                     | Interactively choose and configure an agent backend (Codex, Claude or OpenAI-compatible), chat backend (Discord, Slack or Mattermost) and VCS (GitHub, Gitea or GitLab; Gitea configuration is accepted but its backend is not implemented yet). Secret input is hidden and goes only to `config/secrets.env`; settings go to `config/sbxloop.toml`. Reruns upsert values without duplicate assignments, retain saved secrets when their prompts are left blank and validate the complete config before writing.                                                                                                                                                                                                                                     |
-| `sbxloop update`                                    | Check PyPI and install a newer sbxloop release into the running home's venv, with its worker pinned to the same version; `--check` only compares versions; `--dry-run` shows the installation command. Restart a running daemon when idle afterwards.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `sbxloop update`                                    | Check GitHub Releases and install a newer sbxloop release's checked wheels into the running home's venv, its worker at the same version; `--check` only compares versions; `--dry-run` shows the installation command. Restart a running daemon when idle afterwards.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `sbxloop backup [list\|restore\|prune]`             | Snapshot the home's config, secrets, units and `state.db` into `backups/<stamp>/`; list, restore or prune the snapshots (the daily sweep keeps `[daemon] backups_keep`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `sbxloop init-repo OWNER/NAME`                      | Create the labels the loop relies on in a repository — the seven lifecycle labels (with that repository's renames applied), the planning level labels where planning is on, and the follow-up label, each colored and described. Idempotent; boots one github-ops sandbox; exits 1 when the token cannot write labels.                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `sbxloop bake`                                      | Bake a sandbox template with the worker preinstalled (`--ref`, `--from`, `--keep`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -1675,8 +1686,8 @@ workspace_isolation = "clone"             # clone | auto | in-place, for daemon 
 refresh_workspace = true
 log_level = "INFO"
 log_format = "console"
-version_check = true                      # ask PyPI once at start; false = no request, no advice
-# upgrade_command = "pipx upgrade sbxloop"  # what the drift notice tells the operator to run
+version_check = true                      # ask GitHub Releases once at start; false = no request, no advice
+# upgrade_command = "~/.sbxloop/bin/sbxloop update"  # what the drift notice tells the operator to run
 ```
 
 #### Upgrading a pre-1.0 daemon
@@ -1702,7 +1713,8 @@ The daemon's human channel is one chat service, chosen by `[chat] backend = "dis
 more than one without choosing is a config error, and none means the daemon
 runs headless (`sbxloop daemon ctl` only).
 Everything in this section works the same on each: Discord is described
-first, the Slack and Mattermost differences follow. With `pip install 'sbxloop[discord]'`,
+first, the Slack and Mattermost differences follow. With `discord.py` installed in the
+home's venv (`init` installs both the Discord and Slack SDKs),
 `DISCORD_BOT_TOKEN` in the environment, and `[discord] channel_id` set, a
 gateway bot posts a headline card per run in the control channel (source issue, run id, branch, PR,
 task tally — colour follows the state) and streams that run's
@@ -1903,13 +1915,13 @@ backend reports tokens but not cost, so it says that rather than
 converting to money — and a run from before usage reporting answers "not
 recorded", never zero.
 Ask "are we up to date?" and it compares the installed `sbxloop` /
-`sbxloop-worker` / `sbx` versions against the latest releases on PyPI —
+`sbxloop-worker` / `sbx` versions against the latest GitHub Release —
 sbxloop's releases ship frequently while upgrading a host is an operator's
 step, so the daemon also says so once at startup when it is behind. (It
 only reports: the advice names `[daemon] upgrade_command` when one is set
 and otherwise says the command depends on how sbxloop was installed; a
 restart follows either way. `[daemon] version_check = false` switches the
-PyPI lookup off entirely — no request leaves the host, no notice is posted
+release lookup off entirely — no request leaves the host, no notice is posted
 — for an air-gapped or mirror-pinned host, or one a deploy pipeline keeps
 current.)
 Ask "what is the daemon doing?" or "why is nothing running?" and it quotes
@@ -2005,7 +2017,7 @@ Public Threads, Send Messages in Threads, Add Reactions, and Read Message
 History. Chat is observability, never a dependency: if it is down, the
 daemon logs and carries on.
 
-**Slack instead.** `pip install 'sbxloop[slack]'`, set `[slack] channel_id = "C…"` (the channel's *id*, from its details pane — not its name) and put
+**Slack instead.** With `slack-sdk` and `aiohttp` in the home's venv (`init` installs them), set `[slack] channel_id = "C…"` (the channel's *id*, from its details pane — not its name) and put
 `SLACK_BOT_TOKEN` (`xoxb-…`, the Web API) and `SLACK_APP_TOKEN` (`xapp-…`,
 the Socket Mode connection) in the environment / `.env` — never in
 `sbxloop.toml`; they are read from the environment only and never logged.
@@ -2030,7 +2042,7 @@ tokens present. Switching backends is a config change plus a daemon
 restart; runs recorded under the other backend keep their thread rows but
 are not re-posted.
 
-**Mattermost instead.** For an instance you host. `pip install 'sbxloop[mattermost]'`, set `[mattermost] url` to the instance (scheme
+**Mattermost instead.** For an instance you host. With `aiohttp` in the home's venv (`init` installs it), set `[mattermost] url` to the instance (scheme
 included — a private hostname and a port are ordinary here) and
 `[mattermost] channel_id` to the channel's 26-character id (channel name →
 *View Info*, not a `~name`), and put `MATTERMOST_BOT_TOKEN` in the
@@ -2092,7 +2104,7 @@ the endpoint catalog, the operation and idempotency contract, the streams,
 every error code, the limits, the isolation guarantee and the recovery
 procedures. This section is the walk-through.
 
-With `[api] enabled = true` (and the `sbxloop[api]` extra installed) the daemon
+With `[api] enabled = true` (and the `api` extra's packages installed in the home's venv) the daemon
 also serves a remote operations API in-process: REST under `/v1`, OpenAPI at
 `/v1/openapi.json`, liveness at `/health/live` and readiness at `/health/ready`
 (503 until recovery has finished — commands are refused, not queued, until
@@ -3021,7 +3033,7 @@ review_diff_max_chars = 150000  # the diff shown inline to the reviewer; past it
 Landing is not optional and has no off switch: a run with a repository
 either merges, ends `failed` with its PR still a draft, or hands a `blocked`
 PR to a human. On a repository whose merges publish — sbxloop's own releases
-to PyPI and redeploys the daemon host on every merge to `main` — every
+to GitHub Releases and redeploys the daemon host on every merge to `main` — every
 merged run is therefore an unattended release. That is the existing pipeline
 working as designed, with nobody in front of it; the round budgets and the
 daemon's guardrails are what you are trusting instead.
@@ -3603,7 +3615,7 @@ The notable knobs:
 | `[daemon] workspace_isolation`                                                                                                                    | `clone`                                                                                                                                                                                                             | Isolation for daemon runs against a git-checkout workspace (dirty tree proceeds with a warning).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `[daemon] refresh_workspace`                                                                                                                      | `true`                                                                                                                                                                                                              | `git fetch` + fast-forward the workspace checkout before each fresh daemon run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `[tui] operator_id` / `emoji` / `daemon_unit` / `refresh_s` / `retention_days`                                                                    | `""` / `true` / `sbxloop-daemon` / `0.5` / `14`                                                                                                                                                                     | The operator console (`sbxloop tui`), always on: who it speaks as (empty = the login name), glyph markers, the systemd user unit it tails and restarts, its live refresh interval, and how long the daemon keeps the console's mailbox rows (`0` keeps them). The rendering knobs are the `[discord]` / `[slack]` / `[mattermost]` ones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `[api] enabled`                                                                                                                                   | `false`                                                                                                                                                                                                             | Serve the remote operations API from `sbxloop daemon`: REST under `/v1` with generated OpenAPI at `/v1/openapi.json`, liveness at `/health/live`, readiness at `/health/ready`. Needs the `sbxloop[api]` extra; the daemon refuses to start without it. Off, nothing changes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `[api] enabled`                                                                                                                                   | `false`                                                                                                                                                                                                             | Serve the remote operations API from `sbxloop daemon`: REST under `/v1` with generated OpenAPI at `/v1/openapi.json`, liveness at `/health/live`, readiness at `/health/ready`. Needs the `api` extra's packages; the daemon refuses to start without it. Off, nothing changes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `[api] local_auth_enabled`                                                                                                                        | `true`                                                                                                                                                                                                              | Allow human password login and registration. False requires OIDC for every human grant and rejects existing human tokens without OIDC session provenance; machine clients remain available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `[api] bind` / `port`                                                                                                                             | `127.0.0.1` / `8420`                                                                                                                                                                                                | Where the listener binds. Loopback by default: reach it remotely through your reverse proxy, which terminates TLS. Local binding never stands in for identity — every request carries a token.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `[api] trusted_proxies`                                                                                                                           | `[]`                                                                                                                                                                                                                | Proxy addresses or CIDRs whose `X-Forwarded-*` headers are believed for the client address the auth limiter keys on. Empty: none are.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |

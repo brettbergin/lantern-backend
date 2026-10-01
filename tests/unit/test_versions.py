@@ -1,4 +1,4 @@
-"""Release drift: installed versus latest on PyPI.
+"""Release drift: installed versus the latest GitHub Release.
 
 The network is never touched here — ``fetch`` is injected into VersionProbe,
 and the one test that exercises the real HTTP path monkeypatches
@@ -8,6 +8,7 @@ and the one test that exercises the real HTTP path monkeypatches
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
 from typing import Any
 
@@ -16,8 +17,8 @@ import pytest
 import sbxloop
 from sbxloop.daemon import versions
 from sbxloop.daemon.versions import (
+    LATEST_TTL_S,
     MAX_BYTES,
-    PYPI_TTL_S,
     UNBUILT,
     VersionProbe,
     behind_by,
@@ -55,7 +56,7 @@ class TestCompare:
             ("", "0.7.15", "unknown"),
             ("not-a-version", "0.7.15", "unknown"),
             ("0.7.12", "not-a-version", "unknown"),
-            # No answer from PyPI means no verdict, never a false "behind".
+            # No answer from GitHub means no verdict, never a false "behind".
             ("0.7.12", None, "unknown"),
         ],
     )
@@ -88,27 +89,56 @@ class FakeResponse(io.BytesIO):
         self.close()
 
 
+def release(tag: str = "v0.7.15", **fields: Any) -> bytes:
+    return json.dumps({"tag_name": tag, "draft": False, "prerelease": False, **fields}).encode()
+
+
 class TestFetchLatest:
-    def test_reads_info_version(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_reads_the_latest_release_tag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, Any] = {}
 
         def fake_urlopen(request: Any, timeout: float = 0) -> FakeResponse:
             captured["url"] = request.full_url
             captured["agent"] = request.get_header("User-agent")
+            captured["auth"] = request.get_header("Authorization")
             captured["timeout"] = timeout
-            return FakeResponse(b'{"info": {"version": "0.7.15"}, "releases": {}}')
+            return FakeResponse(release("v0.7.15", assets=[]))
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
         assert fetch_latest("sbxloop") == "0.7.15"
-        assert captured["url"] == "https://pypi.org/pypi/sbxloop/json"
-        assert captured["url"].startswith("https://")  # never a credential over plaintext
+        assert fetch_latest("sbxloop-worker") == "0.7.15"  # one release carries both
+        assert captured["url"] == "https://api.github.com/repos/brettbergin/sbxloop/releases/latest"
+        assert "pypi.org" not in captured["url"]
+        assert captured["url"].startswith("https://")
+        assert captured["auth"] is None  # unauthenticated: no credential leaves the host
         assert sbxloop.__version__ in captured["agent"]
-        assert captured["timeout"] == versions.PYPI_TIMEOUT_S
+        assert captured["timeout"] == versions.LATEST_TIMEOUT_S
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            release("v0.7.16", draft=True),
+            release("v0.8.0", prerelease=True),
+            release("0.7.15"),
+            release("v"),
+            json.dumps({"tag_name": "v0.7.15"}).encode(),  # no draft/prerelease verdict
+            json.dumps({"tag_name": 7, "draft": False, "prerelease": False}).encode(),
+            b"[]",
+        ],
+        ids=["draft", "prerelease", "no_v", "bare_v", "unstated", "not_a_string", "not_an_object"],
+    )
+    def test_anything_but_a_published_release_is_no_answer(
+        self, monkeypatch: pytest.MonkeyPatch, body: bytes
+    ) -> None:
+        monkeypatch.setattr(
+            versions.urllib.request, "urlopen", lambda request, timeout=0: FakeResponse(body)
+        )
+        assert fetch_latest("sbxloop") is None
 
     @pytest.mark.parametrize(
         "boom",
         [
-            urllib.error.HTTPError("https://pypi.org", 503, "down", None, io.BytesIO(b"")),
+            urllib.error.HTTPError("https://api.github.com", 403, "rate", None, io.BytesIO(b"")),
             urllib.error.URLError("no route to host"),
             TimeoutError("timed out"),
         ],
@@ -138,11 +168,11 @@ class TestFetchLatest:
         monkeypatch.setattr(versions.urllib.request, "urlopen", huge)
         assert fetch_latest("sbxloop") is None
 
-    def test_missing_info_key_is_a_miss(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def no_info(request: Any, timeout: float = 0) -> FakeResponse:
-            return FakeResponse(b'{"releases": {}}')
+    def test_missing_tag_is_a_miss(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def no_tag(request: Any, timeout: float = 0) -> FakeResponse:
+            return FakeResponse(b'{"draft": false, "prerelease": false}')
 
-        monkeypatch.setattr(versions.urllib.request, "urlopen", no_info)
+        monkeypatch.setattr(versions.urllib.request, "urlopen", no_tag)
         assert fetch_latest("sbxloop") is None
 
 
@@ -164,10 +194,10 @@ def probe(
     *,
     sbx: Any = None,
     now: list[float] | None = None,
-    check_pypi: bool = True,
+    check_releases: bool = True,
     upgrade_command: str | None = None,
 ) -> tuple[VersionProbe, list[str]]:
-    """A probe whose PyPI answers are canned; returns it plus the call log."""
+    """A probe whose release answers are canned; returns it plus the call log."""
     calls: list[str] = []
 
     def fetch(name: str) -> str | None:
@@ -179,7 +209,7 @@ def probe(
         sbx=sbx,
         clock=clock,
         fetch=fetch,
-        check_pypi=check_pypi,
+        check_releases=check_releases,
         upgrade_command=upgrade_command,
     ), calls
 
@@ -207,12 +237,12 @@ class TestProbe:
         self, boom: Exception, reads: str
     ) -> None:
         """A wedged Docker daemon is not a missing binary; the prose says so,
-        and either way the PyPI rows — the actual point — still render."""
+        and either way the release rows — the actual point — still render."""
         p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, sbx=FakeSbx(raises=boom))
         assert p.installed().sbx is None
         text = p.summary()
         assert reads in text
-        assert "0.7.15 on PyPI" in text
+        assert "0.7.15 released" in text
 
     def test_no_sbx_handle_reports_nothing_for_it(self) -> None:
         p, _ = probe({})
@@ -225,7 +255,7 @@ class TestProbe:
         assert p.latest("sbxloop") == "0.7.15"
         assert p.latest("sbxloop") == "0.7.15"
         assert calls == ["sbxloop"]  # one network call, not two
-        now[0] += PYPI_TTL_S - 1
+        now[0] += LATEST_TTL_S - 1
         p.latest("sbxloop")
         assert calls == ["sbxloop"]
         now[0] += 2
@@ -247,9 +277,10 @@ class TestSummary:
         p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, sbx=FakeSbx("0.38.1"))
         text = p.summary()
         assert (
-            "sbxloop         0.7.12 installed · 0.7.15 on PyPI · BEHIND by 3 patch releases" in text
+            "sbxloop         0.7.12 installed · 0.7.15 released · BEHIND by 3 patch releases"
+            in text
         )
-        assert "sbxloop-worker  0.7.12 installed · 0.7.15 on PyPI · BEHIND" in text
+        assert "sbxloop-worker  0.7.12 installed · 0.7.15 released · BEHIND" in text
         assert "sbx CLI         0.38.1" in text
         # #638: no install method is guessed — pip is one of several.
         assert "pip install --upgrade" not in text
@@ -278,12 +309,12 @@ class TestSummary:
         # installed half still answers, and no upgrade is inferred.
         monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
         monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.12")
-        p, calls = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, check_pypi=False)
+        p, calls = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, check_releases=False)
         text = p.summary()
         assert calls == []
-        assert "sbxloop         0.7.12 installed · PyPI not checked" in text
+        assert "sbxloop         0.7.12 installed · latest release not checked" in text
         assert "[daemon] version_check = false" in text
-        assert "could not reach PyPI" not in text
+        assert "could not reach GitHub Releases" not in text
         assert "BEHIND" not in text and "depends on how" not in text
         assert p.drift_notice() is None and calls == []
 
@@ -304,13 +335,13 @@ class TestSummary:
         assert "operator's step" not in text
         assert "up to date" not in text  # the trap: 0.7.12.dev0 is NOT 0.7.12
 
-    def test_unreachable_pypi_keeps_the_installed_half(
+    def test_unreachable_releases_keep_the_installed_half(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
         p, _ = probe({})
         text = p.summary()
-        assert "0.7.12 installed · could not reach PyPI" in text
+        assert "0.7.12 installed · could not reach GitHub Releases" in text
         assert "the installed versions are still accurate" in text
         assert "operator's step" not in text
 
@@ -329,7 +360,8 @@ class TestDriftNotice:
         p, _ = probe({"sbxloop": "0.7.15"})
         notice = p.drift_notice()
         assert notice is not None
-        assert "0.7.12" in notice and "0.7.15" in notice
+        assert "0.7.12" in notice and "the latest release is 0.7.15" in notice
+        assert "PyPI" not in notice
         assert "3 patch releases behind" in notice
         assert "pip install --upgrade" not in notice
         assert "depends on how sbxloop was installed" in notice
@@ -346,7 +378,7 @@ class TestDriftNotice:
     @pytest.mark.parametrize(
         ("installed", "latest"),
         [("0.7.15", "0.7.15"), ("0.8.0", "0.7.15"), ("0.7.12.dev0", "0.7.15"), ("0.7.12", None)],
-        ids=["current", "ahead", "dev_build", "pypi_down"],
+        ids=["current", "ahead", "dev_build", "github_down"],
     )
     def test_quiet_otherwise(
         self, monkeypatch: pytest.MonkeyPatch, installed: str, latest: str | None

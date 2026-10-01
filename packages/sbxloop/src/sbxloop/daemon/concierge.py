@@ -466,8 +466,8 @@ class Concierge:
         self.bus = bus
         self.clock = clock
         # The daemon builds one probe and shares it, so the startup drift
-        # check warms the PyPI memo for the first "are we up to date?".
-        # Injected whole in tests, so no unit test reaches PyPI or runs `sbx`.
+        # check warms the release memo for the first "are we up to date?".
+        # Injected whole in tests, so no unit test reaches GitHub or runs `sbx`.
         self.versions = versions if versions is not None else VersionProbe()
         # Transport seam: the bridge hands in a callback that records who wants
         # a ping when a run finishes. None means this transport cannot notify.
@@ -1644,7 +1644,7 @@ class Concierge:
                     description=(
                         "Is this daemon running current code? Reports the installed sbxloop, "
                         "sbxloop-worker and sbx versions, the latest sbxloop/sbxloop-worker "
-                        "releases on PyPI (unless the operator switched that check off), and "
+                        "releases on GitHub (unless the operator switched that check off), and "
                         "whether the host is behind. sbxloop's own releases ship frequently, "
                         "while upgrading this host is an operator's step, so drift is normal "
                         "and worth checking. You cannot upgrade anything — the report says "
@@ -2335,7 +2335,7 @@ class Concierge:
         return "\n".join(lines)
 
     def _tool_version_status(self, args: dict[str, Any], by: str) -> str:
-        """Installed versus latest. The PyPI half is best effort by
+        """Installed versus latest. The release half is best effort by
         construction (see :mod:`sbxloop.daemon.versions`), so this returns a
         report rather than failing when the network is unavailable."""
         try:

@@ -3,6 +3,7 @@ network or a shell — every command and download goes through a fake."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -15,6 +16,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from sbxloop import releases
 from sbxloop.cli.app import app
 from sbxloop.homeinit import (
     RUNNER_UNIT,
@@ -119,13 +121,34 @@ class RecordingRun:
         return found[0]
 
 
+def release_files(version: str) -> dict[str, bytes]:
+    """One sbxloop release's wheels and the manifest that vouches for them."""
+    wheels = {
+        releases.wheel_name("sbxloop", version): f"host {version}".encode(),
+        releases.wheel_name("sbxloop-worker", version): f"worker {version}".encode(),
+    }
+    manifest = {
+        "schema": 1,
+        "version": version,
+        "sha": "a" * 40,
+        "files": {name: hashlib.sha256(data).hexdigest() for name, data in wheels.items()},
+    }
+    return {**wheels, releases.MANIFEST: json.dumps(manifest).encode()}
+
+
 class FakeFetch:
     def __init__(self) -> None:
         self.urls: list[str] = []
+        #: Bytes served in place of a release file, by name: a tampered download.
+        self.tampered: dict[str, bytes] = {}
 
     def __call__(self, url: str, target: Path) -> None:
         self.urls.append(url)
-        if "releases/tags/" in url:
+        prefix = "https://github.com/brettbergin/sbxloop/releases/download/v"
+        if url.startswith(prefix):
+            version, name = url.removeprefix(prefix).split("/", 1)
+            target.write_bytes(self.tampered.get(name, release_files(version)[name]))
+        elif "releases/tags/" in url:
             target.write_text(
                 json.dumps(
                     {
@@ -376,8 +399,17 @@ class TestLayout:
         assert [uv, "python", "install", "3.13"] in run.calls
         assert [uv, "venv", "--python", "3.13", str(home.venv)] in run.calls
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
-        assert pip[-2:] == ["sbxloop[discord,slack]==1.2.3", "sbxloop-worker==1.2.3"]
+        wheels = home.tmp / "release-v1.2.3"
+        assert pip[-2:] == [
+            str(wheels / "sbxloop_worker-1.2.3-py3-none-any.whl"),
+            f"{wheels / 'sbxloop-1.2.3-py3-none-any.whl'}[discord,slack]",
+        ]
         assert "--python" in pip and str(home.venv_python) in pip
+        # our packages: the release's own files, checked, never by name
+        base = "https://github.com/brettbergin/sbxloop/releases/download/v1.2.3/"
+        assert base + "release-manifest.json" in fetch.urls
+        assert not any("==" in word for word in pip)
+        assert not wheels.exists()
         # sbx: the pinned release for this platform, through Docker's installer with PREFIX=home
         assert any("releases/tags/v0.43.0" in u for u in fetch.urls)
         assert "u/linux" in fetch.urls
@@ -451,18 +483,84 @@ class TestLayout:
         _, upgrade, run, fetch, _ = make(tmp_path, version="1.2.4", sbx_version="0.39.0")
         upgrade.execute()
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
-        assert "sbxloop[discord,slack]==1.2.4" in pip
+        assert pip[-1].endswith("sbxloop-1.2.4-py3-none-any.whl[discord,slack]")
         assert any("tags/v0.39.0" in u for u in fetch.urls)
         assert home.sbx_version_file.read_text().strip() == "0.39.0"
         assert home.read_record().sbxloop_version == "1.2.4"  # type: ignore[union-attr]
 
-    def test_wheels_directory_feeds_the_install(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize("manifest", [True, False])
+    def test_wheels_directory_feeds_the_install(self, tmp_path: Path, manifest: bool) -> None:
+        wheels = tmp_path / "dist"
+        wheels.mkdir()
+        for name, data in release_files("1.2.3").items():
+            if manifest or name != releases.MANIFEST:
+                (wheels / name).write_bytes(data)
+        _, init, run, fetch, _ = make(tmp_path, wheels=wheels)
+        init.execute()
+        pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
+        assert pip[-2:] == [
+            str(wheels / "sbxloop_worker-1.2.3-py3-none-any.whl"),
+            f"{wheels / 'sbxloop-1.2.3-py3-none-any.whl'}[discord,slack]",
+        ]
+        assert "--find-links" not in pip
+        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
+
+    def test_a_development_build_installs_from_its_own_wheels(self, tmp_path: Path) -> None:
+        """CI's native install smoke test builds this checkout, whose version
+        sits between tags: the files are named, never looked up by version."""
+        wheels = tmp_path / "dist"
+        wheels.mkdir()
+        for name in (
+            "sbxloop-1.2.4.dev3-py3-none-any.whl",
+            "sbxloop_worker-1.2.4.dev3-py3-none-any.whl",
+        ):
+            (wheels / name).write_bytes(b"built here")
+        _, init, run, fetch, _ = make(tmp_path, version="1.2.4.dev3", wheels=wheels)
+        init.execute()
+        pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
+        assert pip[-1] == f"{wheels / 'sbxloop-1.2.4.dev3-py3-none-any.whl'}[discord,slack]"
+        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
+
+    def test_a_wheels_directory_that_contradicts_its_manifest_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        wheels = tmp_path / "dist"
+        wheels.mkdir()
+        for name, data in release_files("1.2.3").items():
+            (wheels / name).write_bytes(data)
+        (wheels / "sbxloop-1.2.3-py3-none-any.whl").write_bytes(b"swapped")
+        _, init, run, _, _ = make(tmp_path, wheels=wheels)
+        with pytest.raises(InitError, match="SHA-256"):
+            init.execute()
+        assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
+
+    def test_a_wheels_directory_without_the_wheels_is_refused(self, tmp_path: Path) -> None:
         wheels = tmp_path / "dist"
         wheels.mkdir()
         _, init, run, _, _ = make(tmp_path, wheels=wheels)
-        init.execute()
-        pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
-        assert "--find-links" in pip and str(wheels) in pip
+        with pytest.raises(InitError, match=r"has no sbxloop_worker-1\.2\.3"):
+            init.execute()
+        assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
+
+    @pytest.mark.parametrize(
+        "name", ["sbxloop-1.2.3-py3-none-any.whl", "sbxloop_worker-1.2.3-py3-none-any.whl"]
+    )
+    def test_a_download_that_does_not_match_the_manifest_is_never_installed(
+        self, tmp_path: Path, name: str
+    ) -> None:
+        home, init, run, fetch, _ = make(tmp_path)
+        fetch.tampered[name] = b"not what the release built"
+        with pytest.raises(InitError, match="SHA-256"):
+            init.execute()
+        assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
+        assert not (home.tmp / "release-v1.2.3").exists()
+
+    def test_a_version_that_is_not_a_release_is_refused(self, tmp_path: Path) -> None:
+        _, init, run, fetch, _ = make(tmp_path, version="1.2.3.dev4")
+        with pytest.raises(InitError, match=r"stable X\.Y\.Z"):
+            init.execute()
+        assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
+        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
 
     def test_unbuilt_version_is_refused_without_a_pin(self, tmp_path: Path) -> None:
         _, init, *_ = make(tmp_path, version=None)

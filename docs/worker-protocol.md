@@ -344,7 +344,8 @@ responses from that JSON file, each request appended to
 ## Worker installation
 
 At provision time the host resolves a worker wheel — vendored inside the
-sbxloop package → built from a workspace checkout → PyPI at the exact
-lockstep version — copies it into the sandbox, creates `~/.sbxloop/venv`,
+sbxloop package, else built from a workspace checkout; with neither it
+refuses, since the worker is never installed by name from a package index —
+copies it into the sandbox, creates `~/.sbxloop/venv`,
 installs it (`[copilot]` extra in the agent sandbox only), and verifies the
 imported version matches the host exactly.
