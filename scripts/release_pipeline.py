@@ -39,12 +39,20 @@ def commit_sha(value: str) -> str:
     return value
 
 
+#: The last release published before sbxloop became Lantern. Its files, and
+#: every earlier release's, carry the old distribution names.
+LAST_SBXLOOP_RELEASE = (2, 1, 37)
+
+
 def distribution_names(version: str) -> list[str]:
-    version_key(version)
+    key = version_key(version)
+    names = (
+        ("sbxloop", "sbxloop_worker")
+        if key <= LAST_SBXLOOP_RELEASE
+        else ("lantern_backend", "lantern_worker")
+    )
     return [
-        f"{name}-{version}{suffix}"
-        for name in ("lantern_backend", "lantern_worker")
-        for suffix in ("-py3-none-any.whl", ".tar.gz")
+        f"{name}-{version}{suffix}" for name in names for suffix in ("-py3-none-any.whl", ".tar.gz")
     ]
 
 

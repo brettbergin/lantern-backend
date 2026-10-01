@@ -2,8 +2,9 @@
 
 sbxloop became Lantern and Angie became the Lantern web app with no
 compatibility aliases. What may still say the old names: point-in-time
-records (the changelog, spikes) and the one-time migration from an sbxloop
-home, which has to name what it migrates from.
+records (the changelog, spikes), the one-time migration from an sbxloop
+home, which has to name what it migrates from, and the release pipeline,
+which has to recognise the releases published under the old name.
 """
 
 from __future__ import annotations
@@ -21,8 +22,10 @@ ALLOWED = {
     "docs/self-deploy.md",
     "packages/lantern/src/lantern/cli/app.py",
     "packages/lantern/src/lantern/fromsbxloop.py",
+    "scripts/release_pipeline.py",
     "tests/unit/test_brand.py",
     "tests/unit/test_from_sbxloop.py",
+    "tests/unit/test_release_pipeline.py",
 }
 ALLOWED_PREFIXES = ("docs/spikes/",)
 
