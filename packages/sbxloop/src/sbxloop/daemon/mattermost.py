@@ -98,12 +98,13 @@ from sbxloop.daemon.mattermost_format import (
 from sbxloop.daemon.store import ChatThread, DaemonStore, MergeGate
 from sbxloop.errors import DaemonError
 from sbxloop.log import get_logger
+from sbxloop.releases import extra_install_hint
 
 log = get_logger(__name__)
 
 INSTALL_HINT = (
-    "aiohttp is not installed on this host — install it with "
-    "`pip install 'sbxloop[mattermost]'` to enable the daemon's Mattermost bridge"
+    "aiohttp is not installed on this host — "
+    f"{extra_install_hint('mattermost', 'aiohttp')} to enable the daemon's Mattermost bridge"
 )
 # Handles resolved from the users API (user id -> username); bounded like
 # the other bridges' per-author maps so a long-lived daemon does not

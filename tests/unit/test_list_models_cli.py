@@ -248,8 +248,9 @@ class TestListModelsCommand:
         result = runner.invoke(app, ["list-models"])
         assert result.exit_code == 2
         assert "github-copilot-sdk is not installed" in result.output
-        # the extra must survive rich rendering (`[copilot]` is not markup)
-        assert "sbxloop[copilot]" in result.output
+        # the SDK itself, never our own package by name from an index
+        assert "'github-copilot-sdk>=" in result.output
+        assert "sbxloop[copilot]" not in result.output
 
     def test_sdk_failure_exits_2(self, workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         install_stub_sdk(monkeypatch, error=RuntimeError("boom"))

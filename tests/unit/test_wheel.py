@@ -46,7 +46,7 @@ def test_workspace_build_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sbxloop.__version__ in resolved.name
 
 
-def test_pypi_fallback_when_nothing_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_none_when_nothing_available(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wheel_mod, "_vendored_wheel", lambda: None)
     monkeypatch.setattr(wheel_mod, "_workspace_worker_root", lambda: None)
     assert wheel_mod.resolve_worker_wheel() is None

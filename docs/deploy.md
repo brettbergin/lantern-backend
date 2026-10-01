@@ -1,7 +1,8 @@
 # Running the daemon as a service and upgrading it
 
 This is the generic guide: install `sbxloop daemon` under systemd, upgrade it by hand, and
-— optionally — let a GitHub Actions workflow on the host keep it current from PyPI. Nothing
+— optionally — let a GitHub Actions workflow on the host keep it current from sbxloop's
+GitHub Releases. Nothing
 here is specific to any one host or repository. How this repository deploys its *own*
 daemon is a separate reference: [docs/self-deploy.md](self-deploy.md).
 
@@ -117,15 +118,20 @@ verify until they expire).
 
 ## Upgrading by hand
 
-Two commands as the service user, once the daemon is idle:
+sbxloop is distributed through GitHub Releases only. Each release carries both wheels and
+a `release-manifest.json` with their SHA-256; every upgrade path installs those files,
+checked against that manifest, and never `sbxloop` or `sbxloop-worker` by name from a
+package index. To move a home to the newest release, `sbxloop update` does the download,
+check and install in one step. For an exact version, as the service user, once the daemon
+is idle:
 
 ```bash
 sbxloop daemon ctl pause --hold upgrade
 until [ "$({ sbxloop daemon ctl status --json 2>/dev/null || echo '{}'; } | jq -r '.current // .claiming // "idle"')" = idle ]; do sleep 15; done
 
 sbxloop backup --label pre-X.Y.Z
-~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python --upgrade 'sbxloop[discord,slack]==X.Y.Z' 'sbxloop-worker==X.Y.Z'
-sbxloop init --systemd --no-sbx
+sbxloop init --no-sbx --version X.Y.Z   # fetch, check and install that release's wheels
+sbxloop init --systemd --no-sbx         # the new version refreshes launchers and units
 systemctl --user reset-failed sbxloop-daemon && systemctl --user restart sbxloop-daemon
 ```
 
@@ -156,11 +162,12 @@ sbxloop daemon ctl status --json     # exit 2 = no daemon came up
 is the by-hand procedure as a workflow, plus rollback. Copy it to
 `.github/workflows/deploy-daemon.yml` in the repository that owns the host. It needs a
 self-hosted Actions runner on the host, running as the service user, and takes **no**
-checkout — it installs from PyPI and needs nothing from the tree.
+checkout — it installs release wheels and needs nothing from the tree.
 
 ```
 schedule / workflow_dispatch → self-hosted runner on the daemon host
-                                ├─ compare PyPI's latest (or the named version) with what is installed
+                                ├─ compare the latest release (or the named version) with what is installed
+                                ├─ fetch and check the target's and the installed version's wheels
                                 ├─ take a named pause hold (deploy-<run id>)
                                 ├─ wait — no cap — for the in-flight run to finish
                                 ├─ snapshot, then install the exact version into the home's venv
@@ -171,23 +178,28 @@ schedule / workflow_dispatch → self-hosted runner on the daemon host
 
 Step by step:
 
-1. **Resolves the version** — the latest on PyPI, or the `workflow_dispatch` input — and
+1. **Resolves the version** — the latest GitHub Release, as the installed sbxloop reads it
+   (`python -m sbxloop.releases latest`), or the `workflow_dispatch` input — and
    **short-circuits** if the host already runs it, so the schedule costs nothing when there
-   is nothing to do.
+   is nothing to do. It then **fetches both releases' wheels** — the target and the version
+   installed now, for a rollback — with `python -m sbxloop.releases download`, which checks
+   each against its release manifest. A version it cannot fetch stops the job before any
+   hold is taken.
 2. **Takes a hold and waits for idle**, polling `ctl status --json` every 15 s with no cap
    short of the job's `timeout-minutes`. A timeout installs nothing: the hold is released and
    the daemon runs on as it was. A daemon that answers nothing for five minutes straight has
    nothing to drain and the job proceeds. To make a deploy go now, `ctl cancel` the run (it
    stays resumable; `cancel --retry` re-queues it fresh).
-3. **Snapshots** (`sbxloop backup`) and **upgrades** with both distributions pinned to the
-   same version, then re-runs `sbxloop init --systemd --no-sbx` so the launchers and units
+3. **Snapshots** (`sbxloop backup`) and **upgrades** from the two fetched wheel files, then
+   re-runs `sbxloop init --systemd --no-sbx` so the launchers and units
    match while preserving the installed sandbox runtime. Rollback also preserves sbx.
 4. **Restarts** after `systemctl --user reset-failed`. Holds are persisted, so an operator
    who paused before the deploy or *during* its wait is still paused afterwards without
    the pipeline doing anything.
 5. **Health-checks**: unit active, `--version` matches, `sbxloop doctor` exits 0, the daemon
    answers `ctl status --json`, then a 45 s settle to prove it is not crash-looping.
-6. **Rolls back** to the previously installed version on any failed check, restarts, and
+6. **Rolls back** to the previously installed version's fetched wheels on any failed check,
+   restarts, and
    fails the job. Rollback only runs once the upgrade step has — a failure before that
    changed nothing on the host, and a rollback restart would be the needless restart this
    whole procedure exists to avoid.
@@ -240,7 +252,7 @@ Two settings, and no names in the file:
   (`runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST }}"]`) and the name the notices
   call the host. Moving the daemon to another host is registering a runner there with that
   label — or changing the variable; the workflow file does not change.
-- The **`schedule`** is how often the host checks PyPI.
+- The **`schedule`** is how often the host checks for a new release.
 
 ### Where the job deploys to
 
@@ -349,13 +361,13 @@ is the control.
 ## Relationship to `version_status`
 
 The concierge's `version_status` tool and the startup drift line report when a host is
-behind PyPI; the upgrade paths above are what stops it happening. The concierge deliberately
+behind the latest GitHub Release; the upgrade paths above are what stops it happening. The concierge deliberately
 cannot upgrade anything. On a host upgraded by hand, set `[daemon] upgrade_command` to the
 two-command path (or whatever wraps it) so the notice tells the operator exactly what to run.
 On a host *with* the workflow, set `[daemon] version_check = false`: the workflow is what
 keeps the host current, a hand upgrade in between would be rolled to wherever the next
 scheduled deploy lands, and the notice would only ever advise exactly that — so the host
-makes no PyPI request and gives no advice, and a stale host shows up in the workflow's run
+makes no release request and gives no advice, and a stale host shows up in the workflow's run
 history instead.
 
 ## Multiple repositories on one host

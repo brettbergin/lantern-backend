@@ -2099,7 +2099,9 @@ def init(
     wheels: Annotated[
         Path | None,
         typer.Option(
-            "--wheels", help="A directory of wheels to install from (a deploy's release assets)."
+            "--wheels",
+            help="A directory holding this version's release wheels to install instead of "
+            "downloading them (checked against its release-manifest.json when present).",
         ),
     ] = None,
     dry_run: Annotated[
@@ -2289,7 +2291,7 @@ def update_command(
         bool, typer.Option("--dry-run", help="Check versions and show the installation command.")
     ] = False,
 ) -> None:
-    """Check PyPI and update this home's sbxloop and worker to the latest release."""
+    """Check GitHub Releases and update this home's sbxloop and worker to the latest release."""
     from sbxloop.update import UpdateError, update_home
 
     if check and dry_run:
@@ -2844,11 +2846,11 @@ def daemon(
     polled = source.github
     if isinstance(polled, MultiRepoIssueSource):
         polled.notify = loop.source_notice
-    # One probe, shared: the startup drift check below warms its PyPI memo, so
+    # One probe, shared: the startup drift check below warms its release memo, so
     # the concierge's first `version_status` answers without a network call.
     versions = VersionProbe(
         sbx=sbx,
-        check_pypi=config.daemon.version_check,
+        check_releases=config.daemon.version_check,
         upgrade_command=config.daemon.upgrade_command,
     )
     concierge: Concierge | None = None
@@ -2910,7 +2912,7 @@ def daemon(
         concierge.warm_up()
 
     if not once and not config.daemon.version_check:
-        # #641: the operator switched the PyPI half off — no request leaves
+        # #641: the operator switched the release half off — no request leaves
         # the host for it, and no advice is given that a pipeline or a mirror
         # pin would contradict. The concierge's `version_status` still
         # answers with the installed half.

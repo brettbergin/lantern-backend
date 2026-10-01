@@ -370,7 +370,7 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
 ```
 ┌ process ─────────────────────────────┐┌ versions ─────────────────────────┐
 │ unit     active (running) · pid 4242 ││ sbxloop   1.4.2 installed · 1.4.5 │
-│ daemon   pid 4242 · up 2d · 1.4.2    ││ on PyPI · BEHIND by 3 releases    │
+│ daemon   pid 4242 · up 2d · 1.4.2    ││ released · BEHIND by 3 releases   │
 │ current  r7ab3kq2m — Add retries     ││ sbxloop-worker 1.4.2 …            │
 │ holds    none · breaker closed       ││ sbx CLI   0.38.1                  │
 │ cap      4/12 runs today (UTC)       ││ checked 12m ago                   │
@@ -405,7 +405,7 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
   its next boundary and stays resumable, the process exits), and quitting
   asks whether to.
 - **Versions.** The same report the concierge's `versions` tool gives
-  (installed, latest on PyPI unless `[daemon] version_check = false`, the
+  (installed, latest GitHub Release unless `[daemon] version_check = false`, the
   sbx CLI), refreshed hourly. `U` runs `[daemon] upgrade_command` in a
   login shell, verbatim — the text the drift notice tells an operator to
   paste — (typed `upgrade`) and shows its output; the daemon keeps running

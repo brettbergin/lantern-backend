@@ -1720,8 +1720,11 @@ def collect_checks(
     checks.append(
         Check(
             "worker wheel",
-            True,
-            f"resolved: {wheel.name}" if wheel else "no local wheel; will install from PyPI",
+            wheel is not None,
+            f"resolved: {wheel.name}"
+            if wheel
+            else "no local worker wheel, so no sandbox can install one; reinstall sbxloop "
+            "from its GitHub Release",
             hard=False,
         )
     )

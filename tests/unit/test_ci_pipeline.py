@@ -159,7 +159,29 @@ def test_automatic_intake_is_separate_from_the_manual_publication_lock():
     assert wake["concurrency"].get("queue", "single") == "single"
     assert set(release[True]) == {"workflow_dispatch"}
     assert release["concurrency"]["queue"] == "max"
-    assert release["jobs"]["release"]["environment"] == "pypi"
+
+
+def test_releases_are_published_to_github_only():
+    """No package index: the distribution names a rename moves to are not
+    ours there, so every install comes from the release's own wheel files."""
+    text = (ROOT / ".github/workflows/release.yml").read_text()
+    job = yaml.safe_load(text)["jobs"]["release"]
+    assert "environment" not in job
+    assert job["permissions"] == {"contents": "write"}  # no OIDC token for an index
+    assert "pypi" not in text.lower()
+    assert not any("pypi" in step.get("uses", "") for step in job["steps"])
+
+
+def test_the_draft_is_published_only_after_the_smoked_files_are_staged():
+    steps = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["release"][
+        "steps"
+    ]
+    runs = [step.get("run", "") for step in steps]
+    smoke = next(i for i, run in enumerate(runs) if "smoke_wheels.py" in run)
+    stage = next(i for i, run in enumerate(runs) if run.endswith('release_pipeline.py" stage'))
+    publish = next(i for i, run in enumerate(runs) if run.endswith('release_pipeline.py" publish'))
+    assert smoke < stage < publish == len(steps) - 1
+    assert steps[publish]["id"] == "publish"
 
 
 def test_final_release_wheels_are_smoked_before_staging_or_publication():

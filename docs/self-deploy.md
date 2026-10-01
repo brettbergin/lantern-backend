@@ -6,7 +6,7 @@ workflow — is [docs/deploy.md](deploy.md). This page records where sbxloop's o
 departs from that pattern and the facts about the host that operating it needs.
 
 ```
-merge to main → coalesced request → Release (verify + tag + PyPI) → Deploy the daemon
+merge to main → coalesced request → Release (verify + tag + GitHub Release) → Deploy the daemon
                                                  ├─ check version, cooldown, and blocked releases
                                                  ├─ check the existing host with doctor
                                                  ├─ take a named pause hold (deploy-<run id>)
@@ -58,16 +58,14 @@ health; reports and history use that final version.
   token. Only this trusted workflow revision supplies executable helper code. The
   release result and manifest are parsed as data. The token needs `contents: read`
   and `actions: read` to read releases and the completion artifact.
-- **Wheels from the release, not PyPI.** `gh release download` fetches the same `dist/` that
-  `Release` uploads to PyPI, which exists the moment that workflow finishes — whereas the
-  PyPI simple index is Fastly-cached with `max-age=600`, so for up to ten minutes pip can be
-  served an index page that predates the upload. Two deploys died exactly there: v0.7.17 on
-  `sbxloop`, then v0.7.18 on `sbxloop-worker`, which is a separate project with its own
-  independently cached page. The host wheel pins `sbxloop-worker==X` exactly, and naming
+- **Wheels from the release, never an index.** Releases are GitHub Releases only (v2.1.36
+  was the last on PyPI), and the names a rename moves to are not ours on any index, so
+  neither package is ever installed by name. The helper downloads the release's exact
+  wheel files, checking each asset's size and SHA-256 digest, and `verify-download` checks
+  them against the manifest. The host wheel pins `sbxloop-worker==X` exactly, and naming
   the local worker wheel satisfies that pin without the index being consulted. Rollback
-  installs from PyPI: the previous version has been published for a while, so its page is
-  long since warm. Both install `[discord,slack]` (#619) so a rollback never drops an extra
-  the upgrade had.
+  fetches the previous version's wheels from its own release the same way. Both install
+  `[discord,slack]` (#619) so a rollback never drops an extra the upgrade had.
 - **Manifest.** New releases carry `release-manifest.json`; the downloaded wheels must
   match its hashes and its commit must match the release tag. Existing completed releases
   without that manifest remain deployable for rollback compatibility.
@@ -154,7 +152,7 @@ deployment or rollback outcome. Normal successful upgrades are spaced apart; man
 operations and necessary rollback recovery can restart sooner.
 
 Set `[daemon] version_check = false` in this host's `sbxloop.toml` (#641): the pipeline keeps it current,
-so the daemon neither asks PyPI nor advises a hand upgrade the next deploy would undo. A
+so the daemon neither asks GitHub Releases nor advises a hand upgrade the next deploy would undo. A
 stale host shows up as a failed or skipped **Deploy the daemon** run — check that, not the
 concierge.
 

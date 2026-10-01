@@ -35,7 +35,7 @@ from sbxloop.tui.widgets.panel import TextPanel
 
 #: `systemctl show` is cheap but forks; the bar and this screen share it.
 UNIT_POLL_S = 15.0
-#: PyPI is asked once an hour (the probe memoises for `PYPI_TTL_S` anyway).
+#: GitHub Releases is asked once an hour (the probe memoises for `LATEST_TTL_S` anyway).
 VERSIONS_POLL_S = 3600.0
 #: Journal lines kept for re-filtering.
 JOURNAL_BUFFER = 2000
@@ -162,7 +162,7 @@ class DaemonScreen(ConsoleScreen):
         probe = VersionProbe(
             sbx=sbx,
             upgrade_command=deps.config.daemon.upgrade_command,
-            check_pypi=deps.config.daemon.version_check,
+            check_releases=deps.config.daemon.version_check,
         )
         try:
             text = probe.summary()

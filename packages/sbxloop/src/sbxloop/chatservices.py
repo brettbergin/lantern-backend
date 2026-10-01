@@ -61,7 +61,9 @@ class ChatService:
     @property
     def missing_extra_detail(self) -> str:
         """Doctor's wording when the SDK is not importable."""
-        return f"{self.sdk_label} missing (pip install 'sbxloop[{self.extra}]')"
+        from sbxloop.releases import extra_install_hint
+
+        return f"{self.sdk_label} missing ({extra_install_hint(self.extra, self.sdk_label)})"
 
     def bridge_type(self) -> type[ChatBridge]:
         """The bridge class, imported now. The backend module — and its

@@ -57,6 +57,7 @@ from sbxloop.backends import ANTHROPIC_TOKEN_ENV, OPENAI_TOKEN_ENV, AgentBackend
 from sbxloop.endpoint import parse_endpoint
 from sbxloop.errors import SbxloopError
 from sbxloop.log import redact_text
+from sbxloop.releases import extra_install_hint
 
 if TYPE_CHECKING:
     from sbxloop.config import Config
@@ -83,9 +84,8 @@ class NoModelListing(SbxloopError):
 
 
 SDK_INSTALL_HINT = (
-    "github-copilot-sdk is not installed on this host — install it with "
-    "`pip install 'sbxloop[copilot]'` (or `pip install github-copilot-sdk`) "
-    "to list models"
+    "github-copilot-sdk is not installed on this host — "
+    f"{extra_install_hint('copilot', 'github-copilot-sdk')} to list models"
 )
 
 
@@ -301,8 +301,8 @@ def fetch_codex_models(timeout_s: float = 60.0) -> list[dict[str, Any]]:
         from openai_codex.types import ModelListResponse
     except ImportError as exc:
         raise SbxloopError(
-            "openai-codex is not installed on this host — install it with "
-            "`pip install 'sbxloop[codex]'` to list models"
+            "openai-codex is not installed on this host — "
+            f"{extra_install_hint('codex', 'openai-codex')} to list models"
         ) from exc
 
     from sbxloop_worker.backends.codex_runtime import authenticated_client

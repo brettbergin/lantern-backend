@@ -410,7 +410,7 @@ def test_interrupted_mutation_requires_manual_recovery():
     )
 
 
-def test_partial_pypi_retry_restores_original_bytes(api, tmp_path, monkeypatch):
+def test_publication_retry_restores_original_bytes(api, tmp_path, monkeypatch):
     client, fake = api
     monkeypatch.setattr(pipeline, "command", fake.release_command)
     plan = {"version": "1.0.2", "sha": "b" * 40, "action": "new"}

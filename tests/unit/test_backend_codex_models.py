@@ -98,8 +98,9 @@ def test_missing_host_extra_is_actionable(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setitem(sys.modules, "openai_codex", None)
     monkeypatch.setitem(sys.modules, "openai_codex.types", None)
-    with pytest.raises(SbxloopError, match=r"openai-codex.*sbxloop\[codex\]"):
+    with pytest.raises(SbxloopError, match=r"openai-codex.*'openai-codex==") as excinfo:
         models.fetch_codex_models()
+    assert "sbxloop[codex]" not in str(excinfo.value)  # never our own name from an index
 
 
 def test_duplicate_pagination_cursor_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

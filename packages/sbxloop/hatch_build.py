@@ -1,8 +1,8 @@
 """Hatch build hook: embed the sbxloop-worker wheel into the host package.
 
-Provisioning must be able to install the worker into a sandbox even when
-sbxloop-worker is not (yet) on PyPI, so the host wheel ships the worker wheel
-as package data at ``sbxloop/_vendor/``.
+Provisioning must be able to install the worker into a sandbox, and
+sbxloop-worker is never installed by name from a package index, so the host
+wheel ships the worker wheel as package data at ``sbxloop/_vendor/``.
 
 Runs for both sdist and wheel targets. When building the wheel from an sdist
 (as ``uv build`` does), the worker source tree is not available — but the

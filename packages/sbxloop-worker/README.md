@@ -7,14 +7,11 @@
 
 The in-sandbox runtime for [sbxloop](https://github.com/brettbergin/lantern-backend):
 shared host/worker protocol models, the job runner (`python -m sbxloop_worker`),
-and agent backends. Install with the `copilot` extra inside agent sandboxes:
+and agent backends.
 
-```bash
-pip install "sbxloop-worker[copilot]"
-```
-
-You normally never install this directly — the sbxloop host package provisions
-it into sandboxes automatically.
+You never install this directly — the sbxloop host package carries this wheel
+and provisions it into sandboxes itself (with the `copilot` extra in agent
+sandboxes). It is never installed by name from a package index.
 
 The `claude` and `codex` extras select the other agent backends. `codex`
 installs the Python `openai-codex` SDK and its matching Codex CLI runtime;

@@ -13,8 +13,8 @@ from __future__ import annotations
 import importlib.util
 
 MISSING_EXTRA = (
-    "the remote API needs the `sbxloop[api]` extra (fastapi, uvicorn, pyjwt); "
-    "install it, or set `[api] enabled = false`"
+    "the remote API needs the `api` extra's packages (fastapi, uvicorn, pyjwt); "
+    "install them into the venv sbxloop runs from, or set `[api] enabled = false`"
 )
 
 

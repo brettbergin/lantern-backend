@@ -7,6 +7,20 @@ Releases. The next release renames the package, CLI, module, environment
 prefix and home directory to `lantern`, `LANTERN_*` and `~/.lantern`, with no
 compatibility aliases.
 
+**Releases come from GitHub only, and our packages are never installed by
+name from an index.** Release publishes the smoked, staged GitHub Release and
+uploads nothing to PyPI; v2.1.36 stays the last version there. The installer,
+`sbxloop update`, `sbxloop init` (including `--version`) and the deploy
+workflows' upgrade and rollback now download a release's two wheels and its
+`release-manifest.json`, check each wheel's SHA-256 against it, and install
+those files; third-party dependencies still resolve from PyPI. The names a
+later rename moves to are not ours on PyPI, so a by-name install could fetch
+someone else's code. A sandbox whose host has no worker wheel now stops with
+a named error instead of installing `sbxloop-worker` from PyPI, and the
+version report and startup drift notice compare against the latest GitHub
+Release. Missing chat, API and model-listing SDKs are named by their own
+packages, to install into the venv sbxloop runs from.
+
 **Members who registered before a capability existed now hold it.** A
 member's API client stores its capabilities, written at registration and on
 a role change, so the `plans:create` and `plans:publish` the owner, admin

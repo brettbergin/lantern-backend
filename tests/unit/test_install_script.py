@@ -15,6 +15,8 @@ have git installed never reaches the script, in either direction.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -29,7 +31,14 @@ INSTALL = ROOT / "scripts" / "install.sh"
 
 # The externals the script reaches for that a fake cannot stand in for; every
 # other name on the runner's PATH stays out of the synthetic host.
-BORROWED = ("mkdir", "uname")
+BORROWED = ("mkdir", "uname", "rm")
+# The release check needs one SHA-256 tool; borrow whichever this runner has.
+SHA_TOOLS = ("sha256sum", "shasum")
+VERSION = "1.2.3"
+WHEELS = {
+    f"sbxloop_worker-{VERSION}-py3-none-any.whl": "worker wheel",
+    f"sbxloop-{VERSION}-py3-none-any.whl": "host wheel",
+}
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="a POSIX shell bootstrap; Windows installs through WSL2"
@@ -73,6 +82,56 @@ class Host:
         target.chmod(0o755)
         return target
 
+    def release(
+        self,
+        *,
+        tampered: str | None = None,
+        draft: bool = False,
+        prerelease: bool = False,
+    ) -> None:
+        """A `curl` that serves GitHub: the release document, its manifest,
+        and both wheels — one of them ``tampered`` if asked."""
+        release = json.dumps(
+            {"tag_name": f"v{VERSION}", "draft": draft, "prerelease": prerelease, "assets": []},
+            indent=2,
+        )
+        manifest = json.dumps(
+            {
+                "schema": 1,
+                "version": VERSION,
+                "sha": "a" * 40,
+                "files": {
+                    name: hashlib.sha256(body.encode()).hexdigest() for name, body in WHEELS.items()
+                },
+            }
+        )
+        served = {name: ("tampered" if name == tampered else body) for name, body in WHEELS.items()}
+        wheel_cases = "".join(
+            f"  */{name}) printf '%s' '{body}' > \"$out\";;\n" for name, body in served.items()
+        )
+        target = self.path / "curl"
+        target.unlink(missing_ok=True)
+        target.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "curl $*" >> "{self.log}"\n'
+            'out=""; url=""\n'
+            "while [ $# -gt 0 ]; do\n"
+            '  case "$1" in\n'
+            '    -o|-H) [ "$1" = -o ] && out="$2"; shift 2; continue;;\n'
+            "    -*) ;;\n"
+            '    *) url="$1";;\n'
+            "  esac\n"
+            "  shift\n"
+            "done\n"
+            'case "$url" in\n'
+            f"  */releases/latest|*/releases/tags/v{VERSION}) printf '%s' '{release}';;\n"
+            f"  */release-manifest.json) printf '%s' '{manifest}';;\n"
+            f"{wheel_cases}"
+            "  *) exit 22;;\n"
+            "esac\n"
+        )
+        target.chmod(0o755)
+
     def run(self, **env: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["/bin/sh", str(INSTALL)],
@@ -102,6 +161,9 @@ def host(tmp_path: Path) -> Host:
         real = shutil.which(name)
         assert real is not None, f"this runner has no {name}"
         (path / name).symlink_to(real)
+    sha = next(((n, shutil.which(n)) for n in SHA_TOOLS if shutil.which(n)), None)
+    assert sha is not None, "this runner has neither sha256sum nor shasum"
+    (path / sha[0]).symlink_to(sha[1])
     host.fake("curl")
     host.fake("tar")
     return host
@@ -112,6 +174,7 @@ def installable(host: Host) -> Host:
     """…and the pieces the script would otherwise download, pre-placed, so a
     passing preflight runs the bootstrap through to `sbxloop init`."""
     host.fake("git")
+    host.release()
     for name, relative in (("uv", "bin/uv"), ("sbxloop", "venv/bin/sbxloop")):
         landed = host.home / relative
         landed.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +243,68 @@ def test_an_explicitly_configured_git_that_is_missing_fails(installable: Host) -
     assert result.returncode == 2
     assert "GIT_PYTHON_GIT_EXECUTABLE" in result.stdout
     assert installable.downloads == []
+
+
+class TestReleaseWheels:
+    """sbxloop and its worker come from the GitHub Release's own wheel files,
+    checked against its manifest — never by name from a package index, where
+    the names a rename moves to are not ours."""
+
+    def install(self, host: Host) -> list[str]:
+        return [line for line in host.invocations if line.startswith("uv pip install")]
+
+    def test_the_latest_release_is_installed_from_its_wheels(self, installable: Host) -> None:
+        result = installable.run()
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        log = "\n".join(installable.invocations)
+        assert "https://api.github.com/repos/brettbergin/sbxloop/releases/latest" in log
+        base = f"https://github.com/brettbergin/sbxloop/releases/download/v{VERSION}/"
+        assert base + "release-manifest.json" in log
+        [install] = self.install(installable)
+        wheels = installable.home / "tmp" / f"release-v{VERSION}"
+        assert f"{wheels}/sbxloop_worker-{VERSION}-py3-none-any.whl" in install
+        assert f"{wheels}/sbxloop-{VERSION}-py3-none-any.whl[discord,slack]" in install
+        assert "==" not in install and "sbxloop[" not in install
+        assert not wheels.exists()
+        assert "sbxloop init --systemd" in log
+
+    def test_a_pinned_version_reads_its_own_release(self, installable: Host) -> None:
+        result = installable.run(SBXLOOP_VERSION=VERSION)
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        log = "\n".join(installable.invocations)
+        assert f"releases/tags/v{VERSION}" in log and "releases/latest" not in log
+        assert len(self.install(installable)) == 1
+
+    @pytest.mark.parametrize("name", sorted(WHEELS))
+    def test_a_wheel_that_contradicts_the_manifest_is_never_installed(
+        self, installable: Host, name: str
+    ) -> None:
+        installable.release(tampered=name)
+
+        result = installable.run()
+
+        assert result.returncode == 1
+        assert f"{name} does not match the SHA-256" in result.stdout
+        assert self.install(installable) == []
+        assert "sbxloop init" not in "\n".join(installable.invocations)
+
+    @pytest.mark.parametrize("flag", ["draft", "prerelease"])
+    def test_only_a_published_stable_release_installs(self, installable: Host, flag: str) -> None:
+        installable.release(**{flag: True})
+
+        result = installable.run()
+
+        assert result.returncode == 1
+        assert self.install(installable) == []
+
+    def test_the_header_names_the_release_not_an_index(self) -> None:
+        header = INSTALL.read_text().split("set -eu", 1)[0]
+        assert "GitHub Release" in header
+        assert "PyPI" in header  # only for the third-party dependencies
+        assert "never by name from" in header
+        assert "sbxloop[" not in INSTALL.read_text()
 
 
 def test_git_is_a_declared_prerequisite() -> None:

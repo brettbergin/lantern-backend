@@ -574,20 +574,7 @@ def main() -> None:
             output(reused=restore_staged(api, plan, dist))
         elif mode == "stage":
             stage(api, plan, dist)
-            # The manifest belongs on GitHub, not on PyPI.
-            (dist / MANIFEST).unlink()
         else:
-            for attestation in sorted(dist.glob("*.publish.attestation")):
-                command(
-                    "gh",
-                    "release",
-                    "upload",
-                    f"v{plan['version']}",
-                    "--repo",
-                    api.repo,
-                    "--clobber",
-                    str(attestation),
-                )
             command(
                 "gh", "release", "edit", f"v{plan['version']}", "--repo", api.repo, "--draft=false"
             )

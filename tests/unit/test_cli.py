@@ -698,7 +698,7 @@ class TestDaemonCommand:
     def test_once_never_starts_the_version_check(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The drift check reaches PyPI, so it belongs to a long-running
+        """The drift check reaches GitHub Releases, so it belongs to a long-running
         daemon only — this is what keeps the unit suite off the network."""
         from sbxloop.cli import app as app_mod
 
@@ -736,7 +736,7 @@ class TestDaemonCommand:
         result = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
         assert result.exit_code == 0, result.output
         (probe,) = built
-        assert probe.check_pypi is False
+        assert probe.check_releases is False
         assert probe.upgrade_command == "pipx upgrade sbxloop"
 
     def test_state_lives_in_the_home_and_is_announced(

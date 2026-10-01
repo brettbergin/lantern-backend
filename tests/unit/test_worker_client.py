@@ -580,29 +580,22 @@ class TestInstall:
         pip_calls = [c for c in fake_sbx.invocations("exec") if any("pip" in a for a in c)]
         assert any(f"/tmp/{wheel.name}[copilot]" in a for c in pip_calls for a in c)
 
-    def test_install_pypi_fallback(
+    def test_install_without_a_local_wheel_never_fetches_the_worker_by_name(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop
         from sbxloop.worker import client as client_mod
 
-        # no local wheel available -> install pinned from PyPI
+        # No local wheel: the worker comes only from this host's release
+        # wheel, so this refuses rather than `pip install sbxloop-worker==X`.
         monkeypatch.setattr(client_mod, "resolve_worker_wheel", lambda: None)
         client = make_client(sandbox, EventBus())
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
         fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
-        fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
-        )
-        fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
-        )
-        client.install(wheel=None, extras="")
+        with pytest.raises(WorkerError, match="GitHub Release"):
+            client.install(wheel=None, extras="")
 
         pip_calls = [c for c in fake_sbx.invocations("exec") if any("pip" in a for a in c)]
-        expected = f"sbxloop-worker=={sbxloop.__version__}"
-        assert any(expected in a for c in pip_calls for a in c)
+        assert not any("sbxloop-worker==" in a for c in pip_calls for a in c)
 
     def test_install_version_mismatch(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         client = make_client(sandbox, EventBus())

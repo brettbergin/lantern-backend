@@ -341,13 +341,10 @@ jobs:
           VERSION: ${{ steps.final.outputs.version }}
         run: |
           set -euo pipefail
-          # Install from the GitHub Release, not PyPI. Release attaches the
-          # same dist/ it uploads to PyPI, and it exists the moment Release
-          # finishes — whereas the PyPI simple index is Fastly-cached with
-          # `max-age=600`, so for up to ten minutes pip can still be served an
-          # index that predates the upload. Two deploys died that way: v0.7.17
-          # on `sbxloop`, then v0.7.18 on `sbxloop-worker`, which is a separate
-          # project with its own independently-cached index page.
+          # The GitHub Release is the only distribution: sbxloop and its
+          # worker are never installed by name from a package index. Its
+          # wheels exist the moment Release finishes, and the helper checks
+          # each against release-manifest.json before anything installs.
           dist="$(mktemp -d)"
           echo "dist=${dist}" >> "$GITHUB_OUTPUT"
           for attempt in 1 2 3 4 5; do
@@ -393,9 +390,8 @@ jobs:
           # sbxloop-worker==VERSION exactly, and naming the local worker wheel
           # satisfies that pin without the index being consulted for it at all.
           # Both chat extras go in, so switching [chat] backend on the host is
-          # a config change, not a reinstall. Everything else (pydantic,
-          # discord.py, slack_sdk) still resolves from PyPI, which is fine:
-          # those are not racing a just-published version.
+          # a config change, not a reinstall. Only third-party dependencies
+          # (pydantic, discord.py, slack_sdk) resolve from PyPI.
           "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
             "${DIST}/sbxloop_worker-${VERSION}-py3-none-any.whl" \
             "${DIST}/sbxloop-${VERSION}-py3-none-any.whl[discord,slack]"
@@ -482,16 +478,35 @@ jobs:
         # exactly the needless restart this pipeline exists to avoid.
         if: failure() && steps.final.outputs.changed == 'true' && steps.upgrade.outcome != 'skipped'
         env:
+          # Only the release helper gets the Actions token; the host commands
+          # below keep the operator's own credentials.
+          ACTIONS_TOKEN: ${{ github.token }}
           PREV: ${{ steps.installed.outputs.current }}
         run: |
           set -euo pipefail
           echo "restored=false" >> "$GITHUB_OUTPUT"
           echo "::error::deploy failed — rolling back to ${PREV}"
-          # PyPI is safe here: PREV has been published for a while, so its index
-          # page is long since warm. No just-published version to race.
+          # The previous version comes from its own GitHub Release, exactly as
+          # the upgrade did: the same helper downloads its wheels and checks
+          # them against that release's manifest. Never by name from an index.
+          prev_dist="$(mktemp -d)"
+          trap 'rm -rf -- "${prev_dist}"' EXIT
+          for attempt in 1 2 3; do
+            if GH_TOKEN="${ACTIONS_TOKEN}" VERSION="${PREV}" DIST="${prev_dist}" \
+              "${VENV_PYTHON}" "${PIPELINE}" download-wheels; then
+              break
+            fi
+            [ "${attempt}" -lt 3 ] || { echo "::error::could not download the wheels for v${PREV}"; exit 1; }
+            echo "release v${PREV} not downloadable (attempt ${attempt}); retrying in 15s"
+            sleep 15
+          done
+          GH_TOKEN="${ACTIONS_TOKEN}" VERSION="${PREV}" DIST="${prev_dist}" \
+            "${VENV_PYTHON}" "${PIPELINE}" verify-download
           # The same extras as the upgrade (#619): a rollback that drops one
           # rolls a host on that backend back to a build that cannot start.
-          "${UV}" pip install --python "${VENV_PYTHON}" --upgrade "sbxloop[discord,slack]==${PREV}" "sbxloop-worker==${PREV}"
+          "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
+            "${prev_dist}/sbxloop_worker-${PREV}-py3-none-any.whl" \
+            "${prev_dist}/sbxloop-${PREV}-py3-none-any.whl[discord,slack]"
           "${SBXLOOP}" init --systemd --no-sbx || true
           systemctl --user reset-failed "${UNIT}" || true
           timeout 300 systemctl --user restart "${UNIT}"
