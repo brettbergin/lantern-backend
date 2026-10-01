@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sbxloop.api.publicids import PublicIds, item_key
-from sbxloop.daemon.model import WorkItem
+from lantern.api.publicids import PublicIds, item_key
+from lantern.daemon.model import WorkItem
 from tests.api.conftest import Api, build
 from tests.unit.test_daemon_loop import gh_item
 

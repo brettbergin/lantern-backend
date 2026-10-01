@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.naming import run_name
-from sbxloop.sbx.provision import (
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.naming import run_name
+from lantern.sbx.provision import (
     GhPat,
     Provisioner,
     github_policy_allows,
@@ -53,7 +53,7 @@ class TestCredential:
     ) -> None:
         provisioner = make(fake_sbx, tmp_path, {"GH_TOKEN": "ghp", "COPILOT_GITHUB_TOKEN": "c"})
         with pytest.raises(ProvisionError, match="GITLAB_TOKEN is not set"):
-            provisioner.ensure_github_only("sbxloop-daemon-github", tmp_path / "ws")
+            provisioner.ensure_github_only("lantern-daemon-github", tmp_path / "ws")
         assert fake_sbx.invocations("create") == []
 
     def test_a_configured_name_wins(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
@@ -87,8 +87,8 @@ class TestSpec:
 
     def test_existing_non_github_boxes_remain_discoverable(self) -> None:
         assert sandbox_name_candidates("r1", "github", vcs_kind="gitlab") == (
-            "sbxloop-r1-gitlab",
-            "sbxloop-r1-github",
+            "lantern-r1-gitlab",
+            "lantern-r1-github",
         )
 
     def test_the_allowlist_without_an_api_root_is_empty_not_githubs(self) -> None:
@@ -125,13 +125,13 @@ class TestDelivery:
             env={"GITLAB_TOKEN": "glpat-x", "COPILOT_GITHUB_TOKEN": "c"},
         )
         assert provisioner._env_file_reason("github", GhPat("glpat-x"), kind="gitlab") == "forge"
-        sandbox = provisioner.ensure_github_only("sbxloop-daemon-github", tmp_path / "ws")
+        sandbox = provisioner.ensure_github_only("lantern-daemon-github", tmp_path / "ws")
         try:
             assert "sandbox.forge_token" in seen
             # No sbx secret was registered for the box: the token rode the
             # env-file road, under the forge's variable.
-            assert not any("sbxloop-daemon-github" in s for s in fake_sbx.secrets())
-            env_file = fake_sbx.sandbox_fs(sandbox.name) / "home/agent/.sbxloop/env.sh"
+            assert not any("lantern-daemon-github" in s for s in fake_sbx.secrets())
+            env_file = fake_sbx.sandbox_fs(sandbox.name) / "home/agent/.lantern/env.sh"
             if env_file.is_file():
                 text = env_file.read_text()
                 assert "GITLAB_TOKEN=" in text and "GH_TOKEN=" not in text

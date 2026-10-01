@@ -15,8 +15,8 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from sbxloop.api.pdf_analysis import ChannelPdfAnalysis, PdfAnalysisRunner, _validated_result
-from sbxloop.api.pdf_worker import extract_pdf
+from lantern.api.pdf_analysis import ChannelPdfAnalysis, PdfAnalysisRunner, _validated_result
+from lantern.api.pdf_worker import extract_pdf
 
 
 def test_pdf_worker_preserves_page_numbers_and_limits_text(tmp_path: Path) -> None:

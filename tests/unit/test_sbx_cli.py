@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.errors import SbxAuthError, SbxError, SbxNotFoundError, SbxSettleTimeoutError
-from sbxloop.sbx.cli import SbxCLI, _exec_failed_at_sbx_level, redacted_argv, resolve_sbx_binary
-from sbxloop.sbx.models import SandboxSpec, SecretSpec
+from lantern.errors import SbxAuthError, SbxError, SbxNotFoundError, SbxSettleTimeoutError
+from lantern.sbx.cli import SbxCLI, _exec_failed_at_sbx_level, redacted_argv, resolve_sbx_binary
+from lantern.sbx.models import SandboxSpec, SecretSpec
 from tests.conftest import FakeSbx
 
 
@@ -16,7 +16,7 @@ def cli(fake_sbx: FakeSbx) -> SbxCLI:
     return SbxCLI(binary=str(fake_sbx.binary))
 
 
-def spec(name: str = "sbxloop-r1-agent", tmp: Path = Path("/tmp")) -> SandboxSpec:
+def spec(name: str = "lantern-r1-agent", tmp: Path = Path("/tmp")) -> SandboxSpec:
     return SandboxSpec(name=name, role="agent", workspace=tmp)
 
 
@@ -39,8 +39,8 @@ class TestAppName:
         assert cli.argv("ls") == [str(fake_sbx.binary), "ls"]
 
     def test_app_name_opt_in_injected(self, fake_sbx: FakeSbx) -> None:
-        cli = SbxCLI(binary=str(fake_sbx.binary), app_name="sbxloop")
-        assert cli.argv("version")[:3] == [str(fake_sbx.binary), "--app-name", "sbxloop"]
+        cli = SbxCLI(binary=str(fake_sbx.binary), app_name="lantern")
+        assert cli.argv("version")[:3] == [str(fake_sbx.binary), "--app-name", "lantern"]
         cli.run("version", check=False)
         # the fake strips --app-name before recording, proving it was passed
         assert fake_sbx.raw_invocations()[0]["args"] == ["version"]
@@ -80,7 +80,7 @@ class TestLifecycle:
         """`sbx rm` returns when the backend accepts the teardown, not when it
         has finished: a caller about to re-create the name must not see the
         removal as done while sbx still lists it (#952)."""
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
         cli.create(spec("boxa", tmp_path))
         fake_sbx.linger_removals(3)
         cli.rm("boxa")
@@ -91,7 +91,7 @@ class TestLifecycle:
     ) -> None:
         """A name sbx never stops listing is "could not tell", not success:
         the caller must not create over it."""
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
         cli.create(spec("boxa", tmp_path))
         fake_sbx.linger_removals(10_000)
         cli.rm("boxa", settle=False)
@@ -104,8 +104,8 @@ class TestLifecycle:
         """`sbx rm` succeeded and the backend is still reaping the box: slow,
         not refused. Callers tell the two apart by type, so a slow teardown is
         not handled like a backend that cannot remove the box."""
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
         cli.create(spec("boxa", tmp_path))
         fake_sbx.linger_removals(10_000)
         with pytest.raises(SbxSettleTimeoutError, match="still lists it"):
@@ -187,7 +187,7 @@ class TestExec:
             captured.update(kwargs)
             return real_run(argv, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr("sbxloop.sbx.cli.subprocess.run", spy)
+        monkeypatch.setattr("lantern.sbx.cli.subprocess.run", spy)
         cli.run("version", check=False)
         assert captured["stdin"] is subprocess.DEVNULL
 
@@ -209,7 +209,7 @@ class TestExec:
                 captured.update(kwargs)
                 super().__init__(argv, **kwargs)
 
-        monkeypatch.setattr("sbxloop.sbx.cli.subprocess.Popen", Spy)
+        monkeypatch.setattr("lantern.sbx.cli.subprocess.Popen", Spy)
         proc = cli.popen("exec", "boxa", "true")
         try:
             assert captured["stdin"] is subprocess.DEVNULL
@@ -220,9 +220,9 @@ class TestExec:
         cli.create(spec("boxa", tmp_path))
         cli.exec(
             "boxa",
-            ["sh", "-c", "mkdir -p /home/agent/.sbxloop && echo hi > /home/agent/.sbxloop/x"],
+            ["sh", "-c", "mkdir -p /home/agent/.lantern && echo hi > /home/agent/.lantern/x"],
         )
-        assert (fake_sbx.sandbox_fs("boxa") / "home/agent/.sbxloop/x").read_text() == "hi\n"
+        assert (fake_sbx.sandbox_fs("boxa") / "home/agent/.lantern/x").read_text() == "hi\n"
 
 
 class TestCp:
@@ -325,7 +325,7 @@ class TestCreateFailureMessages:
         def never_returns(argv: list[str], **kwargs: object) -> object:
             raise subprocess.TimeoutExpired(argv, 600.0)
 
-        monkeypatch.setattr("sbxloop.sbx.cli.subprocess.run", never_returns)
+        monkeypatch.setattr("lantern.sbx.cli.subprocess.run", never_returns)
         with pytest.raises(SbxError, match="cannot create boxa: sbx invocation timed out after"):
             cli.create(spec("boxa", tmp_path))
 
@@ -507,8 +507,8 @@ class TestExecFailureClassification:
     @pytest.mark.parametrize(
         "stderr",
         [
-            'Error: sandbox "sbxloop-r1-agent" not found',
-            "Error: no such sandbox: sbxloop-r1-agent",
+            'Error: sandbox "lantern-r1-agent" not found',
+            "Error: no such sandbox: lantern-r1-agent",
             "Error: sandbox is not running",
             "Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
             "ERROR: user is not authenticated to Docker: secret not found",
@@ -527,7 +527,7 @@ class TestInvocationLogging:
     ) -> None:
         import logging
 
-        with caplog.at_level(logging.DEBUG, logger="sbxloop.sbx.cli"):
+        with caplog.at_level(logging.DEBUG, logger="lantern.sbx.cli"):
             cli.secret_set_custom(host="h", env="E", value="github_pat_SECRET")
         lines = [r.getMessage() for r in caplog.records if "sbx.invoke" in r.getMessage()]
         assert lines, [r.getMessage() for r in caplog.records]
@@ -541,7 +541,7 @@ class TestInvocationLogging:
         import logging
 
         fake_sbx.fail_next("rm", returncode=1, stderr="no such sandbox")
-        with caplog.at_level(logging.DEBUG, logger="sbxloop.sbx.cli"), pytest.raises(SbxError):
+        with caplog.at_level(logging.DEBUG, logger="lantern.sbx.cli"), pytest.raises(SbxError):
             cli.rm("nope")
         (line,) = [r.getMessage() for r in caplog.records if "sbx.invoke" in r.getMessage()]
         assert "'command': 'rm'" in line and "'rc': 1" in line

@@ -3,7 +3,7 @@ switch and gate, and the keys no file line moves."""
 
 from __future__ import annotations
 
-from sbxloop.daemon.configpolicy import NEVER_FROM_CHAT, locked_by, never_from_chat, refusal
+from lantern.daemon.configpolicy import NEVER_FROM_CHAT, locked_by, never_from_chat, refusal
 
 
 def test_the_chat_sections_and_the_concierges_own_switches_are_never_from_chat() -> None:
@@ -27,7 +27,7 @@ def test_a_prefix_matches_whole_segments_only() -> None:
 
 def test_env_only_keys_are_refused_with_the_loaders_reason() -> None:
     why = never_from_chat("home")
-    assert why is not None and why.startswith("not a file setting:") and "SBXLOOP_HOME" in why
+    assert why is not None and why.startswith("not a file setting:") and "LANTERN_HOME" in why
     assert never_from_chat("run_model_override") is not None
 
 

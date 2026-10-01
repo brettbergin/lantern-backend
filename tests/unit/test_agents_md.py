@@ -2,7 +2,7 @@
 
 `AGENTS.md` is what a coding agent reads first when it clones this repository
 (Copilot reads `AGENTS.md`, Claude reads `CLAUDE.md`); the two names must be
-one file, the way `sbxloop.toml.example` aliases the shipped example config.
+one file, the way `lantern.toml.example` aliases the shipped example config.
 """
 
 from __future__ import annotations
@@ -42,15 +42,15 @@ def test_agents_md_points_at_real_paths() -> None:
     text = AGENTS.read_text(encoding="utf-8")
     for rel in (
         "docs/architecture.md",
-        "packages/sbxloop/src/sbxloop/",
-        "packages/sbxloop-worker/src/sbxloop_worker/",
+        "packages/lantern/src/lantern/",
+        "packages/lantern-worker/src/lantern_worker/",
         "tests/fakes/fake_github.py",
         "tests/fixtures/ecosystems/",
         "tests/unit/test_examples.py",
         "tests/unit/test_ecosystems.py",
         "tests/unit/test_prompts.py",
         "scripts/check_self_references.py",
-        "sbxloop.toml.example",
+        "lantern.toml.example",
     ):
         assert rel in text, rel
         assert (REPO_ROOT / rel).exists(), rel

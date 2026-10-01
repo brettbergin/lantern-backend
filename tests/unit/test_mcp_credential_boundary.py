@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.agentbox import DaemonAgent
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner, agent_policy_allows
+from lantern.config import Config
+from lantern.daemon.agentbox import DaemonAgent
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner, agent_policy_allows
 from tests.conftest import FakeSbx
 
 
@@ -66,7 +66,7 @@ def test_provision_keeps_mcp_keys_in_service_under_fallback(
         assert service_env is not None and service_env()["WEATHER_API_KEY"] == marker
     else:
         service_fs = fake_sbx.sandbox_fs(pair.service.name)
-        assert marker in (service_fs / "home/agent/.sbxloop/env.sh").read_text()
+        assert marker in (service_fs / "home/agent/.lantern/env.sh").read_text()
     assert "api.weather.example.com" not in agent_policy_allows(provisioner.config, ["python"])
     for record in fake_sbx.raw_invocations():
         # Custom-secret registration carries names; raw values must never
@@ -86,7 +86,7 @@ def test_credential_free_mcp_preserves_non_proxy_agent_auth(
         env={"COPILOT_GITHUB_TOKEN": "audit-inference-key", "WEATHER_API_KEY": "not-granted"},
     )
     pair = provisioner.ensure_pair("audit")
-    env_file = fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.sbxloop/env.sh"
+    env_file = fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.lantern/env.sh"
     assert "audit-inference-key" in env_file.read_text()
     assert "not-granted" not in env_file.read_text()
 
@@ -116,7 +116,7 @@ def test_concierge_mcp_service_is_lazy_scoped_and_removed(
     assert fake_sbx.invocations("create") == []
     client = daemon._mcp_service()
     assert daemon._mcp_service() is client
-    env_file = fake_sbx.sandbox_fs(client.sandbox.name) / "home/agent/.sbxloop/env.sh"
+    env_file = fake_sbx.sandbox_fs(client.sandbox.name) / "home/agent/.lantern/env.sh"
     assert "concierge-only-key" in env_file.read_text()
     assert "MISSING_BUILDER_KEY" not in env_file.read_text()
     daemon.close()

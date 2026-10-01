@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.errors import CapabilityUnsupported, GithubOpsError
-from sbxloop.vcs.github.ops import GithubOps
-from sbxloop.vcs.gitlab.ops import GitlabOps
-from sbxloop.vcs.protocol import Capability
+from lantern.errors import CapabilityUnsupported, GithubOpsError
+from lantern.vcs.github.ops import GithubOps
+from lantern.vcs.gitlab.ops import GitlabOps
+from lantern.vcs.protocol import Capability
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
 

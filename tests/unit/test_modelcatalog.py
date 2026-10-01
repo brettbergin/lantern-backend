@@ -10,12 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop import modelcatalog
-from sbxloop.backends import backend_named
-from sbxloop.cli.models import ModelRow
-from sbxloop.config import Config
-from sbxloop.configedit.keys import is_model_key
-from sbxloop.paths import SbxloopHome
+from lantern import modelcatalog
+from lantern.backends import backend_named
+from lantern.cli.models import ModelRow
+from lantern.config import Config
+from lantern.configedit.keys import is_model_key
+from lantern.paths import LanternHome
 
 
 def row(id: str = "selected", name: str = "Selected model") -> ModelRow:
@@ -34,7 +34,7 @@ def row(id: str = "selected", name: str = "Selected model") -> ModelRow:
 
 @pytest.mark.parametrize("backend", ["copilot", "claude", "codex"])
 def test_catalog_is_backend_specific_bounded_and_contains_only_picker_fields(tmp_path, backend):
-    home = SbxloopHome(tmp_path)
+    home = LanternHome(tmp_path)
     provider = backend_named(backend)
     catalog = modelcatalog.save_catalog(home, provider, [row(), row(), row("second")])
     assert modelcatalog.load_catalog(home, provider) == catalog
@@ -51,14 +51,14 @@ def test_catalog_is_backend_specific_bounded_and_contains_only_picker_fields(tmp
 
 @pytest.mark.parametrize("bad", [b"not json", b"{}", b"x" * (modelcatalog.MAX_CACHE_BYTES + 1)])
 def test_bad_cache_is_unavailable(tmp_path, bad):
-    home = SbxloopHome(tmp_path)
+    home = LanternHome(tmp_path)
     home.model_catalogs.mkdir(parents=True)
     (home.model_catalogs / "claude.json").write_bytes(bad)
     assert modelcatalog.load_catalog(home, backend_named("claude")) is None
 
 
 def test_cache_write_failure_and_empty_response_preserve_previous_catalog(tmp_path, monkeypatch):
-    home, backend = SbxloopHome(tmp_path), backend_named("claude")
+    home, backend = LanternHome(tmp_path), backend_named("claude")
     original = modelcatalog.save_catalog(home, backend, [row()])
     with pytest.raises(ValueError, match="no models"):
         modelcatalog.save_catalog(home, backend, [])
@@ -76,7 +76,7 @@ def test_cache_write_failure_and_empty_response_preserve_previous_catalog(tmp_pa
 
 
 def test_refresh_uses_backend_listing_and_keeps_old_cache_on_failure(tmp_path, monkeypatch):
-    home, backend = SbxloopHome(tmp_path), backend_named("codex")
+    home, backend = LanternHome(tmp_path), backend_named("codex")
     calls = []
 
     def discover(actual, timeout_s, config=None):
@@ -155,7 +155,7 @@ def test_stale_catalog_triggers_provision_refresh(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("success", [False, True])
 def test_run_catalog_refresh_only_follows_successful_worker_install(tmp_path, monkeypatch, success):
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.engine.engine import LoopEngine
 
     calls = []
     config = Config(home=tmp_path)
@@ -178,7 +178,7 @@ def test_run_catalog_refresh_only_follows_successful_worker_install(tmp_path, mo
 
 
 def test_only_actual_model_settings_get_the_picker():
-    from sbxloop.config import AgentModels
+    from lantern.config import AgentModels
 
     for role in AgentModels.model_fields:
         assert is_model_key(f"agent.models.{role}")
@@ -195,7 +195,7 @@ def test_only_actual_model_settings_get_the_picker():
 
 @pytest.mark.parametrize("success", [False, True])
 def test_concierge_refresh_only_after_ready_and_only_once(tmp_path, monkeypatch, success):
-    from sbxloop.daemon.agentbox import DaemonAgent
+    from lantern.daemon.agentbox import DaemonAgent
 
     calls = []
     config = Config(home=tmp_path)

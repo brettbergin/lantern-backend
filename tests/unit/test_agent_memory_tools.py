@@ -17,19 +17,19 @@ from typing import Any
 
 import pytest
 
-from sbxloop.agents.assignment import AgentAssignment, MemoryBlocks, plan_assignment
-from sbxloop.agents.memory import MemoryService, NoWorkspaceVisibility
-from sbxloop.agents.registry import ConfigAgentRegistry
-from sbxloop.agents.tools import MEMORY_TOOL_NAMES, memory_tools
-from sbxloop.config import Config, MemoryConfig
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.harness import brief_for_phase
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.engine.skilltools import SKILL_TOOL_NAME
-from sbxloop.errors import ToolRejectedError, WorkerError
-from sbxloop.worker.client import WorkerClient
-from sbxloop.worker.hosttools import HostToolCall
-from sbxloop_worker.protocol import JobRequest
+from lantern.agents.assignment import AgentAssignment, MemoryBlocks, plan_assignment
+from lantern.agents.memory import MemoryService, NoWorkspaceVisibility
+from lantern.agents.registry import ConfigAgentRegistry
+from lantern.agents.tools import MEMORY_TOOL_NAMES, memory_tools
+from lantern.config import Config, MemoryConfig
+from lantern.daemon.store import DaemonStore
+from lantern.engine.harness import brief_for_phase
+from lantern.engine.phases import PhaseRunner
+from lantern.engine.skilltools import SKILL_TOOL_NAME
+from lantern.errors import ToolRejectedError, WorkerError
+from lantern.worker.client import WorkerClient
+from lantern.worker.hosttools import HostToolCall
+from lantern_worker.protocol import JobRequest
 from tests.conftest import FakeSbx
 from tests.unit.test_agent_assignment import RecordingAgent, run_build, run_decompose
 from tests.unit.test_engine import HAPPY_TASK, Harness, task, taskgraph

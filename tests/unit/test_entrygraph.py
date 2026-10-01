@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
+from lantern.config import Config
 
 
 def config(**kwargs: object) -> Config:
@@ -12,14 +12,14 @@ def config(**kwargs: object) -> Config:
 
 
 def test_default_selects_enabled_configured_repositories() -> None:
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     cfg = config(github={"repos": [{"repo": "org/one"}, {"repo": "org/two", "enabled": False}]})
     assert resolve_targets(cfg) == ["org/one"]
 
 
 def test_url_matching_configured_repository_uses_its_credentials() -> None:
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     cfg = config(github={"repo": "org/one"})
     assert resolve_targets(cfg, url="https://github.com/org/one.git") == ["org/one"]
@@ -47,14 +47,14 @@ def test_url_matching_configured_repository_uses_its_credentials() -> None:
     ],
 )
 def test_unsafe_or_ambiguous_urls_are_refused(url: str) -> None:
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     with pytest.raises(ValueError):
         resolve_targets(config(), url=url)
 
 
 def test_selectors_fail_closed() -> None:
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     cfg = config(github={"repo": "org/one"})
     with pytest.raises(ValueError, match="one"):
@@ -66,7 +66,7 @@ def test_selectors_fail_closed() -> None:
 
 
 def test_recipe_limits_run_to_scan_inputs_and_chat(tmp_path: Path) -> None:
-    from sbxloop.entrygraph import stage_scanner, tool_config, tool_task
+    from lantern.entrygraph import stage_scanner, tool_config, tool_task
 
     cfg = config(
         home=tmp_path,
@@ -95,7 +95,7 @@ def test_recipe_limits_run_to_scan_inputs_and_chat(tmp_path: Path) -> None:
 
 
 def test_public_url_recipe_has_no_github_capability(tmp_path: Path) -> None:
-    from sbxloop.entrygraph import tool_config, tool_task
+    from lantern.entrygraph import tool_config, tool_task
 
     cfg = config(
         home=tmp_path, github={"repo": "org/default"}, policy={"deny": ["blocked.example.org"]}
@@ -111,7 +111,7 @@ def test_public_url_recipe_has_no_github_capability(tmp_path: Path) -> None:
 
 
 def test_tool_config_rejects_disabled_or_removed_repository() -> None:
-    from sbxloop.entrygraph import tool_config
+    from lantern.entrygraph import tool_config
 
     with pytest.raises(ValueError, match="configured"):
         tool_config(config(github={"repos": [{"repo": "org/one", "enabled": False}]}), "org/one")
@@ -119,7 +119,7 @@ def test_tool_config_rejects_disabled_or_removed_repository() -> None:
 
 @pytest.mark.parametrize("name", [".entrygraph", "entrygraph-report"])
 def test_recipe_files_are_outside_the_configured_checkout(tmp_path: Path, name: str) -> None:
-    from sbxloop.entrygraph import stage_scanner, tool_config, tool_task
+    from lantern.entrygraph import stage_scanner, tool_config, tool_task
 
     target = f"org/{name}"
     cfg = tool_config(config(home=tmp_path, github={"repo": target}), target)
@@ -135,7 +135,7 @@ def test_recipe_files_are_outside_the_configured_checkout(tmp_path: Path, name: 
 
 
 def test_public_repository_tree_is_not_a_result_artifact() -> None:
-    from sbxloop.entrygraph import tool_config
+    from lantern.entrygraph import tool_config
 
     cfg = tool_config(config(), "https://git.example.org/team/repo.git")
     assert "repository" in cfg.artifacts.exclude
@@ -145,7 +145,7 @@ def test_public_repository_tree_is_not_a_result_artifact() -> None:
 def test_daemon_scan_does_not_refresh_an_unrelated_host_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sbxloop.daemon.model import WorkItem
+    from lantern.daemon.model import WorkItem
     from tests.unit.test_daemon_loop import Harness
 
     h = Harness(tmp_path)
@@ -168,9 +168,9 @@ def test_daemon_scan_does_not_refresh_an_unrelated_host_workspace(
 def test_default_runner_stages_scanner_and_seeds_a_tool_run(tmp_path: Path) -> None:
     from unittest.mock import Mock
 
-    from sbxloop.daemon.loop import RunHandle
-    from sbxloop.daemon.model import WorkItem
-    from sbxloop.events import EventBus
+    from lantern.daemon.loop import RunHandle
+    from lantern.daemon.model import WorkItem
+    from lantern.events import EventBus
     from tests.unit.test_daemon_loop import Harness
 
     h = Harness(tmp_path)
@@ -202,8 +202,8 @@ def test_default_runner_stages_scanner_and_seeds_a_tool_run(tmp_path: Path) -> N
 def test_the_analyzer_is_pinned_in_one_place() -> None:
     """The scanner refuses a runtime that is not its own version, so two
     pins could only ever disagree at run time, on a run that then fails."""
-    from sbxloop.data.entrygraph_scan import ENTRYGRAPH_VERSION
-    from sbxloop.entrygraph import RUNTIME
+    from lantern.data.entrygraph_scan import ENTRYGRAPH_VERSION
+    from lantern.entrygraph import RUNTIME
 
     assert f"--with entrygraph=={ENTRYGRAPH_VERSION} " in RUNTIME
 
@@ -212,7 +212,7 @@ def test_the_scan_runtime_installs_wheels_and_reaches_no_code_host() -> None:
     """The pinned analyzer and grammar pack both publish wheels. Building
     from source would reach hosts this recipe does not grant, and fail deep
     inside a compile rather than at resolution."""
-    from sbxloop.entrygraph import RUNTIME, RUNTIME_HOSTS, tool_task
+    from lantern.entrygraph import RUNTIME, RUNTIME_HOSTS, tool_task
 
     assert "--no-build" in RUNTIME
     assert set(RUNTIME_HOSTS) == {"pypi.org", "files.pythonhosted.org"}
@@ -222,7 +222,7 @@ def test_the_scan_runtime_installs_wheels_and_reaches_no_code_host() -> None:
 
 def test_extra_hosts_reach_the_task_declaration() -> None:
     """The declared hosts are the run's whole egress grant."""
-    from sbxloop.entrygraph import tool_config, tool_task
+    from lantern.entrygraph import tool_config, tool_task
 
     cfg = config(
         github={"repo": "org/one"},
@@ -237,7 +237,7 @@ def test_extra_hosts_reach_the_task_declaration() -> None:
 
 
 def test_public_urls_can_be_narrowed_to_configured_repositories() -> None:
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     cfg = config(
         github={"repo": "org/one"},
@@ -250,9 +250,9 @@ def test_public_urls_can_be_narrowed_to_configured_repositories() -> None:
 
 
 def test_the_registry_is_how_the_daemon_reaches_a_recipe() -> None:
-    from sbxloop import entrygraph
-    from sbxloop.errors import ConfigError
-    from sbxloop.recipes import get_recipe
+    from lantern import entrygraph
+    from lantern.errors import ConfigError
+    from lantern.recipes import get_recipe
 
     recipe = get_recipe("entrygraph")
     assert recipe.config is entrygraph.tool_config
@@ -269,7 +269,7 @@ def test_no_recipe_command_relies_on_a_bare_python() -> None:
     command is exempt because `uv run … python` resolves the name itself."""
     import shlex
 
-    from sbxloop.entrygraph import tool_task
+    from lantern.entrygraph import tool_task
 
     for target in ("org/one", "https://git.example.org/team/repo.git"):
         task = tool_task(config(github={"repo": "org/one"}), target)

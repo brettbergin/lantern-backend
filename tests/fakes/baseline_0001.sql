@@ -1,14 +1,14 @@
 -- The exact shape Alembic revision 0001 produces, frozen the day it shipped.
 --
--- 0001 is the pre-ORM migrators (sbxloop.engine.store.apply_engine_schema and
--- sbxloop.daemon.store.apply_daemon_schema), and every deployed database is
+-- 0001 is the pre-ORM migrators (lantern.engine.store.apply_engine_schema and
+-- lantern.daemon.store.apply_daemon_schema), and every deployed database is
 -- already stamped at it -- so Alembic will never run it against one again.
 -- That makes its output a released artefact, not a live definition: a column
 -- added to it now reaches a fresh install and no other database in the world.
 --
 -- tests/unit/test_db_schema.py compares the migrators against this file. If
 -- you changed the schema and landed here, the change belongs in a new
--- revision under sbxloop/db/migrations/versions -- not in the baseline.
+-- revision under lantern/db/migrations/versions -- not in the baseline.
 --
 -- Normalised for comparison: one statement per name, whitespace collapsed,
 -- sorted by name. Not executable as-is -- collapsing a table body that holds

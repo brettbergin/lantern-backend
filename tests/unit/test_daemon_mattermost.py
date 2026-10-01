@@ -23,23 +23,23 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config, MattermostConfig
-from sbxloop.daemon import mattermost
-from sbxloop.daemon.chat import build_bridge
-from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion
-from sbxloop.daemon.discord_format import EmbedSpec
-from sbxloop.daemon.mattermost import (
+from lantern.config import Config, MattermostConfig
+from lantern.daemon import mattermost
+from lantern.daemon.chat import build_bridge
+from lantern.daemon.chat_choices import Choice, ChoiceQuestion
+from lantern.daemon.discord_format import EmbedSpec
+from lantern.daemon.mattermost import (
     EXPIRED_CLICK_NOTE,
     MattermostApiError,
     MattermostBridge,
     MattermostMessage,
     MattermostTarget,
 )
-from sbxloop.daemon.mattermost_format import ZERO_WIDTH_SPACE
-from sbxloop.daemon.model import RunReport, WorkItem
-from sbxloop.daemon.store import ChatThread, DaemonStore
-from sbxloop.errors import DaemonError
-from sbxloop.events import EventBus
+from lantern.daemon.mattermost_format import ZERO_WIDTH_SPACE
+from lantern.daemon.model import RunReport, WorkItem
+from lantern.daemon.store import ChatThread, DaemonStore
+from lantern.errors import DaemonError
+from lantern.events import EventBus
 from tests.unit.test_daemon_discord import (
     FakeConcierge,
     FakeEngine,
@@ -51,7 +51,7 @@ from tests.unit.test_daemon_discord import (
 URL = "https://mm.example.com"
 CHANNEL = "c" * 26
 BOT_ID = "b" * 26
-BOT_NAME = "sbxloop"
+BOT_NAME = "lantern"
 USER_ID = "u" * 26
 TEAM_ID = "t" * 26
 
@@ -613,7 +613,7 @@ class TestReactionChoices:
             choices=[Choice(value="main", label="main"), Choice(value="dev", label="dev")],
         )
         asker = bridge._inbound(
-            json.loads(posted("@sbxloop which base?")["data"]["post"])  # type: ignore[arg-type]
+            json.loads(posted("@lantern which base?")["data"]["post"])  # type: ignore[arg-type]
         )
         assert asker is not None
         posted_msg = asyncio.run(bridge._send_choices(MattermostTarget(CHANNEL), "", question))
@@ -889,7 +889,7 @@ class TestSpentAffordances:
             choices=[Choice(value="main", label="main"), Choice(value="dev", label="dev")],
         )
         asker = bridge._inbound(
-            json.loads(posted("@sbxloop which base?")["data"]["post"])  # type: ignore[arg-type]
+            json.loads(posted("@lantern which base?")["data"]["post"])  # type: ignore[arg-type]
         )
         assert asker is not None
         posted_msg = asyncio.run(bridge._send_choices(MattermostTarget(CHANNEL), "", question))
@@ -1358,7 +1358,7 @@ class TestControlChannelThreads:
         """The one outcome that used to have none."""
         bridge, client, _ = make_bridge(tmp_path)
         try:
-            with caplog.at_level(logging.DEBUG, logger="sbxloop.daemon.chat"):
+            with caplog.at_level(logging.DEBUG, logger="lantern.daemon.chat"):
                 client.deliver(posted("just chatting", post_id="t" * 26))
                 assert wait_for(
                     lambda: any("message_ignored" in r.getMessage() for r in caplog.records)

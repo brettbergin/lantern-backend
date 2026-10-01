@@ -8,19 +8,19 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.engine.engine import LoopEngine as Engine
-from sbxloop.engine.model import TaskRecord, TaskSpec, VerifyReauthor
-from sbxloop.engine.phases import (
+from lantern.engine.engine import LoopEngine as Engine
+from lantern.engine.model import TaskRecord, TaskSpec, VerifyReauthor
+from lantern.engine.phases import (
     VerifyFailure,
     normalise_verify_output,
     verify_fingerprint,
     verify_suspect_feedback,
 )
-from sbxloop.errors import InvalidOutputTwice
+from lantern.errors import InvalidOutputTwice
 
 MYPY = "uv run mypy packages"
 MYPY_OUT = (
-    "packages/sbxloop/hatch_build.py:20: error: Cannot find implementation or "
+    "packages/lantern/hatch_build.py:20: error: Cannot find implementation or "
     'library stub for module named "hatchling.builders.hooks.plugin.interface"\n'
     "Found 12 errors in 1 file (checked 74 source files)"
 )

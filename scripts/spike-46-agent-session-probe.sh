@@ -84,7 +84,7 @@ run "${SBX[@]}" setup --help          # ssh channel exists? (NOT running it)
 run "${SBX[@]}" skills --help
 
 # ---------------------------------------------------------------------------
-log "SETUP: create probe sandbox (shell agent) + dummy custom secret (sandbox-scoped, like sbxloop)"
+log "SETUP: create probe sandbox (shell agent) + dummy custom secret (sandbox-scoped, like lantern)"
 run "${SBX[@]}" create --name "$SANDBOX" shell "$WORKSPACE"
 run "${SBX[@]}" secret set-custom "$SANDBOX" --host "$PROBE_HOST" --env "$PROBE_ENV" --value "$PROBE_VALUE"
 run "${SBX[@]}" ls
@@ -96,9 +96,9 @@ run "${SBX[@]}" secret set-custom "$SANDBOX" --host "$PROBE_HOST" --env "$PROBE_
 
 # ---------------------------------------------------------------------------
 log "P3: placeholder-visibility matrix (resolves the docs-vs-0.1.8 discrepancy)"
-log "P3a: exec, plain (sbxloop's current invocation shape)"
+log "P3a: exec, plain (lantern's current invocation shape)"
 run "${SBX[@]}" exec "$SANDBOX" sh -c "$MARKER"
-log "P3b: exec, login shell (sbxloop's worker wrapper shape)"
+log "P3b: exec, login shell (lantern's worker wrapper shape)"
 run "${SBX[@]}" exec "$SANDBOX" sh -lc "$MARKER"
 log "P3c: exec with a TTY (issue #348's repro shape used -it bash)"
 run_t 30 "${SBX[@]}" exec -it "$SANDBOX" sh -lc "$MARKER"

@@ -16,12 +16,12 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 
-from sbxloop.daemon.store import DaemonStore, apply_daemon_schema
-from sbxloop.db import Base, current_revision, ensure_schema, head_revision, open_engine
-from sbxloop.db.schema import _config
-from sbxloop.db.session import BUSY_TIMEOUT_MS
-from sbxloop.engine.store import StateStore, apply_engine_schema
-from sbxloop_worker.protocol import Event
+from lantern.daemon.store import DaemonStore, apply_daemon_schema
+from lantern.db import Base, current_revision, ensure_schema, head_revision, open_engine
+from lantern.db.schema import _config
+from lantern.db.session import BUSY_TIMEOUT_MS
+from lantern.engine.store import StateStore, apply_engine_schema
+from lantern_worker.protocol import Event
 from tests.fakes import legacy_db
 
 

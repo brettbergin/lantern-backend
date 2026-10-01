@@ -13,12 +13,12 @@ Already-published `main` is a no-op. Normal pushes still start their own
 short quiet window without waiting for that schedule.
 
 CI still checks every PR and push to `main`. Each release batch requires
-successful verification of its frozen commit before tagging or publishing. Both `sbxloop` and
-`sbxloop-worker` keep the same version; nothing is committed back to `main`.
+successful verification of its frozen commit before tagging or publishing. Both `lantern` and
+`lantern-worker` keep the same version; nothing is committed back to `main`.
 
 Releases are **GitHub Releases only**. v2.1.36 was the last version published
-to PyPI. Every install of `sbxloop` and `sbxloop-worker` — the deploy
-workflow, `scripts/install.sh`, `sbxloop update`, `sbxloop init` and a
+to PyPI. Every install of `lantern` and `lantern-worker` — the deploy
+workflow, `scripts/install.sh`, `lantern update`, `lantern init` and a
 sandbox's worker — uses a release's own wheel files, checked against its
 `release-manifest.json`, and never asks a package index for either name: the
 names a later rename moves to are not ours on PyPI. Third-party dependencies
@@ -45,7 +45,7 @@ still resolve from PyPI.
    and commit, even if `main` has advanced. A latest tag outside `main`'s
    history fails closed. The tag must resolve to the tested SHA.
 4. `hatch-vcs` derives both versions from the tag. The host build hook
-   ([`packages/sbxloop/hatch_build.py`](packages/sbxloop/hatch_build.py))
+   ([`packages/lantern/hatch_build.py`](packages/lantern/hatch_build.py))
    vendors the matching worker wheel and injects the exact worker pin.
    The workflow installs the final wheels into a clean temporary environment,
    runs the CLI, checks both versions and the exact worker dependency pin,
@@ -141,7 +141,7 @@ A completed release at the selected tip is a no-op, not another publication.
 No publication tokens are needed. The publication job's `GITHUB_TOKEN`
 needs only `contents: write` to reserve tags, stage releases and publish
 them; there is no `pypi` environment and no `id-token` permission. The PyPI
-projects for `sbxloop` and `sbxloop-worker` keep v2.1.36 and receive nothing
+projects for `lantern` and `lantern-worker` keep v2.1.36 and receive nothing
 newer. Verification uses `actions: read` to inspect CI evidence. Only the automatic
 intake needs `actions: write` to dispatch `release.yml`; its inputs preserve
 the quiet window. A normal manual dispatch still bypasses that window.
@@ -150,7 +150,7 @@ The three-minute quiet window, thirty-minute batching limit, and
 thirty-minute deployment cooldown are repository workflow policy in
 `scripts/release_pipeline.py`; they are not daemon configuration options.
 The generic deployment example fetches and checks release wheels with the
-installed sbxloop (`python -m sbxloop.releases`).
+installed Lantern (`python -m lantern.releases`).
 
 GitHub's [concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
 describes pending queues. Scheduled reconciliation is best-effort; see
@@ -166,6 +166,6 @@ changes worth explaining beyond their commit titles.
 
 ```bash
 make build
-uv run sbxloop --version
-unzip -l dist/sbxloop-*.whl | grep _vendor
+uv run lantern --version
+unzip -l dist/lantern_backend-*.whl | grep _vendor
 ```

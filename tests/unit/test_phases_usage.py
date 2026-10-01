@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sbxloop.config import Config
-from sbxloop.engine.model import SteerVerdict
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop_worker.protocol import JobRequest, JobResult, Usage
+from lantern.config import Config
+from lantern.engine.model import SteerVerdict
+from lantern.engine.phases import PhaseRunner
+from lantern_worker.protocol import JobRequest, JobResult, Usage
 
 
 class UsageAgent:

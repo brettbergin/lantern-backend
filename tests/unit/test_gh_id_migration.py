@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.control import dispatch, plain
-from sbxloop.daemon.discord_format import headline_embed, headline_text, items_lines, queue_lines
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.log import bind_run, clear_run, configure_logging, get_logger
+from lantern.daemon.control import dispatch, plain
+from lantern.daemon.discord_format import headline_embed, headline_text, items_lines, queue_lines
+from lantern.daemon.store import DaemonStore
+from lantern.log import bind_run, clear_run, configure_logging, get_logger
 from tests.unit.test_daemon_discord import FakeLoop
 
 LEGACY_ID = "gh:1234"
@@ -93,7 +93,7 @@ class TestLegacyStateFixture:
         item = store.get(LEGACY_ID)
         assert item is not None
         bind_run("r9", item.item_id, source="github")
-        get_logger("sbxloop.test").info("run.dispatch")
+        get_logger("lantern.test").info("run.dispatch")
         clear_run()
         line = stream.getvalue()
         assert f"item={TYPED_ID}" in line and not BARE.search(line)

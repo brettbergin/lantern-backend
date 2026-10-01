@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-from sbxloop.agents.assignment import AgentAssignment, plan_assignment
-from sbxloop.agents.registry import ConfigAgentRegistry
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.errors import WorkerError
-from sbxloop.events import HostEventTypes
+from lantern.agents.assignment import AgentAssignment, plan_assignment
+from lantern.agents.registry import ConfigAgentRegistry
+from lantern.engine.engine import LoopEngine
+from lantern.errors import WorkerError
+from lantern.events import HostEventTypes
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import GREEN, FakeGithub
 from tests.unit.test_engine import (

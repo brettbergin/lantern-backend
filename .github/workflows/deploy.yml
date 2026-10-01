@@ -1,6 +1,6 @@
 name: Deploy the daemon
 
-# sbxloop's OWN deploy — the instance of the drain / hold / upgrade /
+# lantern's OWN deploy — the instance of the drain / hold / upgrade /
 # health-check / roll-back pattern that keeps the dogfood daemon current.
 # The reusable pattern, with nothing of this host in it, is
 # contrib/workflows/deploy-daemon.yml.example (docs/deploy.md); what is
@@ -21,12 +21,12 @@ name: Deploy the daemon
 # nothing has been installed or restarted and the hold is released.
 #
 # THE HOST IS ONE VARIABLE (#640): the runner label — also the name the
-# notices call the host — is the repository variable SBXLOOP_DEPLOY_HOST
-# (default `db`). Every path is under the sbxloop home, the layout
-# `sbxloop init` builds (contrib/systemd/README.md): ${HOME}/.sbxloop
-# unless the host was installed under a custom SBXLOOP_HOME, which the
+# notices call the host — is the repository variable LANTERN_DEPLOY_HOST
+# (default `db`). Every path is under the lantern home, the layout
+# `lantern init` builds (contrib/systemd/README.md): ${HOME}/.lantern
+# unless the host was installed under a custom LANTERN_HOME, which the
 # first step honours from the runner's environment or the repository
-# variable SBXLOOP_HOME (#895). Nothing else here names a machine or a
+# variable LANTERN_HOME (#895). Nothing else here names a machine or a
 # user, and no step needs a working directory: every command answers the
 # same from anywhere.
 #
@@ -73,7 +73,7 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository &&
        github.event.workflow_run.head_branch == 'main')
-    runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST || 'db' }}"]
+    runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]
     # Bounds the idle wait. 1.0 runs take 14–180 min (#512 ran 182); the
     # engine's own wall clock ([budgets] max_wall_clock_s, 2 h by default)
     # does not cover CI and landing waits. A timeout here installs nothing:
@@ -97,10 +97,10 @@ jobs:
       MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
       INPUT_VERSION: ${{ inputs.version }}
       # The host, as the notices name it (and the runner label above).
-      HOST: ${{ vars.SBXLOOP_DEPLOY_HOST || 'db' }}
+      HOST: ${{ vars.LANTERN_DEPLOY_HOST || 'db' }}
       # Deploy notices belong together, apart from the daemon's control channel.
       DEPLOY_CHANNEL: 4shafe93rpnkzqcdqnso7cmbzc
-      UNIT: sbxloop-daemon
+      UNIT: lantern-daemon
       # This deploy's pause hold (#534). The operator's own `pause` is a
       # separate hold: it survives the deploy, and we release only ours.
       HOLD: deploy-${{ github.run_id }}
@@ -113,22 +113,22 @@ jobs:
 
     steps:
       - name: Resolve host paths
-        # Every path the deploy touches is under the sbxloop home. Written
+        # Every path the deploy touches is under the lantern home. Written
         # to GITHUB_ENV because a job-level `env:` value is a literal — the
         # shell would not expand a ${HOME} inside it.
         env:
           # The optional repository variable, empty when unset (#895).
-          SBXLOOP_HOME_VAR: ${{ vars.SBXLOOP_HOME }}
+          LANTERN_HOME_VAR: ${{ vars.LANTERN_HOME }}
         run: |
           set -euo pipefail
           # The home, resolved once (#895): the repository variable, else
-          # the runner's own SBXLOOP_HOME (the rendered github-runner unit
+          # the runner's own LANTERN_HOME (the rendered github-runner unit
           # exports the home init built), else the default. Every path
           # below derives from it, so the version check, backup, install,
           # health check and rollback cannot drift to another home.
-          root="${SBXLOOP_HOME_VAR:-}"
-          [ -n "${root}" ] || root="${SBXLOOP_HOME:-}"
-          [ -n "${root}" ] || root="${HOME}/.sbxloop"
+          root="${LANTERN_HOME_VAR:-}"
+          [ -n "${root}" ] || root="${LANTERN_HOME:-}"
+          [ -n "${root}" ] || root="${HOME}/.lantern"
           case "${root}" in
             "~") root="${HOME}" ;;
             "~/"*) root="${HOME}/${root#\~/}" ;;
@@ -138,20 +138,27 @@ jobs:
           # (there is no working directory), and a newline would corrupt
           # every assignment after it.
           case "${root}" in
-            *$'\n'*) echo "::error::the sbxloop home may not contain a newline"; exit 1 ;;
+            *$'\n'*) echo "::error::the lantern home may not contain a newline"; exit 1 ;;
             /*) ;;
-            *) echo "::error::the sbxloop home must be an absolute path, not '${root}'"; exit 1 ;;
+            *) echo "::error::the lantern home must be an absolute path, not '${root}'"; exit 1 ;;
           esac
+          # sbxloop became Lantern with no aliases: a host still on the
+          # sbxloop home is moved once by the "Cut over from sbxloop"
+          # workflow. Stop here, before anything on the host is touched.
+          if [ ! -x "${root}/bin/lantern" ] && [ -d "${HOME}/.sbxloop" ]; then
+            echo "::error::this host still runs sbxloop (${HOME}/.sbxloop); run the \"Cut over from sbxloop\" workflow once"
+            exit 1
+          fi
           # Unquoted on purpose: GITHUB_ENV takes the value verbatim to the
           # end of the line, so a home holding spaces survives as itself.
           {
-            echo "SBXLOOP_HOME=${root}"
+            echo "LANTERN_HOME=${root}"
             # The launcher: binds every command to the home (PATH with
             # /usr/sbin for mkfs.ext4, dbus, the home's tmp and caches) and
-            # execs the venv. It exports no secrets; sbxloop reads its
+            # execs the venv. It exports no secrets; lantern reads its
             # own secrets file itself.
-            echo "SBXLOOP=${root}/bin/sbxloop"
-            echo "VENV_SBXLOOP=${root}/venv/bin/sbxloop"
+            echo "LANTERN=${root}/bin/lantern"
+            echo "VENV_LANTERN=${root}/venv/bin/lantern"
             echo "VENV_PYTHON=${root}/venv/bin/python"
             # The home's own uv, and where it keeps its cache and interpreters.
             echo "UV=${root}/bin/uv"
@@ -206,7 +213,7 @@ jobs:
           set -euo pipefail
           # An existing login or host failure cannot be repaired by rolling
           # the package back. Detect it before changing the running install.
-          "${SBXLOOP}" doctor
+          "${LANTERN}" doctor
 
       - name: Prepare isolated PDF analyzer
         if: steps.installed.outputs.changed == 'true'
@@ -219,17 +226,17 @@ jobs:
           # Complete this before taking the hold or changing the install.
           test -n "${DOCKERHUB_USERNAME}"
           test -n "${DOCKERHUB_TOKEN}"
-          ANALYSIS_SBX="${SBXLOOP_HOME}/bin/sbx"
-          printf '%s' "${DOCKERHUB_TOKEN}" | "${ANALYSIS_SBX}" --app-name sbxloop-analysis login \
+          ANALYSIS_SBX="${LANTERN_HOME}/bin/sbx"
+          printf '%s' "${DOCKERHUB_TOKEN}" | "${ANALYSIS_SBX}" --app-name lantern-analysis login \
             --username "${DOCKERHUB_USERNAME}" --password-stdin
-          marker="${SBXLOOP_HOME}/state/channel-pdf-policy-v2"
+          marker="${LANTERN_HOME}/state/channel-pdf-policy-v2"
           if [ ! -e "${marker}" ]; then
-            "${ANALYSIS_SBX}" --app-name sbxloop-analysis policy init deny-all
-            "${ANALYSIS_SBX}" --app-name sbxloop-analysis policy deny network '**'
+            "${ANALYSIS_SBX}" --app-name lantern-analysis policy init deny-all
+            "${ANALYSIS_SBX}" --app-name lantern-analysis policy deny network '**'
             umask 077
             : > "${marker}"
           fi
-          "${ANALYSIS_SBX}" --app-name sbxloop-analysis version
+          "${ANALYSIS_SBX}" --app-name lantern-analysis version
 
       - name: Take the deploy hold
         id: hold
@@ -239,8 +246,8 @@ jobs:
           # Exit 2 = no daemon answered. Not fatal here: the wait below
           # notices a daemon that never answers, and the health check is
           # the thing that fails if it never comes up.
-          "${SBXLOOP}" daemon ctl pause --hold "${HOLD}" --timeout 30 || true
-          status="$("${SBXLOOP}" daemon ctl status --json --timeout 30 || true)"
+          "${LANTERN}" daemon ctl pause --hold "${HOLD}" --timeout 30 || true
+          status="$("${LANTERN}" daemon ctl status --json --timeout 30 || true)"
           echo "${status}"
           current="$(jq -r "${CURRENT_JQ}" <<<"${status}" 2>/dev/null || true)"
           echo "current=${current:-unknown}" >> "$GITHUB_OUTPUT"
@@ -256,13 +263,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${CURRENT}" = "idle" ] || [ "${CURRENT}" = "unknown" ]; then
-            MSG="🚀 deploying sbxloop \`${FROM}\` → \`${VERSION}\` on \`${HOST}\` — [run](${RUN_URL})"
+            MSG="🚀 deploying lantern \`${FROM}\` → \`${VERSION}\` on \`${HOST}\` — [run](${RUN_URL})"
           else
-            MSG="🚀 sbxloop \`${FROM}\` → \`${VERSION}\` staged on \`${HOST}\` — restart deferred until the daemon is idle (now: ${CURRENT}); hold \`${HOLD}\` — [run](${RUN_URL})"
+            MSG="🚀 lantern \`${FROM}\` → \`${VERSION}\` staged on \`${HOST}\` — restart deferred until the daemon is idle (now: ${CURRENT}); hold \`${HOLD}\` — [run](${RUN_URL})"
           fi
           # The trusted workflow helper calls the installed notifier library
           # through its old two-argument API, so this works before the host is
-          # upgraded and after a rollback. sbxloop still owns config + secrets.
+          # upgraded and after a rollback. lantern still owns config + secrets.
           DEPLOY_NOTICE="${MSG}" "${VENV_PYTHON}" "${PIPELINE}" deploy-notify
 
       - name: Wait for the daemon to go idle
@@ -286,7 +293,7 @@ jobs:
           misses=0
           while :; do
             set +e
-            status="$("${SBXLOOP}" daemon ctl status --json --timeout 30)"
+            status="$("${LANTERN}" daemon ctl status --json --timeout 30)"
             rc=$?
             set -e
             if [ "${rc}" -eq 0 ]; then
@@ -341,7 +348,7 @@ jobs:
           VERSION: ${{ steps.final.outputs.version }}
         run: |
           set -euo pipefail
-          # The GitHub Release is the only distribution: sbxloop and its
+          # The GitHub Release is the only distribution: lantern and its
           # worker are never installed by name from a package index. Its
           # wheels exist the moment Release finishes, and the helper checks
           # each against release-manifest.json before anything installs.
@@ -381,27 +388,27 @@ jobs:
         run: |
           set -euo pipefail
           # A snapshot first: config, secrets, units and the state database, so a bad
-          # release is one `sbxloop backup restore` away. The daily sweep
+          # release is one `lantern backup restore` away. The daily sweep
           # keeps the newest [daemon] backups_keep of these.
-          # The label is what the *installed* sbxloop accepts: letters, digits,
+          # The label is what the *installed* lantern accepts: letters, digits,
           # - and _ on every release, so the dots in the version become dashes.
-          "${SBXLOOP}" backup --label "deploy-${VERSION//./-}" --reason "deploy ${{ steps.installed.outputs.current }} -> ${VERSION}"
+          "${LANTERN}" backup --label "deploy-${VERSION//./-}" --reason "deploy ${{ steps.installed.outputs.current }} -> ${VERSION}"
           # Both wheels together, from the release: the host wheel pins
-          # sbxloop-worker==VERSION exactly, and naming the local worker wheel
+          # lantern-worker==VERSION exactly, and naming the local worker wheel
           # satisfies that pin without the index being consulted for it at all.
           # Both chat extras go in, so switching [chat] backend on the host is
           # a config change, not a reinstall. Only third-party dependencies
           # (pydantic, discord.py, slack_sdk) resolve from PyPI.
           "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
-            "${DIST}/sbxloop_worker-${VERSION}-py3-none-any.whl" \
-            "${DIST}/sbxloop-${VERSION}-py3-none-any.whl[discord,slack]"
-          "${VENV_SBXLOOP}" --version
+            "${DIST}/lantern_worker-${VERSION}-py3-none-any.whl" \
+            "${DIST}/lantern_backend-${VERSION}-py3-none-any.whl[discord,slack]"
+          "${VENV_LANTERN}" --version
           # Idempotent: refreshes the launchers and the rendered units for
           # the new version. --no-sbx preserves the operator's runtime;
           # plain init would reinstall this release's pinned sbx version.
-          "${SBXLOOP}" init --systemd --no-sbx
-          mkdir -p "${SBXLOOP_HOME}/logs/deploy"
-          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${{ steps.installed.outputs.current }} -> ${VERSION} run=${{ github.run_id }}" >> "${SBXLOOP_HOME}/logs/deploy/history.log"
+          "${LANTERN}" init --systemd --no-sbx
+          mkdir -p "${LANTERN_HOME}/logs/deploy"
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${{ steps.installed.outputs.current }} -> ${VERSION} run=${{ github.run_id }}" >> "${LANTERN_HOME}/logs/deploy/history.log"
 
       - name: Restart the daemon
         if: steps.final.outputs.changed == 'true'
@@ -425,13 +432,13 @@ jobs:
 
           systemctl --user is-active --quiet "${UNIT}" || fail "unit is not active"
 
-          got="$("${VENV_SBXLOOP}" --version | awk '{print $2}')"
+          got="$("${VENV_LANTERN}" --version | awk '{print $2}')"
           [ "${got}" = "${VERSION}" ] || fail "version is ${got}, expected ${VERSION}"
 
           # Never --deep here: that boots a microVM. Plain doctor covers exactly
           # what a restart can break — sbx login, tokens, template, worker
           # wheel, the home and its units, chat bridge.
-          "${SBXLOOP}" doctor || fail "sbxloop doctor is unhappy"
+          "${LANTERN}" doctor || fail "lantern doctor is unhappy"
 
           # ctl exit 2 = nothing claimed the request, i.e. the daemon never came up.
           # The budget has to cover the daemon's whole startup, not just the
@@ -441,7 +448,7 @@ jobs:
           # client resends across that window rather than reporting the
           # refusal, so the only thing left to get wrong is being too stingy
           # here — 300s is well inside the job's timeout.
-          "${SBXLOOP}" daemon ctl status --json --timeout 300 >/dev/null || fail "daemon did not answer ctl status"
+          "${LANTERN}" daemon ctl status --json --timeout 300 >/dev/null || fail "daemon did not answer ctl status"
 
           # Let it settle, then prove it is not crash-looping.
           before="$(systemctl --user show "${UNIT}" -p NRestarts --value)"
@@ -464,12 +471,12 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          record="${SBXLOOP_HOME}/state/bake.json"
+          record="${LANTERN_HOME}/state/bake.json"
           if [ ! -f "${record}" ]; then
             echo "no bake record at ${record}; this host does not use a baked template"
             exit 0
           fi
-          "${SBXLOOP}" bake </dev/null
+          "${LANTERN}" bake </dev/null
 
       - name: Roll back
         id: rollback
@@ -505,16 +512,16 @@ jobs:
           # The same extras as the upgrade (#619): a rollback that drops one
           # rolls a host on that backend back to a build that cannot start.
           "${UV}" pip install --python "${VENV_PYTHON}" --upgrade \
-            "${prev_dist}/sbxloop_worker-${PREV}-py3-none-any.whl" \
-            "${prev_dist}/sbxloop-${PREV}-py3-none-any.whl[discord,slack]"
-          "${SBXLOOP}" init --systemd --no-sbx || true
+            "${prev_dist}/lantern_worker-${PREV}-py3-none-any.whl" \
+            "${prev_dist}/lantern_backend-${PREV}-py3-none-any.whl[discord,slack]"
+          "${LANTERN}" init --systemd --no-sbx || true
           systemctl --user reset-failed "${UNIT}" || true
           timeout 300 systemctl --user restart "${UNIT}"
           sleep 15
           if systemctl --user is-active --quiet "${UNIT}" \
-            && [ "$("${VENV_SBXLOOP}" --version | awk '{print $2}')" = "${PREV}" ] \
-            && "${SBXLOOP}" doctor \
-            && "${SBXLOOP}" daemon ctl status --json --timeout 300 >/dev/null; then
+            && [ "$("${VENV_LANTERN}" --version | awk '{print $2}')" = "${PREV}" ] \
+            && "${LANTERN}" doctor \
+            && "${LANTERN}" daemon ctl status --json --timeout 300 >/dev/null; then
             echo "restored=true" >> "$GITHUB_OUTPUT"
             echo "rolled back to ${PREV}; health checks passed"
           else
@@ -539,9 +546,9 @@ jobs:
         if: always() && steps.hold.outcome == 'success'
         run: |
           set -euo pipefail
-          "${SBXLOOP}" daemon ctl resume --hold "${HOLD}" --timeout 60 \
+          "${LANTERN}" daemon ctl resume --hold "${HOLD}" --timeout 60 \
             || echo "::warning::could not release hold ${HOLD}"
-          "${SBXLOOP}" daemon ctl status --timeout 60 || true
+          "${LANTERN}" daemon ctl status --timeout 60 || true
 
       - name: Clean up the downloaded wheels
         if: always() && steps.wheels.outputs.dist != ''
@@ -568,16 +575,16 @@ jobs:
           if [ "${RESULT}" = "success" ] && [ "${UPGRADED}" = "skipped" ]; then
             MSG="Deploy batch on ${HOST} finished without an upgrade (${DECISION}); daemon remains on ${FROM}. [run](${RUN_URL})"
           elif [ "${RESULT}" = "success" ]; then
-            MSG="✅ \`${HOST}\` restarted on sbxloop \`${VERSION}\`${waited} — [run](${RUN_URL})"
+            MSG="✅ \`${HOST}\` restarted on lantern \`${VERSION}\`${waited} — [run](${RUN_URL})"
           elif [ "${UPGRADED}" = "skipped" ]; then
-            MSG="❌ deploy of sbxloop \`${VERSION}\` to \`${HOST}\` **${RESULT}** before anything was installed — still on \`${FROM}\`, daemon untouched. [run](${RUN_URL})"
+            MSG="❌ deploy of lantern \`${VERSION}\` to \`${HOST}\` **${RESULT}** before anything was installed — still on \`${FROM}\`, daemon untouched. [run](${RUN_URL})"
           elif [ "${RESTORED}" = "true" ]; then
-            MSG="❌ deploy of sbxloop \`${VERSION}\` to \`${HOST}\` **${RESULT}** — rolled back to \`${FROM}\`. [run](${RUN_URL})"
+            MSG="❌ deploy of lantern \`${VERSION}\` to \`${HOST}\` **${RESULT}** — rolled back to \`${FROM}\`. [run](${RUN_URL})"
           else
-            MSG="❌ deploy of sbxloop \`${VERSION}\` to \`${HOST}\` **${RESULT}** — rollback could not restore health; ${HOST} needs a human. [run](${RUN_URL})"
+            MSG="❌ deploy of lantern \`${VERSION}\` to \`${HOST}\` **${RESULT}** — rollback could not restore health; ${HOST} needs a human. [run](${RUN_URL})"
           fi
           # The helper survives an upgrade or rollback; the installed
-          # notifier still reads sbxloop's config and secrets (#639).
+          # notifier still reads lantern's config and secrets (#639).
           DEPLOY_NOTICE="${MSG}" "${VENV_PYTHON}" "${PIPELINE}" deploy-notify
 
       - name: Clean up the workflow helper

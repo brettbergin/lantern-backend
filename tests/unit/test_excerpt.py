@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sbxloop.excerpt import (
+from lantern.excerpt import (
     TOOL_EXCERPT_LINE_CLIP,
     TOOL_FAIL_OUTPUT_LINES_DEFAULT,
     TOOL_OUTPUT_LINES_DEFAULT,
@@ -99,6 +99,6 @@ def test_excerpt_output_lines_tail_only_and_zero_budget() -> None:
 def test_no_daemon_import() -> None:
     from pathlib import Path
 
-    import sbxloop.excerpt as mod
+    import lantern.excerpt as mod
 
-    assert "sbxloop.daemon" not in Path(mod.__file__).read_text()
+    assert "lantern.daemon" not in Path(mod.__file__).read_text()

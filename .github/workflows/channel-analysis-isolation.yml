@@ -10,9 +10,9 @@ on:
       - scripts/probe_channel_analysis_isolation.py
       - docs/channel-analysis-isolation.md
       - scripts/probe_channel_pdf_analysis.py
-      - packages/sbxloop/src/sbxloop/api/pdf_analysis.py
-      - packages/sbxloop/src/sbxloop/api/pdf_worker.py
-      - packages/sbxloop/pyproject.toml
+      - packages/lantern/src/lantern/api/pdf_analysis.py
+      - packages/lantern/src/lantern/api/pdf_worker.py
+      - packages/lantern/pyproject.toml
       - uv.lock
   push:
     branches: [main]
@@ -21,9 +21,9 @@ on:
       - scripts/probe_channel_analysis_isolation.py
       - docs/channel-analysis-isolation.md
       - scripts/probe_channel_pdf_analysis.py
-      - packages/sbxloop/src/sbxloop/api/pdf_analysis.py
-      - packages/sbxloop/src/sbxloop/api/pdf_worker.py
-      - packages/sbxloop/pyproject.toml
+      - packages/lantern/src/lantern/api/pdf_analysis.py
+      - packages/lantern/src/lantern/api/pdf_worker.py
+      - packages/lantern/pyproject.toml
       - uv.lock
   workflow_dispatch:
 
@@ -32,12 +32,12 @@ permissions:
 
 env:
   SBX_INSTALL_DIR: /home/runner/.docker/sbx
-  # Match the sbx series pinned by sbxloop init and doctor.
+  # Match the sbx series pinned by lantern init and doctor.
   SBX_ANALYSIS_TEST_VERSION: 0.43.0
-  SBXLOOP_APP_NAME: sbxloop-analysis
+  LANTERN_APP_NAME: lantern-analysis
   SBX_PROBE_NAME: analysis-isolation-${{ github.run_id }}
   XDG_STATE_HOME: /tmp/sbx-analysis-state
-  SBXLOOP_ANALYSIS_HOST_SENTINEL: host-only-probe
+  LANTERN_ANALYSIS_HOST_SENTINEL: host-only-probe
 
 jobs:
   probe:
@@ -83,11 +83,11 @@ jobs:
           test -n "$DOCKERHUB_USERNAME"
           test -n "$DOCKERHUB_TOKEN"
           echo -n "" | gnome-keyring-daemon --unlock --components=secrets || true
-          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name "$SBXLOOP_APP_NAME" login --username "$DOCKERHUB_USERNAME" --password-stdin
+          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name "$LANTERN_APP_NAME" login --username "$DOCKERHUB_USERNAME" --password-stdin
           # This app exists only for analyzers, so deny globally as well.
-          sbx --app-name "$SBXLOOP_APP_NAME" policy init deny-all
-          sbx --app-name "$SBXLOOP_APP_NAME" policy deny network '**'
-          sbx --app-name "$SBXLOOP_APP_NAME" version
+          sbx --app-name "$LANTERN_APP_NAME" policy init deny-all
+          sbx --app-name "$LANTERN_APP_NAME" policy deny network '**'
+          sbx --app-name "$LANTERN_APP_NAME" version
 
       - name: Prove isolated parser profile
         run: |
@@ -109,11 +109,11 @@ jobs:
             -e GH_TOKEN= -e GITHUB_TOKEN= -e DOCKERHUB_TOKEN=
             -e OPENAI_API_KEY= -e ANTHROPIC_API_KEY= -e COPILOT_GITHUB_TOKEN=
           )
-          timeout 600s sbx --app-name "$SBXLOOP_APP_NAME" create \
+          timeout 600s sbx --app-name "$LANTERN_APP_NAME" create \
             --name="$SBX_PROBE_NAME" --cpus 1 --memory 512m \
             --deny-network '**' --skills off "${clear_credentials[@]}" \
             shell "$root/work" "$root/input:ro"
-          timeout 30s sbx --app-name "$SBXLOOP_APP_NAME" exec \
+          timeout 30s sbx --app-name "$LANTERN_APP_NAME" exec \
             "${clear_credentials[@]}" "$SBX_PROBE_NAME" \
             python3 "$root/input/probe.py" "$root/input/original.bin" "$expected_sha256" \
             "$root/private/neighbor.bin" "$root/private/host-output.bin"
@@ -125,11 +125,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
 
       - name: Extract PDF with production runner in a real sandbox
-        run: uv run --package sbxloop python scripts/probe_channel_pdf_analysis.py
+        run: uv run --package lantern-backend python scripts/probe_channel_pdf_analysis.py
 
       - name: Remove disposable sandbox
         if: always()
         run: |
-          sbx --app-name "$SBXLOOP_APP_NAME" policy log "$SBX_PROBE_NAME" --limit 10 || true
-          sbx --app-name "$SBXLOOP_APP_NAME" rm --force "$SBX_PROBE_NAME" || true
-          sbx --app-name "$SBXLOOP_APP_NAME" logout --yes || true
+          sbx --app-name "$LANTERN_APP_NAME" policy log "$SBX_PROBE_NAME" --limit 10 || true
+          sbx --app-name "$LANTERN_APP_NAME" rm --force "$SBX_PROBE_NAME" || true
+          sbx --app-name "$LANTERN_APP_NAME" logout --yes || true

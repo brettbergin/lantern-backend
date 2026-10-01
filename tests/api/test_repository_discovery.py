@@ -13,8 +13,8 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 
-from sbxloop.vcs.github import appauth
-from sbxloop.vcs.github.appauth import InstallationToken
+from lantern.vcs.github import appauth
+from lantern.vcs.github.appauth import InstallationToken
 from tests.api.conftest import Api, build
 
 READ = frozenset({"runs:read"})
@@ -150,7 +150,7 @@ class TestWithAPersonalToken:
     def test_reads_every_page_until_a_short_one(
         self, api: Api, forge: Forge, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.api import discovery
+        from lantern.api import discovery
 
         monkeypatch.setattr(discovery, "PAGE_SIZE", 2)
         _secrets(api, "GITHUB_TOKEN=pat-secret\n")

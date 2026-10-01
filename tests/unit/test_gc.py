@@ -1,4 +1,4 @@
-"""Run-directory retention: the sbxloop.gc policy, `sbxloop gc`, and the
+"""Run-directory retention: the lantern.gc policy, `lantern gc`, and the
 daemon's periodic sweep."""
 
 from __future__ import annotations
@@ -10,13 +10,13 @@ from typing import Any, cast
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.events import Event, HostEventTypes
-from sbxloop.gc import (
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.events import Event, HostEventTypes
+from lantern.gc import (
     DAY_S,
     classify_run_dirs,
     dir_size,
@@ -24,7 +24,7 @@ from sbxloop.gc import (
     prune_run_dirs,
     workspace_pruned,
 )
-from sbxloop.paths import SbxloopHome
+from lantern.paths import LanternHome
 from tests.fakes.rawdb import backdate
 
 runner = CliRunner()
@@ -34,18 +34,18 @@ RETENTION = 14 * DAY_S
 
 
 @pytest.fixture
-def state_dir(tmp_path: Path) -> SbxloopHome:
-    return SbxloopHome(tmp_path / "state")
+def state_dir(tmp_path: Path) -> LanternHome:
+    return LanternHome(tmp_path / "state")
 
 
 @pytest.fixture
-def store(state_dir: SbxloopHome) -> StateStore:
+def store(state_dir: LanternHome) -> StateStore:
     return StateStore(state_dir.state_db)
 
 
 def seed_run(
     store: StateStore,
-    state_dir: SbxloopHome,
+    state_dir: LanternHome,
     run_id: str,
     *,
     state: str = "completed",
@@ -70,13 +70,13 @@ def seed_run(
     return run_dir
 
 
-def verdict_for(store: StateStore, state_dir: SbxloopHome, run_id: str):  # type: ignore[no-untyped-def]
+def verdict_for(store: StateStore, state_dir: LanternHome, run_id: str):  # type: ignore[no-untyped-def]
     verdicts = classify_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW)
     return next(v for v in verdicts if v.run_id == run_id)
 
 
 class TestPolicy:
-    def test_old_terminal_run_is_prunable(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_old_terminal_run_is_prunable(self, store: StateStore, state_dir: LanternHome) -> None:
         seed_run(store, state_dir, "raaaaaaa1")
         v = verdict_for(store, state_dir, "raaaaaaa1")
         assert v.prunable
@@ -85,7 +85,7 @@ class TestPolicy:
 
     @pytest.mark.parametrize("state", ["completed", "merged", "failed", "blocked", "cancelled"])
     def test_every_terminal_state_qualifies(
-        self, store: StateStore, state_dir: SbxloopHome, state: str
+        self, store: StateStore, state_dir: LanternHome, state: str
     ) -> None:
         seed_run(store, state_dir, "raaaaaaa2", state=state)
         assert verdict_for(store, state_dir, "raaaaaaa2").prunable
@@ -94,7 +94,7 @@ class TestPolicy:
         "state", ["created", "provisioning", "building", "delivering", "awaiting_ci", "landing"]
     )
     def test_in_flight_runs_are_never_pruned(
-        self, store: StateStore, state_dir: SbxloopHome, state: str
+        self, store: StateStore, state_dir: LanternHome, state: str
     ) -> None:
         # However old: the daemon may still resume it on its next start.
         seed_run(store, state_dir, "raaaaaaa3", state=state, age_days=400)
@@ -102,13 +102,13 @@ class TestPolicy:
         assert not v.prunable
         assert "resumable" in v.reason
 
-    def test_within_retention_is_kept(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_within_retention_is_kept(self, store: StateStore, state_dir: LanternHome) -> None:
         seed_run(store, state_dir, "raaaaaaa4", age_days=13.9)
         v = verdict_for(store, state_dir, "raaaaaaa4")
         assert not v.prunable
         assert "within retention" in v.reason
 
-    def test_delivery_failed_is_kept(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_delivery_failed_is_kept(self, store: StateStore, state_dir: LanternHome) -> None:
         # The workspace is the only copy of delivered-but-not-delivered work
         # (#223 redelivery needs it).
         seed_run(store, state_dir, "raaaaaaa5")
@@ -120,7 +120,7 @@ class TestPolicy:
         assert "delivery failed" in v.reason
 
     def test_later_successful_delivery_clears_the_failure(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         seed_run(store, state_dir, "raaaaaaa6")
         store.append_event(
@@ -131,7 +131,7 @@ class TestPolicy:
         )
         assert verdict_for(store, state_dir, "raaaaaaa6").prunable
 
-    def test_kept_sandboxes_are_kept(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_kept_sandboxes_are_kept(self, store: StateStore, state_dir: LanternHome) -> None:
         # A live kept sandbox may still mount the workspace.
         seed_run(store, state_dir, "raaaaaaa7", kept="debug")
         v = verdict_for(store, state_dir, "raaaaaaa7")
@@ -139,7 +139,7 @@ class TestPolicy:
         assert "kept" in v.reason
 
     def test_unknown_and_foreign_dirs_are_reported_not_pruned(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         (state_dir.runs / "rzzzzzzz9").mkdir(parents=True)  # valid id, no row
         (state_dir.runs / "notes").mkdir()  # not a run id at all
@@ -150,13 +150,13 @@ class TestPolicy:
         assert not by_id["notes"].prunable
         assert by_id["rzzzzzzz9"].run_state is None
 
-    def test_no_runs_dir_is_empty(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_no_runs_dir_is_empty(self, store: StateStore, state_dir: LanternHome) -> None:
         assert classify_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW) == []
 
 
 class TestPrune:
     def test_removes_only_candidates_and_records_event(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         old = seed_run(store, state_dir, "rbbbbbbb1")
         young = seed_run(store, state_dir, "rbbbbbbb2", age_days=1)
@@ -178,7 +178,7 @@ class TestPrune:
         assert not workspace_pruned(store, "rbbbbbbb2")
 
     def test_workspace_elsewhere_is_not_flagged_removed(
-        self, store: StateStore, state_dir: SbxloopHome, tmp_path: Path
+        self, store: StateStore, state_dir: LanternHome, tmp_path: Path
     ) -> None:
         # In-place workspace (user's checkout): only the artifacts dir goes,
         # so resume of such a run would still find its work.
@@ -193,7 +193,7 @@ class TestPrune:
         assert not workspace_pruned(store, "rbbbbbbb4")
 
     def test_dry_run_removes_nothing_but_counts(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         old = seed_run(store, state_dir, "rbbbbbbb5")
         result = prune_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW, dry_run=True)
@@ -204,14 +204,14 @@ class TestPrune:
         assert old.exists()
         assert list(store.events("rbbbbbbb5", type_prefix="daemon.gc")) == []
 
-    def test_second_sweep_is_a_no_op(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_second_sweep_is_a_no_op(self, store: StateStore, state_dir: LanternHome) -> None:
         seed_run(store, state_dir, "rbbbbbbb6")
         prune_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW)
         again = prune_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW)
         assert again.pruned == [] and again.verdicts == []
 
     def test_claim_backs_off_when_run_leaves_terminal_after_classification(
-        self, store: StateStore, state_dir: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Another process resumes the failed run between our read of its
         # state and our removal: the marker+re-check is one write
@@ -230,7 +230,7 @@ class TestPrune:
         assert not workspace_pruned(store, "rbbbbbbb7")
 
     def test_marker_precedes_removal_and_survives_a_failed_rmtree(
-        self, store: StateStore, state_dir: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # rmtree can delete half a workspace and then raise; the durable
         # marker must already exist by then so resume refuses the remains.
@@ -245,7 +245,7 @@ class TestPrune:
 
         # Force the in-place fallback (rename refused) and make rmtree fail.
         monkeypatch.setattr(Path, "rename", no_rename)
-        monkeypatch.setattr("sbxloop.gc.shutil.rmtree", half_then_fail)
+        monkeypatch.setattr("lantern.gc.shutil.rmtree", half_then_fail)
         result = prune_run_dirs(store, state_dir, older_than_s=RETENTION, now=NOW)
         assert result.failed == ["rbbbbbbb8"] and result.pruned == []
         assert workspace_pruned(store, "rbbbbbbb8")
@@ -253,7 +253,7 @@ class TestPrune:
         assert [bool(e.data.get("error")) for e in events] == [False, True]
 
     def test_staged_leftovers_are_reclaimed_next_sweep(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         # A sweep that died after the rename but before the delete leaves
         # the payload under gc-pending/; it was already marked, so the next
@@ -281,10 +281,10 @@ class TestPrune:
 
 class TestResumeGuard:
     def test_resume_refuses_pruned_workspace(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
-        from sbxloop.engine.engine import LoopEngine
-        from sbxloop.errors import StateError
+        from lantern.engine.engine import LoopEngine
+        from lantern.errors import StateError
 
         # A failed run is resumable by an operator — until gc took its
         # workspace; then resume must say so instead of re-provisioning empty.
@@ -295,9 +295,9 @@ class TestResumeGuard:
             engine.resume("rccccccc1")
 
     def test_resume_leaves_terminal_before_touching_workspace(
-        self, store: StateStore, state_dir: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.engine.engine import LoopEngine
+        from lantern.engine.engine import LoopEngine
 
         # resume moves a failed run out of the terminal set before it
         # provisions, so a sweep racing it backs off: its claim re-checks
@@ -322,10 +322,10 @@ class TestResumeGuard:
         assert run_dir.exists() and not workspace_pruned(store, "rccccccc2")
 
     def test_resume_rechecks_after_leaving_terminal_and_restores_state(
-        self, store: StateStore, state_dir: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.engine.engine import LoopEngine
-        from sbxloop.errors import StateError
+        from lantern.engine.engine import LoopEngine
+        from lantern.errors import StateError
 
         # The sweep's marker lands right after resume's first guard check:
         # the second check (after the transition) must refuse, and the run
@@ -342,7 +342,7 @@ class TestResumeGuard:
             return workspace_pruned(store_, run_id)
 
         monkeypatch.setattr(
-            "sbxloop.engine.engine.workspace_pruned", marker_lands_after_first_check
+            "lantern.engine.engine.workspace_pruned", marker_lands_after_first_check
         )
         with pytest.raises(StateError, match="removed by gc"):
             engine.resume("rccccccc3")
@@ -368,7 +368,7 @@ class _NoWork:
 
 
 class TestDaemonSweep:
-    def make_loop(self, state_dir: SbxloopHome, store: StateStore, **daemon: object) -> DaemonLoop:
+    def make_loop(self, state_dir: LanternHome, store: StateStore, **daemon: object) -> DaemonLoop:
         config = Config.model_validate({"home": str(state_dir), "daemon": daemon})
         return DaemonLoop(
             config,
@@ -378,7 +378,7 @@ class TestDaemonSweep:
             clock=lambda: NOW,
         )
 
-    def test_first_tick_sweeps_then_daily(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_first_tick_sweeps_then_daily(self, store: StateStore, state_dir: LanternHome) -> None:
         old = seed_run(store, state_dir, "rddddddd1")
         loop = self.make_loop(state_dir, store)
         loop.tick()
@@ -392,7 +392,7 @@ class TestDaemonSweep:
         loop.tick()
         assert not later.exists()
 
-    def test_config_window_and_disable(self, store: StateStore, state_dir: SbxloopHome) -> None:
+    def test_config_window_and_disable(self, store: StateStore, state_dir: LanternHome) -> None:
         one_day = seed_run(store, state_dir, "rddddddd3", age_days=2)
         loop = self.make_loop(state_dir, store, prune_runs_after_days=1)
         loop.tick()
@@ -402,7 +402,7 @@ class TestDaemonSweep:
         assert never.exists()
 
     def test_sweep_notifies_frontend_with_counts(
-        self, store: StateStore, state_dir: SbxloopHome
+        self, store: StateStore, state_dir: LanternHome
     ) -> None:
         seed_run(store, state_dir, "rddddddd5")
         seen: list[Any] = []
@@ -421,9 +421,9 @@ class TestDaemonSweep:
         assert "pruned 1 run dir(s)" in notice.text and "freed" in notice.text
 
     def test_sweep_failure_does_not_take_daemon_down(
-        self, store: StateStore, state_dir: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop.daemon.loop as loop_mod
+        import lantern.daemon.loop as loop_mod
 
         def boom(*a: object, **k: object) -> None:
             raise OSError("disk on fire")
@@ -440,7 +440,7 @@ class TestCli:
         return tmp_path
 
     def cli_seed(self, workdir: Path) -> tuple[StateStore, Path, Path]:
-        state_dir = SbxloopHome(workdir / ".sbxloop")
+        state_dir = LanternHome(workdir / ".lantern")
         store = StateStore(state_dir.state_db)
         old = seed_run(store, state_dir, "reeeeeee1")
         young = seed_run(store, state_dir, "reeeeeee2", age_days=1)
@@ -481,7 +481,7 @@ class TestCli:
         assert old.exists() and young.exists()
 
     def test_gc_nothing_to_do(self, workdir: Path) -> None:
-        StateStore(workdir / ".sbxloop" / "state.db")
+        StateStore(workdir / ".lantern" / "state.db")
         result = runner.invoke(app, ["gc"])
         assert result.exit_code == 0
         assert "no run directories" in result.output
@@ -496,7 +496,7 @@ class TestCli:
     def test_gc_table_shows_foreign_dir_as_unknown(self, workdir: Path) -> None:
         # A runs/<id>/ directory with no state-DB row: the table must
         # render the missing state/age rather than crash, and keep it.
-        state_dir = SbxloopHome(workdir / ".sbxloop")
+        state_dir = LanternHome(workdir / ".lantern")
         StateStore(state_dir.state_db)
         (state_dir.runs / "rforeign1").mkdir(parents=True)
         result = runner.invoke(app, ["gc"])

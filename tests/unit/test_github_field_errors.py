@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
+from lantern.errors import GithubOpsError
 from tests.fakes.github_errors import (
     FIXTURE_PATH,
     WORKER_SHAPES,
@@ -24,7 +24,7 @@ from tests.fakes.github_errors import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-PRODUCTION_SRC = REPO_ROOT / "packages" / "sbxloop" / "src"
+PRODUCTION_SRC = REPO_ROOT / "packages" / "lantern" / "src"
 UNIT_TESTS = Path(__file__).resolve().parent
 
 _STATUS_LITERAL = re.compile(r"HTTP (\d{3})")

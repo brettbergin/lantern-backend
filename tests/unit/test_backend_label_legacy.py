@@ -24,16 +24,16 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.discord_format import (
+from lantern.daemon.discord_format import (
     agent_ident_from_config_json,
     agent_model_label,
     format_for_discord,
     headline_embed,
     headline_text,
 )
-from sbxloop.daemon.model import WorkItem
-from sbxloop.engine.store import StateStore
-from sbxloop.events import Event
+from lantern.daemon.model import WorkItem
+from lantern.engine.store import StateStore
+from lantern.events import Event
 
 RUN_ID = "r1legacy0"
 
@@ -74,7 +74,7 @@ OLD_MESSAGE_NO_MODEL = '{"agent": "executor", "content": "done"}'
 # A `runs` row from before config persistence at all...
 OLD_CONFIG_EMPTY = "{}"
 # ...and one that persisted a config but predates the `[agent]` section.
-OLD_CONFIG_NO_AGENT = '{"model": "gpt-5", "home": "/var/lib/sbxloop"}'
+OLD_CONFIG_NO_AGENT = '{"model": "gpt-5", "home": "/var/lib/lantern"}'
 
 
 def legacy_store(tmp_path: Path, *, config_json: str = OLD_CONFIG_NO_AGENT) -> Path:

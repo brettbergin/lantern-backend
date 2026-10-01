@@ -4,15 +4,15 @@ fetch result) dwarfs the commands' real work."""
 
 from __future__ import annotations
 
-from sbxloop.config import Config
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import (
+from lantern.config import Config
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import (
     VERIFY_HEAD_CLIP,
     VERIFY_TAIL_CLIP,
     PhaseRunner,
     clip_head_tail,
 )
-from sbxloop_worker.protocol import BatchCommandResult, ErrorInfo, JobRequest, JobResult
+from lantern_worker.protocol import BatchCommandResult, ErrorInfo, JobRequest, JobResult
 
 
 class BatchStubAgent:

@@ -11,11 +11,11 @@ from pathlib import Path
 
 from git import Repo
 
-from sbxloop.config import load_config
+from lantern.config import load_config
 
 
 def _write(tmp_path: Path, body: str) -> Path:
-    (tmp_path / "sbxloop.toml").write_text(body)
+    (tmp_path / "lantern.toml").write_text(body)
     return tmp_path
 
 

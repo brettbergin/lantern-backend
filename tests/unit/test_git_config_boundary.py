@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from git import Repo
 
-from sbxloop.errors import ProvisionError
-from sbxloop.hostgit import diff_text
+from lantern.errors import ProvisionError
+from lantern.hostgit import diff_text
 
 
 @pytest.fixture

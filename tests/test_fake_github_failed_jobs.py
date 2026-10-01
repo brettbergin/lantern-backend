@@ -20,12 +20,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop.deliver import branch_name, deliver_workspace
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.errors import GithubOpsError
+from lantern.deliver import branch_name, deliver_workspace
+from lantern.engine.engine import LoopEngine
+from lantern.errors import GithubOpsError
 from tests.fakes.fake_github import FakeGithub
 
-FOLLOWUP_LABEL = "sbxloop:follow-up"
+FOLLOWUP_LABEL = "lantern:follow-up"
 
 
 def make_workspace(tmp_path: Path) -> Path:
@@ -53,7 +53,7 @@ class TestRawLookupIsNotAFailedJob:
         assert fake.failed_job_paths == ["raw"]
 
     def test_the_helper_falls_back_for_a_stand_in_without_the_method(self) -> None:
-        from sbxloop.vcs.github.ops import raw_lookup
+        from lantern.vcs.github.ops import raw_lookup
 
         class Bare:
             def raw(self, method: str, path: str, body: Any = None) -> Any:
@@ -85,9 +85,9 @@ class TestLookupsAreRawCalls:
         assert fake.ref_lookup("o/r", "heads/main") == "base123"
         assert fake.raw_calls[-1] == ("GET", "/repos/o/r/git/ref/heads/main", None)
         # A delivery branch exists only once delivery created it.
-        assert fake.ref_lookup("o/r", "heads/sbxloop/r1") is None
-        fake.branches.add("sbxloop/r1")
-        assert fake.ref_lookup("o/r", "heads/sbxloop/r1") == fake.head_sha
+        assert fake.ref_lookup("o/r", "heads/lantern/r1") is None
+        fake.branches.add("lantern/r1")
+        assert fake.ref_lookup("o/r", "heads/lantern/r1") == fake.head_sha
         # A base that is gone, or not visible to the token.
         fake.missing_refs.add("main")
         assert fake.ref_lookup("o/r", "heads/main") is None
@@ -125,7 +125,7 @@ class TestLedgerRecordsFailures:
 
     def test_a_422_ref_create_records(self) -> None:
         fake = FakeGithub()
-        body = {"ref": "refs/heads/sbxloop/r42", "sha": "commit1"}
+        body = {"ref": "refs/heads/lantern/r42", "sha": "commit1"}
         fake.raw("POST", "/repos/o/r/git/refs", body)  # the first create is fine
         fake.assert_no_failed_jobs()
         with pytest.raises(GithubOpsError):
@@ -158,7 +158,7 @@ class TestLedgerIgnoresResolvedMisses:
 
     def test_ref_lookup_miss_is_not_a_failed_job(self) -> None:
         fake = FakeGithub()
-        assert fake.ref_lookup("o/r", "heads/sbxloop/r42") is None
+        assert fake.ref_lookup("o/r", "heads/lantern/r42") is None
         assert fake.failed_jobs == []
         fake.assert_no_failed_jobs()
 

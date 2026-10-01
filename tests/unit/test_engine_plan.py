@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.engine.model import PLAN_STAGES, RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES
-from sbxloop.engine.planning import (
+from lantern import hostgit
+from lantern.engine.model import PLAN_STAGES, RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES
+from lantern.engine.planning import (
     Clarification,
     CurrentChild,
     PlanAnswer,
@@ -32,9 +32,9 @@ from sbxloop.engine.planning import (
     proposal_problems,
     replan_problems,
 )
-from sbxloop.errors import ConfigError, PlanDeliveryError
-from sbxloop.events import HostEventTypes
-from sbxloop.sbx.naming import run_name
+from lantern.errors import ConfigError, PlanDeliveryError
+from lantern.events import HostEventTypes
+from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.gitrepo import make_repo
@@ -592,8 +592,8 @@ class TestClarificationShape:
             PlanClarification.model_validate(body)
 
     def test_the_bounds_are_the_chat_choice_questions(self) -> None:
-        from sbxloop.daemon import chat_choices
-        from sbxloop.engine import planning
+        from lantern.daemon import chat_choices
+        from lantern.engine import planning
 
         assert (planning.MIN_CHOICES, planning.MAX_CHOICES) == (
             chat_choices.MIN_CHOICES,

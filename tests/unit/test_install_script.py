@@ -1,14 +1,14 @@
 """The bootstrap script's host preflight (#893).
 
 `scripts/install.sh` used to check only `curl` and `tar`, download an
-interpreter and every package, and then hand over to `sbxloop init` — which
-imports sbxloop, which imports GitPython, which resolves the git executable
+interpreter and every package, and then hand over to `lantern init` — which
+imports lantern, which imports GitPython, which resolves the git executable
 at *import* time. On a host without a usable git that turned a missing
 prerequisite into an `ImportError` traceback after the install had already
 mutated the home.
 
 Every test here runs the real script through an absolute `/bin/sh` against a
-synthetic host: its own `HOME` and `SBXLOOP_HOME` under `tmp_path`, and a
+synthetic host: its own `HOME` and `LANTERN_HOME` under `tmp_path`, and a
 `PATH` holding only what the script needs. Whether this runner happens to
 have git installed never reaches the script, in either direction.
 """
@@ -36,8 +36,8 @@ BORROWED = ("mkdir", "uname", "rm")
 SHA_TOOLS = ("sha256sum", "shasum")
 VERSION = "1.2.3"
 WHEELS = {
-    f"sbxloop_worker-{VERSION}-py3-none-any.whl": "worker wheel",
-    f"sbxloop-{VERSION}-py3-none-any.whl": "host wheel",
+    f"lantern_worker-{VERSION}-py3-none-any.whl": "worker wheel",
+    f"lantern_backend-{VERSION}-py3-none-any.whl": "host wheel",
 }
 
 pytestmark = pytest.mark.skipif(
@@ -138,7 +138,7 @@ class Host:
             env={
                 "PATH": str(self.path),
                 "HOME": str(self.root / "home"),
-                "SBXLOOP_HOME": str(self.home),
+                "LANTERN_HOME": str(self.home),
                 **env,
             },
             cwd=self.root,
@@ -156,7 +156,7 @@ def host(tmp_path: Path) -> Host:
     path = root / "path"
     path.mkdir(parents=True)
     (root / "home").mkdir()
-    host = Host(root=root, home=root / "sbxloop", path=path, log=root / "invocations.log")
+    host = Host(root=root, home=root / "lantern", path=path, log=root / "invocations.log")
     for name in BORROWED:
         real = shutil.which(name)
         assert real is not None, f"this runner has no {name}"
@@ -172,14 +172,14 @@ def host(tmp_path: Path) -> Host:
 @pytest.fixture
 def installable(host: Host) -> Host:
     """…and the pieces the script would otherwise download, pre-placed, so a
-    passing preflight runs the bootstrap through to `sbxloop init`."""
+    passing preflight runs the bootstrap through to `lantern init`."""
     host.fake("git")
     host.release()
-    for name, relative in (("uv", "bin/uv"), ("sbxloop", "venv/bin/sbxloop")):
+    for name, relative in (("uv", "bin/uv"), ("lantern", "venv/bin/lantern")):
         landed = host.home / relative
         landed.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(host.fake(name, on_path=False), landed)
-    (host.home / "venv/bin/python").symlink_to(host.home / "venv/bin/sbxloop")
+    (host.home / "venv/bin/python").symlink_to(host.home / "venv/bin/lantern")
     return host
 
 
@@ -220,7 +220,7 @@ def test_a_usable_git_bootstraps(installable: Host) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "is required" not in result.stdout
-    assert "sbxloop init --systemd" in "\n".join(installable.invocations)
+    assert "lantern init --systemd" in "\n".join(installable.invocations)
 
 
 def test_an_explicitly_configured_git_satisfies_the_preflight(installable: Host) -> None:
@@ -232,12 +232,12 @@ def test_an_explicitly_configured_git_satisfies_the_preflight(installable: Host)
     result = installable.run(GIT_PYTHON_GIT_EXECUTABLE=str(elsewhere))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "sbxloop init --systemd" in "\n".join(installable.invocations)
+    assert "lantern init --systemd" in "\n".join(installable.invocations)
 
 
 def test_an_explicitly_configured_git_that_is_missing_fails(installable: Host) -> None:
     """…and the same variable pointed at nothing fails the host, even with a
-    usable git on PATH: that is the executable sbxloop would try to use."""
+    usable git on PATH: that is the executable lantern would try to use."""
     result = installable.run(GIT_PYTHON_GIT_EXECUTABLE=str(installable.root / "no-such-git"))
 
     assert result.returncode == 2
@@ -246,7 +246,7 @@ def test_an_explicitly_configured_git_that_is_missing_fails(installable: Host) -
 
 
 class TestReleaseWheels:
-    """sbxloop and its worker come from the GitHub Release's own wheel files,
+    """lantern and its worker come from the GitHub Release's own wheel files,
     checked against its manifest — never by name from a package index, where
     the names a rename moves to are not ours."""
 
@@ -258,19 +258,19 @@ class TestReleaseWheels:
 
         assert result.returncode == 0, result.stdout + result.stderr
         log = "\n".join(installable.invocations)
-        assert "https://api.github.com/repos/brettbergin/sbxloop/releases/latest" in log
-        base = f"https://github.com/brettbergin/sbxloop/releases/download/v{VERSION}/"
+        assert "https://api.github.com/repos/brettbergin/lantern-backend/releases/latest" in log
+        base = f"https://github.com/brettbergin/lantern-backend/releases/download/v{VERSION}/"
         assert base + "release-manifest.json" in log
         [install] = self.install(installable)
         wheels = installable.home / "tmp" / f"release-v{VERSION}"
-        assert f"{wheels}/sbxloop_worker-{VERSION}-py3-none-any.whl" in install
-        assert f"{wheels}/sbxloop-{VERSION}-py3-none-any.whl[discord,slack]" in install
-        assert "==" not in install and "sbxloop[" not in install
+        assert f"{wheels}/lantern_worker-{VERSION}-py3-none-any.whl" in install
+        assert f"{wheels}/lantern_backend-{VERSION}-py3-none-any.whl[discord,slack]" in install
+        assert "==" not in install and "lantern-backend[" not in install
         assert not wheels.exists()
-        assert "sbxloop init --systemd" in log
+        assert "lantern init --systemd" in log
 
     def test_a_pinned_version_reads_its_own_release(self, installable: Host) -> None:
-        result = installable.run(SBXLOOP_VERSION=VERSION)
+        result = installable.run(LANTERN_VERSION=VERSION)
 
         assert result.returncode == 0, result.stdout + result.stderr
         log = "\n".join(installable.invocations)
@@ -288,7 +288,7 @@ class TestReleaseWheels:
         assert result.returncode == 1
         assert f"{name} does not match the SHA-256" in result.stdout
         assert self.install(installable) == []
-        assert "sbxloop init" not in "\n".join(installable.invocations)
+        assert "lantern init" not in "\n".join(installable.invocations)
 
     @pytest.mark.parametrize("flag", ["draft", "prerelease"])
     def test_only_a_published_stable_release_installs(self, installable: Host, flag: str) -> None:
@@ -304,7 +304,7 @@ class TestReleaseWheels:
         assert "GitHub Release" in header
         assert "PyPI" in header  # only for the third-party dependencies
         assert "never by name from" in header
-        assert "sbxloop[" not in INSTALL.read_text()
+        assert "lantern-backend[" not in INSTALL.read_text()
 
 
 def test_git_is_a_declared_prerequisite() -> None:
@@ -323,7 +323,7 @@ class TestHostPreparation:
     These are not the script's own: it can install a whole home without
     them, and the remedies — enabling virtualisation, granting the device,
     installing a package — are an administrator's. So they are reported
-    early and never performed, and `sbxloop init` is what refuses the one
+    early and never performed, and `lantern init` is what refuses the one
     step that cannot work without them.
     """
 
@@ -343,7 +343,7 @@ class TestHostPreparation:
         result = installable.run()
 
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "sbxloop init --systemd" in "\n".join(installable.invocations)
+        assert "lantern init --systemd" in "\n".join(installable.invocations)
         # Whichever this runner is, the advisory and the host agree.
         assert ("/dev/kvm does not exist" in result.stderr) is not Path("/dev/kvm").exists()
 
@@ -372,17 +372,17 @@ class TestHostPreparation:
 
         assert result.returncode == 0, result.stdout + result.stderr
         assert "host preparation needed" not in result.stderr
-        assert "sbxloop init --systemd" in "\n".join(installable.invocations)
+        assert "lantern init --systemd" in "\n".join(installable.invocations)
 
 
 @pytest.mark.slow
-def test_importing_sbxloop_without_a_usable_git_is_an_importerror(tmp_path: Path) -> None:
+def test_importing_lantern_without_a_usable_git_is_an_importerror(tmp_path: Path) -> None:
     """Why the preflight exists, reproduced in an isolated interpreter: an
     unreachable git executable — simulated through GitPython's own variable,
     never by touching the runner's installation — and the import chain behind
-    `sbxloop init` fails with no mention of a prerequisite."""
+    `lantern init` fails with no mention of a prerequisite."""
     result = subprocess.run(
-        [sys.executable, "-c", "import sbxloop"],
+        [sys.executable, "-c", "import lantern"],
         env={**os.environ, "GIT_PYTHON_GIT_EXECUTABLE": str(tmp_path / "no-such-git")},
         capture_output=True,
         text=True,

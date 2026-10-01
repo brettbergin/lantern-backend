@@ -4,7 +4,7 @@ It implements the relay's two routes the way the relay does: ``POST
 /v1/enroll`` seals a device token into an opaque handle, and ``POST
 /v1/push`` opens the handle, checks the payload's shape and records what
 it would have sent to the push provider. The handle here is an HMAC-keyed
-envelope rather than the real AES-GCM one — what matters to sbxloop is
+envelope rather than the real AES-GCM one — what matters to lantern is
 that it is opaque, bound to one token, and refused when tampered with.
 
 A test scripts failures with :meth:`FakeRelay.fail_next` (a status, an

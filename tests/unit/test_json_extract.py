@@ -8,7 +8,7 @@ must recover any JSON value it can find, preferring the last candidate
 
 from __future__ import annotations
 
-from sbxloop_worker._json import extract_json
+from lantern_worker._json import extract_json
 
 
 class TestFenced:

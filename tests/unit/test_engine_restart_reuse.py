@@ -31,7 +31,7 @@ from tests.unit.test_engine import (
     taskgraph,
 )
 
-PRIOR_BRANCH = "sbxloop/rprev0001"
+PRIOR_BRANCH = "lantern/rprev0001"
 
 
 @pytest.fixture
@@ -86,7 +86,7 @@ class TestBranchReuse:
         engine = harness.pipeline(fake)
         result = engine.start("no prior attempt")
         assert result.state == "merged"
-        assert engine.store.get_run(result.run_id).branch == f"sbxloop/{result.run_id}"
+        assert engine.store.get_run(result.run_id).branch == f"lantern/{result.run_id}"
         assert fake.pr_create_calls == 1
 
 
@@ -99,11 +99,11 @@ class TestFallback:
         fake = FakeGithub()  # branches empty: the ref lookup misses
         script_one_round(harness)
         engine = harness.pipeline(fake)
-        with caplog.at_level(logging.INFO, logger="sbxloop.engine.engine"):
+        with caplog.at_level(logging.INFO, logger="lantern.engine.engine"):
             result = engine.start("restart me", prior_branch=PRIOR_BRANCH, prior_pr=7)
 
         assert result.state == "merged"
-        assert engine.store.get_run(result.run_id).branch == f"sbxloop/{result.run_id}"
+        assert engine.store.get_run(result.run_id).branch == f"lantern/{result.run_id}"
         reasons = unusable_reasons(caplog)
         assert len(reasons) == 1
         assert "no longer on origin" in reasons[0]
@@ -119,11 +119,11 @@ class TestFallback:
         fake.unrelated_branches.add(PRIOR_BRANCH)
         script_one_round(harness)
         engine = harness.pipeline(fake)
-        with caplog.at_level(logging.INFO, logger="sbxloop.engine.engine"):
+        with caplog.at_level(logging.INFO, logger="lantern.engine.engine"):
             result = engine.start("restart me", prior_branch=PRIOR_BRANCH)
 
         assert result.state == "merged"
-        assert engine.store.get_run(result.run_id).branch == f"sbxloop/{result.run_id}"
+        assert engine.store.get_run(result.run_id).branch == f"lantern/{result.run_id}"
         reasons = unusable_reasons(caplog)
         assert len(reasons) == 1
         assert "merge base" in reasons[0]
@@ -134,7 +134,7 @@ class TestFallback:
         be reported as a branch to abandon. The base ref tells them apart."""
         from typing import Any
 
-        from sbxloop.engine.engine import LoopEngine
+        from lantern.engine.engine import LoopEngine
 
         class Ops(OpsStub):
             def __init__(self, compare: Any, base_sha: str | None) -> None:
@@ -259,11 +259,11 @@ class TestWorkspacePinning:
             sandbox={"workspace": str(source), "workspace_isolation": "clone"},
         )
         with caplog.at_level(logging.INFO):
-            result = engine.start("restart me", prior_branch="sbxloop/never-fetched")
+            result = engine.start("restart me", prior_branch="lantern/never-fetched")
 
         assert result.state == "merged"
         run = engine.store.get_run(result.run_id)
-        assert run.branch == f"sbxloop/{result.run_id}"
+        assert run.branch == f"lantern/{result.run_id}"
         messages = " ".join(r.getMessage() for r in caplog.records)
         assert "continue_branch_unusable" in messages
 
@@ -273,7 +273,7 @@ class TestContinueBranchParameter:
     parameter; the config key is the operator's way to ask for the same."""
 
     def test_the_engine_offers_a_prior_branch_as_the_parameter(self, harness: Harness) -> None:
-        from sbxloop.sbx.provision import ContinueBranch
+        from lantern.sbx.provision import ContinueBranch
 
         engine = harness.engine()
         assert engine._continue_branch() is None
@@ -283,25 +283,25 @@ class TestContinueBranchParameter:
         assert engine.config.sandbox.continue_branch is None
 
     def test_the_parameter_wins_over_the_config_knob(self, harness: Harness) -> None:
-        from sbxloop.config import Config
-        from sbxloop.events import EventBus
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.provision import ContinueBranch, Provisioner, continue_from_config
+        from lantern.config import Config
+        from lantern.events import EventBus
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.provision import ContinueBranch, Provisioner, continue_from_config
 
         config = Config.model_validate(
             {
                 "home": str(harness.home.root),
-                "sandbox": {"continue_branch": "sbxloop/by-hand", "continue_branch_optional": True},
+                "sandbox": {"continue_branch": "lantern/by-hand", "continue_branch_optional": True},
             }
         )
-        assert continue_from_config(config.sandbox) == ContinueBranch("sbxloop/by-hand", True)
+        assert continue_from_config(config.sandbox) == ContinueBranch("lantern/by-hand", True)
         assert (
             continue_from_config(Config.model_validate({"home": str(harness.home.root)}).sandbox)
             is None
         )
         provisioner = Provisioner(SbxCLI(binary=str(harness.fake_sbx.binary)), config, EventBus())
         # The operator's knob is the default...
-        assert provisioner._continue == ContinueBranch("sbxloop/by-hand", True)
+        assert provisioner._continue == ContinueBranch("lantern/by-hand", True)
         # ...and an explicit parameter replaces it for that provision.
-        provisioner._continue = ContinueBranch("sbxloop/offered", optional=False)
-        assert provisioner._continue.branch == "sbxloop/offered"
+        provisioner._continue = ContinueBranch("lantern/offered", optional=False)
+        assert provisioner._continue.branch == "lantern/offered"

@@ -1,12 +1,12 @@
 """Parser tests pinned against realistic sbx output — both the v0.35 layout
 and the v0.38 one (NAME renamed to SANDBOX, frequently-empty PORTS column)."""
 
-from sbxloop.sbx.parse import parse_columns, parse_ls, parse_version
+from lantern.sbx.parse import parse_columns, parse_ls, parse_version
 
 LS_FIXTURE = """\
 NAME                    AGENT    STATUS    WORKSPACE
-sbxloop-r1a2b3c4d-agent   shell    running   /Users/b/.sbxloop/runs/r1a2b3c4d/workspace
-sbxloop-r1a2b3c4d-github  shell    running   /Users/b/.sbxloop/runs/r1a2b3c4d/workspace
+lantern-r1a2b3c4d-agent   shell    running   /Users/b/.lantern/runs/r1a2b3c4d/workspace
+lantern-r1a2b3c4d-github  shell    running   /Users/b/.lantern/runs/r1a2b3c4d/workspace
 quickstart              claude   stopped   /Users/b/proj
 """
 
@@ -22,13 +22,13 @@ webby     shell   running   8080    /home/b/site
 def test_parse_ls_fixture() -> None:
     infos = parse_ls(LS_FIXTURE)
     assert [i.name for i in infos] == [
-        "sbxloop-r1a2b3c4d-agent",
-        "sbxloop-r1a2b3c4d-github",
+        "lantern-r1a2b3c4d-agent",
+        "lantern-r1a2b3c4d-github",
         "quickstart",
     ]
     assert infos[0].agent == "shell"
     assert infos[2].status == "stopped"
-    assert infos[0].workspace == "/Users/b/.sbxloop/runs/r1a2b3c4d/workspace"
+    assert infos[0].workspace == "/Users/b/.lantern/runs/r1a2b3c4d/workspace"
 
 
 def test_parse_ls_038_sandbox_header_and_empty_ports() -> None:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.api.artifacts import CATALOG_MAX_FILES, content_type_for, guess_media_type
+from lantern.api.artifacts import CATALOG_MAX_FILES, content_type_for, guess_media_type
 from tests.api.conftest import Api
 from tests.unit.test_daemon_loop import gh_item
 
@@ -169,7 +169,7 @@ class TestDownload:
 
 
 def test_the_catalog_is_bounded(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
-    from sbxloop.api import artifacts as module
+    from lantern.api import artifacts as module
 
     monkeypatch.setattr(module, "CATALOG_MAX_FILES", 2)
     run_id = _finish(api)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop_worker.registryops import CATALOGUE_ENV, RegistryFetchError, execute_fetch
+from lantern_worker.registryops import CATALOGUE_ENV, RegistryFetchError, execute_fetch
 from tests.fakes.gitserver import PrivateGitServer
 from tests.unit.test_hostgit import git, make_repo
 
@@ -187,7 +187,7 @@ def test_git_fetch_returns_a_bundle_without_project_execution(
     clone = tmp_path / "agent-checkout"
     clone.mkdir()
     git("init", cwd=clone)
-    git("fetch", str(bundle), "refs/sbxloop/dependency", cwd=clone)
+    git("fetch", str(bundle), "refs/lantern/dependency", cwd=clone)
     git("checkout", "FETCH_HEAD", cwd=clone)
     assert (clone / "hello.txt").read_text() == "hi\n"
 

@@ -11,9 +11,9 @@ from typing import Any
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from sbxloop.api import ws as ws_module
-from sbxloop.daemon.loop import RESTART_MARKER_KEY
-from sbxloop.daemon.sources import RepoHealth
+from lantern.api import ws as ws_module
+from lantern.daemon.loop import RESTART_MARKER_KEY
+from lantern.daemon.sources import RepoHealth
 from tests.api.conftest import Api, build
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_daemon_loop import FakeSource

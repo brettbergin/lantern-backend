@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.concierge import ConciergeReply
+from lantern.daemon.concierge import ConciergeReply
 
 
 class FakeConcierge:
@@ -253,7 +253,7 @@ def test_ordinary_conversation_cannot_use_action_tools(api: Any) -> None:
     response = api.client.post(
         f"/v1/channels/{channel_id}/turns",
         headers=headers,
-        json={"content": "hello Angie"},
+        json={"content": "hello Lantern"},
     )
     assert response.status_code == 202
 
@@ -261,17 +261,17 @@ def test_ordinary_conversation_cannot_use_action_tools(api: Any) -> None:
     while not concierge.calls and time.monotonic() < deadline:
         time.sleep(0.01)
     assert concierge.calls[0]["allow_actions"] is False
-    assert concierge.calls[0]["session_key"] == f"{channel_id}:angie"
+    assert concierge.calls[0]["session_key"] == f"{channel_id}:lantern"
 
 
 @pytest.mark.parametrize(
     ("intent", "contract"),
     [
-        ("code", "selected sbxloop's Code runner"),
-        ("workload", "selected sbxloop's Workload runner"),
+        ("code", "selected lantern's Code runner"),
+        ("workload", "selected lantern's Workload runner"),
     ],
 )
-def test_explicit_runner_selection_uses_angie_and_existing_pipeline(
+def test_explicit_runner_selection_uses_lantern_and_existing_pipeline(
     api: Any, intent: str, contract: str
 ) -> None:
     concierge = FakeConcierge()
@@ -342,7 +342,7 @@ def test_preferences_are_durable_and_injected_into_new_turns(api: Any) -> None:
     assert "Be concise." in concierge.calls[0]["persona"]
 
 
-def test_workflow_definitions_keep_angie_crud_contract(api: Any) -> None:
+def test_workflow_definitions_keep_lantern_crud_contract(api: Any) -> None:
     headers = bearer(register(api))
     created = api.client.post(
         "/v1/workflows",
@@ -473,7 +473,7 @@ def test_owner_can_select_and_save_gitlab(api: Any) -> None:
 
 def test_connection_write_refuses_host_overrides(api: Any, monkeypatch: Any) -> None:
     headers = bearer(register(api))
-    monkeypatch.setenv("SBXLOOP_VCS__KIND", "github")
+    monkeypatch.setenv("LANTERN_VCS__KIND", "github")
     overridden = api.client.put(
         "/v1/connections/gitlab",
         headers=headers,
@@ -481,7 +481,7 @@ def test_connection_write_refuses_host_overrides(api: Any, monkeypatch: Any) -> 
     )
     assert overridden.status_code == 409
     assert overridden.json()["code"] == "external_connection_setting"
-    monkeypatch.delenv("SBXLOOP_VCS__KIND")
+    monkeypatch.delenv("LANTERN_VCS__KIND")
 
     monkeypatch.setenv("GITLAB_TOKEN", "host-token")
     external_secret = api.client.put(

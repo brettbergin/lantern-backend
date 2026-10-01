@@ -4,8 +4,8 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config, load_config, load_config_with_sources
-from sbxloop.errors import ConfigError
+from lantern.config import Config, load_config, load_config_with_sources
+from lantern.errors import ConfigError
 
 
 def test_defaults(tmp_path: Path) -> None:
@@ -22,32 +22,32 @@ def test_defaults(tmp_path: Path) -> None:
 
 def test_artifacts_exclude_default_and_override(tmp_path: Path) -> None:
     default = load_config(cwd=tmp_path, env={}).artifacts.exclude
-    assert default[:2] == [".git", ".sbxloop"]
+    assert default[:2] == [".git", ".lantern"]
     assert {"node_modules", "__pycache__", ".venv", "target", "obj"} <= set(default)
     # An override replaces the default wholesale — it does not extend it.
-    (tmp_path / "sbxloop.toml").write_text('[artifacts]\nexclude = [".git", "node_modules"]\n')
+    (tmp_path / "lantern.toml").write_text('[artifacts]\nexclude = [".git", "node_modules"]\n')
     config = load_config(cwd=tmp_path, env={})
     assert config.artifacts.exclude == [".git", "node_modules"]
 
 
 def test_init_template_exclude_matches_the_default(tmp_path: Path) -> None:
-    """`sbxloop init` writes the exclude list out literally; a starter file
+    """`lantern init` writes the exclude list out literally; a starter file
     that silently differs from the built-in default would be a trap."""
-    from sbxloop.data import DEFAULT_CONFIG_TOML
+    from lantern.data import DEFAULT_CONFIG_TOML
 
-    (tmp_path / "sbxloop.toml").write_text(DEFAULT_CONFIG_TOML)
+    (tmp_path / "lantern.toml").write_text(DEFAULT_CONFIG_TOML)
     written = load_config(cwd=tmp_path, env={}).artifacts.exclude
     assert set(written) == set(Config().artifacts.exclude)
 
 
 def test_artifacts_harvest_mode_default_and_override(tmp_path: Path) -> None:
     assert load_config(cwd=tmp_path, env={}).artifacts.harvest_mode == "per-task"
-    (tmp_path / "sbxloop.toml").write_text('[artifacts]\nharvest_mode = "final"\n')
+    (tmp_path / "lantern.toml").write_text('[artifacts]\nharvest_mode = "final"\n')
     assert load_config(cwd=tmp_path, env={}).artifacts.harvest_mode == "final"
 
 
 def test_artifacts_exclude_rejects_path_separators(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[artifacts]\nexclude = [".git/objects"]\n')
+    (tmp_path / "lantern.toml").write_text('[artifacts]\nexclude = [".git/objects"]\n')
     with pytest.raises(ConfigError, match=r"artifacts\.exclude"):
         load_config(cwd=tmp_path, env={})
 
@@ -61,7 +61,7 @@ def test_sandbox_languages_default_is_python(tmp_path: Path) -> None:
 
 
 def test_sandbox_languages_normalizes_and_dedupes(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         '[sandbox]\nlanguages = ["Python", "py", "  python3 "]\n'
     )
     config = load_config(cwd=tmp_path, env={})
@@ -70,36 +70,36 @@ def test_sandbox_languages_normalizes_and_dedupes(tmp_path: Path) -> None:
 
 
 def test_sandbox_languages_rejects_unknown(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[sandbox]\nlanguages = ["cobol"]\n')
+    (tmp_path / "lantern.toml").write_text('[sandbox]\nlanguages = ["cobol"]\n')
     with pytest.raises(ConfigError, match=r"unsupported sandbox\.languages"):
         load_config(cwd=tmp_path, env={})
 
 
 def test_pyproject_layer(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
-        '[tool.sbxloop]\nmodel = "gpt-5"\n[tool.sbxloop.budgets]\nmax_tasks = 5\n'
+        '[tool.lantern]\nmodel = "gpt-5"\n[tool.lantern.budgets]\nmax_tasks = 5\n'
     )
     config = load_config(cwd=tmp_path, env={})
     assert config.model == "gpt-5"
     assert config.budgets.max_tasks == 5
 
 
-def test_sbxloop_toml_overrides_pyproject(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[tool.sbxloop]\nmodel = "gpt-5"\napp_name = "a"\n')
-    (tmp_path / "sbxloop.toml").write_text('model = "auto"\n')
+def test_lantern_toml_overrides_pyproject(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[tool.lantern]\nmodel = "gpt-5"\napp_name = "a"\n')
+    (tmp_path / "lantern.toml").write_text('model = "auto"\n')
     config = load_config(cwd=tmp_path, env={})
-    assert config.model == "auto"  # sbxloop.toml wins
+    assert config.model == "auto"  # lantern.toml wins
     assert config.app_name == "a"  # untouched keys survive from lower layers
 
 
 def test_env_overrides_everything(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('model = "file-model"\nkeep_sandboxes = false\n')
+    (tmp_path / "lantern.toml").write_text('model = "file-model"\nkeep_sandboxes = false\n')
     env = {
-        "SBXLOOP_MODEL": "env-model",
-        "SBXLOOP_KEEP_SANDBOXES": "true",
-        "SBXLOOP_BUDGETS__MAX_TASKS": "3",
-        "SBXLOOP_BUDGETS__MAX_WALL_CLOCK_S": "60.5",
-        "SBXLOOP_GITHUB__REPO": "brettbergin/sbxloop",
+        "LANTERN_MODEL": "env-model",
+        "LANTERN_KEEP_SANDBOXES": "true",
+        "LANTERN_BUDGETS__MAX_TASKS": "3",
+        "LANTERN_BUDGETS__MAX_WALL_CLOCK_S": "60.5",
+        "LANTERN_GITHUB__REPO": "brettbergin/lantern-backend",
         "UNRELATED": "ignored",
     }
     config = load_config(cwd=tmp_path, env=env)
@@ -107,21 +107,21 @@ def test_env_overrides_everything(tmp_path: Path) -> None:
     assert config.keep_sandboxes is True
     assert config.budgets.max_tasks == 3
     assert config.budgets.max_wall_clock_s == 60.5
-    assert config.github.repo == "brettbergin/sbxloop"
+    assert config.github.repo == "brettbergin/lantern-backend"
     assert config.github.enabled
 
 
 def test_workspace_isolation_default_and_validation(tmp_path: Path) -> None:
     assert load_config(cwd=tmp_path, env={}).sandbox.workspace_isolation == "auto"
-    config = load_config(cwd=tmp_path, env={"SBXLOOP_SANDBOX__WORKSPACE_ISOLATION": "clone"})
+    config = load_config(cwd=tmp_path, env={"LANTERN_SANDBOX__WORKSPACE_ISOLATION": "clone"})
     assert config.sandbox.workspace_isolation == "clone"
     with pytest.raises(ConfigError):
-        load_config(cwd=tmp_path, env={"SBXLOOP_SANDBOX__WORKSPACE_ISOLATION": "yolo"})
+        load_config(cwd=tmp_path, env={"LANTERN_SANDBOX__WORKSPACE_ISOLATION": "yolo"})
 
 
 def test_daemon_and_discord_sections(tmp_path: Path) -> None:
     config = load_config(cwd=tmp_path, env={})
-    assert config.daemon.trigger_label == "sbxloop:run"
+    assert config.daemon.trigger_label == "lantern:run"
     assert config.daemon.max_runs_per_day == 12
     # #255: unattended posture — clone isolation, fetch refresh.
     assert config.daemon.workspace_isolation == "clone"
@@ -130,9 +130,9 @@ def test_daemon_and_discord_sections(tmp_path: Path) -> None:
     over = load_config(
         cwd=tmp_path,
         env={
-            "SBXLOOP_DAEMON__MAX_RUNS_PER_DAY": "3",
-            "SBXLOOP_DAEMON__WORKSPACE_ISOLATION": "in-place",
-            "SBXLOOP_DISCORD__CHANNEL_ID": "123456789",
+            "LANTERN_DAEMON__MAX_RUNS_PER_DAY": "3",
+            "LANTERN_DAEMON__WORKSPACE_ISOLATION": "in-place",
+            "LANTERN_DISCORD__CHANNEL_ID": "123456789",
         },
     )
     assert over.daemon.max_runs_per_day == 3
@@ -161,82 +161,82 @@ def test_daemon_and_discord_sections(tmp_path: Path) -> None:
         "github.repos.token_env",
         "telemetry.dsn_env",
     ]
-    (tmp_path / "sbxloop.toml").write_text('[concierge]\nconfig_locked = ["policy"]\n')
+    (tmp_path / "lantern.toml").write_text('[concierge]\nconfig_locked = ["policy"]\n')
     assert load_config(cwd=tmp_path, env={}).concierge.config_locked == ["policy"]
-    (tmp_path / "sbxloop.toml").unlink()
+    (tmp_path / "lantern.toml").unlink()
     over2 = load_config(
         cwd=tmp_path,
-        env={"SBXLOOP_CONCIERGE__MODEL": "gpt-5", "SBXLOOP_CONCIERGE__TIMEOUT_S": "300"},
+        env={"LANTERN_CONCIERGE__MODEL": "gpt-5", "LANTERN_CONCIERGE__TIMEOUT_S": "300"},
     )
     assert over2.concierge.model == "gpt-5" and over2.concierge.timeout_s == 300.0
-    (tmp_path / "sbxloop.toml").write_text("[concierge]\ntimeout_s = 5\n")
+    (tmp_path / "lantern.toml").write_text("[concierge]\ntimeout_s = 5\n")
     with pytest.raises(ConfigError):
         load_config(cwd=tmp_path, env={})
-    assert config.daemon.completed_label == "sbxloop:completed"
-    assert config.daemon.blocked_label == "sbxloop:blocked"
+    assert config.daemon.completed_label == "lantern:completed"
+    assert config.daemon.blocked_label == "lantern:blocked"
     assert config.github.deliver_closes is None
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         '[daemon]\ntrigger_label = "x"\nin_progress_label = "x"\n'
     )
     with pytest.raises(ConfigError, match="distinct"):
         load_config(cwd=tmp_path, env={})
     # blocked_label takes part in the lifecycle-label distinctness check
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\nblocked_label = "sbxloop:failed"\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\nblocked_label = "lantern:failed"\n')
     with pytest.raises(ConfigError, match="distinct"):
         load_config(cwd=tmp_path, env={})
     # completed_label does too, case-insensitively
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\ncompleted_label = "SBXLOOP:BLOCKED"\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\ncompleted_label = "LANTERN:BLOCKED"\n')
     with pytest.raises(ConfigError, match="case-insensitively"):
         load_config(cwd=tmp_path, env={})
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\nblocked_label = " "\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\nblocked_label = " "\n')
     with pytest.raises(ConfigError, match="non-empty"):
         load_config(cwd=tmp_path, env={})
     # deliver_closes must be a positive issue number
-    (tmp_path / "sbxloop.toml").write_text('[github]\nrepo = "o/r"\ndeliver_closes = 0\n')
+    (tmp_path / "lantern.toml").write_text('[github]\nrepo = "o/r"\ndeliver_closes = 0\n')
     with pytest.raises(ConfigError):
         load_config(cwd=tmp_path, env={})
     # GitHub labels are case-insensitive: differing only by case is a collision
-    (tmp_path / "sbxloop.toml").write_text(
-        '[daemon]\ntrigger_label = "sbxloop:run"\nfailed_label = "SBXLOOP:RUN"\n'
+    (tmp_path / "lantern.toml").write_text(
+        '[daemon]\ntrigger_label = "lantern:run"\nfailed_label = "LANTERN:RUN"\n'
     )
     with pytest.raises(ConfigError, match="case-insensitively"):
         load_config(cwd=tmp_path, env={})
-    (tmp_path / "sbxloop.toml").write_text("[daemon]\nmax_runs_per_day = 0\n")
+    (tmp_path / "lantern.toml").write_text("[daemon]\nmax_runs_per_day = 0\n")
     with pytest.raises(ConfigError, match="max_runs_per_day"):
         load_config(cwd=tmp_path, env={})
-    (tmp_path / "sbxloop.toml").write_text("[daemon]\npoll_interval_s = 0\n")
+    (tmp_path / "lantern.toml").write_text("[daemon]\npoll_interval_s = 0\n")
     with pytest.raises(ConfigError, match="poll_interval_s"):
         load_config(cwd=tmp_path, env={})
 
 
 def test_sources_tracking(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[tool.sbxloop]\nmodel = "gpt-5"\n')
-    (tmp_path / "sbxloop.toml").write_text("keep_sandboxes = true\n")
+    (tmp_path / "pyproject.toml").write_text('[tool.lantern]\nmodel = "gpt-5"\n')
+    (tmp_path / "lantern.toml").write_text("keep_sandboxes = true\n")
     config, sources = load_config_with_sources(
-        cwd=tmp_path, env={"SBXLOOP_BUDGETS__MAX_TASKS": "9"}
+        cwd=tmp_path, env={"LANTERN_BUDGETS__MAX_TASKS": "9"}
     )
     assert config.budgets.max_tasks == 9
     assert sources["model"] == "pyproject.toml"
-    assert sources["keep_sandboxes"] == "sbxloop.toml"
+    assert sources["keep_sandboxes"] == "lantern.toml"
     assert sources["budgets.max_tasks"] == "env"
     assert sources["budgets.max_replans_per_task"] == "default"
 
 
 def test_unknown_key_is_config_error(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text("no_such_option = 1\n")
-    with pytest.raises(ConfigError, match="invalid sbxloop configuration"):
+    (tmp_path / "lantern.toml").write_text("no_such_option = 1\n")
+    with pytest.raises(ConfigError, match="invalid lantern configuration"):
         load_config(cwd=tmp_path, env={})
     # Any unknown key in those
     # sections is still a hard error.
     for section in ("daemon", "github", "landing"):
-        (tmp_path / "sbxloop.toml").write_text(f"[{section}]\nno_such_option = 1\n")
-        with pytest.raises(ConfigError, match="invalid sbxloop configuration"):
+        (tmp_path / "lantern.toml").write_text(f"[{section}]\nno_such_option = 1\n")
+        with pytest.raises(ConfigError, match="invalid lantern configuration"):
             load_config(cwd=tmp_path, env={})
 
 
 def test_github_repo_must_be_owner_name(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="owner/name"):
-        load_config(cwd=tmp_path, env={"SBXLOOP_GITHUB__REPO": "https://github.com/o/r"})
+        load_config(cwd=tmp_path, env={"LANTERN_GITHUB__REPO": "https://github.com/o/r"})
 
 
 def test_github_disabled_by_default(tmp_path: Path) -> None:
@@ -249,31 +249,31 @@ def test_github_disabled_by_default(tmp_path: Path) -> None:
 
 
 def test_invalid_toml_is_config_error(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text("not [valid\n")
+    (tmp_path / "lantern.toml").write_text("not [valid\n")
     with pytest.raises(ConfigError, match="invalid TOML"):
         load_config(cwd=tmp_path, env={})
 
 
 def test_invalid_literal_is_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
-        load_config(cwd=tmp_path, env={"SBXLOOP_WORKER_TRANSPORT": "carrier-pigeon"})
+        load_config(cwd=tmp_path, env={"LANTERN_WORKER_TRANSPORT": "carrier-pigeon"})
 
 
 def test_env_string_fallback(tmp_path: Path) -> None:
     # Bare strings are not valid TOML scalars; they fall back to raw strings.
-    config = load_config(cwd=tmp_path, env={"SBXLOOP_MODEL": "claude-sonnet"})
+    config = load_config(cwd=tmp_path, env={"LANTERN_MODEL": "claude-sonnet"})
     assert config.model == "claude-sonnet"
 
 
 def test_github_delivery_layers(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[github]\nrepo = "file/repo"\ncreate_repo = true\n')
+    (tmp_path / "lantern.toml").write_text('[github]\nrepo = "file/repo"\ncreate_repo = true\n')
     config = load_config(cwd=tmp_path, env={})
     assert config.github.repo == "file/repo"
     assert config.github.create_repo is True
     assert config.github.deliver_base is None
     assert config.landing.deliver_draft is True
 
-    config = load_config(cwd=tmp_path, env={"SBXLOOP_GITHUB__DELIVER_BASE": "develop"})
+    config = load_config(cwd=tmp_path, env={"LANTERN_GITHUB__DELIVER_BASE": "develop"})
     assert config.github.deliver_base == "develop"
 
 
@@ -295,15 +295,15 @@ class TestLandingSection:
         assert landing.review_diff_max_chars == 150_000
 
     def test_layers_and_validation(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[landing]\nmax_review_rounds = 1\nci_settle_s = 0\ndeliver_draft = false\n"
         )
         config = load_config(
             cwd=tmp_path,
             env={
-                "SBXLOOP_LANDING__MERGE_METHOD": "rebase",
-                "SBXLOOP_LANDING__MERGE_UPDATE_ATTEMPTS": "0",
-                "SBXLOOP_LANDING__CI_POLL_INTERVAL_S": "5",
+                "LANTERN_LANDING__MERGE_METHOD": "rebase",
+                "LANTERN_LANDING__MERGE_UPDATE_ATTEMPTS": "0",
+                "LANTERN_LANDING__CI_POLL_INTERVAL_S": "5",
             },
         )
         assert config.landing.max_review_rounds == 1
@@ -314,12 +314,12 @@ class TestLandingSection:
         assert config.landing.merge_update_attempts == 0
         assert config.landing.ci_poll_interval_s == 5.0
         for bad in (
-            {"SBXLOOP_LANDING__MERGE_METHOD": "yolo"},
-            {"SBXLOOP_LANDING__MERGE_UPDATE_ATTEMPTS": "-1"},
-            {"SBXLOOP_LANDING__MAX_REVIEW_ROUNDS": "-1"},
-            {"SBXLOOP_LANDING__CI_POLL_INTERVAL_S": "0"},
-            {"SBXLOOP_LANDING__CI_TIMEOUT_S": "0"},
-            {"SBXLOOP_LANDING__REVIEW_DIFF_MAX_CHARS": "100"},
+            {"LANTERN_LANDING__MERGE_METHOD": "yolo"},
+            {"LANTERN_LANDING__MERGE_UPDATE_ATTEMPTS": "-1"},
+            {"LANTERN_LANDING__MAX_REVIEW_ROUNDS": "-1"},
+            {"LANTERN_LANDING__CI_POLL_INTERVAL_S": "0"},
+            {"LANTERN_LANDING__CI_TIMEOUT_S": "0"},
+            {"LANTERN_LANDING__REVIEW_DIFF_MAX_CHARS": "100"},
         ):
             with pytest.raises(ConfigError):
                 load_config(cwd=tmp_path, env=bad)
@@ -346,16 +346,16 @@ class TestRetiredKeysAreErrors:
         ],
     )
     def test_retired_keys_fail_to_load(self, tmp_path: Path, toml: str) -> None:
-        (tmp_path / "sbxloop.toml").write_text(toml)
+        (tmp_path / "lantern.toml").write_text(toml)
         with pytest.raises(ConfigError, match="Extra inputs are not permitted"):
             load_config(cwd=tmp_path, env={})
 
     def test_retired_keys_from_the_environment_fail_too(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError):
-            load_config(cwd=tmp_path, env={"SBXLOOP_DAEMON__AUTO_MERGE": "true"})
+            load_config(cwd=tmp_path, env={"LANTERN_DAEMON__AUTO_MERGE": "true"})
 
     def test_landing_knobs_live_under_landing(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[landing]\nmerge_method = "rebase"\ndeliver_draft = false\n'
         )
         config = load_config(cwd=tmp_path, env={})
@@ -371,7 +371,7 @@ def test_policy_defaults_empty(tmp_path: Path) -> None:
 
 
 def test_policy_patterns_parse_and_normalize(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         "[policy]\n"
         'allow = ["Registry.NPMJS.org", "*.crates.io", "*"]\n'
         'deny = ["evil.example.com"]\n'
@@ -382,7 +382,7 @@ def test_policy_patterns_parse_and_normalize(tmp_path: Path) -> None:
 
 
 def test_policy_invalid_pattern_is_config_error(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[policy]\nallow = ["https://pypi.org"]\n')
+    (tmp_path / "lantern.toml").write_text('[policy]\nallow = ["https://pypi.org"]\n')
     with pytest.raises(ConfigError, match="invalid egress pattern"):
         load_config(cwd=tmp_path, env={})
 
@@ -398,26 +398,26 @@ def test_limits_defaults(tmp_path: Path) -> None:
 
 
 def test_limits_mem_abort_must_exceed_mem_warn(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text("[limits]\nmem_warn = 90.0\nmem_abort = 85.0\n")
+    (tmp_path / "lantern.toml").write_text("[limits]\nmem_warn = 90.0\nmem_abort = 85.0\n")
     with pytest.raises(ConfigError, match="mem_abort"):
         load_config(cwd=tmp_path, env={})
-    (tmp_path / "sbxloop.toml").write_text("[limits]\nmem_warn = 90.0\nmem_abort = 97.0\n")
+    (tmp_path / "lantern.toml").write_text("[limits]\nmem_warn = 90.0\nmem_abort = 97.0\n")
     assert load_config(cwd=tmp_path, env={}).limits.mem_abort == 97.0
 
 
 def test_limits_layers_and_env(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text("[limits]\ndisk_warn = 70.0\ndisk_abort = 80.0\n")
+    (tmp_path / "lantern.toml").write_text("[limits]\ndisk_warn = 70.0\ndisk_abort = 80.0\n")
     config = load_config(cwd=tmp_path, env={})
     assert config.limits.disk_warn == 70.0
     assert config.limits.disk_abort == 80.0
 
-    config = load_config(cwd=tmp_path, env={"SBXLOOP_LIMITS__DISK_ABORT": "90.0"})
+    config = load_config(cwd=tmp_path, env={"LANTERN_LIMITS__DISK_ABORT": "90.0"})
     assert config.limits.disk_abort == 90.0
 
 
 def test_limits_zero_disables_without_error(tmp_path: Path) -> None:
     # warn disabled + abort enabled is a valid (abort-only) configuration.
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         "[limits]\ndisk_warn = 0\ndisk_abort = 95.0\nmem_warn = 0\n"
     )
     config = load_config(cwd=tmp_path, env={})
@@ -426,14 +426,14 @@ def test_limits_zero_disables_without_error(tmp_path: Path) -> None:
 
 
 def test_limits_abort_must_exceed_warn(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text("[limits]\ndisk_warn = 90.0\ndisk_abort = 80.0\n")
+    (tmp_path / "lantern.toml").write_text("[limits]\ndisk_warn = 90.0\ndisk_abort = 80.0\n")
     with pytest.raises(ConfigError, match="disk_abort"):
         load_config(cwd=tmp_path, env={})
 
 
 def test_limits_must_be_percentages(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"0\.\.100"):
-        load_config(cwd=tmp_path, env={"SBXLOOP_LIMITS__DISK_WARN": "150"})
+        load_config(cwd=tmp_path, env={"LANTERN_LIMITS__DISK_WARN": "150"})
 
 
 def test_daemon_log_level_and_format(tmp_path: Path) -> None:
@@ -442,14 +442,14 @@ def test_daemon_log_level_and_format(tmp_path: Path) -> None:
     assert config.daemon.log_format == "console"
     over = load_config(
         cwd=tmp_path,
-        env={"SBXLOOP_DAEMON__LOG_LEVEL": "debug", "SBXLOOP_DAEMON__LOG_FORMAT": "JSON"},
+        env={"LANTERN_DAEMON__LOG_LEVEL": "debug", "LANTERN_DAEMON__LOG_FORMAT": "JSON"},
     )
     assert over.daemon.log_level == "DEBUG"  # case-insensitive
     assert over.daemon.log_format == "json"
     with pytest.raises(ConfigError, match="log_level"):
-        load_config(cwd=tmp_path, env={"SBXLOOP_DAEMON__LOG_LEVEL": "LOUD"})
+        load_config(cwd=tmp_path, env={"LANTERN_DAEMON__LOG_LEVEL": "LOUD"})
     with pytest.raises(ConfigError, match="log_format"):
-        load_config(cwd=tmp_path, env={"SBXLOOP_DAEMON__LOG_FORMAT": "xml"})
+        load_config(cwd=tmp_path, env={"LANTERN_DAEMON__LOG_FORMAT": "xml"})
 
 
 def test_daemon_version_check_and_upgrade_command(tmp_path: Path) -> None:
@@ -458,15 +458,15 @@ def test_daemon_version_check_and_upgrade_command(tmp_path: Path) -> None:
     config = load_config(cwd=tmp_path, env={})
     assert config.daemon.version_check is True
     assert config.daemon.upgrade_command is None
-    (tmp_path / "sbxloop.toml").write_text(
-        '[daemon]\nversion_check = false\nupgrade_command = "  pipx upgrade sbxloop "\n'
+    (tmp_path / "lantern.toml").write_text(
+        '[daemon]\nversion_check = false\nupgrade_command = "  pipx upgrade lantern "\n'
     )
     config = load_config(cwd=tmp_path, env={})
     assert config.daemon.version_check is False
-    assert config.daemon.upgrade_command == "pipx upgrade sbxloop"
-    over = load_config(cwd=tmp_path, env={"SBXLOOP_DAEMON__VERSION_CHECK": "true"})
+    assert config.daemon.upgrade_command == "pipx upgrade lantern"
+    over = load_config(cwd=tmp_path, env={"LANTERN_DAEMON__VERSION_CHECK": "true"})
     assert over.daemon.version_check is True
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\nupgrade_command = "   "\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\nupgrade_command = "   "\n')
     with pytest.raises(ConfigError, match="upgrade_command"):
         load_config(cwd=tmp_path, env={})
 
@@ -478,18 +478,18 @@ def test_run_cap_timezone_defaults_to_utc(tmp_path: Path) -> None:
 
 
 def test_run_cap_timezone_explicit_zone(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\nrun_cap_timezone = "America/New_York"\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\nrun_cap_timezone = "America/New_York"\n')
     config = load_config(cwd=tmp_path, env={})
     assert config.daemon.run_cap_timezone == "America/New_York"
     assert ZoneInfo(config.daemon.run_cap_timezone) is not None
     # the cap itself keeps its name and default (backward compatibility)
     assert config.daemon.max_runs_per_day == 12
-    over = load_config(cwd=tmp_path, env={"SBXLOOP_DAEMON__RUN_CAP_TIMEZONE": "Europe/Berlin"})
+    over = load_config(cwd=tmp_path, env={"LANTERN_DAEMON__RUN_CAP_TIMEZONE": "Europe/Berlin"})
     assert over.daemon.run_cap_timezone == "Europe/Berlin"
 
 
 def test_run_cap_timezone_rejects_bogus_zone(tmp_path: Path) -> None:
-    (tmp_path / "sbxloop.toml").write_text('[daemon]\nrun_cap_timezone = "Mars/Olympus"\n')
+    (tmp_path / "lantern.toml").write_text('[daemon]\nrun_cap_timezone = "Mars/Olympus"\n')
     with pytest.raises(ConfigError, match="run_cap_timezone"):
         load_config(cwd=tmp_path, env={})
 
@@ -497,11 +497,11 @@ def test_run_cap_timezone_rejects_bogus_zone(tmp_path: Path) -> None:
 def test_run_stale_after_s_default_override_and_validation(tmp_path: Path) -> None:
     """#374 liveness safety net: conservative 6h default, 0 disables."""
     assert load_config(cwd=tmp_path, env={}).daemon.run_stale_after_s == 21600.0
-    (tmp_path / "sbxloop.toml").write_text("[daemon]\nrun_stale_after_s = 300\n")
+    (tmp_path / "lantern.toml").write_text("[daemon]\nrun_stale_after_s = 300\n")
     assert load_config(cwd=tmp_path, env={}).daemon.run_stale_after_s == 300.0
-    (tmp_path / "sbxloop.toml").write_text("[daemon]\nrun_stale_after_s = 0\n")
+    (tmp_path / "lantern.toml").write_text("[daemon]\nrun_stale_after_s = 0\n")
     assert load_config(cwd=tmp_path, env={}).daemon.run_stale_after_s == 0.0
-    (tmp_path / "sbxloop.toml").write_text("[daemon]\nrun_stale_after_s = -1\n")
+    (tmp_path / "lantern.toml").write_text("[daemon]\nrun_stale_after_s = -1\n")
     with pytest.raises(ConfigError, match=r"run_stale_after_s"):
         load_config(cwd=tmp_path, env={})
 
@@ -521,7 +521,7 @@ class TestMergeGateConfig:
     def test_defaults_off(self) -> None:
         config = Config.model_validate({})
         assert config.landing.merge_gate == "off"
-        assert config.daemon.gated_label == "sbxloop:awaiting-merge"
+        assert config.daemon.gated_label == "lantern:awaiting-merge"
 
     def test_chat_is_the_only_other_value(self) -> None:
         assert Config.model_validate({"landing": {"merge_gate": "chat"}}).landing.merge_gate == (
@@ -532,14 +532,14 @@ class TestMergeGateConfig:
 
     def test_gated_label_joins_the_distinctness_check(self) -> None:
         with pytest.raises(ValidationError, match="distinct"):
-            Config.model_validate({"daemon": {"gated_label": "sbxloop:blocked"}})
+            Config.model_validate({"daemon": {"gated_label": "lantern:blocked"}})
 
 
 def test_concierge_clarify_ttl_default_and_env_override(tmp_path: Path) -> None:
     """Ask, never block: one knob times the clickable choices and the
     auto-file sweep together."""
     assert load_config(cwd=tmp_path, env={}).concierge.clarify_ttl_s == 900.0
-    config = load_config(cwd=tmp_path, env={"SBXLOOP_CONCIERGE__CLARIFY_TTL_S": "120"})
+    config = load_config(cwd=tmp_path, env={"LANTERN_CONCIERGE__CLARIFY_TTL_S": "120"})
     assert config.concierge.clarify_ttl_s == 120.0
 
 
@@ -567,7 +567,7 @@ class TestGithubApiUrl:
         assert github.allow_domains == ("api.github.com", "github.com")
 
     def test_enterprise_server_derives_one_host(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[github]\napi_url = "https://ghe.example.com/api/v3/"\n'
         )
         github = load_config(cwd=tmp_path, env={}).github
@@ -583,14 +583,14 @@ class TestGithubApiUrl:
         ["http://ghe.example.com/api/v3", "ghe.example.com", "https://u:p@ghe.example.com", ""],
     )
     def test_refuses_anything_but_a_plain_https_url(self, tmp_path: Path, bad: str) -> None:
-        (tmp_path / "sbxloop.toml").write_text(f'[github]\napi_url = "{bad}"\n')
+        (tmp_path / "lantern.toml").write_text(f'[github]\napi_url = "{bad}"\n')
         with pytest.raises(ConfigError, match="api_url must be a plain https URL"):
             load_config(cwd=tmp_path, env={})
 
     def test_gh_host_disagreeing_with_api_url_fails_at_load(self, tmp_path: Path) -> None:
         with pytest.raises(ConfigError, match=r"GH_HOST='ghe\.example\.com'.*disagrees"):
             load_config(cwd=tmp_path, env={"GH_HOST": "ghe.example.com"})
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[github]\napi_url = "https://ghe.example.com/api/v3"\n'
         )
         with pytest.raises(ConfigError, match=r"GH_HOST='github\.com'.*disagrees"):
@@ -598,7 +598,7 @@ class TestGithubApiUrl:
 
     def test_gh_host_naming_the_same_site_is_fine(self, tmp_path: Path) -> None:
         assert load_config(cwd=tmp_path, env={"GH_HOST": "GitHub.com"}).github.is_dotcom
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[github]\napi_url = "https://ghe.example.com/api/v3"\n'
         )
         config = load_config(cwd=tmp_path, env={"GH_HOST": "ghe.example.com"})
@@ -610,16 +610,16 @@ class TestCloneFilter:
         assert load_config(cwd=tmp_path, env={}).sandbox.clone_filter is None
 
     def test_opt_in_spec(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[sandbox]\nclone_filter = "blob:none"\n')
+        (tmp_path / "lantern.toml").write_text('[sandbox]\nclone_filter = "blob:none"\n')
         assert load_config(cwd=tmp_path, env={}).sandbox.clone_filter == "blob:none"
 
     def test_blank_means_off(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[sandbox]\nclone_filter = "  "\n')
+        (tmp_path / "lantern.toml").write_text('[sandbox]\nclone_filter = "  "\n')
         assert load_config(cwd=tmp_path, env={}).sandbox.clone_filter is None
 
     @pytest.mark.parametrize("bad", ["blob:none --depth 1", "--filter=blob:none"])
     def test_refuses_anything_but_one_filter_spec(self, tmp_path: Path, bad: str) -> None:
-        (tmp_path / "sbxloop.toml").write_text(f'[sandbox]\nclone_filter = "{bad}"\n')
+        (tmp_path / "lantern.toml").write_text(f'[sandbox]\nclone_filter = "{bad}"\n')
         with pytest.raises(ConfigError, match="clone_filter must be a git filter spec"):
             load_config(cwd=tmp_path, env={})
 
@@ -638,14 +638,14 @@ class TestConfigDiscovery:
         return [
             r.getMessage()
             for r in caplog.records
-            if r.name == "sbxloop.config" and f"'event': '{name}'" in r.getMessage()
+            if r.name == "lantern.config" and f"'event': '{name}'" in r.getMessage()
         ]
 
     def test_subdirectory_of_a_checkout_finds_the_root_config(self, tmp_path: Path) -> None:
         from tests.unit.test_hostgit import git, make_repo
 
         root = make_repo(tmp_path)
-        (root / "sbxloop.toml").write_text('model = "from-root"\n[sandbox]\nlanguages = ["go"]\n')
+        (root / "lantern.toml").write_text('model = "from-root"\n[sandbox]\nlanguages = ["go"]\n')
         # Untracked: the operator's file, not the repository's.
         nested = root / "packages" / "foo"
         nested.mkdir(parents=True)
@@ -653,17 +653,17 @@ class TestConfigDiscovery:
         config, sources = load_config_with_sources(cwd=nested, env={})
         assert config.model == "from-root"
         assert config.sandbox.languages == ["go"]
-        assert sources["model"] == "sbxloop.toml"
+        assert sources["model"] == "lantern.toml"
 
     def test_nearest_config_wins_and_the_walk_stops_at_the_checkout(self, tmp_path: Path) -> None:
         from tests.unit.test_hostgit import make_repo
 
-        (tmp_path / "sbxloop.toml").write_text('model = "above-the-checkout"\n')
+        (tmp_path / "lantern.toml").write_text('model = "above-the-checkout"\n')
         root = make_repo(tmp_path)
-        (root / "sbxloop.toml").write_text('model = "root"\n')
+        (root / "lantern.toml").write_text('model = "root"\n')
         pkg = root / "pkg"
         pkg.mkdir()
-        (pkg / "sbxloop.toml").write_text('model = "pkg"\n')
+        (pkg / "lantern.toml").write_text('model = "pkg"\n')
         assert load_config(cwd=pkg, env={}).model == "pkg"
         (root / "other").mkdir()
         assert load_config(cwd=root / "other", env={}).model == "root"
@@ -680,7 +680,7 @@ class TestConfigDiscovery:
         from tests.unit.test_hostgit import git, make_repo
 
         root = make_repo(tmp_path)
-        (root / "sbxloop.toml").write_text(
+        (root / "lantern.toml").write_text(
             'state_dir = "/tmp/elsewhere"\n'
             "[sandbox]\n"
             'languages = ["javascript"]\n'
@@ -691,13 +691,13 @@ class TestConfigDiscovery:
             "[landing]\n"
             'merge_gate = "chat"\n'
         )
-        git("add", "sbxloop.toml", cwd=root)
+        git("add", "lantern.toml", cwd=root)
         git("commit", "-m", "carry config", cwd=root)
         with caplog.at_level(logging.WARNING):
             config, sources = load_config_with_sources(cwd=root, env={})
         assert config.sandbox.languages == ["javascript"]
         assert config.sandbox.gate_command == "npm test"
-        assert sources["sandbox.languages"] == "sbxloop.toml (project)"
+        assert sources["sandbox.languages"] == "lantern.toml (project)"
         assert config.sandbox.extra_allow_domains == []
         assert config.policy.allow == Config().policy.allow
         assert config.landing.merge_gate == Config().landing.merge_gate
@@ -717,7 +717,7 @@ class TestConfigDiscovery:
 
         root = make_repo(tmp_path)
         (root / "pyproject.toml").write_text(
-            '[tool.sbxloop]\nmodel = "not-yours"\n[tool.sbxloop.github]\nbranch_prefix = "bot/"\n'
+            '[tool.lantern]\nmodel = "not-yours"\n[tool.lantern.github]\nbranch_prefix = "bot/"\n'
         )
         git("add", "pyproject.toml", cwd=root)
         git("commit", "-m", "pyproject", cwd=root)
@@ -727,41 +727,41 @@ class TestConfigDiscovery:
         assert sources["github.branch_prefix"] == "pyproject.toml (project)"
 
     def test_untracked_config_in_a_checkout_is_the_operators(self, tmp_path: Path) -> None:
-        """`sbxloop init` in a checkout writes an untracked file: that is the
+        """`lantern init` in a checkout writes an untracked file: that is the
         operator's, and every key it sets is honoured (the daemon's runner
         directory is the common shape of this)."""
         from tests.unit.test_hostgit import make_repo
 
         root = make_repo(tmp_path)
-        (root / "sbxloop.toml").write_text(
+        (root / "lantern.toml").write_text(
             '[policy]\nallow = ["pypi.org"]\n[landing]\nmerge_gate = "chat"\n'
         )
         config, sources = load_config_with_sources(cwd=root, env={})
         assert config.landing.merge_gate == "chat"
         assert "pypi.org" in config.policy.allow
-        assert sources["landing.merge_gate"] == "sbxloop.toml"
+        assert sources["landing.merge_gate"] == "lantern.toml"
 
     def test_config_outside_any_checkout_is_the_operators(self, tmp_path: Path) -> None:
         work = tmp_path / "runner"
         work.mkdir()
-        (work / "sbxloop.toml").write_text(
+        (work / "lantern.toml").write_text(
             '[landing]\nmerge_gate = "chat"\n[budgets]\nmax_tasks = 2\n'
         )
         config, sources = load_config_with_sources(cwd=work, env={})
         assert config.landing.merge_gate == "chat"
         assert config.budgets.max_tasks == 2
-        assert sources["budgets.max_tasks"] == "sbxloop.toml"
+        assert sources["budgets.max_tasks"] == "lantern.toml"
 
     def test_unknown_tracking_reads_as_the_repositorys_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Fail closed: when git cannot say whether the checkout carries the
         file, it is treated as project config."""
-        from sbxloop import hostgit
+        from lantern import hostgit
         from tests.unit.test_hostgit import make_repo
 
         root = make_repo(tmp_path)
-        (root / "sbxloop.toml").write_text(
+        (root / "lantern.toml").write_text(
             '[landing]\nmerge_gate = "chat"\n[sandbox]\nlanguages = ["go"]\n'
         )
         monkeypatch.setattr(hostgit, "is_tracked", lambda repo_root, path: None)
@@ -781,7 +781,7 @@ class TestCredentials:
         assert config.credentials_named([]) == []
 
     def test_entries_parse_with_defaults_and_overrides(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[[credentials]]\n"
             'name = "weather"\n'
             'env = "WEATHER_API_KEY"\n'
@@ -814,7 +814,7 @@ class TestCredentials:
         assert config.credential("keyed") is keyed
 
     def test_credentials_named_keeps_order_and_dedupes(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[[credentials]]\nname = "a"\nenv = "A"\nhost = "a.example.com"\n\n'
             '[[credentials]]\nname = "b"\nenv = "B"\nhost = "b.example.com"\n'
         )
@@ -822,7 +822,7 @@ class TestCredentials:
         assert [c.name for c in config.credentials_named(["b", "a", "b"])] == ["b", "a"]
 
     def test_credentials_named_refuses_an_undeclared_name(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[[credentials]]\nname = "a"\nenv = "A"\nhost = "a.example.com"\n'
         )
         config = load_config(cwd=tmp_path, env={})
@@ -849,12 +849,12 @@ class TestCredentials:
         entry = {"name": "weather", "env": "WEATHER_API_KEY", "host": "api.example.com"}
         entry[field] = value
         body = "[[credentials]]\n" + "".join(f'{k} = "{v}"\n' for k, v in entry.items())
-        (tmp_path / "sbxloop.toml").write_text(body)
+        (tmp_path / "lantern.toml").write_text(body)
         with pytest.raises(ConfigError, match=problem):
             load_config(cwd=tmp_path, env={})
 
     def test_duplicate_names_are_refused(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[[credentials]]\nname = "a"\nenv = "A"\nhost = "a.example.com"\n\n'
             '[[credentials]]\nname = "a"\nenv = "B"\nhost = "b.example.com"\n'
         )
@@ -879,7 +879,7 @@ class TestWorkloads:
         assert config.for_workload_profile(None) is config
 
     def test_profile_parses_with_defaults_and_overrides(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             self.CATALOGUE + "[[workloads]]\n"
             'name = "research"\n'
             'description = "reads the web"\n'
@@ -914,7 +914,7 @@ class TestWorkloads:
         assert config.workload_profile("bare") is bare
 
     def test_for_workload_profile_pins_the_choice_and_applies_budgets(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[budgets]\nmax_tasks = 12\nmax_revisions_per_task = 4\n\n"
             "[[workloads]]\n"
             'name = "research"\n'
@@ -939,7 +939,7 @@ class TestWorkloads:
         assert bare.budgets == config.budgets
 
     def test_unknown_profile_name_is_a_config_error(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[[workloads]]\nname = "research"\n')
+        (tmp_path / "lantern.toml").write_text('[[workloads]]\nname = "research"\n')
         config = load_config(cwd=tmp_path, env={})
         with pytest.raises(ConfigError, match=r"'nope' is not declared.*declared: research"):
             config.workload_profile("nope")
@@ -990,12 +990,12 @@ class TestWorkloads:
         ],
     )
     def test_unsound_profiles_are_refused(self, tmp_path: Path, body: str, problem: str) -> None:
-        (tmp_path / "sbxloop.toml").write_text(body)
+        (tmp_path / "lantern.toml").write_text(body)
         with pytest.raises(ConfigError, match=problem):
             load_config(cwd=tmp_path, env={})
 
     def test_unknown_default_without_profiles_lists_none(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[workload]\ndefault = "research"\n')
+        (tmp_path / "lantern.toml").write_text('[workload]\ndefault = "research"\n')
         with pytest.raises(
             ConfigError, match=r"names no \[\[workloads\]\] profile \(declared: none\)"
         ):
@@ -1012,7 +1012,7 @@ class TestRegistries:
         assert config.registry_auth_envs_for(None) == []
 
     def test_entries_parse_and_auth_envs_are_collected(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[[registries]]\n"
             'kind = "npm"\n'
             'host = "artifactory.example.com"\n'
@@ -1030,7 +1030,7 @@ class TestRegistries:
         assert config.registry_auth_envs_for(None) == ["NPM_TOKEN"]
 
     def test_a_repository_override_replaces_the_global_list(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[[registries]]\n"
             'kind = "go"\n'
             'host = "github.example.com"\n'
@@ -1058,7 +1058,7 @@ class TestRegistries:
         assert config.registries_for("owner/none") == []
 
     def test_one_default_per_ecosystem(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[[registries]]\n"
             'kind = "pypi"\n'
             'host = "a.example.com"\n'
@@ -1072,7 +1072,7 @@ class TestRegistries:
             load_config(cwd=tmp_path, env={})
 
     def test_a_credential_name_cannot_also_be_plain_env(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[sandbox]\n"
             'env = { NPM_TOKEN = "literal" }\n'
             "[[registries]]\n"
@@ -1098,7 +1098,7 @@ class TestSandboxEnv:
         assert config.sandbox_env_for(None) == {}
 
     def test_plain_values_parse(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[sandbox]\n"
             'env = { RAILS_ENV = "test", DATABASE_URL = "postgres://localhost/app_test" }\n'
         )
@@ -1109,7 +1109,7 @@ class TestSandboxEnv:
         }
 
     def test_a_repository_override_replaces_the_global_setting(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[sandbox]\n"
             'env = { RAILS_ENV = "test" }\n'
             "\n"
@@ -1131,8 +1131,8 @@ class TestSandboxEnv:
         ("body", "match"),
         [
             ('[sandbox]\nenv = { "1BAD" = "x" }\n', "not an environment variable name"),
-            ('[sandbox]\nenv = { GH_TOKEN = "x" }\n', "delivered by sbxloop itself"),
-            ('[sandbox]\nenv = { SBXLOOP_WORKER_BACKEND = "echo" }\n', "delivered by sbxloop"),
+            ('[sandbox]\nenv = { GH_TOKEN = "x" }\n', "delivered by lantern itself"),
+            ('[sandbox]\nenv = { LANTERN_WORKER_BACKEND = "echo" }\n', "delivered by lantern"),
             (
                 '[sandbox]\nenv = { NPM_TOKEN = "x" }\n\n'
                 '[[registries]]\nkind = "npm"\nhost = "npm.example.com"\n'
@@ -1145,7 +1145,7 @@ class TestSandboxEnv:
     def test_refuses_names_the_loop_owns_or_that_are_not_names(
         self, tmp_path: Path, body: str, match: str
     ) -> None:
-        (tmp_path / "sbxloop.toml").write_text(body)
+        (tmp_path / "lantern.toml").write_text(body)
         with pytest.raises(ConfigError, match=match):
             load_config(cwd=tmp_path, env={})
 
@@ -1173,7 +1173,7 @@ class TestSandboxEnv:
         removed it. The refusal names the key, not `extra="forbid"`'s
         generic "extra inputs", and says where each kind of secret now
         belongs."""
-        (tmp_path / "sbxloop.toml").write_text(body)
+        (tmp_path / "lantern.toml").write_text(body)
         with pytest.raises(ConfigError, match=f"{where} secret_env is no longer supported") as info:
             load_config(cwd=tmp_path, env={})
         message = str(info.value)
@@ -1195,7 +1195,7 @@ class TestAptPackagesAndSetupCommands:
         assert config.setup_commands_for(None) == []
 
     def test_lists_parse_and_a_repository_override_replaces_them(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[sandbox]\n"
             'apt_packages = ["libpq-dev", "protobuf-compiler", "libpq-dev", "ffmpeg=7:6.1-1"]\n'
             'setup_commands = ["npx playwright install --with-deps chromium", '
@@ -1233,12 +1233,12 @@ class TestAptPackagesAndSetupCommands:
         ],
     )
     def test_refusals(self, tmp_path: Path, body: str, match: str) -> None:
-        (tmp_path / "sbxloop.toml").write_text(f"[sandbox]\n{body}\n")
+        (tmp_path / "lantern.toml").write_text(f"[sandbox]\n{body}\n")
         with pytest.raises(ConfigError, match=match):
             load_config(cwd=tmp_path, env={})
 
     def test_repository_entries_are_checked_the_same_way(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[[github.repos]]\nrepo = "o/web"\napt_packages = ["$(evil)"]\n'
         )
         with pytest.raises(ConfigError, match=r"vcs.repos\[\].apt_packages"):
@@ -1255,7 +1255,7 @@ class TestVerifyMode:
         assert config.verify_mode_for(None) == "full"
 
     def test_global_and_per_repository(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[sandbox]\n"
             'verify_mode = "advisory"\n'
             "\n"
@@ -1272,6 +1272,6 @@ class TestVerifyMode:
         assert config.verify_mode_for(None) == "advisory"
 
     def test_unknown_mode_is_refused(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[sandbox]\nverify_mode = "skip"\n')
+        (tmp_path / "lantern.toml").write_text('[sandbox]\nverify_mode = "skip"\n')
         with pytest.raises(ConfigError, match="verify_mode"):
             load_config(cwd=tmp_path, env={})

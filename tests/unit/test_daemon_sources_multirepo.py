@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import RepoConfig
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.sources import (
+from lantern.config import RepoConfig
+from lantern.daemon.model import WorkItem
+from lantern.daemon.sources import (
     STATUS_MARKER,
     GitHubIssueSource,
     MultiRepoIssueSource,
@@ -16,7 +16,7 @@ from sbxloop.daemon.sources import (
     build_github_source,
     permanent_failure,
 )
-from sbxloop.errors import GithubOpsError
+from lantern.errors import GithubOpsError
 from tests.fakes.github_errors import github_error
 from tests.fakes.ops_stub import OpsStub
 
@@ -63,8 +63,8 @@ def repos(*names: str, disabled: tuple[str, ...] = ()) -> list[RepoConfig]:
 def router() -> RouterOps:
     return RouterOps(
         {
-            "o/a": RecordingOps({"4": issue(4, "sbxloop:run"), "5": issue(5, "other")}),
-            "o/b": RecordingOps({"4": issue(4, "sbxloop:run"), "9": issue(9, "sbxloop:run")}),
+            "o/a": RecordingOps({"4": issue(4, "lantern:run"), "5": issue(5, "other")}),
+            "o/b": RecordingOps({"4": issue(4, "lantern:run"), "9": issue(9, "lantern:run")}),
         }
     )
 
@@ -105,7 +105,7 @@ class TestBuild:
         ]
         source = build_github_source(lambda: router, entries, LABELS)  # type: ignore[arg-type]
         assert isinstance(source, MultiRepoIssueSource)
-        assert [s.labels.trigger for s in source.sources] == ["do-it", "sbxloop:run"]
+        assert [s.labels.trigger for s in source.sources] == ["do-it", "lantern:run"]
 
     def test_every_lifecycle_label_can_be_renamed_per_repo(self, router: RouterOps) -> None:
         """#630: the entry's six ``<kind>_label`` fields merge straight over
@@ -125,7 +125,7 @@ class TestBuild:
         assert isinstance(source, MultiRepoIssueSource)
         a, b = source.sources
         assert (a.labels.trigger, a.labels.in_progress, a.labels.failed) == (
-            "sbxloop:run",
+            "lantern:run",
             "loop:working",
             "loop:failed",
         )
@@ -135,8 +135,8 @@ class TestBuild:
             "loop:gated",
         )
         assert (b.labels.in_progress, b.labels.gated) == (
-            "sbxloop:in-progress",
-            "sbxloop:awaiting-merge",
+            "lantern:in-progress",
+            "lantern:awaiting-merge",
         )
 
     def test_per_repo_extra_labels_are_applied_when_an_issue_is_claimed(
@@ -153,8 +153,8 @@ class TestBuild:
         }
         # One POST per claim: the in-progress mark plus the repo's own labels.
         assert posted == {
-            "o/a": [{"labels": ["sbxloop:in-progress", "team:core"]}],
-            "o/b": [{"labels": ["sbxloop:in-progress"]}],
+            "o/a": [{"labels": ["lantern:in-progress", "team:core"]}],
+            "o/b": [{"labels": ["lantern:in-progress"]}],
         }
 
     def test_empty_source_list_is_rejected(self) -> None:

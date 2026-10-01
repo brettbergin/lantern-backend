@@ -14,16 +14,16 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.harness import (
+from lantern.config import Config
+from lantern.engine.harness import (
     ROLE_BY_PHASE,
     Role,
     brief_for_phase,
     harness_context,
 )
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import AGENT_NAMES, PhaseRunner
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import AGENT_NAMES, PhaseRunner
+from lantern_worker.protocol import JobRequest, JobResult
 
 ROLES: tuple[Role, ...] = ("planner", "builder", "critic", "operator", "concierge")
 

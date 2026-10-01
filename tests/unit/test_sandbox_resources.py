@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern.config import Config
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 
 
 def test_default_allocations_cover_every_provisioned_role(tmp_path: Path) -> None:
@@ -61,8 +61,8 @@ def test_equivalent_memory_limits_have_the_same_allocation() -> None:
 def test_create_always_sends_limits_and_never_retries_without_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from sbxloop.errors import SbxError
-    from sbxloop.sbx.models import SandboxSpec
+    from lantern.errors import SbxError
+    from lantern.sbx.models import SandboxSpec
 
     calls = []
 
@@ -79,9 +79,9 @@ def test_create_always_sends_limits_and_never_retries_without_them(
 
 
 def test_reuse_requires_a_host_record_and_matching_vm_identity(tmp_path: Path) -> None:
-    from sbxloop.errors import ProvisionError
-    from sbxloop.resources import SandboxResources
-    from sbxloop.sbx.allocations import record_allocation, require_allocation
+    from lantern.errors import ProvisionError
+    from lantern.resources import SandboxResources
+    from lantern.sbx.allocations import record_allocation, require_allocation
 
     class Box:
         name = "test"
@@ -128,7 +128,7 @@ def test_reuse_requires_a_host_record_and_matching_vm_identity(tmp_path: Path) -
 def test_packaged_toml_and_all_presets_keep_live_resource_defaults() -> None:
     import tomllib
 
-    from sbxloop.data import config_presets, render_config_template
+    from lantern.data import config_presets, render_config_template
 
     for preset in (None, *config_presets()):
         parsed = tomllib.loads(render_config_template(preset))
@@ -142,7 +142,7 @@ def test_packaged_toml_and_all_presets_keep_live_resource_defaults() -> None:
 
 
 def test_doctor_reports_requested_allocations_and_repo_overrides() -> None:
-    from sbxloop.cli.doctor import sandbox_resource_checks
+    from lantern.cli.doctor import sandbox_resource_checks
 
     config = Config.model_validate({"github": {"repos": [{"repo": "org/project", "cpus": 8}]}})
     rows = sandbox_resource_checks(config)
@@ -154,7 +154,7 @@ def test_doctor_reports_requested_allocations_and_repo_overrides() -> None:
 
 @pytest.mark.parametrize("repo_override", [None, 3])
 def test_resume_uses_current_resource_limits_but_keeps_run_rules(tmp_path, repo_override):
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.engine.engine import LoopEngine
 
     saved = Config.model_validate(
         {

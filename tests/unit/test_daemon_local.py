@@ -12,17 +12,17 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.local import (
+from lantern.config import Config
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.local import (
     EXPIRED_CLICK_NOTE,
     LOCAL_BOT_ID,
     STALE_INBOUND_NOTE,
     LocalBridge,
 )
-from sbxloop.daemon.model import DaemonNotice, RunReport, WorkItem
-from sbxloop.daemon.store import LOCAL_HEARTBEAT_KEY, LOCAL_STARTED_KEY, DaemonStore
-from sbxloop.events import EventBus
+from lantern.daemon.model import DaemonNotice, RunReport, WorkItem
+from lantern.daemon.store import LOCAL_HEARTBEAT_KEY, LOCAL_STARTED_KEY, DaemonStore
+from lantern.events import EventBus
 from tests.unit.test_daemon_discord import FakeConcierge, FakeEngine, FakeLoop, wait_for
 
 
@@ -196,7 +196,7 @@ class TestInbound:
         """The daily token budget is spent before the person asks: the turn
         never reaches the concierge, the message is marked failed, and the
         channel says why, naming the budget and when it resets."""
-        from sbxloop.daemon.usagepool import UsagePool
+        from lantern.daemon.usagepool import UsagePool
 
         concierge = FakeConcierge([ConciergeReply("should never be sent")])
         bridge, dstore, _ = make_bridge(tmp_path, concierge=concierge)
@@ -228,7 +228,7 @@ class TestInbound:
             bridge.close(drain_wait_s=1)
 
     def test_a_control_mention_runs_while_the_budget_has_room(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.usagepool import UsagePool
+        from lantern.daemon.usagepool import UsagePool
 
         concierge = FakeConcierge([ConciergeReply("sure")])
         bridge, dstore, _ = make_bridge(tmp_path, concierge=concierge)
@@ -318,7 +318,7 @@ class TestChoices:
             '{"value": "timing", "label": "Timing"}]}\n'
             "```"
         )
-        from sbxloop.daemon.chat_choices import parse_choice_question
+        from lantern.daemon.chat_choices import parse_choice_question
 
         prose, spec = parse_choice_question(question)
         assert spec is not None

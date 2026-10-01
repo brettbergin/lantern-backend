@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 from git import Git, GitCommandError, Repo
 
-from sbxloop import hostgit
-from sbxloop.errors import DeliveryError, ProvisionError
-from sbxloop_worker.gitops import GitMergeError, merge_from_base
+from lantern import hostgit
+from lantern.errors import DeliveryError, ProvisionError
+from lantern_worker.gitops import GitMergeError, merge_from_base
 from tests.fakes.gitrepo import git, make_repo
 from tests.fakes.gitserver import PrivateGitServer, bare_from
 
@@ -57,20 +57,20 @@ class TestDirtyAndHead:
         assert hostgit.is_dirty(root) is True
 
     def test_ignored_names_do_not_count(self, tmp_path: Path) -> None:
-        """sbxloop's own state dir dropped inside a checkout is run state,
+        """lantern's own state dir dropped inside a checkout is run state,
         not user content (field failure r5a1d9m9c)."""
         root = make_repo(tmp_path)
-        (root / ".sbxloop").mkdir()
-        (root / ".sbxloop" / "state.db").write_text("db\n")
+        (root / ".lantern").mkdir()
+        (root / ".lantern" / "state.db").write_text("db\n")
         assert hostgit.is_dirty(root) is True  # counted without ignore
-        assert hostgit.is_dirty(root, ignore=[".sbxloop"]) is False
+        assert hostgit.is_dirty(root, ignore=[".lantern"]) is False
 
     def test_real_changes_still_count_alongside_ignored_names(self, tmp_path: Path) -> None:
         root = make_repo(tmp_path)
-        (root / ".sbxloop").mkdir()
-        (root / ".sbxloop" / "state.db").write_text("db\n")
+        (root / ".lantern").mkdir()
+        (root / ".lantern" / "state.db").write_text("db\n")
         (root / "hello.txt").write_text("changed\n")
-        assert hostgit.is_dirty(root, ignore=[".sbxloop"]) is True
+        assert hostgit.is_dirty(root, ignore=[".lantern"]) is True
 
     def test_head_commit_sha(self, tmp_path: Path) -> None:
         sha = hostgit.head_commit(make_repo(tmp_path))
@@ -89,7 +89,7 @@ class TestCloneForRun:
         target = tmp_path / "state" / "runs" / "r1" / "workspace"
         target.parent.mkdir(parents=True)
 
-        sha = hostgit.clone_for_run(source, target, "sbxloop/r1")
+        sha = hostgit.clone_for_run(source, target, "lantern/r1")
 
         assert sha == hostgit.head_commit(source)
         assert (target / "hello.txt").read_text() == "hi\n"
@@ -98,9 +98,9 @@ class TestCloneForRun:
         assert not (target / ".git" / "objects" / "info" / "alternates").exists()
         # on the run branch
         head = (target / ".git" / "HEAD").read_text().strip()
-        assert head.endswith("refs/heads/sbxloop/r1")
+        assert head.endswith("refs/heads/lantern/r1")
         # the source repo is untouched: no new branch, same HEAD
-        assert not (source / ".git" / "refs" / "heads" / "sbxloop").exists()
+        assert not (source / ".git" / "refs" / "heads" / "lantern").exists()
         assert hostgit.head_commit(source) == sha
 
     def test_clone_pins_base_ref(self, tmp_path: Path) -> None:
@@ -108,7 +108,7 @@ class TestCloneForRun:
         against it after the agent commits or moves the branch (#248)."""
         source = make_repo(tmp_path)
         target = tmp_path / "target"
-        sha = hostgit.clone_for_run(source, target, "sbxloop/r1")
+        sha = hostgit.clone_for_run(source, target, "lantern/r1")
         pinned = subprocess.run(
             ["git", "rev-parse", hostgit.CLONE_BASE_REF],
             cwd=target,
@@ -119,7 +119,7 @@ class TestCloneForRun:
         assert pinned == sha
         # the pin is not a branch: it must never show up as one to the agent
         assert (
-            "sbxloop/base"
+            "lantern/base"
             not in subprocess.run(
                 ["git", "branch", "--list"], cwd=target, check=True, capture_output=True, text=True
             ).stdout
@@ -127,7 +127,7 @@ class TestCloneForRun:
 
     def test_clone_failure_raises_provision_error(self, tmp_path: Path) -> None:
         with pytest.raises(ProvisionError, match="cloning workspace"):
-            hostgit.clone_for_run(tmp_path / "nope", tmp_path / "target", "sbxloop/r1")
+            hostgit.clone_for_run(tmp_path / "nope", tmp_path / "target", "lantern/r1")
 
     def test_find_git_missing_binary(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hostgit.shutil, "which", lambda name: None)
@@ -172,11 +172,11 @@ class TestGitignoredFiles:
         assert hostgit.gitignored_files(root) == {"dist/a.whl"}
 
     def test_parent_checkout_rules_do_not_leak(self, tmp_path: Path) -> None:
-        """A harvest dir under a checkout's .sbxloop/ must not see itself as
+        """A harvest dir under a checkout's .lantern/ must not see itself as
         ignored through the enclosing repo's rules."""
         outer = make_repo(tmp_path)
-        (outer / ".gitignore").write_text(".sbxloop/\n")
-        root = outer / ".sbxloop" / "runs" / "r1" / "artifacts"
+        (outer / ".gitignore").write_text(".lantern/\n")
+        root = outer / ".lantern" / "runs" / "r1" / "artifacts"
         touch(root, "app.py", "dist/a.whl")
         assert hostgit.gitignored_files(root) == frozenset()
 
@@ -185,12 +185,12 @@ class TestGitignoredFiles:
     ) -> None:
         """Unmounted artifact roots come from the relative default state_dir;
         GIT_WORK_TREE must not be resolved beneath root itself."""
-        root = tmp_path / ".sbxloop" / "runs" / "r1" / "artifacts"
+        root = tmp_path / ".lantern" / "runs" / "r1" / "artifacts"
         root.mkdir(parents=True)
         (root / ".gitignore").write_text("dist/\n")
         touch(root, "dist/a.whl", "m.py")
         monkeypatch.chdir(tmp_path)
-        rel = Path(".sbxloop") / "runs" / "r1" / "artifacts"
+        rel = Path(".lantern") / "runs" / "r1" / "artifacts"
         assert hostgit.gitignored_files(rel) == {"dist/a.whl"}
 
     def test_checkout_config_cannot_run_an_fsmonitor_hook(self, tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def make_clone(tmp_path: Path) -> tuple[Path, Path]:
     git("add", ".", cwd=source)
     git("commit", "-m", "more", cwd=source)
     clone = tmp_path / "clone"
-    hostgit.clone_for_run(source, clone, "sbxloop/r1")
+    hostgit.clone_for_run(source, clone, "lantern/r1")
     return source, clone
 
 
@@ -285,7 +285,7 @@ class TestChangesSince:
         git("add", ".", cwd=source)
         git("commit", "-m", "ignore", cwd=source)
         clone = tmp_path / "clone"
-        hostgit.clone_for_run(source, clone, "sbxloop/r1")
+        hostgit.clone_for_run(source, clone, "lantern/r1")
         (clone / "debug.log").write_text("noise\n")
         (clone / "kept.txt").write_text("x\n")
         changes = hostgit.changes_since(clone, rev(clone, hostgit.CLONE_BASE_REF))
@@ -387,7 +387,7 @@ class TestDiffText:
         git("add", ".", cwd=source)
         git("commit", "-m", "ignore", cwd=source)
         clone = tmp_path / "clone"
-        hostgit.clone_for_run(source, clone, "sbxloop/r1")
+        hostgit.clone_for_run(source, clone, "lantern/r1")
         (clone / "debug.log").write_text("noise\n")
         (clone / "kept.txt").write_text("x\n")
         text = hostgit.diff_text(clone, None)
@@ -459,14 +459,14 @@ class TestClonePointsOriginAtSourceOrigin:
         upstream, checkout = make_upstream_and_clone(tmp_path)
         target = tmp_path / "state" / "runs" / "r1" / "workspace"
         target.parent.mkdir(parents=True)
-        hostgit.clone_for_run(checkout, target, "sbxloop/r1")
+        hostgit.clone_for_run(checkout, target, "lantern/r1")
         assert hostgit.origin_url(target) == str(upstream)
         assert (target / "hello.txt").read_text() == "hi\n"
 
     def test_source_without_origin_keeps_default_path_origin(self, tmp_path: Path) -> None:
         source = make_repo(tmp_path)
         target = tmp_path / "ws"
-        hostgit.clone_for_run(source, target, "sbxloop/r1")
+        hostgit.clone_for_run(source, target, "lantern/r1")
         assert hostgit.origin_url(target) == str(source)
 
 
@@ -491,7 +491,7 @@ class TestPublicRemoteUrl:
         source = make_repo(tmp_path)
         git("remote", "add", "origin", "https://x:ghp_secret@github.com/o/r.git", cwd=source)
         target = tmp_path / "ws"
-        hostgit.clone_for_run(source, target, "sbxloop/r1")
+        hostgit.clone_for_run(source, target, "lantern/r1")
         assert hostgit.origin_url(target) == "https://github.com/o/r.git"
         assert "ghp_secret" not in (target / ".git" / "config").read_text()
 
@@ -629,11 +629,11 @@ class TestCloneExistingBranch:
         upstream, checkout = make_upstream_and_clone(tmp_path)
         other = tmp_path / "author"
         git("clone", "-q", str(upstream), str(other), cwd=tmp_path)
-        git("checkout", "-q", "-b", "sbxloop/r1", cwd=other)
+        git("checkout", "-q", "-b", "lantern/r1", cwd=other)
         (other / "pr-work.txt").write_text("the PR's work\n")
         git("add", ".", cwd=other)
         git("commit", "-q", "-m", "pr work", cwd=other)
-        git("push", "-q", "origin", "sbxloop/r1", cwd=other)
+        git("push", "-q", "origin", "lantern/r1", cwd=other)
         sha = hostgit.head_commit(other) or ""
         git("fetch", "-q", "origin", cwd=checkout)
         return upstream, checkout, sha
@@ -641,7 +641,7 @@ class TestCloneExistingBranch:
     def test_it_starts_from_the_branchs_own_commit(self, tmp_path: Path) -> None:
         _, checkout, sha = self._with_pr_branch(tmp_path)
         target = tmp_path / "run"
-        got = hostgit.clone_existing_branch(checkout, target, "sbxloop/r1")
+        got = hostgit.clone_existing_branch(checkout, target, "lantern/r1")
         assert got == sha
         # The PR's work is present — this is the whole point.
         assert (target / "pr-work.txt").read_text() == "the PR's work\n"
@@ -651,14 +651,14 @@ class TestCloneExistingBranch:
         branch, which is what updates the PR rather than opening a new one."""
         _, checkout, _ = self._with_pr_branch(tmp_path)
         target = tmp_path / "run"
-        hostgit.clone_existing_branch(checkout, target, "sbxloop/r1")
+        hostgit.clone_existing_branch(checkout, target, "lantern/r1")
         with Repo(target) as clone:
-            assert clone.active_branch.name == "sbxloop/r1"
+            assert clone.active_branch.name == "lantern/r1"
 
     def test_the_base_ref_is_pinned_for_the_delivery_diff(self, tmp_path: Path) -> None:
         _, checkout, sha = self._with_pr_branch(tmp_path)
         target = tmp_path / "run"
-        hostgit.clone_existing_branch(checkout, target, "sbxloop/r1")
+        hostgit.clone_existing_branch(checkout, target, "lantern/r1")
         with Repo(target) as clone:
             assert clone.git.rev_parse(hostgit.CLONE_BASE_REF).strip() == sha
 
@@ -687,13 +687,13 @@ class TestCloneExistingBranch:
         delivering a tree that never had the PR's work is not."""
         _, checkout = make_upstream_and_clone(tmp_path)
         with pytest.raises(ProvisionError, match="is not on"):
-            hostgit.clone_existing_branch(checkout, tmp_path / "run", "sbxloop/nope")
+            hostgit.clone_existing_branch(checkout, tmp_path / "run", "lantern/nope")
 
     def test_a_refusal_leaves_no_half_clone(self, tmp_path: Path) -> None:
         _, checkout = make_upstream_and_clone(tmp_path)
         target = tmp_path / "run"
         with pytest.raises(ProvisionError):
-            hostgit.clone_existing_branch(checkout, target, "sbxloop/nope")
+            hostgit.clone_existing_branch(checkout, target, "lantern/nope")
         assert not target.exists() or not any(target.iterdir())
 
 
@@ -706,7 +706,7 @@ def make_run_clone(tmp_path: Path) -> tuple[Path, Path]:
     """
     upstream, checkout = make_upstream_and_clone(tmp_path)
     clone = tmp_path / "run"
-    hostgit.clone_for_run(checkout, clone, "sbxloop/r1")
+    hostgit.clone_for_run(checkout, clone, "lantern/r1")
     assert hostgit.origin_url(clone) == str(upstream)
     return upstream, clone
 
@@ -747,7 +747,7 @@ class TestMergeFromBase:
         assert "origin/main" in result.message
         with Repo(clone) as repo:
             assert repo.is_ancestor(repo.commit(new_sha), repo.head.commit)
-            assert repo.active_branch.name == "sbxloop/r1"
+            assert repo.active_branch.name == "lantern/r1"
             assert not repo.is_dirty(untracked_files=True)
         # Both sides' files are present: the run's work and the base's.
         assert (clone / "work.txt").read_text() == "the run's work\n"
@@ -768,17 +768,17 @@ class TestMergeFromBase:
         assert result.merged is True
         with Repo(clone) as repo:
             checkpoints = [
-                c for c in repo.iter_commits() if c.message.startswith("sbxloop: checkpoint")
+                c for c in repo.iter_commits() if c.message.startswith("lantern: checkpoint")
             ]
             assert len(checkpoints) == 1
             (checkpoint,) = checkpoints
             assert (checkpoint.author.name, checkpoint.author.email) == (
-                "sbxloop",
-                "sbxloop@localhost",
+                "lantern",
+                "lantern@localhost",
             )
             assert (checkpoint.committer.name, checkpoint.committer.email) == (
-                "sbxloop",
-                "sbxloop@localhost",
+                "lantern",
+                "lantern@localhost",
             )
             assert set(checkpoint.stats.files) == {"wip.txt", "hello.txt"}
             assert repo.is_ancestor(checkpoint, repo.head.commit)
@@ -792,7 +792,7 @@ class TestMergeFromBase:
     def test_a_repository_pre_commit_hook_does_not_run_for_the_checkpoint(
         self, tmp_path: Path
     ) -> None:
-        """The checkpoint is sbxloop's own commit; a hook the repository
+        """The checkpoint is lantern's own commit; a hook the repository
         ships must neither veto it nor run on its behalf."""
         upstream, clone = make_run_clone(tmp_path)
         marker = tmp_path / "hook-ran"
@@ -807,7 +807,7 @@ class TestMergeFromBase:
         assert result.merged is True, result.message
         assert not marker.exists()
         with Repo(clone) as repo:
-            assert any(c.message.startswith("sbxloop: checkpoint") for c in repo.iter_commits())
+            assert any(c.message.startswith("lantern: checkpoint") for c in repo.iter_commits())
             assert repo.is_ancestor(repo.commit(new_sha), repo.head.commit)
 
     def test_a_name_git_cannot_decode_is_checkpointed_and_merged(self, tmp_path: Path) -> None:
@@ -968,7 +968,7 @@ class TestCloneSize:
     def test_run_clone_of_a_checkout_carries_one_branch_and_no_tags(self, tmp_path: Path) -> None:
         _, checkout = self._upstream_with_baggage(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(checkout, clone, "sbxloop/r1")
+        hostgit.clone_for_run(checkout, clone, "lantern/r1")
         assert git_out("tag", cwd=clone) == ""
         assert remote_branches(clone) == ["origin/main"]
         assert (
@@ -981,7 +981,7 @@ class TestCloneSize:
     def test_remote_clone_carries_one_branch_and_no_tags(self, tmp_path: Path) -> None:
         upstream, _ = self._upstream_with_baggage(tmp_path)
         clone = tmp_path / "run"
-        sha = hostgit.clone_from_remote(f"file://{upstream}", clone, "sbxloop/r1")
+        sha = hostgit.clone_from_remote(f"file://{upstream}", clone, "lantern/r1")
         assert sha == rev(upstream, "main")
         assert git_out("tag", cwd=clone) == ""
         assert remote_branches(clone) == ["origin/main"]
@@ -1004,7 +1004,7 @@ class TestCloneSize:
         upstream, _ = self._upstream_with_baggage(tmp_path)
         target = tmp_path / "run"
         with pytest.raises(ProvisionError, match="cloning"):
-            hostgit.clone_from_remote(f"file://{upstream}", target, "sbxloop/nope", existing=True)
+            hostgit.clone_from_remote(f"file://{upstream}", target, "lantern/nope", existing=True)
         assert not target.exists() or not (target / ".git").is_dir()
 
     def test_base_that_is_not_the_clone_branch_still_merges_and_anchors(
@@ -1016,11 +1016,11 @@ class TestCloneSize:
         upstream, _ = self._upstream_with_baggage(tmp_path)
         author = tmp_path / "author"
         git("clone", "-q", str(upstream), str(author), cwd=tmp_path)
-        git("checkout", "-q", "-b", "sbxloop/r1", "origin/other", cwd=author)
+        git("checkout", "-q", "-b", "lantern/r1", "origin/other", cwd=author)
         (author / "pr.txt").write_text("pr\n")
         git("add", ".", cwd=author)
         git("commit", "-q", "-m", "pr", cwd=author)
-        git("push", "-q", "origin", "sbxloop/r1", cwd=author)
+        git("push", "-q", "origin", "lantern/r1", cwd=author)
         # The base moves on after the PR branched.
         git("checkout", "-q", "other", cwd=author)
         (author / "base-moved.txt").write_text("moved\n")
@@ -1030,8 +1030,8 @@ class TestCloneSize:
         new_base = rev(author)
 
         clone = tmp_path / "run"
-        hostgit.clone_from_remote(f"file://{upstream}", clone, "sbxloop/r1", existing=True)
-        assert remote_branches(clone) == ["origin/sbxloop/r1"]
+        hostgit.clone_from_remote(f"file://{upstream}", clone, "lantern/r1", existing=True)
+        assert remote_branches(clone) == ["origin/lantern/r1"]
         assert hostgit.resolve_diff_base(clone, new_base) != new_base  # not fetched yet
 
         result = merge_from_base(clone, "other")
@@ -1046,7 +1046,7 @@ class TestCloneSize:
         upstream, _ = self._upstream_with_baggage(tmp_path)
         clone = tmp_path / "run"
         sha = hostgit.clone_from_remote(
-            f"file://{upstream}", clone, "sbxloop/r1", clone_filter="blob:none"
+            f"file://{upstream}", clone, "lantern/r1", clone_filter="blob:none"
         )
         assert sha == rev(upstream, "main")
         assert clone_config(clone, "remote.origin.partialclonefilter") == "blob:none"
@@ -1075,7 +1075,7 @@ class TestCloneSize:
         monkeypatch.setattr(hostgit.Repo, "clone_from", staticmethod(old_git))
         clone = tmp_path / "run"
         sha = hostgit.clone_from_remote(
-            f"file://{upstream}", clone, "sbxloop/r1", clone_filter="blob:none"
+            f"file://{upstream}", clone, "lantern/r1", clone_filter="blob:none"
         )
         assert sha == rev(upstream, "main")
         assert len(calls) == 2
@@ -1096,13 +1096,13 @@ class TestCloneSize:
         other local branches as origin/*; the branch is fetched from the
         source's heads instead."""
         _, checkout = self._upstream_with_baggage(tmp_path)
-        git("branch", "sbxloop/r1", "origin/other", cwd=checkout)
+        git("branch", "lantern/r1", "origin/other", cwd=checkout)
         clone = tmp_path / "run"
-        sha = hostgit.clone_existing_branch(checkout, clone, "sbxloop/r1")
-        assert sha == rev(checkout, "sbxloop/r1")
+        sha = hostgit.clone_existing_branch(checkout, clone, "lantern/r1")
+        assert sha == rev(checkout, "lantern/r1")
         assert (clone / "other.txt").read_text() == "other\n"
         with Repo(clone) as repo:
-            assert repo.active_branch.name == "sbxloop/r1"
+            assert repo.active_branch.name == "lantern/r1"
 
 
 class TestPrivateRemoteClone:
@@ -1125,7 +1125,7 @@ class TestPrivateRemoteClone:
     ) -> None:
         clone = tmp_path / "run"
         url = f"{remote.url}/o/private.git"
-        sha = hostgit.clone_from_remote(url, clone, "sbxloop/r1", token=self.TOKEN)
+        sha = hostgit.clone_from_remote(url, clone, "lantern/r1", token=self.TOKEN)
         assert sha == rev(tmp_path / "src", "main")
         assert (clone / "hello.txt").read_text() == "hi\n"
         # The first request is unauthenticated (git only sends a credential
@@ -1142,7 +1142,7 @@ class TestPrivateRemoteClone:
     ) -> None:
         target = tmp_path / "run"
         with pytest.raises(ProvisionError) as excinfo:
-            hostgit.clone_from_remote(f"{remote.url}/o/private.git", target, "sbxloop/r1")
+            hostgit.clone_from_remote(f"{remote.url}/o/private.git", target, "lantern/r1")
         assert "cloning" in str(excinfo.value)
         assert not (target / ".git").is_dir()
 
@@ -1152,7 +1152,7 @@ class TestPrivateRemoteClone:
         target = tmp_path / "run"
         with pytest.raises(ProvisionError) as excinfo:
             hostgit.clone_from_remote(
-                f"{remote.url}/o/private.git", target, "sbxloop/r1", token="ghs_wrong"
+                f"{remote.url}/o/private.git", target, "lantern/r1", token="ghs_wrong"
             )
         message = str(excinfo.value)
         assert "Authentication failed" in message
@@ -1183,13 +1183,13 @@ class TestIsTracked:
 
     def test_nested_path_and_ignored_file(self, tmp_path: Path) -> None:
         root = make_repo(tmp_path)
-        (root / ".gitignore").write_text("sbxloop.toml\n")
-        (root / "sbxloop.toml").write_text("model = 'x'\n")
+        (root / ".gitignore").write_text("lantern.toml\n")
+        (root / "lantern.toml").write_text("model = 'x'\n")
         git("add", ".gitignore", cwd=root)
         git("commit", "-m", "ignore", cwd=root)
-        assert hostgit.is_tracked(root, root / "sbxloop.toml") is False
+        assert hostgit.is_tracked(root, root / "lantern.toml") is False
         (root / "pkg").mkdir()
-        (root / "pkg" / "pyproject.toml").write_text("[tool.sbxloop]\n")
+        (root / "pkg" / "pyproject.toml").write_text("[tool.lantern]\n")
         git("add", "pkg/pyproject.toml", cwd=root)
         git("commit", "-m", "pkg", cwd=root)
         assert hostgit.is_tracked(root, root / "pkg" / "pyproject.toml") is True
@@ -1289,7 +1289,7 @@ class TestSubmodules:
         git("add", "-A", cwd=app)
         git("commit", "-q", "-m", "undecodable sibling", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.populate_submodules(clone, source=app, token=None) == [
             ("vendor/lib", "local")
         ]
@@ -1326,7 +1326,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert not (clone / "vendor" / "lib" / "lib.txt").exists()  # a bare gitlink
         before = len(remote.requests)
         populated = hostgit.populate_submodules(clone, source=app, token=None)
@@ -1349,7 +1349,7 @@ class TestSubmodules:
         git("update-index", "--cacheinfo", f"160000,{v2},vendor/lib", cwd=app)
         git("commit", "-q", "-m", "bump lib without updating", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         populated = hostgit.populate_submodules(clone, source=app, token=None)
         assert populated == [("vendor/lib", "remote")]
         assert (clone / "vendor" / "lib" / "lib.txt").read_text() == "v2\n"
@@ -1361,7 +1361,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.populate_submodules(clone, source=None, token=None) == [
             ("vendor/lib", "remote")
         ]
@@ -1379,7 +1379,7 @@ class TestSubmodules:
             app, _, _ = make_submodule_setup(tmp_path, private.url)
             private.public = False
             clone = tmp_path / "run"
-            hostgit.clone_for_run(app, clone, "sbxloop/r1")
+            hostgit.clone_for_run(app, clone, "lantern/r1")
             with pytest.raises(ProvisionError) as excinfo:
                 hostgit.populate_submodules(clone, source=None, token=None)
             assert "vendor/lib" in str(excinfo.value)
@@ -1411,7 +1411,7 @@ class TestSubmodules:
         )
         git("commit", "-q", "-m", "vendor lib", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         with pytest.raises(ProvisionError) as excinfo:
             hostgit.populate_submodules(clone, source=None, token=None)
         assert "vendor/lib" in str(excinfo.value)
@@ -1438,14 +1438,14 @@ class TestSubmodules:
         git("-C", "vendor/lib", "submodule", "update", "--init", "-q", cwd=app)
         git("commit", "-q", "-am", "bump lib", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.populate_submodules(clone, source=app, token=None) == [
             ("vendor/lib", "local"),
             ("vendor/lib/deps/core", "local"),
         ]
         assert (clone / "vendor" / "lib" / "deps" / "core" / "core.txt").read_text() == "core\n"
         clone2 = tmp_path / "run2"
-        hostgit.clone_for_run(app, clone2, "sbxloop/r2")
+        hostgit.clone_for_run(app, clone2, "lantern/r2")
         assert hostgit.populate_submodules(clone2, source=None, token=None) == [
             ("vendor/lib", "remote"),
             ("vendor/lib/deps/core", "remote"),
@@ -1465,7 +1465,7 @@ class TestSubmodules:
         git("rm", "--cached", "vendor/lib", cwd=app)
         git("commit", "-m", "drop the gitlink, keep the stanza", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         with caplog.at_level(logging.INFO):
             assert hostgit.populate_submodules(clone, source=app, token=None) == []
         assert not (clone / "vendor" / "lib").exists()
@@ -1477,7 +1477,7 @@ class TestSubmodules:
         app, lib, lib_bare = make_submodule_setup(tmp_path, remote.url)
         v2 = lib_v2(lib, lib_bare)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_submodules(clone, source=app, token=None)
         # the agent fetches and checks the new library commit out, staging
         # nothing in the superproject
@@ -1500,7 +1500,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_submodules(clone, source=app, token=None)
         (clone / "vendor" / "lib" / "lib.txt").write_text("edited in place\n")
         (clone / "README").write_text("real work\n")
@@ -1514,7 +1514,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_submodules(clone, source=app, token=None)
         sub = clone / "vendor" / "lib"
         (sub / "lib.txt").write_text("local\n")
@@ -1530,7 +1530,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_submodules(clone, source=app, token=None)
         git("rm", "-q", "vendor/lib", cwd=clone)  # also drops its .gitmodules entry
         changes = hostgit.changes_since(clone, rev(clone, hostgit.CLONE_BASE_REF))
@@ -1544,7 +1544,7 @@ class TestSubmodules:
     ) -> None:
         app, _, _ = make_submodule_setup(tmp_path, remote.url)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_submodules(clone, source=app, token=None)
         (clone / "README").write_text("real work\n")
         changes = hostgit.changes_since(clone, rev(clone, hostgit.CLONE_BASE_REF))
@@ -1676,7 +1676,7 @@ class TestLfs:
     def test_a_run_clone_starts_on_pointer_files(self, tmp_path: Path) -> None:
         app, _ = make_lfs_repo(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert is_pointer(clone / "asset.bin")
 
     def test_populates_from_the_host_checkout_without_the_network(
@@ -1684,7 +1684,7 @@ class TestLfs:
     ) -> None:
         app, payload = make_lfs_repo(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         population = hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
         assert population == hostgit.LfsPopulation(files=1, linked=1, fetched=0)
         assert (clone / "asset.bin").read_bytes() == payload
@@ -1701,7 +1701,7 @@ class TestLfs:
         remote.seed_lfs(app)
         url = f"{remote.url}/o/app.git"
         clone = tmp_path / "run"
-        hostgit.clone_from_remote(url, clone, "sbxloop/r1", token="ghs_lfs")
+        hostgit.clone_from_remote(url, clone, "lantern/r1", token="ghs_lfs")
         assert is_pointer(clone / "asset.bin")
         population = hostgit.populate_lfs(
             clone, source=None, lfs_url=hostgit.lfs_endpoint(url), token="ghs_lfs"
@@ -1717,7 +1717,7 @@ class TestLfs:
         remote.seed_lfs(app)
         url = f"{remote.url}/o/app.git"
         clone = tmp_path / "run"
-        hostgit.clone_from_remote(url, clone, "sbxloop/r1", token="ghs_lfs")
+        hostgit.clone_from_remote(url, clone, "lantern/r1", token="ghs_lfs")
         with pytest.raises(ProvisionError) as excinfo:
             hostgit.populate_lfs(
                 clone, source=None, lfs_url=hostgit.lfs_endpoint(url), token="wrong"
@@ -1729,7 +1729,7 @@ class TestLfs:
         app, _ = make_lfs_repo(tmp_path)
         shutil.rmtree(app / ".git" / "lfs")  # a host checkout that never pulled
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         with pytest.raises(ProvisionError) as excinfo:
             hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
         assert "asset.bin" in str(excinfo.value)
@@ -1740,7 +1740,7 @@ class TestLfs:
     ) -> None:
         app, _ = make_lfs_repo(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         monkeypatch.setattr(hostgit, "lfs_version", lambda: None)
         with pytest.raises(ProvisionError) as excinfo:
             hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
@@ -1750,7 +1750,7 @@ class TestLfs:
     def test_a_populated_asset_is_not_a_change(self, tmp_path: Path) -> None:
         app, _ = make_lfs_repo(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
         assert hostgit.changes_since(clone, rev(clone, hostgit.CLONE_BASE_REF)) == []
         # a build that touches the file's mtime re-runs the clean filter,
@@ -1761,7 +1761,7 @@ class TestLfs:
     def test_lfs_tracked_names_the_paths_gitattributes_routes(self, tmp_path: Path) -> None:
         app, _ = make_lfs_repo(tmp_path)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
         (clone / "new.bin").write_bytes(b"\x00" * 16)
         (clone / "README").write_text("more\n")
@@ -1789,7 +1789,7 @@ class TestFetchTags:
         app = make_repo(tmp_path, "app")
         git("tag", "-a", "v1.2.3", "-m", "release", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.tag_count(clone) == 0
         assert hostgit.tag_count(app) == 1
 
@@ -1800,7 +1800,7 @@ class TestFetchTags:
             git("tag", "-a", "v1.2.3", "-m", "release", cwd=app)
             git("remote", "add", "origin", f"{private.url}/o/app.git", cwd=app)
             clone = tmp_path / "run"
-            hostgit.clone_for_run(app, clone, "sbxloop/r1")
+            hostgit.clone_for_run(app, clone, "lantern/r1")
             fetched = hostgit.fetch_tags(clone, source=app, token=None)
             assert fetched == hostgit.TagFetch(tags=1, source="local")
             assert describe(clone) == "v1.2.3"
@@ -1820,7 +1820,7 @@ class TestFetchTags:
             hostgit.clone_from_remote(url, host, "main", existing=True, token="ghs_tags")
             assert hostgit.tag_count(host) == 0
             clone = tmp_path / "run"
-            hostgit.clone_for_run(host, clone, "sbxloop/r1")
+            hostgit.clone_for_run(host, clone, "lantern/r1")
             fetched = hostgit.fetch_tags(
                 clone, source=host, token="ghs_tags", credential_url=private.url
             )
@@ -1839,7 +1839,7 @@ class TestFetchTags:
         ) as private:
             url = f"{private.url}/o/app.git"
             clone = tmp_path / "run"
-            hostgit.clone_from_remote(url, clone, "sbxloop/r1", token="ghs_tags")
+            hostgit.clone_from_remote(url, clone, "lantern/r1", token="ghs_tags")
             with pytest.raises(ProvisionError) as excinfo:
                 hostgit.fetch_tags(clone, source=None, token="wrong", credential_url=private.url)
             assert 'fetch_tags = "never"' in str(excinfo.value)
@@ -1863,7 +1863,7 @@ class TestFetchTags:
         ) as private:
             clone = tmp_path / "run"
             hostgit.clone_from_remote(
-                f"{private.url}/o/app.git", clone, "sbxloop/r1", token="ghs_tags"
+                f"{private.url}/o/app.git", clone, "lantern/r1", token="ghs_tags"
             )
             hostgit.fetch_tags(clone, source=None, token="ghs_tags", credential_url=private.url)
         assert hostgit.CLONE_TOKEN_ENV not in os.environ
@@ -1874,7 +1874,7 @@ class TestFetchTags:
     def test_a_repository_without_tags_is_not_an_error(self, tmp_path: Path) -> None:
         app = make_repo(tmp_path, "app")
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.fetch_tags(clone, source=app, token=None) == hostgit.TagFetch(0, "remote")
 
     def test_a_tag_off_the_branch_brings_its_commit(self, tmp_path: Path) -> None:
@@ -1886,6 +1886,6 @@ class TestFetchTags:
         git("tag", "v3.0.0", cwd=app)
         git("checkout", "-q", "main", cwd=app)
         clone = tmp_path / "run"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         assert hostgit.fetch_tags(clone, source=app, token=None) == hostgit.TagFetch(1, "local")
         assert git_out("cat-file", "-t", "v3.0.0^{commit}", cwd=clone) == "commit"

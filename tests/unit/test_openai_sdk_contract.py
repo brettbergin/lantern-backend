@@ -16,12 +16,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop_worker.backends.openai import (
+from lantern_worker.backends.openai import (
     SESSION_DIR_ENV,
     EndpointRequestRejected,
     OpenAIBackend,
 )
-from sbxloop_worker.protocol import (
+from lantern_worker.protocol import (
     OPENAI_API_ENV,
     OPENAI_BASE_URL_ENV,
     OPENAI_KEY_NAME_ENV,

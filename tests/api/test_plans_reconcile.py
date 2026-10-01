@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sbxloop.errors import GithubOpsError
+from lantern.errors import GithubOpsError
 from tests.api.conftest import Api, build
 from tests.api.test_plans_publish import (
     DRAFT,

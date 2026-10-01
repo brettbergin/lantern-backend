@@ -8,10 +8,10 @@ from pathlib import Path
 import jwt
 import pytest
 
-from sbxloop.api.auth.keys import load_or_create, rotate
-from sbxloop.api.auth.store import check_secret, hash_secret, parse_capabilities
-from sbxloop.api.auth.tokens import LEEWAY_S, TokenError, mint_access, verify_access
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES
+from lantern.api.auth.keys import load_or_create, rotate
+from lantern.api.auth.store import check_secret, hash_secret, parse_capabilities
+from lantern.api.auth.tokens import LEEWAY_S, TokenError, mint_access, verify_access
+from lantern.daemon.controls.principal import ALL_CAPABILITIES
 from tests.api.conftest import Api
 
 
@@ -45,7 +45,7 @@ class TestTokenGrant:
         assert pair["scope"] == "runs:read audit:read"
         assert pair["refresh_token"].startswith("rt_") and pair["refresh_expires_in"] == 604800
         claims = jwt.decode(pair["access_token"], options={"verify_signature": False})
-        assert claims["iss"] == "sbxloop" and claims["aud"] == "sbxloop-api"
+        assert claims["iss"] == "lantern" and claims["aud"] == "lantern-api"
         assert claims["sub"] == pair["client_id"] and claims["workspace"] == "local"
         header = jwt.get_unverified_header(pair["access_token"])
         assert header["alg"] == "EdDSA" and header["kid"] == api.keys.current.kid
@@ -137,7 +137,7 @@ class TestAccessTokens:
             verify_access(api.keys, token, now=api.clock())
         assert excinfo.value.code == "invalid_token"
         forged = jwt.encode(
-            {"iss": "sbxloop", "aud": "sbxloop-api", "sub": "cli_x", "iat": 1, "exp": 2**31},
+            {"iss": "lantern", "aud": "lantern-api", "sub": "cli_x", "iat": 1, "exp": 2**31},
             "an-hmac-key-long-enough-for-sha256-so-pyjwt-does-not-warn",
             algorithm="HS256",
         )

@@ -24,10 +24,10 @@ from typing import Any, ClassVar
 
 import pytest
 
-from sbxloop.agents.tools import AgentTool
-from sbxloop.api.channel_artifacts import TOOL_NAME as CHANNEL_READ_TOOL
-from sbxloop.config import Config
-from sbxloop.daemon.concierge import (
+from lantern.agents.tools import AgentTool
+from lantern.api.channel_artifacts import TOOL_NAME as CHANNEL_READ_TOOL
+from lantern.config import Config
+from lantern.daemon.concierge import (
     CONCIERGE_AGENT,
     CONCIERGE_RUN_ID,
     STATE_SESSION_ID,
@@ -36,14 +36,14 @@ from sbxloop.daemon.concierge import (
     ConciergeReply,
     concierge_run_id,
 )
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Principal
-from sbxloop.daemon.model import RunReport, WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import TaskSpec
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import DaemonError, GithubOpsError, WorkerError, WorkerTimeoutError
-from sbxloop.events import EventBus
-from sbxloop_worker.protocol import (
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Principal
+from lantern.daemon.model import RunReport, WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import TaskSpec
+from lantern.engine.store import StateStore
+from lantern.errors import DaemonError, GithubOpsError, WorkerError, WorkerTimeoutError
+from lantern.events import EventBus
+from lantern_worker.protocol import (
     ErrorInfo,
     HostToolCall,
     HostToolResponse,
@@ -184,7 +184,7 @@ class FakeGithub(OpsStub):
     def issue_create(
         self, repo: str, title: str, body: str = "", labels: list[str] | None = None
     ) -> Any:
-        from sbxloop.vcs.github.ops import IssueRef
+        from lantern.vcs.github.ops import IssueRef
 
         self.created = getattr(self, "created", [])
         self.created.append((repo, title, body, labels))
@@ -194,7 +194,7 @@ class FakeGithub(OpsStub):
 class FakeVersions:
     """Stands in for VersionProbe: the tool is a thin wrapper over summary()."""
 
-    def __init__(self, text: str = "sbxloop 0.7.12 · 0.7.15 on PyPI · BEHIND") -> None:
+    def __init__(self, text: str = "lantern 0.7.12 · 0.7.15 on PyPI · BEHIND") -> None:
         self.text = text
         self.calls = 0
 
@@ -312,7 +312,7 @@ class TestJobShape:
             "load_skill",
         ]  # no github_get: no repo configured; the rest need nothing
         assert job.host_tools_dir is None  # the WorkerClient fills it in
-        assert job.system_message and "sbxloop concierge" in job.system_message
+        assert job.system_message and "Lantern concierge" in job.system_message
         assert "`sbx_control`" in job.system_message
         assert job.prompt is not None
         assert job.prompt.startswith("[situation @ ")
@@ -346,7 +346,7 @@ class TestJobShape:
                 {"session_id": "session-a"},
             ],
         )
-        for key in ("channel-a:angie", "channel-b:angie", "channel-a:angie"):
+        for key in ("channel-a:lantern", "channel-b:lantern", "channel-a:lantern"):
             concierge.submit_turn("hello", author="owner", session_key=key).result(timeout=10)
         assert [job.resume_session_id for job in client.jobs] == [None, None, "session-a"]
 
@@ -359,7 +359,7 @@ class TestJobShape:
         )
         for _ in range(2):
             concierge.submit_turn(
-                "RELEVANT or PASS?", author="sbxloop", session_key="c:ambient:x", stateless=True
+                "RELEVANT or PASS?", author="lantern", session_key="c:ambient:x", stateless=True
             ).result(timeout=10)
         concierge.submit_turn("hello", author="owner", session_key="c:ambient:x").result(timeout=10)
         assert [job.resume_session_id for job in client.jobs] == [None, None, None]
@@ -369,8 +369,8 @@ class TestJobShape:
         reply = concierge.submit_turn(
             "hello",
             author="owner",
-            session_key="channel-a:angie",
-            persona="\nYou are Angie.",
+            session_key="channel-a:lantern",
+            persona="\nYou are Lantern.",
             allow_actions=False,
         ).result(timeout=10)
         assert reply.ok
@@ -378,7 +378,7 @@ class TestJobShape:
         assert job.host_tools == []
         assert job.mcp_servers == []
         assert job.system_message is not None
-        assert "You are Angie." in job.system_message
+        assert "You are Lantern." in job.system_message
         assert "ordinary conversation turn" in job.system_message
         # A mention asks for a reply, so it is not how a person gets action:
         # the turn points at the runner modes instead.
@@ -465,7 +465,7 @@ class TestJobShape:
         assert job.system_message is not None
         assert "Complete your assigned work before handing it off" in job.system_message
         assert "does not replace your deliverable" in job.system_message
-        assert "Do not recreate sbxloop's execution pipelines" in job.system_message
+        assert "Do not recreate lantern's execution pipelines" in job.system_message
         assert "incorporate it into revised work" in job.system_message
         assert "do not follow a fixed role order" in job.system_message
         handoff = next(tool for tool in job.host_tools if tool.name == "handoff_agent")
@@ -545,7 +545,7 @@ class TestJobShape:
 
 class TestTools:
     def test_rate_limit_report_fits_tool_budget(self, tmp_path, monkeypatch):
-        from sbxloop_worker.rate_limits import RateLimit, RateLimitReport
+        from lantern_worker.rate_limits import RateLimit, RateLimitReport
 
         concierge, client, host, _, _ = make(
             tmp_path,
@@ -578,7 +578,7 @@ class TestTools:
         calls = []
 
         def query():
-            from sbxloop_worker.rate_limits import RateLimitReport
+            from lantern_worker.rate_limits import RateLimitReport
 
             calls.append(backend)
             return RateLimitReport(backend=backend, status="unavailable", reason="test")
@@ -759,7 +759,7 @@ class TestTools:
             [TaskSpec(id="t1", title="Build widget"), TaskSpec(id="t2", title="Test widget")],
         )
         store.set_run_state("r1abcdefg", "completed")
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         for i in range(3):
             store.append_event(
@@ -784,7 +784,7 @@ class TestTools:
             tmp_path, [{"calls": [("run_usage", {"run_id": "r1abcdefg"})]}]
         )
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         for tokens in (1200, 800):
             store.append_event(
@@ -828,7 +828,7 @@ class TestTools:
             tmp_path, [{"calls": [("run_usage", {"run_id": "r1abcdefg"})]}]
         )
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         # One executor job of two turns, plus a second job of one turn.
         for job, tokens in (("jaaa", 1200), ("jaaa", 800), ("jbbb", 500)):
@@ -864,7 +864,7 @@ class TestTools:
             tmp_path, [{"calls": [("run_usage", {"run_id": "r1abcdefg"})]}]
         )
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         samples = (
             {"backend": "copilot", "model": "gpt-5"},
@@ -899,7 +899,7 @@ class TestTools:
         """The daily head line uses the same backend+model pairs."""
         concierge, client, _, loop, dstore = make(tmp_path, [{"calls": [("usage_today", {})]}])
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         for extra in ({"backend": "copilot", "model": "gpt-5"}, {"model": "legacy-model"}):
             event = Event.now(
@@ -942,7 +942,7 @@ class TestTools:
         is a different day's spend even on a run that is still active."""
         concierge, client, _, loop, dstore = make(tmp_path, [{"calls": [("usage_today", {})]}])
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         fresh = Event.now(
             "agent.usage", "r1abcdefg", model="claude-opus-5", input_tokens=500, output_tokens=40
@@ -1078,7 +1078,7 @@ class TestTools:
                     {
                         "number": 9,
                         "title": "Already going",
-                        "labels": [{"name": "sbxloop:run"}],
+                        "labels": [{"name": "lantern:run"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1087,7 +1087,7 @@ class TestTools:
                     {
                         "number": 11,
                         "title": "Stuck",
-                        "labels": [{"name": "sbxloop:blocked"}],
+                        "labels": [{"name": "lantern:blocked"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1141,7 +1141,7 @@ class TestTools:
                     {
                         "number": 8,
                         "title": "Queued one",
-                        "labels": [{"name": "sbxloop:run"}],
+                        "labels": [{"name": "lantern:run"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1150,7 +1150,7 @@ class TestTools:
                     {
                         "number": 9,
                         "title": "Running one",
-                        "labels": [{"name": "sbxloop:in-progress"}],
+                        "labels": [{"name": "lantern:in-progress"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1159,7 +1159,7 @@ class TestTools:
                     {
                         "number": 10,
                         "title": "Failed one",
-                        "labels": [{"name": "sbxloop:failed"}],
+                        "labels": [{"name": "lantern:failed"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1168,7 +1168,7 @@ class TestTools:
                     {
                         "number": 11,
                         "title": "Blocked one",
-                        "labels": [{"name": "sbxloop:blocked"}],
+                        "labels": [{"name": "lantern:blocked"}],
                         "created_at": "bogus",
                         "user": {"login": "bo"},
                         "comments": 0,
@@ -1205,7 +1205,7 @@ class TestTools:
             {
                 "number": 8,
                 "title": "Queued one",
-                "labels": [{"name": "sbxloop:run"}],
+                "labels": [{"name": "lantern:run"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1214,7 +1214,7 @@ class TestTools:
             {
                 "number": 9,
                 "title": "Running one",
-                "labels": [{"name": "sbxloop:in-progress"}],
+                "labels": [{"name": "lantern:in-progress"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1223,7 +1223,7 @@ class TestTools:
             {
                 "number": 10,
                 "title": "Blocked one",
-                "labels": [{"name": "sbxloop:blocked"}],
+                "labels": [{"name": "lantern:blocked"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1274,7 +1274,7 @@ class TestTools:
             {
                 "number": 8,
                 "title": "Queued",
-                "labels": [{"name": "sbxloop:run"}],
+                "labels": [{"name": "lantern:run"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1283,7 +1283,7 @@ class TestTools:
             {
                 "number": 9,
                 "title": "Failed",
-                "labels": [{"name": "sbxloop:failed"}],
+                "labels": [{"name": "lantern:failed"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1292,7 +1292,7 @@ class TestTools:
             {
                 "number": 10,
                 "title": "Blocked",
-                "labels": [{"name": "sbxloop:blocked"}],
+                "labels": [{"name": "lantern:blocked"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1301,7 +1301,7 @@ class TestTools:
             {
                 "number": 11,
                 "title": "Running and once failed",
-                "labels": [{"name": "sbxloop:in-progress"}, {"name": "sbxloop:failed"}],
+                "labels": [{"name": "lantern:in-progress"}, {"name": "lantern:failed"}],
                 "created_at": "bogus",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1352,7 +1352,7 @@ class TestTools:
                 "number": 8,
                 "title": "Closed one",
                 "state": "closed",
-                "labels": [{"name": "sbxloop:run"}],
+                "labels": [{"name": "lantern:run"}],
                 "created_at": "2026-08-01T00:00:00Z",
                 "user": {"login": "bo"},
                 "comments": 0,
@@ -1401,11 +1401,11 @@ class TestTools:
             }
             for n, names in (
                 (7, []),
-                (8, ["sbxloop:run"]),
-                (9, ["sbxloop:in-progress"]),
-                (10, ["sbxloop:blocked"]),
-                (11, ["sbxloop:failed"]),
-                (12, ["sbxloop:failed", "sbxloop:run"]),
+                (8, ["lantern:run"]),
+                (9, ["lantern:in-progress"]),
+                (10, ["lantern:blocked"]),
+                (11, ["lantern:failed"]),
+                (12, ["lantern:failed", "lantern:run"]),
             )
         ]
         github = FakeGithub({"/issues?": issues})
@@ -1459,11 +1459,11 @@ class TestTools:
         self, tmp_path: Path
     ) -> None:
         fixture: list[tuple[int, list[str]]] = [
-            (21, ["sbxloop:run"]),
-            (22, ["sbxloop:in-progress"]),
-            (23, ["sbxloop:failed"]),
-            (24, ["sbxloop:blocked"]),
-            (25, ["sbxloop:failed", "sbxloop:blocked"]),
+            (21, ["lantern:run"]),
+            (22, ["lantern:in-progress"]),
+            (23, ["lantern:failed"]),
+            (24, ["lantern:blocked"]),
+            (25, ["lantern:failed", "lantern:blocked"]),
             (26, []),
         ]
         issues = [
@@ -1480,7 +1480,7 @@ class TestTools:
         ]
         all_numbers = {n for n, _ in fixture}
         expected_queued = {
-            n for n, names in fixture if {"sbxloop:run", "sbxloop:in-progress"} & set(names)
+            n for n, names in fixture if {"lantern:run", "lantern:in-progress"} & set(names)
         }
         expected_not_queued = all_numbers - expected_queued
         github = FakeGithub({"/issues?": issues})
@@ -1522,15 +1522,15 @@ class TestTools:
         assert not numbers(queued.text) & numbers(not_queued.text)
         assert numbers(queued.text) | numbers(not_queued.text) == all_numbers
 
-        assert numbers(state_queued.text) == {n for n, names in fixture if "sbxloop:run" in names}
+        assert numbers(state_queued.text) == {n for n, names in fixture if "lantern:run" in names}
         assert numbers(state_running.text) == {
-            n for n, names in fixture if "sbxloop:in-progress" in names
+            n for n, names in fixture if "lantern:in-progress" in names
         }
         assert numbers(state_failed.text) == {
-            n for n, names in fixture if "sbxloop:failed" in names
+            n for n, names in fixture if "lantern:failed" in names
         }
         assert numbers(state_blocked.text) == {
-            n for n, names in fixture if "sbxloop:blocked" in names
+            n for n, names in fixture if "lantern:blocked" in names
         }
         assert numbers(state_backlog.text) == {n for n, names in fixture if not names}
 
@@ -1604,12 +1604,12 @@ class TestTools:
         assert created.ok and created.text.startswith(
             "created and queued issue #41 https://gh/i/41"
         )
-        assert "`sbxloop:run`" in created.text and "run thread will appear" in created.text
+        assert "`lantern:run`" in created.text and "run thread will appear" in created.text
         assert "ask the person" not in created.text
         assert bad.text == "both title and body are required"
         (repo, title, body, labels) = github.created[0]
         assert repo == "owner/repo" and title == "Add retries to fetch"
-        assert labels == ["sbxloop:run"]
+        assert labels == ["lantern:run"]
         assert body.startswith("Wrap fetch().\n\n---\nFiled by Discord user `ana` (via concierge)")
         assert "777" not in body  # the requester never reaches the public issue
         assert not any("/labels" in p for p in github.paths)  # already queued: no label call
@@ -1630,7 +1630,7 @@ class TestTools:
         )
         assert origins[-1] == ("owner/repo", 12, "Issue #12")
         (labelled,) = client.responses[2:]
-        assert labelled.ok and labelled.text.startswith("added `sbxloop:run` to #12")
+        assert labelled.ok and labelled.text.startswith("added `lantern:run` to #12")
         assert "polls for it now" in labelled.text
         assert github.paths[-1] == "/repos/owner/repo/issues/12/labels"
         assert loop.wakes == 2
@@ -1687,8 +1687,8 @@ class TestTools:
         turn(concierge, "please fix it")
         for response in client.responses:
             assert response.text.startswith("created and queued issue #41")
-            assert "`sbxloop:run`" in response.text
-        assert [c[3] for c in github.created] == [["sbxloop:run"], ["sbxloop:run"]]
+            assert "`lantern:run`" in response.text
+        assert [c[3] for c in github.created] == [["lantern:run"], ["lantern:run"]]
 
     def test_create_issue_tool_description_covers_both_paths(self, tmp_path: Path) -> None:
         concierge, client, _, _, _ = make(tmp_path, [{}], github=FakeGithub())
@@ -1733,7 +1733,7 @@ class TestTools:
         assert "PAUSED" in client.responses[0].text
 
     def test_version_status_reports_drift(self, tmp_path: Path) -> None:
-        versions = FakeVersions("sbxloop 0.7.12 installed · 0.7.15 on PyPI · BEHIND")
+        versions = FakeVersions("lantern 0.7.12 installed · 0.7.15 on PyPI · BEHIND")
         concierge, client, *_ = make(
             tmp_path, [{"calls": [("version_status", {})]}], versions=versions
         )
@@ -1809,7 +1809,7 @@ class TestTools:
                     "number": 12,
                     "title": "Retry the fetch client",
                     "state": "open",
-                    "labels": [{"name": "sbxloop:backlog"}, {"name": "sbxloop:run"}],
+                    "labels": [{"name": "lantern:backlog"}, {"name": "lantern:run"}],
                     "html_url": "https://gh/i/12",
                 }
             }
@@ -1839,7 +1839,7 @@ class TestTools:
         assert [(m, p) for m, p, _ in github.calls] == [
             ("GET", "/repos/owner/repo/issues/12"),
             ("POST", "/repos/owner/repo/issues/12/comments"),
-            ("DELETE", "/repos/owner/repo/issues/12/labels/sbxloop%3Arun"),
+            ("DELETE", "/repos/owner/repo/issues/12/labels/lantern%3Arun"),
             ("PATCH", "/repos/owner/repo/issues/12"),
         ]
         assert github.calls[-1][2] == {"state": "closed", "state_reason": "not_planned"}
@@ -1850,7 +1850,7 @@ class TestTools:
             'closed #12 "Retry the fetch client" as not_planned — https://gh/i/12'
         )
         assert "posted the reason as a comment" in closed.text
-        assert "removed `sbxloop:run`" in closed.text
+        assert "removed `lantern:run`" in closed.text
 
     def test_close_issue_refuses_without_confirmation_or_reason(self, tmp_path: Path) -> None:
         github = FakeGithub()
@@ -1897,7 +1897,7 @@ class TestTools:
                     "number": 14,
                     "title": "Being worked",
                     "state": "open",
-                    "labels": [{"name": "sbxloop:in-progress"}],
+                    "labels": [{"name": "lantern:in-progress"}],
                     "html_url": "https://gh/i/14",
                 },
             }
@@ -1957,7 +1957,7 @@ class TestTools:
             "number": 12,
             "title": "T",
             "state": "open",
-            "labels": [{"name": "sbxloop:run"}],
+            "labels": [{"name": "lantern:run"}],
             "html_url": "https://gh/i/12",
         }
         args = {
@@ -2008,7 +2008,7 @@ class TestTools:
         turn(concierge4)
         (noisy,) = client4.responses
         assert noisy.text.startswith('closed #12 "T" as not_planned')
-        assert "could NOT remove `sbxloop:run`" in noisy.text
+        assert "could NOT remove `lantern:run`" in noisy.text
         assert [m for m, _, _ in gh4.calls] == ["GET", "POST", "DELETE", "PATCH"]
 
     def test_close_issue_reports_a_read_failure_and_a_bad_number(self, tmp_path: Path) -> None:
@@ -2100,7 +2100,7 @@ class TestTools:
             config={"concierge": {"max_tool_result_chars": 1000}},
         )
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         for _i in range(200):
             store.append_event(Event.now("agent.message", "r1abcdefg", content="y" * 50))
@@ -2158,9 +2158,9 @@ class TestTools:
             tmp_path, [{"calls": [("run_events", {"run_id": "r1abcdefg", "tail": 50})]}]
         )
         store = self._seed_run(tmp_path, dstore, loop)
-        from sbxloop.events import Event
+        from lantern.events import Event
 
-        prefix = "cd /home/x/.local/state/sbxloop/sbxloop-work/runs/r1abcdefg/workspace && "
+        prefix = "cd /home/x/.local/state/lantern/lantern-work/runs/r1abcdefg/workspace && "
         # old shape: no tool_call_id, no output_lines, no duration_ms
         store.append_event(
             Event.now(
@@ -2350,19 +2350,19 @@ class TestDaemonLogTool:
 
     @pytest.fixture(autouse=True)
     def _buffer(self) -> Any:
-        from sbxloop.log import log_buffer
+        from lantern.log import log_buffer
 
         log_buffer().clear()
         yield
         log_buffer().clear()
 
     def _seed(self) -> None:
-        from sbxloop.log import LogRecordLine, log_buffer
+        from lantern.log import LogRecordLine, log_buffer
 
         for level, logger, line in [
-            ("INFO", "sbxloop.daemon.loop", "daemon.idle queued=0 sbxq"),
-            ("WARNING", "sbxloop.daemon.loop", "breaker open failures=3 sbxq"),
-            ("ERROR", "sbxloop.vcs.github.poll", "github.poll_failed status=502 sbxq"),
+            ("INFO", "lantern.daemon.loop", "daemon.idle queued=0 sbxq"),
+            ("WARNING", "lantern.daemon.loop", "breaker open failures=3 sbxq"),
+            ("ERROR", "lantern.vcs.github.poll", "github.poll_failed status=502 sbxq"),
         ]:
             log_buffer().append(LogRecordLine("2026-01-01T00:00:00+00:00", level, logger, line))
 
@@ -2384,7 +2384,7 @@ class TestDaemonLogTool:
         lines = text.splitlines()[1:]
         assert len(lines) == 3
         assert "daemon.idle" in lines[0] and "github.poll_failed" in lines[2]
-        assert lines[0].startswith("2026-01-01T00:00:00+00:00 INFO sbxloop.daemon.loop ")
+        assert lines[0].startswith("2026-01-01T00:00:00+00:00 INFO lantern.daemon.loop ")
 
     def test_level_filter_is_at_or_above(self, tmp_path: Path) -> None:
         self._seed()
@@ -2413,7 +2413,7 @@ class TestDaemonLogTool:
         assert "the buffer holds " in text
 
     def test_tail_is_clamped(self, tmp_path: Path) -> None:
-        from sbxloop.log import LogRecordLine, log_buffer
+        from lantern.log import LogRecordLine, log_buffer
 
         for i in range(600):
             log_buffer().append(LogRecordLine("t", "INFO", "l", f"sbxline {i}"))
@@ -2429,7 +2429,7 @@ class TestDaemonLogTool:
         assert "sbxline 599" in text and "sbxline 99 " not in text
 
     def test_tool_result_is_clipped(self, tmp_path: Path) -> None:
-        from sbxloop.log import LogRecordLine, log_buffer
+        from lantern.log import LogRecordLine, log_buffer
 
         for i in range(400):
             log_buffer().append(LogRecordLine("t", "INFO", "logger", f"line {i} " + "x" * 100))
@@ -2448,7 +2448,7 @@ class TestDaemonLogTool:
         """Real logging into the ring buffer, torn down afterwards."""
         import io
 
-        from sbxloop.log import configure_logging
+        from lantern.log import configure_logging
 
         configure_logging("DEBUG", fmt="console", stream=io.StringIO())
         yield
@@ -2458,13 +2458,13 @@ class TestDaemonLogTool:
         configure_logging("DEBUG")
 
     def _emit(self) -> None:
-        from sbxloop.log import get_logger
+        from lantern.log import get_logger
 
-        log = get_logger("sbxloop.daemon.loop")
+        log = get_logger("lantern.daemon.loop")
         log.debug("daemon.tick", marker="sbxq")
         log.info("daemon.idle", queued=0, marker="sbxq")
         log.warning("breaker.open", failures=3, marker="sbxq")
-        get_logger("sbxloop.vcs.github.poll").error("github.poll_failed", status=502, marker="sbxq")
+        get_logger("lantern.vcs.github.poll").error("github.poll_failed", status=502, marker="sbxq")
 
     def test_real_log_records_reach_the_tool(self, tmp_path: Path, _logging: Any) -> None:
         self._emit()
@@ -2510,7 +2510,7 @@ class TestMemoryStaysOutOfTheDaemonLog:
 
     @pytest.fixture(autouse=True)
     def _buffer(self) -> Any:
-        from sbxloop.log import log_buffer
+        from lantern.log import log_buffer
 
         log_buffer().clear()
         yield
@@ -2520,7 +2520,7 @@ class TestMemoryStaysOutOfTheDaemonLog:
     def _logging(self) -> Any:
         import io
 
-        from sbxloop.log import configure_logging
+        from lantern.log import configure_logging
 
         configure_logging("DEBUG", fmt="console", stream=io.StringIO())
         yield
@@ -2529,9 +2529,9 @@ class TestMemoryStaysOutOfTheDaemonLog:
     def _kept(self, tmp_path: Path, calls: list[tuple[str, dict[str, Any]]]) -> tuple[str, Any]:
         """One turn in ``chan-a`` making ``calls``, and what an agent asking
         ``daemon_log`` from anywhere else would be quoted afterwards."""
-        from sbxloop.agents.memory import MemoryService, NoWorkspaceVisibility
-        from sbxloop.agents.tools import memory_tools
-        from sbxloop.config import MemoryConfig
+        from lantern.agents.memory import MemoryService, NoWorkspaceVisibility
+        from lantern.agents.tools import memory_tools
+        from lantern.config import MemoryConfig
 
         concierge, client, _, _, dstore = make(tmp_path, [{"calls": calls}])
         service = MemoryService(dstore, NoWorkspaceVisibility(), MemoryConfig(), lambda: 1_000.0)
@@ -2712,7 +2712,7 @@ class TestWatchRun:
     def test_concierge_module_has_no_discord_import(self) -> None:
         import re
 
-        from sbxloop.daemon import concierge as module
+        from lantern.daemon import concierge as module
 
         source = Path(str(module.__file__)).read_text(encoding="utf-8")
         assert re.search(r"^\s*(import|from)\s+discord", source, re.M) is None
@@ -2797,10 +2797,10 @@ class TestMultiRepo:
         (repos,) = client.responses
         assert repos.ok
         assert "3 configured repository(ies):" in repos.text
-        assert "- owner/one — enabled, base main, trigger label `sbxloop:run`" in repos.text
-        assert "- owner/two — enabled, base trunk, trigger label `sbxloop:run`" in repos.text
+        assert "- owner/one — enabled, base main, trigger label `lantern:run`" in repos.text
+        assert "- owner/two — enabled, base trunk, trigger label `lantern:run`" in repos.text
         assert (
-            "- owner/three — disabled, base (repo default), trigger label `sbxloop:run`"
+            "- owner/three — disabled, base (repo default), trigger label `lantern:run`"
             in repos.text
         )
         assert "daemon-wide" in repos.text
@@ -2860,7 +2860,7 @@ class TestSymptomFirstIssues:
     no symptom is refused with the question to ask."""
 
     def test_compose_structured_body(self) -> None:
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         body = compose_issue_body(
             {
@@ -2871,7 +2871,7 @@ class TestSymptomFirstIssues:
                     "no link-preview card appears under a bridge message",
                     "the bridge's own status cards still render",
                 ],
-                "body": "Seen in #sbxloop since the 1.0 deploy.",
+                "body": "Seen in #lantern since the 1.0 deploy.",
             }
         )
         assert body.startswith(
@@ -2887,11 +2887,11 @@ class TestSymptomFirstIssues:
             "## Acceptance criteria\n\n- [ ] no link-preview card appears under a bridge message\n"
             "- [ ] the bridge's own status cards still render" in body
         )
-        assert body.endswith("Seen in #sbxloop since the 1.0 deploy.")
+        assert body.endswith("Seen in #lantern since the 1.0 deploy.")
         assert body.index("## Symptom") < body.index("## Requested change") < body.index("## Goal")
 
     def test_a_fix_shaped_ask_without_a_symptom_is_refused_with_the_question(self) -> None:
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         with pytest.raises(ValueError, match="symptom is required") as exc:
             compose_issue_body({"requested_change": "remove the embeds", "goal": "cleaner"})
@@ -2900,7 +2900,7 @@ class TestSymptomFirstIssues:
             compose_issue_body({"symptom": "cards everywhere", "goal": "no cards"})
 
     def test_a_plain_body_still_files_as_is(self) -> None:
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         assert compose_issue_body({"body": "Wrap fetch()."}) == "Wrap fetch()."
         assert compose_issue_body({}) == ""
@@ -2941,7 +2941,7 @@ class TestSymptomFirstIssues:
         filed, refused = client.responses
         assert filed.ok and filed.text.startswith("created and queued issue #41")
         (_, title, body, labels) = github.created[0]
-        assert title.startswith("Suppress link-preview unfurls") and labels == ["sbxloop:run"]
+        assert title.startswith("Suppress link-preview unfurls") and labels == ["lantern:run"]
         assert body.startswith("## Symptom (as observed)\n\ngrey GitHub preview cards")
         assert "- [ ] no preview card appears" in body
         assert "Filed by Discord user `ana`" in body
@@ -3015,7 +3015,7 @@ class TestAssumedFiling:
     concierge's stated assumption instead of parking the goal forever."""
 
     def test_an_assumption_files_with_an_assumed_symptom_section(self) -> None:
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         body = compose_issue_body(
             {
@@ -3031,7 +3031,7 @@ class TestAssumedFiling:
         assert "- [ ] no preview card appears" in body
 
     def test_a_real_symptom_wins_over_an_assumption(self) -> None:
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         body = compose_issue_body(
             {
@@ -3047,7 +3047,7 @@ class TestAssumedFiling:
     def test_neither_symptom_nor_assumption_still_refuses(self) -> None:
         """The backstop that forces the ask stays; only the wait-forever
         failure mode is gone."""
-        from sbxloop.daemon.concierge import compose_issue_body
+        from lantern.daemon.concierge import compose_issue_body
 
         with pytest.raises(ValueError, match="symptom is required") as exc:
             compose_issue_body({"requested_change": "remove the embeds", "goal": "cleaner"})
@@ -3055,7 +3055,7 @@ class TestAssumedFiling:
         assert "never wait forever" in str(exc.value)
 
     def test_the_reply_carries_the_pending_filing(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.chat_choices import PendingFiling
+        from lantern.daemon.chat_choices import PendingFiling
 
         concierge, _client, _, _, _ = make(
             tmp_path,
@@ -3277,7 +3277,7 @@ class TestStartEntrygraph:
     def test_rejected_url_credentials_are_absent_from_tool_notes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.daemon import concierge as concierge_module
+        from lantern.daemon import concierge as concierge_module
 
         notes: list[dict[str, Any]] = []
         logged: list[dict[str, Any]] = []
@@ -3466,13 +3466,13 @@ class TestStartWorkload:
         assert job.system_message is not None
         assert "`research` (default): sinks issue, artifact — reads the web" in job.system_message
         assert "`quiet`: sinks chat only" in job.system_message
-        assert "sbxloop:workload" in job.system_message
+        assert "lantern:workload" in job.system_message
         (tool,) = [t for t in job.host_tools if t.name == "start_workload"]
         assert tool.parameters["properties"]["sink"]["enum"] == ["chat", "issue", "artifact", "pr"]
         assert tool.parameters["required"] == ["ask"]
         # #797: the description says the subject is unbounded and the call is
         # never gated on a "want me to queue it?" question
-        assert "any subject, whether or not it concerns sbxloop" in tool.description
+        assert "any subject, whether or not it concerns lantern" in tool.description
         assert "never ask whether to queue it" in tool.description
 
 
@@ -4035,7 +4035,7 @@ class TestSetConfig:
         )
         assert resp.text.endswith("Nothing was written.")
         assert self._text(concierge) == seed
-        assert not list(concierge.config.paths.config.glob("sbxloop.toml.bak-*"))
+        assert not list(concierge.config.paths.config.glob("lantern.toml.bak-*"))
         assert not loop.restarts
         _, bad, _, _ = self._run(
             tmp_path / "bad",
@@ -4055,10 +4055,10 @@ class TestSetConfig:
             lines[0]
             == f"set `daemon.max_runs_per_day` = 20 in {concierge.config.paths.config_toml}"
         )
-        assert lines[1].startswith("previous kept as sbxloop.toml.bak-")
+        assert lines[1].startswith("previous kept as lantern.toml.bak-")
         assert lines[-1].startswith("restarting after the current run once this reply is posted")
         assert self._text(concierge) == "[daemon]\nmax_runs_per_day = 20\n"
-        assert list(concierge.config.paths.config.glob("sbxloop.toml.bak-*"))
+        assert list(concierge.config.paths.config.glob("lantern.toml.bak-*"))
         # nothing has happened to the daemon yet: the restart rides the reply
         assert not loop.restarts and not getattr(loop, "stopped", False)
         assert reply.after is not None
@@ -4153,7 +4153,7 @@ class TestSetConfig:
     def test_a_key_another_layer_sets_is_written_and_flagged(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("SBXLOOP_DAEMON__POLL_INTERVAL_S", "5.0")
+        monkeypatch.setenv("LANTERN_DAEMON__POLL_INTERVAL_S", "5.0")
         concierge, resp, _, _ = self._run(
             tmp_path,
             {
@@ -4459,7 +4459,7 @@ class TestConcurrentTurns:
                 concierge.submit_turn(
                     "ask channel",
                     author="b",
-                    session_key="channel-1:angie",
+                    session_key="channel-1:lantern",
                     handoff=lambda agent, message: "q",
                 ),
             ]
@@ -4486,7 +4486,7 @@ class TestConcurrentTurns:
             futures = [
                 concierge.submit_turn("hold bridge a", author="a"),
                 concierge.submit_turn("ask bridge b", author="b"),
-                concierge.submit_turn("ask channel", author="c", session_key="channel-1:angie"),
+                concierge.submit_turn("ask channel", author="c", session_key="channel-1:lantern"),
             ]
             assert futures[2].result(timeout=5).text == "done ask channel"
             assert not futures[0].done() and not futures[1].done()
@@ -4595,21 +4595,21 @@ class TestConcurrentTurns:
         concierge, client, _, _, _ = make(tmp_path, [{"text": "a"}, {"text": "b"}])
         try:
             concierge.submit_turn("hi", author="x").result(timeout=10)
-            concierge.submit_turn("hi", author="x", session_key="channel-1:angie").result(
+            concierge.submit_turn("hi", author="x", session_key="channel-1:lantern").result(
                 timeout=10
             )
         finally:
             concierge.close()
-        digest = hashlib.sha256(b"channel-1:angie").hexdigest()[:24]
+        digest = hashlib.sha256(b"channel-1:lantern").hexdigest()[:24]
         assert [job.run_id for job in client.jobs] == ["concierge", f"concierge:{digest}"]
         assert concierge_run_id(None) == CONCIERGE_RUN_ID == "concierge"
-        assert concierge_run_id("channel-1:angie") == f"concierge:{digest}"
+        assert concierge_run_id("channel-1:lantern") == f"concierge:{digest}"
 
     def test_an_interrupted_call_in_one_session_does_not_block_another(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.provider import ProviderRecovery
-        from sbxloop.worker.client import WorkerClient
+        from lantern.provider import ProviderRecovery
+        from lantern.worker.client import WorkerClient
         from tests.unit.test_provider_recovery import rejected
 
         concierge, _, host, _, _ = make(tmp_path, [], config={"agent": {"backend": "claude"}})
@@ -4650,9 +4650,9 @@ class TestConcurrentTurns:
         # bridge turn parks the provider for everyone.
         from sqlalchemy import update
 
-        from sbxloop.db.engine_models import ProviderJobRow
-        from sbxloop.provider import ProviderRecovery
-        from sbxloop.worker.client import WorkerClient
+        from lantern.db.engine_models import ProviderJobRow
+        from lantern.provider import ProviderRecovery
+        from lantern.worker.client import WorkerClient
         from tests.unit.test_provider_recovery import rejected
 
         concierge, _, host, _, _ = make(tmp_path, [], config={"agent": {"backend": "claude"}})

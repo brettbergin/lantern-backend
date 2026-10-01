@@ -1,4 +1,4 @@
-"""Raw state databases in the shapes released sbxloop versions wrote (#524).
+"""Raw state databases in the shapes released lantern versions wrote (#524).
 
 A store migrates in place on open (``CREATE TABLE IF NOT EXISTS`` plus
 idempotent ``ALTER``s), so the only test that proves an upgrade path is one

@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.gitlab.ops import GitlabOps, _undrafted_title
-from sbxloop.vcs.model import CredentialInfo, MergeOutcome, QueueEntry, QueueState
-from sbxloop.vcs.protocol import Capability
+from lantern.errors import GithubOpsError
+from lantern.vcs.gitlab.ops import GitlabOps, _undrafted_title
+from lantern.vcs.model import CredentialInfo, MergeOutcome, QueueEntry, QueueState
+from lantern.vcs.protocol import Capability
 from tests.fakes.fake_gitlab import FakeGitlab
 
 REPO = "acme/widgets"
@@ -18,21 +18,21 @@ MR = "/projects/acme%2Fwidgets/merge_requests"
 
 
 def ready(fake: FakeGitlab, iid: int = 1, **seed: object) -> FakeGitlab:
-    fake.seed_mr(iid, source_branch="sbxloop/r1", head_sha="commit0", **seed)  # type: ignore[arg-type]
+    fake.seed_mr(iid, source_branch="lantern/r1", head_sha="commit0", **seed)  # type: ignore[arg-type]
     return fake
 
 
 class TestUndraft:
     def test_the_prefix_is_the_whole_of_a_draft(self) -> None:
-        assert _undrafted_title("Draft: sbxloop: ship it") == "sbxloop: ship it"
+        assert _undrafted_title("Draft: lantern: ship it") == "lantern: ship it"
         assert _undrafted_title("WIP: x") == "x"
         assert _undrafted_title("[Draft] x") == "x"
         assert _undrafted_title("ready") == "ready"
 
     def test_ready_for_review_retitles_once(self) -> None:
-        fake = ready(FakeGitlab(), title="Draft: sbxloop: ship it")
+        fake = ready(FakeGitlab(), title="Draft: lantern: ship it")
         assert fake.pr_ready_for_review("1!1") is True
-        assert fake.mr_updates == [(1, {"title": "sbxloop: ship it"})]
+        assert fake.mr_updates == [(1, {"title": "lantern: ship it"})]
         assert fake.pr_get(REPO, 1)["draft"] is False
         assert fake.pr_ready_for_review("1!1") is True
         assert len(fake.mr_updates) == 1, "a request not in draft is left alone"
@@ -154,7 +154,7 @@ class TestCredential:
         info = FakeGitlab().credential_info()
         assert info == CredentialInfo(
             kind="GitLab access token",
-            name="sbxloop",
+            name="lantern",
             scopes=("api",),
             expires_at="2026-11-11",
             active=True,

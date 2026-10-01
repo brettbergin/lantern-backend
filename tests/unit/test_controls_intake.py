@@ -8,16 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.controls import ControlError, ControlService, Principal
-from sbxloop.daemon.controls.intake import (
+from lantern.config import Config
+from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.controls.intake import (
     IssueAdmission,
     ToolAdmission,
     WorkloadAdmission,
     build_item,
     target_key,
 )
-from sbxloop.daemon.controls.operations import IdempotencyConflict, OperationReplay
+from lantern.daemon.controls.operations import IdempotencyConflict, OperationReplay
 from tests.unit.test_daemon_loop import Harness
 
 CLIENT = Principal(

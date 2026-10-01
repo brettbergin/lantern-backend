@@ -1,8 +1,8 @@
-# How sbxloop deploys itself
+# How Lantern deploys itself
 
 **This is a reference for this repository's own daemon host, not a guide.** The generic
 procedure — running the daemon as a service, upgrading it by hand, automating that with a
-workflow — is [docs/deploy.md](deploy.md). This page records where sbxloop's own pipeline
+workflow — is [docs/deploy.md](deploy.md). This page records where lantern's own pipeline
 departs from that pattern and the facts about the host that operating it needs.
 
 ```
@@ -13,7 +13,7 @@ merge to main → coalesced request → Release (verify + tag + GitHub Release) 
                                                  ├─ wait — no cap — for the in-flight run to finish
                                                  ├─ refresh to the latest complete release
                                                  ├─ pip install the release wheels
-                                                 ├─ systemctl --user restart sbxloop-daemon
+                                                 ├─ systemctl --user restart lantern-daemon
                                                  ├─ health check, or roll back
                                                  └─ restore the other holds + tell the control channel
 ```
@@ -62,37 +62,37 @@ health; reports and history use that final version.
   was the last on PyPI), and the names a rename moves to are not ours on any index, so
   neither package is ever installed by name. The helper downloads the release's exact
   wheel files, checking each asset's size and SHA-256 digest, and `verify-download` checks
-  them against the manifest. The host wheel pins `sbxloop-worker==X` exactly, and naming
+  them against the manifest. The host wheel pins `lantern-worker==X` exactly, and naming
   the local worker wheel satisfies that pin without the index being consulted. Rollback
   fetches the previous version's wheels from its own release the same way. Both install
   `[discord,slack]` (#619) so a rollback never drops an extra the upgrade had.
 - **Manifest.** New releases carry `release-manifest.json`; the downloaded wheels must
   match its hashes and its commit must match the release tag. Existing completed releases
   without that manifest remain deployable for rollback compatibility.
-- **Deployment state.** `state/deploy.json` under the resolved sbxloop home records the
+- **Deployment state.** `state/deploy.json` under the resolved Lantern home records the
   last completion time, versions suppressed after attempts/rollbacks, and whether an
   upgrade was interrupted. Writes replace the file atomically. Malformed state and an
   interrupted or unhealthy deployment block automatic work and name the recovery need.
 - **`GH_TOKEN` is set explicitly** on every step calling `gh`. The host's `secrets.env`
-  exports its own `GH_TOKEN`, and the `sbxloop` wrapper sources it with `set -a`; without
+  exports its own `GH_TOKEN`, and the `lantern` wrapper sources it with `set -a`; without
   the override, a host PAT would be the identity for Actions API calls.
-- **The home.** Everything is under `~/.sbxloop`, exactly the layout the generic guide
-  describes; the tokens live in `~/.sbxloop/config/secrets.env` (mode 0600; shape: the
-  repo-root [`.env.example`](../.env.example)), read by sbxloop itself. The job never
+- **The home.** Everything is under `~/.lantern`, exactly the layout the generic guide
+  describes; the tokens live in `~/.lantern/config/secrets.env` (mode 0600; shape: the
+  repo-root [`.env.example`](../.env.example)), read by Lantern itself. The job never
   reads that file (#639): `ctl status --json`, `backup` and `daemon notify` go through the
   launcher, from whatever directory the runner happens to be in. Deploy notices land in
-  `#sbxloop-deploys`; the trusted workflow helper selects that channel through the installed
+  `#lantern-deploys`; the trusted workflow helper selects that channel through the installed
   notifier's original API, so routing also works before an upgrade or after a rollback. The
-  daemon's normal control traffic remains in `#sbxloop`.
+  daemon's normal control traffic remains in `#lantern`.
 - **PDF analyzer identity.** Before a changed release takes the deploy hold, the job
-  signs in to Docker under the separate `sbxloop-analysis` app with repository
+  signs in to Docker under the separate `lantern-analysis` app with repository
   Docker Hub secrets and initializes a deny-all policy once. The PDF worker runs with no
   agent skills, credentials or network access. A missing Docker Hub secret fails
   the deployment before the installed daemon is changed.
 
 ## The host
 
-`db`, one user, three user units alongside each other: `sbxloop-daemon`, `sbx-sandboxd`
+`db`, one user, three user units alongside each other: `lantern-daemon`, `sbx-sandboxd`
 (the sandbox backend, which the daemon unit `Requires=`), and `github-runner` (the Actions
 runner, as the same user so the workflow can `systemctl --user restart`). Deploying by hand
 and the layout table are in the generic guide; the paths above are the only deltas.
@@ -100,17 +100,17 @@ and the layout table are in the generic guide; the paths above are the only delt
 The runner is registered with the label `db`:
 
 ```bash
-./config.sh --url https://github.com/brettbergin/sbxloop \
-  --token "$(gh api -X POST repos/brettbergin/sbxloop/actions/runners/registration-token --jq .token)" \
+./config.sh --url https://github.com/brettbergin/lantern-backend \
+  --token "$(gh api -X POST repos/brettbergin/lantern-backend/actions/runners/registration-token --jq .token)" \
   --name db --labels db --work _work --unattended --replace
 ```
 
-Confirm with `gh api repos/brettbergin/sbxloop/actions/runners --jq '.runners[].status'`.
+Confirm with `gh api repos/brettbergin/lantern-backend/actions/runners --jq '.runners[].status'`.
 
 **The host is one variable** (#640). The workflow targets
-`runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST || 'db' }}"]` and calls the host by
+`runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]` and calls the host by
 the same name in its notices. To move the daemon: set the repository variable
-`SBXLOOP_DEPLOY_HOST` to the new host's runner label and register a runner there with that
+`LANTERN_DEPLOY_HOST` to the new host's runner label and register a runner there with that
 label. `deploy.yml` does not change, and neither does anything `make check` runs.
 
 ## Operating it
@@ -123,15 +123,15 @@ gh workflow run deploy.yml --ref main -f version=X.Y.Z
 gh workflow run deploy.yml --ref main
 
 gh run watch                                            # from the repo
-ssh db 'journalctl --user -u sbxloop-daemon -f'         # from the host
-ssh db 'systemctl --user status github-runner sbx-sandboxd sbxloop-daemon'
+ssh db 'journalctl --user -u lantern-daemon -f'         # from the host
+ssh db 'systemctl --user status github-runner sbx-sandboxd lantern-daemon'
 ```
 
 Rolling back is just deploying the older version — the workflow pins exactly. A rollback
 passes only after its version, service, doctor and control checks pass. If a deploy
 fails *and* its rollback fails, the job says `ROLLBACK ALSO FAILED — db needs a human`; fix
 by hand with the commands in the generic guide, from any directory. Every deploy leaves a
-snapshot under `~/.sbxloop/backups/` and a line in `~/.sbxloop/logs/deploy/history.log`.
+snapshot under `~/.lantern/backups/` and a line in `~/.lantern/logs/deploy/history.log`.
 
 Manual deploys bypass the cooldown and failed-version suppression, but wait for the
 shared deployment slot and for the current daemon task to drain. Pending manual requests
@@ -151,7 +151,7 @@ The control channel sees actual draining, a changed target after draining, and t
 deployment or rollback outcome. Normal successful upgrades are spaced apart; manual
 operations and necessary rollback recovery can restart sooner.
 
-Set `[daemon] version_check = false` in this host's `sbxloop.toml` (#641): the pipeline keeps it current,
+Set `[daemon] version_check = false` in this host's `lantern.toml` (#641): the pipeline keeps it current,
 so the daemon neither asks GitHub Releases nor advises a hand upgrade the next deploy would undo. A
 stale host shows up as a failed or skipped **Deploy the daemon** run — check that, not the
 concierge.
@@ -168,12 +168,24 @@ running daemon can strand it. Each one is recorded here with its manual step.
   the generic guide), and every deploy after that is unattended again.
 - **1.0 (state and config).** The steps a 0.7.x host needs are in the
   [CHANGELOG under "1.0 cutover"](../CHANGELOG.md#10-cutover).
-- **The home.** Every path moved under `~/.sbxloop` and the deploy job's paths with them,
+- **The home.** Every path moved under `~/.lantern` and the deploy job's paths with them,
   so the first deploy after it lands fails at "Resolve host paths"' consumers (no
-  `~/.sbxloop/bin/sbxloop` yet) *before installing anything*. The one manual step, once,
+  `~/.lantern/bin/lantern` yet) *before installing anything*. The one manual step, once,
   as the service user: install the release into a fresh home and migrate the old
   installation into it —
-  `SBXLOOP_VERSION=X.Y.Z SBXLOOP_INIT_ARGS="--migrate --purge --runner $HOME/actions-runner" sh <(curl -fsSL …/scripts/install.sh)`
-  — then `sbxloop doctor` and re-run the deploy. The migration backs up the old config,
-  secrets, units and every `state.db` it finds to `~/.sbxloop/backups/<stamp>-migrate/`
+  `LANTERN_VERSION=X.Y.Z LANTERN_INIT_ARGS="--migrate --purge --runner $HOME/actions-runner" sh <(curl -fsSL …/scripts/install.sh)`
+  — then `lantern doctor` and re-run the deploy. The migration backs up the old config,
+  secrets, units and every `state.db` it finds to `~/.lantern/backups/<stamp>-migrate/`
   first.
+- **sbxloop became Lantern.** The package, CLI, environment prefix, config file, unit
+  and home were all renamed (`lantern`, `LANTERN_*`, `lantern.toml`, `lantern-daemon`,
+  `~/.lantern`) with no aliases, so "Deploy the daemon" stops at "Resolve host paths" on a
+  host that still has `~/.sbxloop`. Run **Cut over from sbxloop** once
+  (`gh workflow run cutover-from-sbxloop.yml --ref main -f version=X.Y.Z`): it drains and
+  stops `sbxloop-daemon`, installs the release into a fresh home with
+  `lantern init --from-sbxloop ~/.sbxloop` (config, secrets, App key and workspaces carried
+  and renamed; state starts fresh), starts `lantern-daemon` and health-checks it, and puts
+  sbxloop back if anything fails. `~/.sbxloop` is left untouched as the rollback until
+  `-f purge=true` removes it. Configuration management that writes into the home (Ansible
+  roles for OIDC or push) must target `~/.lantern/config/lantern.toml` and
+  `LANTERN_OIDC_CLIENT_SECRET` from then on.

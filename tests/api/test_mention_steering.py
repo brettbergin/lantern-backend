@@ -23,13 +23,13 @@ from typing import Any
 
 from alembic import command
 
-from sbxloop.agents.assignment import AgentAssignment, plan_assignment
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Principal
-from sbxloop.daemon.controls.results import CancelOutcome
-from sbxloop.db import open_engine
-from sbxloop.db.schema import _config
-from sbxloop.engine.model import TaskSpec
+from lantern.agents.assignment import AgentAssignment, plan_assignment
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Principal
+from lantern.daemon.controls.results import CancelOutcome
+from lantern.db import open_engine
+from lantern.db.schema import _config
+from lantern.engine.model import TaskSpec
 from tests.api.conftest import Api
 from tests.api.test_channel_access import _invite
 from tests.api.test_collaboration import FakeConcierge, bearer, register

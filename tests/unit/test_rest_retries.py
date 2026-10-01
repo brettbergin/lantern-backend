@@ -12,8 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop_worker import githubops
-from sbxloop_worker.githubops import GithubOpError, RestTransport
+from lantern_worker import githubops
+from lantern_worker.githubops import GithubOpError, RestTransport
 
 
 def test_rate_limited_read_honors_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:

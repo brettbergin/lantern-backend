@@ -24,14 +24,14 @@ from typing import Any
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.daemon.controls.intake import PlanAdmission, plan_item
-from sbxloop.daemon.discord import DiscordBridge
-from sbxloop.engine.planning import PlanQuestion
-from sbxloop.events import HostEventTypes
-from sbxloop.ghids import api_item_id
-from sbxloop_worker.protocol import Event
+from lantern import hostgit
+from lantern.config import Config
+from lantern.daemon.controls.intake import PlanAdmission, plan_item
+from lantern.daemon.discord import DiscordBridge
+from lantern.engine.planning import PlanQuestion
+from lantern.events import HostEventTypes
+from lantern.ghids import api_item_id
+from lantern_worker.protocol import Event
 from tests.conftest import FakeSbx
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_daemon_discord import (

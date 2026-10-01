@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import SbxError
-from sbxloop.worker.hosttools import MAX_RESPONSE_CHARS, HostToolBroker
-from sbxloop_worker.protocol import (
+from lantern.errors import SbxError
+from lantern.worker.hosttools import MAX_RESPONSE_CHARS, HostToolBroker
+from lantern_worker.protocol import (
     Event,
     EventTypes,
     HostToolCall,
@@ -47,7 +47,7 @@ def job() -> JobRequest:
         kind="agent.session",
         prompt="hi",
         host_tools=[HostToolSpec(name="echo_back", description="x")],
-        host_tools_dir="/home/agent/.sbxloop/tools/j1",
+        host_tools_dir="/home/agent/.lantern/tools/j1",
     )
 
 
@@ -66,7 +66,7 @@ def wait_for(pred: Any, timeout: float = 5.0) -> None:
 
 def parse(sandbox: RecordingSandbox, call_id: str) -> HostToolResponse:
     return HostToolResponse.model_validate_json(
-        sandbox.written[f"/home/agent/.sbxloop/tools/j1/{call_id}.json"]
+        sandbox.written[f"/home/agent/.lantern/tools/j1/{call_id}.json"]
     )
 
 
@@ -155,7 +155,7 @@ class TestBroker:
         broker.dispatch(request())
         assert done.wait(5)
         broker.close()  # in-flight write fails silently; close still cleans up
-        assert ["rm", "-rf", "/home/agent/.sbxloop/tools/j1"] in sandbox.execs
+        assert ["rm", "-rf", "/home/agent/.lantern/tools/j1"] in sandbox.execs
 
     def test_close_cancels_pending_and_removes_tools_dir(self) -> None:
         sandbox = RecordingSandbox()
@@ -170,10 +170,10 @@ class TestBroker:
         broker.dispatch(request("c2"))  # queued behind c1 on the single worker
         broker.close()
         release.set()
-        wait_for(lambda: "/home/agent/.sbxloop/tools/j1/c1.json" in sandbox.written)
+        wait_for(lambda: "/home/agent/.lantern/tools/j1/c1.json" in sandbox.written)
         time.sleep(0.05)
-        assert "/home/agent/.sbxloop/tools/j1/c2.json" not in sandbox.written
-        assert sandbox.execs[-1] == ["rm", "-rf", "/home/agent/.sbxloop/tools/j1"]
+        assert "/home/agent/.lantern/tools/j1/c2.json" not in sandbox.written
+        assert sandbox.execs[-1] == ["rm", "-rf", "/home/agent/.lantern/tools/j1"]
 
     def test_requires_tools_dir(self) -> None:
         plain = JobRequest(job_id="j1", run_id="r1", kind="agent.session", prompt="hi")

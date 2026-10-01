@@ -10,12 +10,12 @@ round says the problem is fixed.
 
 from __future__ import annotations
 
-from sbxloop.engine.reconcile import (
+from lantern.engine.reconcile import (
     confirm_body,
     confirm_marker,
     post_confirmations,
 )
-from sbxloop.engine.review import (
+from lantern.engine.review import (
     CarriedVerdict,
     ReviewFinding,
     ReviewRound,
@@ -24,9 +24,9 @@ from sbxloop.engine.review import (
     review_body,
     split_carried,
 )
-from sbxloop.engine.store import PostedRecord
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import ReviewComment
+from lantern.engine.store import PostedRecord
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import ReviewComment
 from tests.fakes.fake_github import FakeGithub
 
 REPO = "o/r"

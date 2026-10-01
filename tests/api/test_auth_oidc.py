@@ -26,17 +26,17 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import ValidationError
 from sqlalchemy import select, update
 
-from sbxloop.api.auth import oidc
-from sbxloop.config import ApiOidcConfig, Config, load_config
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES, ROLE_CAPABILITIES
-from sbxloop.db.api_models import ApiEventRow, ClientRow
-from sbxloop.db.collaboration_models import LocalUserRow
+from lantern.api.auth import oidc
+from lantern.config import ApiOidcConfig, Config, load_config
+from lantern.daemon.controls.principal import ALL_CAPABILITIES, ROLE_CAPABILITIES
+from lantern.db.api_models import ApiEventRow, ClientRow
+from lantern.db.collaboration_models import LocalUserRow
 from tests.api.conftest import Api, build
 
-ISSUER = "https://idp.example.test/application/o/angie/"
-CLIENT_ID = "angie"
+ISSUER = "https://idp.example.test/application/o/lantern/"
+CLIENT_ID = "lantern"
 SECRET = "oidc-client-secret-value-7f3a9c-0b1d2e3f4a5b6c7d"  # nosec B105 - test fixture
-REDIRECT = "https://angie.example.test/auth/callback"
+REDIRECT = "https://lantern.example.test/auth/callback"
 NONCE = "nonce-0123456789abcdef"
 VERIFIER = "v" * 64
 KID = "key-1"
@@ -142,7 +142,7 @@ def idp(monkeypatch: pytest.MonkeyPatch) -> FakeIdP:
 
     fake = FakeIdP(clock=Clock())
     monkeypatch.setattr(oidc, "http_request", fake)
-    monkeypatch.setenv("SBXLOOP_OIDC_CLIENT_SECRET", SECRET)
+    monkeypatch.setenv("LANTERN_OIDC_CLIENT_SECRET", SECRET)
     return fake
 
 
@@ -209,7 +209,7 @@ def test_providers_offer_only_local_login_when_oidc_is_off(api: Api) -> None:
         "local": True,
         "oidc": None,
         "policy_version": 1,
-        "assistant_name": "Angie",
+        "assistant_name": "Lantern",
         "oidc_session_max_age_s": None,
     }
     features = api.client.get("/v1/capabilities", headers=api.bearer()).json()["features"]
@@ -225,7 +225,7 @@ def test_providers_describe_the_configured_provider_without_a_token(
     assert response.json() == {
         "local": True,
         "policy_version": 1,
-        "assistant_name": "Angie",
+        "assistant_name": "Lantern",
         "oidc_session_max_age_s": 28800,
         "oidc": {
             "id": "authentik",
@@ -252,7 +252,7 @@ def test_providers_offer_no_oidc_when_discovery_fails(served: Api, idp: FakeIdP)
         "local": True,
         "oidc": None,
         "policy_version": 1,
-        "assistant_name": "Angie",
+        "assistant_name": "Lantern",
         "oidc_session_max_age_s": 28800,
     }
 
@@ -651,7 +651,7 @@ def test_a_concurrent_first_sign_in_is_answered_with_a_retryable_conflict(
 ) -> None:
     from sqlalchemy.exc import IntegrityError
 
-    from sbxloop.api.collaboration import CollaborationStore
+    from lantern.api.collaboration import CollaborationStore
 
     def collide(self: Any, **_: Any) -> Any:
         raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
@@ -954,7 +954,7 @@ def test_a_person_without_an_email_still_provisions(served: Api, idp: FakeIdP) -
 def test_existing_configuration_without_the_section_still_loads() -> None:
     config = Config.model_validate({"api": {"enabled": True}})
     assert config.api.oidc.enabled is False
-    assert config.api.oidc.client_secret_env == "SBXLOOP_OIDC_CLIENT_SECRET"
+    assert config.api.oidc.client_secret_env == "LANTERN_OIDC_CLIENT_SECRET"
     assert config.api.oidc.scopes == ["openid", "email", "profile"]
     assert config.api.oidc.algorithms == ["RS256", "ES256"]
 
@@ -972,7 +972,7 @@ def test_the_audience_defaults_to_the_client_id() -> None:
         {"client_id": ""},
         {"redirect_uris": []},
         {"issuer": "http://idp.example.test/"},
-        {"redirect_uris": ["http://angie.example.test/auth/callback"]},
+        {"redirect_uris": ["http://lantern.example.test/auth/callback"]},
         {"redirect_uris": ["not a url"]},
         {"algorithms": ["HS256"]},
         {"algorithms": ["none"]},
@@ -980,7 +980,7 @@ def test_the_audience_defaults_to_the_client_id() -> None:
         {"scopes": ["email"]},
         {"default_role": "owner"},
         {"client_secret_env": "not a name"},
-        {"client_secret_env": "SBXLOOP_OTHER_SECRET"},
+        {"client_secret_env": "LANTERN_OTHER_SECRET"},
     ],
 )
 def test_an_enabled_provider_must_be_complete_and_safe(overrides: dict[str, Any]) -> None:
@@ -1012,7 +1012,7 @@ def test_native_redirects_default_to_none() -> None:
     [
         ("app:/cb", "reverse-DNS"),
         ("myapp://callback", "reverse-DNS"),
-        ("https://angie.example.test/auth/callback", "private-use"),
+        ("https://lantern.example.test/auth/callback", "private-use"),
         ("http://localhost:3000/cb", "private-use"),
         ("com.example.app:", "path"),
         ("com.example.app:/cb#frag", "fragment"),
@@ -1042,11 +1042,11 @@ def test_plain_http_is_allowed_only_for_localhost() -> None:
     config = ApiOidcConfig.model_validate(
         {
             **OIDC,
-            "issuer": "http://localhost:9000/application/o/angie/",
+            "issuer": "http://localhost:9000/application/o/lantern/",
             "redirect_uris": ["http://localhost:3000/auth/callback", "http://127.0.0.1:3000/cb"],
         }
     )
-    assert config.issuer == "http://localhost:9000/application/o/angie/"
+    assert config.issuer == "http://localhost:9000/application/o/lantern/"
 
 
 def test_a_disabled_provider_needs_nothing() -> None:
@@ -1054,7 +1054,7 @@ def test_a_disabled_provider_needs_nothing() -> None:
 
 
 def test_the_secret_variable_is_not_read_as_a_setting(tmp_path: Path) -> None:
-    config = load_config(tmp_path, env={"SBXLOOP_OIDC_CLIENT_SECRET": SECRET})
+    config = load_config(tmp_path, env={"LANTERN_OIDC_CLIENT_SECRET": SECRET})
     assert SECRET not in config.model_dump_json()
 
 
@@ -1209,7 +1209,7 @@ def test_a_redirected_key_set_is_reported_unavailable(no_proxy: None) -> None:
 def test_a_redirected_token_endpoint_fails_without_replaying_the_secret(no_proxy: None) -> None:
     with _Recorder({}) as elsewhere, _Recorder({}) as provider:
         _live_provider(provider, elsewhere, **{"/token": True})
-        env = {"SBXLOOP_OIDC_CLIENT_SECRET": SECRET}
+        env = {"LANTERN_OIDC_CLIENT_SECRET": SECRET}
         live = oidc.OidcProvider(_live_config(provider), clock=lambda: 0.0, env=env)
         with pytest.raises(oidc.OidcError) as caught:
             live.exchange(

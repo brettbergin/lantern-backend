@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.errors import SecretStateError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.secretstate import (
+from lantern.errors import SecretStateError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.secretstate import (
     COPILOT_TOKEN_ENV,
     COPILOT_TOKEN_HOST,
     Assessment,
@@ -23,23 +23,23 @@ from tests.conftest import FakeSbx
 
 EXISTS_STDERR = (
     'ERROR: custom secret env "COPILOT_GITHUB_TOKEN" already exists in scope '
-    "sbxloop-r1-agent with placeholder sbx-cs-abc123."
+    "lantern-r1-agent with placeholder sbx-cs-abc123."
 )
 
 
 class TestParsing:
     def test_parsed_scope_variants(self) -> None:
-        assert parsed_scope(EXISTS_STDERR) == "sbxloop-r1-agent"
+        assert parsed_scope(EXISTS_STDERR) == "lantern-r1-agent"
         assert parsed_scope('already exists in scope "quoted-scope" with x') == "quoted-scope"
         assert parsed_scope("some unrelated error") is None
 
     def test_ls_entry_sandbox_scope_and_host(self) -> None:
         raw = (
             "SCOPE  TYPE  NAME  HOST\n"
-            "sbxloop-r1-agent  custom  COPILOT_GITHUB_TOKEN  api.github.com\n"
+            "lantern-r1-agent  custom  COPILOT_GITHUB_TOKEN  api.github.com\n"
         )
         entry = parse_secret_ls_entry(raw, COPILOT_TOKEN_ENV)
-        assert entry == ("sbxloop-r1-agent", ["api.github.com"])
+        assert entry == ("lantern-r1-agent", ["api.github.com"])
 
     def test_ls_entry_global_spellings(self) -> None:
         for spelling in ("global", "-g"):
@@ -75,12 +75,12 @@ class TestInspect:
             host=COPILOT_TOKEN_HOST,
             env=COPILOT_TOKEN_ENV,
             value="tok",
-            sandbox="sbxloop-r1-agent",
+            sandbox="lantern-r1-agent",
         )
         state = inspect_custom_secret(cli, COPILOT_TOKEN_ENV, host=COPILOT_TOKEN_HOST)
         assert state.exists is True
         assert state.source == "ls"
-        assert state.scope == "sbxloop-r1-agent"
+        assert state.scope == "lantern-r1-agent"
         assert state.hosts == [COPILOT_TOKEN_HOST]
 
     def test_absent_secret_probed_and_no_sentinel_left(self, fake_sbx: FakeSbx) -> None:
@@ -96,13 +96,13 @@ class TestInspect:
             host=COPILOT_TOKEN_HOST,
             env=COPILOT_TOKEN_ENV,
             value="tok",
-            sandbox="sbxloop-r1-agent",
+            sandbox="lantern-r1-agent",
         )
         fake_sbx.script("secret ls", returncode=1, stderr="unknown command")
         state = inspect_custom_secret(cli, COPILOT_TOKEN_ENV, host=COPILOT_TOKEN_HOST)
         assert state.exists is True
         assert state.source == "probe"
-        assert state.scope == "sbxloop-r1-agent"  # parsed from the exists-error
+        assert state.scope == "lantern-r1-agent"  # parsed from the exists-error
         # probing never clobbered the real registration
         assert self.custom_state(fake_sbx)[COPILOT_TOKEN_ENV]["value"] == "tok"
 
@@ -133,12 +133,12 @@ class TestAssess:
         assert judgement.status == "ok" and not judgement.stale
 
     def test_dead_sandbox_scope_is_stale(self) -> None:
-        judgement = self.judge(self.state(exists=True, scope="sbxloop-old-agent"))
+        judgement = self.judge(self.state(exists=True, scope="lantern-old-agent"))
         assert judgement.status == "warn" and judgement.stale and judgement.owned
 
     def test_live_sandbox_scope_is_ok_but_owned(self) -> None:
         judgement = self.judge(
-            self.state(exists=True, scope="sbxloop-r1-agent"), live={"sbxloop-r1-agent"}
+            self.state(exists=True, scope="lantern-r1-agent"), live={"lantern-r1-agent"}
         )
         assert judgement.status == "ok" and not judgement.stale and judgement.owned
 
@@ -175,10 +175,10 @@ class TestRemovalAndRotation:
             host=COPILOT_TOKEN_HOST,
             env=COPILOT_TOKEN_ENV,
             value="tok",
-            sandbox="sbxloop-old-agent",
+            sandbox="lantern-old-agent",
         )
         state = CustomSecretState(
-            env=COPILOT_TOKEN_ENV, exists=True, scope="sbxloop-old-agent", detail=EXISTS_STDERR
+            env=COPILOT_TOKEN_ENV, exists=True, scope="lantern-old-agent", detail=EXISTS_STDERR
         )
         assert any(rm() for rm in removal_ladder(cli, state, host=COPILOT_TOKEN_HOST))
         assert self.custom_state(fake_sbx) == {}
@@ -189,7 +189,7 @@ class TestRemovalAndRotation:
             host="wrong.example.com",
             env=COPILOT_TOKEN_ENV,
             value="old",
-            sandbox="sbxloop-old-agent",
+            sandbox="lantern-old-agent",
         )
         replace_registration(cli, env=COPILOT_TOKEN_ENV, host=COPILOT_TOKEN_HOST, token="new")
         entry = self.custom_state(fake_sbx)[COPILOT_TOKEN_ENV]

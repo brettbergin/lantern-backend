@@ -1,5 +1,5 @@
-"""Doctor and Secrets: the report ``sbxloop doctor`` prints, in a worker
-against the fake sbx, and the registrations ``sbxloop secrets`` judges."""
+"""Doctor and Secrets: the report ``lantern doctor`` prints, in a worker
+against the fake sbx, and the registrations ``lantern secrets`` judges."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from typing import Any
 import pytest
 from textual.widgets import Input
 
-from sbxloop.cli.doctor import doctor_report
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.secretstate import (
+from lantern.cli.doctor import doctor_report
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.secretstate import (
     COPILOT_TOKEN_ENV,
     COPILOT_TOKEN_HOST,
     clean_secrets,
@@ -20,11 +20,11 @@ from sbxloop.sbx.secretstate import (
     secret_rows,
     secrets_context,
 )
-from sbxloop.tui.screens.doctor import DoctorScreen
-from sbxloop.tui.screens.modals import OutcomeScreen, TypedConfirmScreen
-from sbxloop.tui.screens.secrets import SecretsScreen
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop.tui.widgets.tables import ConsoleTable
+from lantern.tui.screens.doctor import DoctorScreen
+from lantern.tui.screens.modals import OutcomeScreen, TypedConfirmScreen
+from lantern.tui.screens.secrets import SecretsScreen
+from lantern.tui.widgets.panel import TextPanel
+from lantern.tui.widgets.tables import ConsoleTable
 from tests.conftest import FakeSbx
 from tests.unit.tui.conftest import drive, make_app, until
 
@@ -33,7 +33,7 @@ REFRESH: dict[str, Any] = {"refresh_s": 3.0}
 
 @pytest.fixture
 def host(
-    seeded: SbxloopHome, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    seeded: LanternHome, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     """A host whose config lives beside the seeded state dir, with tokens
     (set after the fake sbx fixture, which scrubs them)."""
@@ -41,10 +41,10 @@ def host(
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
     monkeypatch.setenv("GH_TOKEN", "tok")
-    # The console and the CLI must read the same home: SBXLOOP_HOME names
+    # The console and the CLI must read the same home: LANTERN_HOME names
     # it, and the record makes doctor's `home` row read it as initialised.
-    monkeypatch.setenv("SBXLOOP_HOME", str(seeded.root))
-    seeded.write_record(sbxloop_version="test", created_by="test")
+    monkeypatch.setenv("LANTERN_HOME", str(seeded.root))
+    seeded.write_record(lantern_version="test", created_by="test")
     return seeded
 
 
@@ -66,16 +66,16 @@ def test_doctor_report_is_the_cli_data(host: Path, fake_sbx: FakeSbx) -> None:
 
 
 def test_secret_helpers_judge_like_the_cli(host: Path, fake_sbx: FakeSbx) -> None:
-    from sbxloop.config import load_config
+    from lantern.config import load_config
 
     config = load_config()
     SbxCLI().secret_set_custom(
-        host=COPILOT_TOKEN_HOST, env=COPILOT_TOKEN_ENV, value="old", sandbox="sbxloop-dead-agent"
+        host=COPILOT_TOKEN_HOST, env=COPILOT_TOKEN_ENV, value="old", sandbox="lantern-dead-agent"
     )
     cli, live = secrets_context(config)
     (row,) = secret_rows(config, cli, live)
     assert row.env == COPILOT_TOKEN_ENV and row.judgement.status == "warn"
-    assert "stale" in row.judgement.note and "sbxloop-dead-agent" in row.actual
+    assert "stale" in row.judgement.note and "lantern-dead-agent" in row.actual
     dry = clean_secrets(config, cli, live, apply=False, all_=False)
     assert dry[0].removed and dry[0].message.startswith("would remove")
     done = clean_secrets(config, cli, live, apply=True, all_=False)
@@ -95,7 +95,7 @@ def test_doctor_screen_runs_the_report_and_secrets_clean_behind_a_typed_word(
     host: Path, fake_sbx: FakeSbx
 ) -> None:
     SbxCLI().secret_set_custom(
-        host=COPILOT_TOKEN_HOST, env=COPILOT_TOKEN_ENV, value="old", sandbox="sbxloop-dead-agent"
+        host=COPILOT_TOKEN_HOST, env=COPILOT_TOKEN_ENV, value="old", sandbox="lantern-dead-agent"
     )
 
     async def scenario() -> None:

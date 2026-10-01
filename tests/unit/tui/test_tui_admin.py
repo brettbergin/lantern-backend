@@ -8,20 +8,20 @@ from typing import Any
 
 from textual.widgets import Input, RichLog
 
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.ids import new_run_id
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.models import SandboxInfo
-from sbxloop.sbx.naming import run_name
-from sbxloop.tui.commands import CATALOGUE
-from sbxloop.tui.screens.daemon import DaemonScreen
-from sbxloop.tui.screens.modals import ConfirmScreen, TextPromptScreen, TypedConfirmScreen
-from sbxloop.tui.screens.run_detail import RunDetailScreen
-from sbxloop.tui.screens.sandboxes import SandboxesScreen
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop.tui.widgets.tables import ConsoleTable
-from sbxloop_worker.protocol import Event
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.ids import new_run_id
+from lantern.paths import LanternHome
+from lantern.sbx.models import SandboxInfo
+from lantern.sbx.naming import run_name
+from lantern.tui.commands import CATALOGUE
+from lantern.tui.screens.daemon import DaemonScreen
+from lantern.tui.screens.modals import ConfirmScreen, TextPromptScreen, TypedConfirmScreen
+from lantern.tui.screens.run_detail import RunDetailScreen
+from lantern.tui.screens.sandboxes import SandboxesScreen
+from lantern.tui.widgets.panel import TextPanel
+from lantern.tui.widgets.tables import ConsoleTable
+from lantern_worker.protocol import Event
 from tests.unit.tui.conftest import (
     FakeCtl,
     FakeRunner,
@@ -36,7 +36,7 @@ from tests.unit.tui.conftest import (
 REFRESH: dict[str, Any] = {"refresh_s": 3.0}
 
 
-def test_sandboxes_screen_classifies_and_prunes_behind_a_typed_word(seeded: SbxloopHome) -> None:
+def test_sandboxes_screen_classifies_and_prunes_behind_a_typed_word(seeded: LanternHome) -> None:
     # A run id the sandbox naming scheme recognises (the seeded ids are
     # readable, not real), failed two days ago: its sandbox is an orphan.
     old = new_run_id()
@@ -49,9 +49,9 @@ def test_sandboxes_screen_classifies_and_prunes_behind_a_typed_word(seeded: Sbxl
     backdate(seeded, old, 2.0)
     sbx = RecordingSbx(
         [
-            SandboxInfo(name="sbxloop-r_live-agent", status="running"),
-            SandboxInfo(name=f"sbxloop-{old}-agent", status="stopped"),
-            SandboxInfo(name="sbxloop-daemon-github-abcd1234", status="running"),
+            SandboxInfo(name="lantern-r_live-agent", status="running"),
+            SandboxInfo(name=f"lantern-{old}-agent", status="stopped"),
+            SandboxInfo(name="lantern-daemon-github-abcd1234", status="running"),
             SandboxInfo(name="somebody-elses", status="running"),
         ]
     )
@@ -63,10 +63,10 @@ def test_sandboxes_screen_classifies_and_prunes_behind_a_typed_word(seeded: Sbxl
             await until(pilot, lambda: isinstance(app.screen, SandboxesScreen))
             assert isinstance(app.screen, SandboxesScreen)
             table = app.screen.query_one("#sandboxes", ConsoleTable)
-            assert table.row_count == 3, "non-sbxloop sandboxes are never listed"
-            daemon_row = table.get_row_at(table.get_row_index("sbxloop-daemon-github-abcd1234"))
+            assert table.row_count == 3, "non-lantern sandboxes are never listed"
+            daemon_row = table.get_row_at(table.get_row_index("lantern-daemon-github-abcd1234"))
             assert daemon_row[1] == "daemon"
-            failed_row = table.get_row_at(table.get_row_index(f"sbxloop-{old}-agent"))
+            failed_row = table.get_row_at(table.get_row_index(f"lantern-{old}-agent"))
             assert "orphan" in str(failed_row[6])
             summary = app.screen.query_one("#summary", TextPanel).content_text
             assert "1 orphan(s)" in summary
@@ -82,24 +82,24 @@ def test_sandboxes_screen_classifies_and_prunes_behind_a_typed_word(seeded: Sbxl
             box.value = "prune"
             await pilot.press("enter")
             await pilot.pause(1.5)
-            assert ("rm", "--force", f"sbxloop-{old}-agent") in sbx.calls
-            assert not any(c[-1] == "sbxloop-r_live-agent" for c in sbx.calls if c[0] == "rm")
+            assert ("rm", "--force", f"lantern-{old}-agent") in sbx.calls
+            assert not any(c[-1] == "lantern-r_live-agent" for c in sbx.calls if c[0] == "rm")
             # x removes the selected sandbox under its typed name.
             table = app.screen.query_one("#sandboxes", ConsoleTable)
-            table.move_cursor(row=table.get_row_index("sbxloop-r_live-agent"))
+            table.move_cursor(row=table.get_row_index("lantern-r_live-agent"))
             await pilot.press("x")
             await until(pilot, lambda: isinstance(app.screen, TypedConfirmScreen))
             assert isinstance(app.screen, TypedConfirmScreen)
-            app.screen.query_one("#typed", Input).value = "sbxloop-r_live-agent"
+            app.screen.query_one("#typed", Input).value = "lantern-r_live-agent"
             await pilot.press("enter")
             await pilot.pause(1.5)
-            assert ("rm", "--force", "sbxloop-r_live-agent") in sbx.calls
+            assert ("rm", "--force", "lantern-r_live-agent") in sbx.calls
 
     drive(scenario)
 
 
 def test_daemon_screen_shows_the_unit_streams_the_journal_and_drives_the_verbs(
-    seeded: SbxloopHome,
+    seeded: LanternHome,
 ) -> None:
     runner = FakeRunner()
     runner.script(
@@ -110,8 +110,8 @@ def test_daemon_screen_shows_the_unit_streams_the_journal_and_drives_the_verbs(
     )
     runner.script("systemctl", "--user", "restart")
     runner.stream_lines = [
-        "2026-09-05T10:00:00+0000 db sbxloop[4242]: [info     ] daemon.tick queued=1",
-        "2026-09-05T10:00:01+0000 db sbxloop[4242]: [warning  ] github.poll_failed "
+        "2026-09-05T10:00:00+0000 db lantern[4242]: [info     ] daemon.tick queued=1",
+        "2026-09-05T10:00:01+0000 db lantern[4242]: [warning  ] github.poll_failed "
         "token=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
     ]
     ctl = FakeCtl(live_status(holds=["deploy-1"], paused=True))
@@ -145,10 +145,10 @@ def test_daemon_screen_shows_the_unit_streams_the_journal_and_drives_the_verbs(
             await pilot.press("B")
             await until(pilot, lambda: isinstance(app.screen, TypedConfirmScreen))
             assert isinstance(app.screen, TypedConfirmScreen)
-            app.screen.query_one("#typed", Input).value = "sbxloop-daemon"
+            app.screen.query_one("#typed", Input).value = "lantern-daemon"
             await pilot.press("enter")
             await pilot.pause(1.0)
-            assert ("systemctl", "--user", "restart", "sbxloop-daemon") in runner.calls
+            assert ("systemctl", "--user", "restart", "lantern-daemon") in runner.calls
             # D is refused while a daemon answers.
             await pilot.press("D")
             await until(pilot, lambda: isinstance(app.screen, DaemonScreen))
@@ -167,7 +167,7 @@ def test_daemon_screen_shows_the_unit_streams_the_journal_and_drives_the_verbs(
 
 
 def test_daemon_screen_spawns_a_daemon_when_there_is_no_unit_and_asks_on_quit(
-    seeded: SbxloopHome,
+    seeded: LanternHome,
 ) -> None:
     runner = FakeRunner()
     runner.script(
@@ -181,7 +181,7 @@ def test_daemon_screen_spawns_a_daemon_when_there_is_no_unit_and_asks_on_quit(
             await pilot.press("6")
             await pilot.pause(1.5)
             process = app.screen.query_one("#process", TextPanel).content_text
-            assert "no unit sbxloop-daemon" in process and "D spawns one here" in process
+            assert "no unit lantern-daemon" in process and "D spawns one here" in process
             await pilot.press("S")
             await pilot.pause(0.3)
             assert runner.calls[-1][:3] == ("systemctl", "--user", "show"), "S is refused"
@@ -206,7 +206,7 @@ def test_daemon_screen_spawns_a_daemon_when_there_is_no_unit_and_asks_on_quit(
     drive(scenario)
 
 
-def test_run_verbs_go_through_confirmations_and_ctl(seeded: SbxloopHome) -> None:
+def test_run_verbs_go_through_confirmations_and_ctl(seeded: LanternHome) -> None:
     ctl = FakeCtl(live_status())
 
     async def scenario() -> None:
@@ -262,7 +262,7 @@ def test_run_verbs_go_through_confirmations_and_ctl(seeded: SbxloopHome) -> None
     drive(scenario)
 
 
-def test_read_only_refuses_every_verb(seeded: SbxloopHome) -> None:
+def test_read_only_refuses_every_verb(seeded: LanternHome) -> None:
     ctl = FakeCtl(live_status())
 
     async def scenario() -> None:
@@ -283,7 +283,7 @@ def test_read_only_refuses_every_verb(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_queue_verbs_use_ctl_when_live_and_the_row_when_down(seeded: SbxloopHome) -> None:
+def test_queue_verbs_use_ctl_when_live_and_the_row_when_down(seeded: LanternHome) -> None:
     ctl = FakeCtl(live_status())
 
     async def scenario() -> None:
@@ -331,7 +331,7 @@ def test_queue_verbs_use_ctl_when_live_and_the_row_when_down(seeded: SbxloopHome
     drive(scenario)
 
 
-def test_phases_tab_folds_usage_per_persona(seeded: SbxloopHome) -> None:
+def test_phases_tab_folds_usage_per_persona(seeded: LanternHome) -> None:
     store = StateStore(seeded.state_db)
     try:
         for who in ("builder", "builder", "critic"):

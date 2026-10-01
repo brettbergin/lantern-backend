@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.sources import (
+from lantern.daemon.sources import (
     ApiSource,
     CompositeSource,
     GitHubIssueSource,
@@ -36,7 +36,7 @@ def _github(ops: RecordingOps, repo: str = "o/r", *, qualify: bool = False) -> G
 
 @pytest.fixture
 def ops() -> RecordingOps:
-    return RecordingOps({"4": issue(4), "5": issue(5, "sbxloop:run"), "6": issue(6, "closed")})
+    return RecordingOps({"4": issue(4), "5": issue(5, "lantern:run"), "6": issue(6, "closed")})
 
 
 @pytest.fixture
@@ -45,7 +45,7 @@ def api(tmp_path: Path, ops: RecordingOps) -> Any:
     built = build(
         tmp_path,
         config={
-            "daemon": {"trigger_label": "sbxloop:run", "in_progress_label": "sbxloop:in-progress"},
+            "daemon": {"trigger_label": "lantern:run", "in_progress_label": "lantern:in-progress"},
             "workloads": [{"name": "research", "sinks": ["chat", "artifact"]}],
         },
     )
@@ -73,7 +73,7 @@ class TestIssueIntake:
         assert body["operation"]["target"] == {"kind": "item", "id": "o/r#4"}
         assert body["operation"]["actor"]["kind"] == "client"
         # The issue was labelled as a person would label it …
-        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["sbxloop:run"]
+        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["lantern:run"]
         # … so the next poll finds it and the queue still holds one item.
         polled = {i.item_id: i for i in api.loop.source.poll()}
         assert "gh:issue:4" in polled
@@ -114,10 +114,10 @@ class TestIssueIntake:
         closed = post(6)
         assert closed.status_code == 409 and closed.json()["code"] == "not_eligible"
         assert "not open" in closed.json()["detail"]
-        ops.issues["7"] = issue(7, "sbxloop:in-progress")
+        ops.issues["7"] = issue(7, "lantern:in-progress")
         claimed = post(7)
         assert claimed.status_code == 409 and "in progress" in claimed.json()["detail"]
-        ops.issues["8"] = issue(8, "sbxloop:workload")
+        ops.issues["8"] = issue(8, "lantern:workload")
         crossed = post(8)
         assert crossed.status_code == 409 and "queued as a workload" in crossed.json()["detail"]
         missing = post(99)
@@ -147,7 +147,7 @@ class TestIssueIntake:
             headers={**api.bearer(), **KEY},
         )
         assert response.status_code == 201 and response.json()["item"]["kind"] == "workload"
-        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["sbxloop:workload"]
+        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["lantern:workload"]
 
     def test_by_repository_id_across_two_repositories(self, tmp_path: Path) -> None:
         one, two = RecordingOps({"4": issue(4)}), RecordingOps({"4": issue(4)})
@@ -180,7 +180,7 @@ class TestIssueIntake:
                 "gh:o/one:issue:4",
                 "gh:o/two:issue:4",
             ]
-            assert [lb["name"] for lb in two.issues["4"]["labels"]] == ["sbxloop:run"]
+            assert [lb["name"] for lb in two.issues["4"]["labels"]] == ["lantern:run"]
         api.ctx.close()
 
 

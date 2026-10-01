@@ -21,12 +21,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api import ws as ws_module
-from sbxloop.api.auth.deps import resolve_token
-from sbxloop.api.routes import events as events_route
-from sbxloop.api.routes.events import sse_frames
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import chat_item_id
+from lantern.api import ws as ws_module
+from lantern.api.auth.deps import resolve_token
+from lantern.api.routes import events as events_route
+from lantern.api.routes.events import sse_frames
+from lantern.daemon.model import WorkItem
+from lantern.ghids import chat_item_id
 from tests.api.conftest import Api
 from tests.api.test_channel_access import _channel, _invite
 from tests.api.test_collaboration import FakeConcierge, bearer, register
@@ -394,7 +394,7 @@ def _linked_run(api: Api, headers: dict[str, str], channel_id: str, text: str) -
     api.clock.t += 10
     api.loop.tick()
     run_id = str(api.harness.runs[-1][0])
-    from sbxloop_worker.protocol import Event
+    from lantern_worker.protocol import Event
 
     api.harness.store.append_event(
         Event(ts=api.clock(), run_id=run_id, type="phase.start", data={"phase": "plan"})

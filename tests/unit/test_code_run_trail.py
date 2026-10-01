@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.events import Event
+from lantern.events import Event
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import GREEN, FakeGithub
 from tests.unit.test_engine import (
@@ -85,12 +85,12 @@ def _scrub(value: Any, run_id: str) -> Any:
         # its own tests. Keep the pre-rename code trail comparable.
         value = re.sub(
             rf"sbxl-[0-9a-f]{{8}}-{re.escape(run_id)}-run-vcs-github",
-            f"sbxloop-{run_id}-github",
+            f"lantern-{run_id}-github",
             value,
         )
         value = re.sub(
             rf"sbxl-[0-9a-f]{{8}}-{re.escape(run_id)}-run-agent",
-            f"sbxloop-{run_id}-agent",
+            f"lantern-{run_id}-agent",
             value,
         )
         return value.replace(run_id, "<run>")

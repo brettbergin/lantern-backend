@@ -14,17 +14,17 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-import sbxloop
-from sbxloop import releases, update
-from sbxloop.cli.app import app
-from sbxloop.daemon import versions
-from sbxloop.paths import SbxloopHome
+import lantern
+from lantern import releases, update
+from lantern.cli.app import app
+from lantern.daemon import versions
+from lantern.paths import LanternHome
 
 runner = CliRunner()
 
 
 def test_check_reports_installed_and_available_versions(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sbxloop, "__version__", "1.2.9")
+    monkeypatch.setattr(lantern, "__version__", "1.2.9")
     monkeypatch.setattr(versions, "fetch_latest", lambda _name: "1.2.10")
     result = runner.invoke(app, ["update", "--check"])
     assert result.exit_code == 0, result.output
@@ -39,8 +39,8 @@ class FakeFetch:
     def __init__(self, version: str = "1.2.10") -> None:
         self.urls: list[str] = []
         self.files = {
-            releases.wheel_name("sbxloop", version): b"host wheel",
-            releases.wheel_name("sbxloop-worker", version): b"worker wheel",
+            releases.wheel_name("lantern-backend", version): b"host wheel",
+            releases.wheel_name("lantern-worker", version): b"worker wheel",
         }
         self.manifest: dict[str, object] = {
             "schema": 1,
@@ -85,15 +85,15 @@ def fetch(monkeypatch: pytest.MonkeyPatch) -> FakeFetch:
 @pytest.fixture
 def installation(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch, fetch: FakeFetch
-) -> tuple[SbxloopHome, FakeRun]:
-    home = SbxloopHome(isolated_home / ".sbxloop")
+) -> tuple[LanternHome, FakeRun]:
+    home = LanternHome(isolated_home / ".lantern")
     home.venv_python.parent.mkdir(parents=True)
     home.venv_python.touch()
     home.uv.touch()
-    home.write_record(sbxloop_version="1.2.9", created_by="original install")
+    home.write_record(lantern_version="1.2.9", created_by="original install")
     monkeypatch.setattr(sys, "prefix", str(home.venv))
-    monkeypatch.setattr(sbxloop, "__file__", str(home.venv / "lib" / "sbxloop" / "__init__.py"))
-    monkeypatch.setattr(sbxloop, "__version__", "1.2.9")
+    monkeypatch.setattr(lantern, "__file__", str(home.venv / "lib" / "lantern" / "__init__.py"))
+    monkeypatch.setattr(lantern, "__version__", "1.2.9")
     monkeypatch.setattr(versions, "fetch_latest", lambda _name: "1.2.10")
 
     def no_sdk(_name: str) -> str:
@@ -106,7 +106,7 @@ def installation(
 
 
 def test_update_installs_exact_pair_and_verifies_before_recording(
-    installation: tuple[SbxloopHome, FakeRun],
+    installation: tuple[LanternHome, FakeRun],
 ) -> None:
     home, run = installation
     home.config_toml.write_text("# operator config\n")
@@ -123,34 +123,34 @@ def test_update_installs_exact_pair_and_verifies_before_recording(
             "install",
             "--python",
             str(home.venv_python),
-            str(wheels / "sbxloop_worker-1.2.10-py3-none-any.whl"),
-            f"{wheels / 'sbxloop-1.2.10-py3-none-any.whl'}[discord,slack]",
+            str(wheels / "lantern_worker-1.2.10-py3-none-any.whl"),
+            f"{wheels / 'lantern_backend-1.2.10-py3-none-any.whl'}[discord,slack]",
         ],
         [str(home.venv_python), "-I", "-c", update.VERIFY_SCRIPT],
     ]
     assert not wheels.exists()  # the downloaded files do not outlive the update
     record = home.read_record()
     assert before is not None and record is not None
-    assert record.sbxloop_version == "1.2.10"
+    assert record.lantern_version == "1.2.10"
     assert record.created_by == before.created_by
     assert record.created_at == before.created_at
     assert home.config_toml.read_text() == "# operator config\n"
     assert home.secrets_env.read_text() == "OPERATOR_SECRET=kept\n"
-    assert "Updated sbxloop and sbxloop-worker to 1.2.10" in result.output
+    assert "Updated lantern and lantern-worker to 1.2.10" in result.output
     assert "Restart any running daemon when idle" in result.output
 
 
 def test_our_packages_come_from_the_release_never_by_name_from_an_index(
-    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch
+    installation: tuple[LanternHome, FakeRun], fetch: FakeFetch
 ) -> None:
     _, run = installation
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
-    base = "https://github.com/brettbergin/sbxloop/releases/download/v1.2.10/"
+    base = "https://github.com/brettbergin/lantern-backend/releases/download/v1.2.10/"
     assert fetch.urls == [
         base + "release-manifest.json",
-        base + "sbxloop_worker-1.2.10-py3-none-any.whl",
-        base + "sbxloop-1.2.10-py3-none-any.whl",
+        base + "lantern_worker-1.2.10-py3-none-any.whl",
+        base + "lantern_backend-1.2.10-py3-none-any.whl",
     ]
     install = run.calls[0]
     assert not any("==" in word for word in install)
@@ -167,12 +167,12 @@ def test_our_packages_come_from_the_release_never_by_name_from_an_index(
     ],
 )
 def test_unverified_wheels_are_never_installed(
-    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch, tamper: str, message: str
+    installation: tuple[LanternHome, FakeRun], fetch: FakeFetch, tamper: str, message: str
 ) -> None:
     home, run = installation
     record = home.record.read_bytes()
     if tamper == "wheel":
-        fetch.files["sbxloop-1.2.10-py3-none-any.whl"] = b"something else"
+        fetch.files["lantern_backend-1.2.10-py3-none-any.whl"] = b"something else"
     elif tamper == "version":
         fetch.manifest["version"] = "1.2.9"
     elif tamper == "missing":
@@ -189,7 +189,7 @@ def test_unverified_wheels_are_never_installed(
 
 @pytest.mark.parametrize("flag", ["--check", "--dry-run"])
 def test_previews_never_install_or_change_the_record(
-    installation: tuple[SbxloopHome, FakeRun], fetch: FakeFetch, flag: str
+    installation: tuple[LanternHome, FakeRun], fetch: FakeFetch, flag: str
 ) -> None:
     home, run = installation
     record = home.record.read_bytes()
@@ -201,8 +201,8 @@ def test_previews_never_install_or_change_the_record(
     assert "Update available" in result.output
     if flag == "--dry-run":
         assert "Would run:" in result.output
-        assert "sbxloop_worker-1.2.10-py3-none-any.whl" in result.output
-        assert "sbxloop-1.2.10-py3-none-any.whl[discord,slack]" in result.output
+        assert "lantern_worker-1.2.10-py3-none-any.whl" in result.output
+        assert "lantern_backend-1.2.10-py3-none-any.whl[discord,slack]" in result.output
         assert "==" not in result.output
 
 
@@ -216,7 +216,7 @@ def test_previews_never_install_or_change_the_record(
     ],
 )
 def test_never_reinstalls_or_downgrades(
-    installation: tuple[SbxloopHome, FakeRun],
+    installation: tuple[LanternHome, FakeRun],
     monkeypatch: pytest.MonkeyPatch,
     installed: str,
     latest: str,
@@ -224,7 +224,7 @@ def test_never_reinstalls_or_downgrades(
 ) -> None:
     home, run = installation
     record = home.record.read_bytes()
-    monkeypatch.setattr(sbxloop, "__version__", installed)
+    monkeypatch.setattr(lantern, "__version__", installed)
     monkeypatch.setattr(versions, "fetch_latest", lambda _name: latest)
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
@@ -235,10 +235,10 @@ def test_never_reinstalls_or_downgrades(
 
 @pytest.mark.parametrize("installed", ["1.2.10.dev1", "1.2.9+local"])
 def test_development_installs_can_check_but_cannot_self_update(
-    installation: tuple[SbxloopHome, FakeRun], monkeypatch: pytest.MonkeyPatch, installed: str
+    installation: tuple[LanternHome, FakeRun], monkeypatch: pytest.MonkeyPatch, installed: str
 ) -> None:
     _, run = installation
-    monkeypatch.setattr(sbxloop, "__version__", installed)
+    monkeypatch.setattr(lantern, "__version__", installed)
     checked = runner.invoke(app, ["update", "--check"])
     assert checked.exit_code == 0, checked.output
     assert "development build" in checked.output
@@ -250,19 +250,19 @@ def test_development_installs_can_check_but_cannot_self_update(
 
 @pytest.mark.parametrize("installed", ["0.0.0", "", "unknown"])
 def test_unknown_installed_version_fails_closed(
-    installation: tuple[SbxloopHome, FakeRun], monkeypatch: pytest.MonkeyPatch, installed: str
+    installation: tuple[LanternHome, FakeRun], monkeypatch: pytest.MonkeyPatch, installed: str
 ) -> None:
     _, run = installation
-    monkeypatch.setattr(sbxloop, "__version__", installed)
+    monkeypatch.setattr(lantern, "__version__", installed)
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 1, result.output
-    assert "installed sbxloop version" in result.output
+    assert "installed lantern version" in result.output
     assert not run.calls
 
 
 @pytest.mark.parametrize("latest", [None, "", "bad", "0.0.0", "1.3.0rc1", "1.3.0+local"])
 def test_missing_or_invalid_release_never_installs(
-    installation: tuple[SbxloopHome, FakeRun],
+    installation: tuple[LanternHome, FakeRun],
     monkeypatch: pytest.MonkeyPatch,
     latest: str | None,
 ) -> None:
@@ -280,7 +280,7 @@ def test_missing_or_invalid_release_never_installs(
 @pytest.mark.parametrize("flag", [[], ["--dry-run"]])
 @pytest.mark.parametrize("wrong", ["prefix", "editable", "home_override"])
 def test_wrong_environment_never_updates_another_installation(
-    installation: tuple[SbxloopHome, FakeRun],
+    installation: tuple[LanternHome, FakeRun],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     flag: list[str],
@@ -290,9 +290,9 @@ def test_wrong_environment_never_updates_another_installation(
     if wrong == "prefix":
         monkeypatch.setattr(sys, "prefix", str(tmp_path / "pipx-venv"))
     elif wrong == "editable":
-        monkeypatch.setattr(sbxloop, "__file__", str(tmp_path / "checkout" / "__init__.py"))
+        monkeypatch.setattr(lantern, "__file__", str(tmp_path / "checkout" / "__init__.py"))
     else:
-        monkeypatch.setenv("SBXLOOP_HOME", str(tmp_path / "different-home"))
+        monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "different-home"))
     result = runner.invoke(app, ["update", *flag])
     assert result.exit_code == 1, result.output
     assert "home's own installation" in result.output
@@ -300,7 +300,7 @@ def test_wrong_environment_never_updates_another_installation(
 
 
 def test_check_works_outside_the_home_installation(
-    installation: tuple[SbxloopHome, FakeRun], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    installation: tuple[LanternHome, FakeRun], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _, run = installation
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "pipx-venv"))
@@ -312,7 +312,7 @@ def test_check_works_outside_the_home_installation(
 
 @pytest.mark.parametrize("missing", ["uv", "venv_python", "record", "invalid_record"])
 def test_incomplete_home_names_what_needs_repair(
-    installation: tuple[SbxloopHome, FakeRun], missing: str
+    installation: tuple[LanternHome, FakeRun], missing: str
 ) -> None:
     home, run = installation
     if missing == "invalid_record":
@@ -321,18 +321,20 @@ def test_incomplete_home_names_what_needs_repair(
         getattr(home, missing).unlink()
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 1, result.output
-    assert "sbxloop init" in result.output
+    assert "lantern init" in result.output
     assert not run.calls
 
 
 def test_optional_host_sdk_is_preserved(
-    installation: tuple[SbxloopHome, FakeRun], monkeypatch: pytest.MonkeyPatch
+    installation: tuple[LanternHome, FakeRun], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _, run = installation
     monkeypatch.setattr(update.metadata, "version", lambda _name: "1.0.0")
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0, result.output
-    assert run.calls[0][-1].endswith("sbxloop-1.2.10-py3-none-any.whl[discord,slack,copilot]")
+    assert run.calls[0][-1].endswith(
+        "lantern_backend-1.2.10-py3-none-any.whl[discord,slack,copilot]"
+    )
 
 
 @pytest.mark.parametrize(
@@ -345,7 +347,7 @@ def test_optional_host_sdk_is_preserved(
 )
 @pytest.mark.parametrize("fail_at", [1, 2])
 def test_failed_installation_or_verification_does_not_claim_success(
-    installation: tuple[SbxloopHome, FakeRun],
+    installation: tuple[LanternHome, FakeRun],
     failure: Exception,
     message: str,
     fail_at: int,
@@ -357,7 +359,7 @@ def test_failed_installation_or_verification_does_not_claim_success(
     assert result.exit_code == 1, result.output
     assert message in result.output
     assert ("installation" if fail_at == 1 else "verification") in result.output
-    assert "Updated sbxloop" not in result.output
+    assert "Updated lantern" not in result.output
     assert len(run.calls) == fail_at
     assert home.record.read_bytes() == before
 
@@ -366,24 +368,24 @@ def test_failed_installation_or_verification_does_not_claim_success(
     "verified", ["garbage", '["1.2.10", "1.2.9"]', '["1.2.9", "1.2.9"]', "null", "{}"]
 )
 def test_both_packages_must_be_verified_before_the_record_changes(
-    installation: tuple[SbxloopHome, FakeRun], verified: str
+    installation: tuple[LanternHome, FakeRun], verified: str
 ) -> None:
     home, run = installation
     record = home.record.read_bytes()
     run.verified = verified
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 1, result.output
-    assert "Updated sbxloop" not in result.output
+    assert "Updated lantern" not in result.output
     assert home.record.read_bytes() == record
 
 
 def test_record_failure_reports_that_the_packages_were_updated(
-    installation: tuple[SbxloopHome, FakeRun], monkeypatch: pytest.MonkeyPatch
+    installation: tuple[LanternHome, FakeRun], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def cannot_write(*_args: object, **_kwargs: object) -> None:
         raise PermissionError("read-only record")
 
-    monkeypatch.setattr(SbxloopHome, "write_record", cannot_write)
+    monkeypatch.setattr(LanternHome, "write_record", cannot_write)
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 1, result.output
     assert "packages updated, but could not update" in result.output
@@ -409,10 +411,10 @@ def test_runner_is_bounded_and_does_not_use_a_shell(monkeypatch: pytest.MonkeyPa
         return subprocess.CompletedProcess(argv, 0, json.dumps(["1.2.10", "1.2.10"]), "")
 
     monkeypatch.setattr(subprocess, "run", fake_subprocess)
-    update._run(["/home/operator space/.sbxloop/bin/uv", "pip", "install", "/tmp/x.whl"])
+    update._run(["/home/operator space/.lantern/bin/uv", "pip", "install", "/tmp/x.whl"])
     assert len(calls) == 1
     argv, options = calls[0]
-    assert argv[0] == "/home/operator space/.sbxloop/bin/uv"
+    assert argv[0] == "/home/operator space/.lantern/bin/uv"
     assert options["check"] is True
     assert options["stdin"] == subprocess.DEVNULL
     assert options["timeout"] == 600

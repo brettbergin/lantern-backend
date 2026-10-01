@@ -10,14 +10,14 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config, load_config
-from sbxloop.engine.issue_lookup import IssueLookup
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.engine.review import ReviewFinding, ReviewGuard, ReviewVerdict
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import InvalidOutputTwice
-from sbxloop.provider import ProviderHeldError
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.config import Config, load_config
+from lantern.engine.issue_lookup import IssueLookup
+from lantern.engine.phases import PhaseRunner
+from lantern.engine.review import ReviewFinding, ReviewGuard, ReviewVerdict
+from lantern.engine.store import StateStore
+from lantern.errors import InvalidOutputTwice
+from lantern.provider import ProviderHeldError
+from lantern_worker.protocol import JobRequest, JobResult
 from tests.fakes.fake_github import FakeGithub
 
 MAJOR = {
@@ -198,7 +198,7 @@ def test_repair_without_a_session_id_still_receives_the_complete_response(tmp_pa
 
 
 def test_response_corrections_keep_model_until_the_next_review(tmp_path: Path) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[agent.models]\nreview = "first"\n')
     invalid = verdict({**MAJOR, "category": "unsupported"})
 

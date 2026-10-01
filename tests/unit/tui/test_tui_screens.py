@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.run_detail import RunDetailScreen
-from sbxloop.tui.widgets.chronology import ChronologyLog
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop.tui.widgets.statusbar import StatusBar
-from sbxloop.tui.widgets.tables import ConsoleTable
+from lantern.paths import LanternHome
+from lantern.tui.screens.run_detail import RunDetailScreen
+from lantern.tui.widgets.chronology import ChronologyLog
+from lantern.tui.widgets.panel import TextPanel
+from lantern.tui.widgets.statusbar import StatusBar
+from lantern.tui.widgets.tables import ConsoleTable
 from tests.unit.tui.conftest import FakeCtl, drive, live_status, make_app, until
 
 
 def bar_text(app: object) -> str:
-    from sbxloop.tui.app import SbxloopTui
+    from lantern.tui.app import LanternTui
 
-    assert isinstance(app, SbxloopTui)
+    assert isinstance(app, LanternTui)
     bar = app.screen.query_one("#statusbar", StatusBar)
     return bar.last.plain
 
@@ -23,14 +23,14 @@ def page_text(app: object) -> str:
     """Everything the Overview's current page put on screen."""
     from textual.containers import VerticalScroll
 
-    from sbxloop.tui.app import SbxloopTui
+    from lantern.tui.app import LanternTui
 
-    assert isinstance(app, SbxloopTui)
+    assert isinstance(app, LanternTui)
     page = app.screen.query_one("#page", VerticalScroll)
     return "\n".join(w.content_text for w in page.walk_children() if isinstance(w, TextPanel))
 
 
-def test_overview_reports_the_week_and_the_run_in_flight(seeded: SbxloopHome) -> None:
+def test_overview_reports_the_week_and_the_run_in_flight(seeded: LanternHome) -> None:
     """Overview answers "is this working well": a live line for now, and a
     page of analytics for the week. The queue, recent runs and who is
     waiting live on the screens that own them (Queue, Runs, Daemon)."""
@@ -51,7 +51,7 @@ def test_overview_reports_the_week_and_the_run_in_flight(seeded: SbxloopHome) ->
     drive(scenario)
 
 
-def test_daemon_down_and_starting_read_in_the_bar(seeded: SbxloopHome) -> None:
+def test_daemon_down_and_starting_read_in_the_bar(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, ctl=FakeCtl(down=True))
         async with app.run_test(size=(140, 45)) as pilot:
@@ -81,7 +81,7 @@ def test_daemon_down_and_starting_read_in_the_bar(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_runs_screen_lists_filters_and_opens_a_run(seeded: SbxloopHome) -> None:
+def test_runs_screen_lists_filters_and_opens_a_run(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded)
         async with app.run_test(size=(140, 45)) as pilot:
@@ -122,7 +122,7 @@ def test_runs_screen_lists_filters_and_opens_a_run(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_run_screen_tabs_render_the_store(seeded: SbxloopHome) -> None:
+def test_run_screen_tabs_render_the_store(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, run="r_live")
         async with app.run_test(size=(140, 45)) as pilot:
@@ -156,7 +156,7 @@ def test_run_screen_tabs_render_the_store(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_queue_screen_and_help(seeded: SbxloopHome) -> None:
+def test_queue_screen_and_help(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, emoji=False)
         async with app.run_test(size=(140, 45)) as pilot:
@@ -176,11 +176,11 @@ def test_queue_screen_and_help(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_a_busy_daemon_reads_as_alive_not_down(seeded: SbxloopHome) -> None:
+def test_a_busy_daemon_reads_as_alive_not_down(seeded: LanternHome) -> None:
     """A `pending` reply is a daemon that took the request but was too busy
     to answer in time — the misread the ctl queue warns about."""
-    from sbxloop.daemon.control import CommandReply
-    from sbxloop.tui.data import probe_daemon
+    from lantern.daemon.control import CommandReply
+    from lantern.tui.data import probe_daemon
 
     class Busy:
         def submit(self, cmd: str, *, timeout_s: float = 30.0) -> CommandReply | None:
@@ -200,13 +200,13 @@ def test_a_busy_daemon_reads_as_alive_not_down(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_queue_lists_the_daemons_dispatch_order_and_eligibility(seeded: SbxloopHome) -> None:
+def test_queue_lists_the_daemons_dispatch_order_and_eligibility(seeded: LanternHome) -> None:
     """A resume-pending run goes first, a failed attempt waits its backoff:
     the daemon's own rule (`dispatch_eligible_at`), not a re-derivation."""
     import time
 
-    from sbxloop.daemon.model import WorkItem
-    from sbxloop.daemon.store import DaemonStore, dispatch_eligible_at
+    from lantern.daemon.model import WorkItem
+    from lantern.daemon.store import DaemonStore, dispatch_eligible_at
 
     dstore = DaemonStore(seeded.state_db)
     now = time.time()
@@ -243,7 +243,7 @@ def test_queue_lists_the_daemons_dispatch_order_and_eligibility(seeded: SbxloopH
     drive(scenario)
 
 
-def test_tables_repaint_in_place_and_keep_the_cursor(seeded: SbxloopHome) -> None:
+def test_tables_repaint_in_place_and_keep_the_cursor(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded)
         async with app.run_test(size=(140, 45)) as pilot:
@@ -260,7 +260,7 @@ def test_tables_repaint_in_place_and_keep_the_cursor(seeded: SbxloopHome) -> Non
     drive(scenario)
 
 
-def test_escape_clears_the_event_filter_before_leaving_the_run(seeded: SbxloopHome) -> None:
+def test_escape_clears_the_event_filter_before_leaving_the_run(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, run="r_live")
         async with app.run_test(size=(140, 45)) as pilot:
@@ -278,9 +278,9 @@ def test_escape_clears_the_event_filter_before_leaving_the_run(seeded: SbxloopHo
     drive(scenario)
 
 
-def test_events_wait_while_follow_is_off(seeded: SbxloopHome) -> None:
-    from sbxloop.engine.store import StateStore
-    from sbxloop_worker.protocol import Event
+def test_events_wait_while_follow_is_off(seeded: LanternHome) -> None:
+    from lantern.engine.store import StateStore
+    from lantern_worker.protocol import Event
 
     async def scenario() -> None:
         app = make_app(seeded, run="r_live")
@@ -306,14 +306,14 @@ def test_events_wait_while_follow_is_off(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_a_workload_run_header_shows_its_profile_and_needs(seeded: SbxloopHome) -> None:
+def test_a_workload_run_header_shows_its_profile_and_needs(seeded: LanternHome) -> None:
     """#804: a workload's screen says which profile bounded it, what the
     plan asked for and the grant gave (names only), and a refused need
-    with the sbxloop.toml key that would allow it."""
+    with the lantern.toml key that would allow it."""
     import json
 
-    from sbxloop.engine.store import StateStore
-    from sbxloop_worker.protocol import Event
+    from lantern.engine.store import StateStore
+    from lantern_worker.protocol import Event
 
     store = StateStore(seeded.state_db)
     pinned = json.dumps({"workload": {"default": "research"}})
@@ -348,9 +348,9 @@ def test_a_workload_run_header_shows_its_profile_and_needs(seeded: SbxloopHome) 
     store.close()
 
     def header_of(app: object) -> str:
-        from sbxloop.tui.app import SbxloopTui
+        from lantern.tui.app import LanternTui
 
-        assert isinstance(app, SbxloopTui)
+        assert isinstance(app, LanternTui)
         return app.screen.query_one("#header", TextPanel).content_text
 
     async def scenario() -> None:

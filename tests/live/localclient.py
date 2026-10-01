@@ -3,7 +3,7 @@
 The conformance suite's live backends drive a real backend object against
 a live forge, but there is no sandbox and no worker process in a test
 run. This client executes each job through the worker's own op registry
-and REST transport (:mod:`sbxloop_worker.githubops`), the same code that
+and REST transport (:mod:`lantern_worker.githubops`), the same code that
 runs inside the github-role box — only the process boundary is missing.
 The token is the caller's; the harness CA is trusted for the process
 through ``SSL_CERT_FILE``, which the stdlib's default TLS context reads.
@@ -14,8 +14,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sbxloop_worker.githubops import GithubOpError, RestTransport, execute_op
-from sbxloop_worker.protocol import ErrorInfo, JobRequest, JobResult, TransportSpec
+from lantern_worker.githubops import GithubOpError, RestTransport, execute_op
+from lantern_worker.protocol import ErrorInfo, JobRequest, JobResult, TransportSpec
 
 
 class LocalWorkerClient:

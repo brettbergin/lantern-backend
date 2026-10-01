@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.agents.assignment import plan_assignment
-from sbxloop.agents.registry import ConfigAgentRegistry
+from lantern.agents.assignment import plan_assignment
+from lantern.agents.registry import ConfigAgentRegistry
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import GREEN, FakeGithub
 from tests.unit.test_code_run_trail import FIXTURES, STABLE_KEYS, trail

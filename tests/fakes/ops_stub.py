@@ -1,4 +1,4 @@
-"""The base for a test's own stand-in for :class:`sbxloop.vcs.github.ops.GithubOps`.
+"""The base for a test's own stand-in for :class:`lantern.vcs.github.ops.GithubOps`.
 
 A stand-in scripts the generic transport — its ``raw`` answers the paths
 it expects and records what it was asked — and inherits every named
@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import GithubOps
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import GithubOps
 
 
 class OpsStub(GithubOps):

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import (
+from lantern.daemon.model import WorkItem
+from lantern.ghids import (
     GhId,
     format_gh_id,
     is_repo_slug,
@@ -16,7 +16,7 @@ from sbxloop.ghids import (
     try_parse_gh_id,
 )
 
-REPO = "brettbergin/sbxloop"
+REPO = "brettbergin/lantern-backend"
 
 
 def test_render_repo_qualified() -> None:

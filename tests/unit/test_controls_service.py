@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import ScheduleConfig
-from sbxloop.daemon.control import CommandReply, dispatch
-from sbxloop.daemon.controls import ControlError, ControlService, Principal
-from sbxloop.daemon.controls.results import (
+from lantern.config import ScheduleConfig
+from lantern.daemon.control import CommandReply, dispatch
+from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.controls.results import (
     CancelOutcome,
     GateOutcome,
     ItemOutcome,
@@ -21,9 +21,9 @@ from sbxloop.daemon.controls.results import (
     ScheduleOutcome,
     StopOutcome,
 )
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.paths import SbxloopHome
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.paths import LanternHome
 from tests.unit.test_daemon_discord import FakeLoop
 
 OPERATOR = Principal.trusted("ops via test", "ctl")
@@ -93,7 +93,7 @@ class ServiceLoop(FakeLoop):
 
 @pytest.fixture
 def floop(tmp_path: Path) -> ServiceLoop:
-    return ServiceLoop(DaemonStore(SbxloopHome(tmp_path).state_db))
+    return ServiceLoop(DaemonStore(LanternHome(tmp_path).state_db))
 
 
 @pytest.fixture
@@ -330,8 +330,8 @@ class TestLogRecords:
     def test_records_are_the_buffers_newest_last(
         self, service: ControlService, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import log as logmod
-        from sbxloop.log import LogBuffer, LogRecordLine
+        from lantern import log as logmod
+        from lantern.log import LogBuffer, LogRecordLine
 
         buffer = LogBuffer()
         for i in range(3):

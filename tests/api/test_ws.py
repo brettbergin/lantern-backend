@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from sbxloop.api import ws as ws_module
+from lantern.api import ws as ws_module
 from tests.api.conftest import Api, build
 from tests.api.test_channel_access import _channel, _invite
 from tests.api.test_collaboration import bearer, register

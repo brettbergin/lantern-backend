@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.engine.model import TaskOutput, TaskRecord, TaskSpec
-from sbxloop.engine.sinks import PublishError, safe_relative
+from lantern.config import Config
+from lantern.engine.engine import LoopEngine
+from lantern.engine.model import TaskOutput, TaskRecord, TaskSpec
+from lantern.engine.sinks import PublishError, safe_relative
 
 
 @pytest.mark.parametrize(

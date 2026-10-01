@@ -18,18 +18,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop import __version__
-from sbxloop.config import Config
-from sbxloop.daemon.agentbox import (
+from lantern import __version__
+from lantern.config import Config
+from lantern.daemon.agentbox import (
     REPROVISION_MIN_INTERVAL_S,
     DaemonAgent,
     sandbox_name_for,
 )
-from sbxloop.errors import DaemonError, WorkerError, WorkerTimeoutError
-from sbxloop.events import Event, EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.sandbox import Sandbox
-from sbxloop.worker.client import WorkerClient
+from lantern.errors import DaemonError, WorkerError, WorkerTimeoutError
+from lantern.events import Event, EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.sandbox import Sandbox
+from lantern.worker.client import WorkerClient
 from tests.conftest import FakeSbx
 
 # Both agent credentials: provisioning takes the one [agent] backend names,
@@ -88,7 +88,7 @@ class TestLifecycle:
     def test_existing_concierge_keeps_its_session_name_during_upgrade(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx.naming import legacy_concierge_name
+        from lantern.sbx.naming import legacy_concierge_name
 
         agent = make_agent(fake_sbx, tmp_path, monkeypatch)
         old = legacy_concierge_name(agent.config.paths)
@@ -101,7 +101,7 @@ class TestLifecycle:
     def test_changed_or_unknown_allocation_preserves_concierge_history(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, old_vm: bool
     ) -> None:
-        from sbxloop.errors import ProvisionError
+        from lantern.errors import ProvisionError
 
         first = make_agent(fake_sbx, tmp_path, monkeypatch)
         first.client()
@@ -160,7 +160,7 @@ class TestLifecycle:
         )
 
         with (
-            caplog.at_level(logging.ERROR, logger="sbxloop.daemon.agentbox"),
+            caplog.at_level(logging.ERROR, logger="lantern.daemon.agentbox"),
             pytest.raises(DaemonError, match="not authenticated to Docker"),
         ):
             agent.client()
@@ -200,7 +200,7 @@ class TestLifecycle:
         # The version probe runs the fake's exec on the host: script an
         # answer that is NOT this host's version, then the entrypoint smoke.
         fake_sbx.script(
-            f"exec {agent.name} {sys.executable} -c import sbxloop_worker",
+            f"exec {agent.name} {sys.executable} -c import lantern_worker",
             stdout="0.0.0-stale\n",
             once=True,
         )
@@ -238,19 +238,19 @@ class TestLifecycle:
         # the backend probe. Each is consumed once, leaving the blanket
         # answer below to govern the re-provision that follows.
         fake_sbx.script(
-            f"exec {agent.name} {sys.executable} -c import sbxloop_worker",
+            f"exec {agent.name} {sys.executable} -c import lantern_worker",
             stdout=f"{__version__}\n",
             once=True,
         )
         fake_sbx.script(
-            f"exec {agent.name} {sys.executable} -m sbxloop_worker",
+            f"exec {agent.name} {sys.executable} -m lantern_worker",
             returncode=64,
             once=True,
         )
         fake_sbx.script(
-            f"exec {agent.name} {sys.executable} -c import sys; from sbxloop_worker.backends",
+            f"exec {agent.name} {sys.executable} -c import sys; from lantern_worker.backends",
             returncode=1,
-            stderr=f"backend runtime is not installed; install sbxloop-worker[{backend}]",
+            stderr=f"backend runtime is not installed; install lantern-worker[{backend}]",
             once=True,
         )
         fake_sbx.script(f"exec {agent.name} python3 -m venv", once=True)
@@ -276,7 +276,7 @@ class TestLifecycle:
         bus.subscribe(events.append)
         second = make_agent(fake_sbx, tmp_path, monkeypatch, install_workers=True, bus=bus)
         fake_sbx.script(
-            f"exec {second.name} {sys.executable} -c import sys; from sbxloop_worker.backends",
+            f"exec {second.name} {sys.executable} -c import sys; from lantern_worker.backends",
             returncode=0,
         )
         second.client()
@@ -291,7 +291,7 @@ class TestLifecycle:
         sandbox to the old one's reaper part-way through provisioning; the
         concierge then answers nothing for a minute and a half while it
         retries, which reads from chat as a dead bridge (#952)."""
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
         first = make_agent(fake_sbx, tmp_path, monkeypatch)
         first.client()
         first.close()
@@ -312,8 +312,8 @@ class TestLifecycle:
     ) -> None:
         """Fail closed: a teardown sbx will not confirm must not be followed
         by a create of the same name."""
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
-        monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+        monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
         first = make_agent(fake_sbx, tmp_path, monkeypatch)
         first.client()
         first.close()

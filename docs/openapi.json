@@ -334,7 +334,7 @@
             "type": "string"
           },
           "module_path": {
-            "default": "sbxloop.api.agents",
+            "default": "lantern.api.agents",
             "title": "Module Path",
             "type": "string"
           },
@@ -876,7 +876,7 @@
       },
       "AuthorOut": {
         "additionalProperties": false,
-        "description": "Who wrote a message: a person, an agent, or sbxloop itself.",
+        "description": "Who wrote a message: a person, an agent, or lantern itself.",
         "properties": {
           "display_name": {
             "anyOf": [
@@ -6625,7 +6625,7 @@
       },
       "PlanForge": {
         "additionalProperties": false,
-        "description": "The issue a published node became, as the forge last said.\n``version`` is the version of the issue the node holds \u2014 a digest of its\ntitle and sections as sbxloop last read or wrote them \u2014 which an edit of\nthe node names as ``forge_version``. ``updated_at`` is the forge's own\ntimestamp as last read (informational: a comment or a label moves it).\n``detached`` says why the node no longer follows its issue (it left its\nparent or the forge, or a person detached it); ``marker_missing`` that\nits body lost the ``sbx-plan`` marker; ``checklist_error`` why its\nmanaged children checklist could not be read. None of these is\nrepaired by sbxloop.",
+        "description": "The issue a published node became, as the forge last said.\n``version`` is the version of the issue the node holds \u2014 a digest of its\ntitle and sections as lantern last read or wrote them \u2014 which an edit of\nthe node names as ``forge_version``. ``updated_at`` is the forge's own\ntimestamp as last read (informational: a comment or a label moves it).\n``detached`` says why the node no longer follows its issue (it left its\nparent or the forge, or a person detached it); ``marker_missing`` that\nits body lost the ``sbx-plan`` marker; ``checklist_error`` why its\nmanaged children checklist could not be read. None of these is\nrepaired by lantern.",
         "properties": {
           "checklist_error": {
             "anyOf": [
@@ -8970,7 +8970,7 @@
       },
       "RepositoryLabels": {
         "additionalProperties": false,
-        "description": "Whether a repository carries the labels sbxloop relies on.\n\n``compliant``: it carries every one of them, as of ``checked_at``.\n``incomplete``: ``missing`` names the ones it does not carry \u2014 a\nlabel sync creates exactly those. ``unknown``: nobody has been able\nto look yet (no reading has been taken, the forge would not answer,\nor the configured names have changed since the last reading), which\nis never reported as compliant.",
+        "description": "Whether a repository carries the labels lantern relies on.\n\n``compliant``: it carries every one of them, as of ``checked_at``.\n``incomplete``: ``missing`` names the ones it does not carry \u2014 a\nlabel sync creates exactly those. ``unknown``: nobody has been able\nto look yet (no reading has been taken, the forge would not answer,\nor the configured names have changed since the last reading), which\nis never reported as compliant.",
         "properties": {
           "checked_at": {
             "anyOf": [
@@ -11776,7 +11776,7 @@
     }
   },
   "info": {
-    "title": "sbxloop",
+    "title": "lantern",
     "version": "snapshot"
   },
   "openapi": "3.1.0",
@@ -14038,7 +14038,7 @@
     },
     "/v1/channels/{channel_id}/stop": {
       "post": {
-        "description": "Stop everything this channel has in flight and silence it.\n\nAnyone who may post may stop a channel they are in: a person watching\nagents go somewhere they should not is the only guard that matters, and\nwaiting for whoever owns the channel would defeat it. Queued and\nrunning turns are cancelled, the runs the channel asked for are\ncancelled and the work it queued is abandoned through the daemon's\ncontrol service (scoped to this channel's own work, so a member who\nmay post needs no run control), and the channel is silenced for an\nhour (``sbxloop.api.context.STOP_SILENCE_S``) until ``resume`` or a\n``silence`` of its own lifts it. A ``/stop`` typed in the channel goes\nthrough the same :meth:`ApiContext.stop_channel`.",
+        "description": "Stop everything this channel has in flight and silence it.\n\nAnyone who may post may stop a channel they are in: a person watching\nagents go somewhere they should not is the only guard that matters, and\nwaiting for whoever owns the channel would defeat it. Queued and\nrunning turns are cancelled, the runs the channel asked for are\ncancelled and the work it queued is abandoned through the daemon's\ncontrol service (scoped to this channel's own work, so a member who\nmay post needs no run control), and the channel is silenced for an\nhour (``lantern.api.context.STOP_SILENCE_S``) until ``resume`` or a\n``silence`` of its own lifts it. A ``/stop`` typed in the channel goes\nthrough the same :meth:`ApiContext.stop_channel`.",
         "operationId": "stop_channel_v1_channels__channel_id__stop_post",
         "parameters": [
           {
@@ -17232,7 +17232,7 @@
     },
     "/v1/plans/{plan_id}/nodes/{node_id}/run/skip": {
       "post": {
-        "description": "Treat a task that is not under way \u2014 failed, blocked, waiting or\nready \u2014 as done, so its dependents become ready. The task is\n``skipped``; its issue is left exactly as it is (sbxloop does not\nclose it) and its item is not touched. Refused when the task is queued\nor running (``409 task_in_progress``), already settled (``409\ntask_settled``) or the run has ended (``409 run_ended``). Records\n``plan.run.task_skipped``.",
+        "description": "Treat a task that is not under way \u2014 failed, blocked, waiting or\nready \u2014 as done, so its dependents become ready. The task is\n``skipped``; its issue is left exactly as it is (lantern does not\nclose it) and its item is not touched. Refused when the task is queued\nor running (``409 task_in_progress``), already settled (``409\ntask_settled``) or the run has ended (``409 run_ended``). Records\n``plan.run.task_skipped``.",
         "operationId": "skip_epic_run_task_v1_plans__plan_id__nodes__node_id__run_skip_post",
         "parameters": [
           {
@@ -17896,7 +17896,7 @@
     },
     "/v1/repositories/{repository_id}/labels/sync": {
       "post": {
-        "description": "Create the labels sbxloop relies on \u2014 the seven lifecycle labels\nand the follow-up label, under this repository's own names \u2014 on a\nregistered repository, and say what it carries now. The repository is\nread first: one that already carries every one of them is left\nuntouched, and reports itself compliant.",
+        "description": "Create the labels lantern relies on \u2014 the seven lifecycle labels\nand the follow-up label, under this repository's own names \u2014 on a\nregistered repository, and say what it carries now. The repository is\nread first: one that already carries every one of them is left\nuntouched, and reports itself compliant.",
         "operationId": "sync_repository_labels_v1_repositories__repository_id__labels_sync_post",
         "parameters": [
           {

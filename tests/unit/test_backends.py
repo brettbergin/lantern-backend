@@ -10,17 +10,17 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop import backends
-from sbxloop.backends import BACKENDS, CLAUDE, CODEX, COPILOT, backend_for, backend_named
-from sbxloop.cli import models
-from sbxloop.cli.app import app
-from sbxloop.config import AgentConfig, Config, load_config
-from sbxloop.daemon.discord_format import KNOWN_BACKENDS
-from sbxloop.errors import SbxloopError
-from sbxloop.modelcatalog import ModelCatalog
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.secretstate import tracked_custom_secrets
-from sbxloop_worker.protocol import AGENT_BACKEND_NAMES
+from lantern import backends
+from lantern.backends import BACKENDS, CLAUDE, CODEX, COPILOT, backend_for, backend_named
+from lantern.cli import models
+from lantern.cli.app import app
+from lantern.config import AgentConfig, Config, load_config
+from lantern.daemon.discord_format import KNOWN_BACKENDS
+from lantern.errors import LanternError
+from lantern.modelcatalog import ModelCatalog
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.secretstate import tracked_custom_secrets
+from lantern_worker.protocol import AGENT_BACKEND_NAMES
 from tests.conftest import FakeSbx
 
 runner = CliRunner()
@@ -36,7 +36,7 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def claude_config(workdir: Path, extra: str = "", top: str = "") -> None:
-    (workdir / "sbxloop.toml").write_text(top + '[agent]\nbackend = "claude"\n' + extra)
+    (workdir / "lantern.toml").write_text(top + '[agent]\nbackend = "claude"\n' + extra)
 
 
 class TestDescriptor:
@@ -94,7 +94,7 @@ class TestDescriptor:
             assert binding.token_host in binding.token_hosts
 
     def test_secretstate_reexports_the_constants(self) -> None:
-        from sbxloop.sbx import secretstate
+        from lantern.sbx import secretstate
 
         assert secretstate.COPILOT_TOKEN_ENV is backends.COPILOT_TOKEN_ENV
         assert secretstate.ANTHROPIC_TOKEN_HOST is backends.ANTHROPIC_TOKEN_HOST
@@ -109,7 +109,7 @@ class TestDescriptor:
 
 class TestDoctor:
     def _checks(self, env: dict[str, str], fake_sbx: FakeSbx) -> dict[str, Any]:
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
         checks = collect_checks(env, cli=SbxCLI(binary=str(fake_sbx.binary)))
         return {c.name: c for c in checks}
@@ -119,7 +119,7 @@ class TestDoctor:
     ) -> None:
         """#617 acceptance: backend=claude + ANTHROPIC_API_KEY → green agent
         and concierge rows, and no Copilot row of any kind."""
-        from sbxloop.cli import doctor
+        from lantern.cli import doctor
 
         monkeypatch.setattr(
             doctor, "installed_sdk_permission_kinds", lambda: pytest.fail("copilot SDK probed")
@@ -200,19 +200,19 @@ class TestPrune:
         """A sandbox provisioned under the claude backend carries the
         Anthropic registration; prune has no way to know which backend was
         current then, so it removes every backend's."""
-        from sbxloop.engine.store import StateStore
-        from sbxloop.sbx.models import SandboxSpec
+        from lantern.engine.store import StateStore
+        from lantern.sbx.models import SandboxSpec
 
         store = StateStore(load_config().paths.state_db)
         store.create_run("rabc12345", "an outcome")
         store.set_run_state("rabc12345", "failed")
         cli = SbxCLI(binary=str(fake_sbx.binary))
-        cli.create(SandboxSpec(name="sbxloop-rabc12345-agent", role="agent", workspace=workdir))
+        cli.create(SandboxSpec(name="lantern-rabc12345-agent", role="agent", workspace=workdir))
         cli.secret_set_custom(
             host="api.anthropic.com",
             env="ANTHROPIC_API_KEY",
             value="sk",
-            sandbox="sbxloop-rabc12345-agent",
+            sandbox="lantern-rabc12345-agent",
         )
         result = runner.invoke(app, ["sandbox", "prune", "--min-age", "0", "--force"])
         assert result.exit_code == 0, result.output
@@ -221,7 +221,7 @@ class TestPrune:
             host="api.anthropic.com",
             env="ANTHROPIC_API_KEY",
             value="sk",
-            sandbox="sbxloop-rabc12345-agent",
+            sandbox="lantern-rabc12345-agent",
         )
 
 
@@ -278,7 +278,7 @@ class TestAnthropicModels:
         assert "after_id=claude-fable-5" in seen[1].full_url
 
     def test_missing_key_is_actionable(self) -> None:
-        with pytest.raises(SbxloopError, match="ANTHROPIC_API_KEY is not set"):
+        with pytest.raises(LanternError, match="ANTHROPIC_API_KEY is not set"):
             models.fetch_anthropic_models(env={}, open_url=fake_opener([], []))
 
     def test_http_401_names_the_key(self) -> None:
@@ -287,11 +287,11 @@ class TestAnthropicModels:
         def denied(request: Any, timeout_s: float) -> bytes:
             raise urllib.error.HTTPError(request.full_url, 401, "unauthorized", {}, None)  # type: ignore[arg-type]
 
-        with pytest.raises(SbxloopError, match="HTTP 401 — the key is invalid"):
+        with pytest.raises(LanternError, match="HTTP 401 — the key is invalid"):
             models.fetch_anthropic_models(env={"ANTHROPIC_API_KEY": "sk"}, open_url=denied)
 
     def test_non_json_is_an_error_not_a_traceback(self) -> None:
-        with pytest.raises(SbxloopError, match="not JSON"):
+        with pytest.raises(LanternError, match="not JSON"):
             models.fetch_anthropic_models(
                 env={"ANTHROPIC_API_KEY": "sk"}, open_url=lambda r, t: b"<html>"
             )

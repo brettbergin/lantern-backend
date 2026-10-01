@@ -173,7 +173,7 @@ def fake_sbx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeSbx:
     # A fake successful provision must not contact a real model catalogue.
     # Lifecycle tests replace this hook with a recorder; catalogue tests
     # inject the discovery response and exercise the cache itself.
-    monkeypatch.setattr("sbxloop.modelcatalog.refresh_after_provision", lambda config: None)
+    monkeypatch.setattr("lantern.modelcatalog.refresh_after_provision", lambda config: None)
     state = tmp_path / "sbx-state"
     state.mkdir()
     bin_dir = tmp_path / "bin"
@@ -203,7 +203,7 @@ def _structlog_through_stdlib() -> None:
     captures every record with its structured fields rendered. Tests that
     assert on a level below WARNING should say so with ``caplog.at_level``:
     CLI tests reconfigure the root level as the real entrypoint does."""
-    from sbxloop.log import configure_logging
+    from lantern.log import configure_logging
 
     configure_logging("DEBUG")
 
@@ -223,7 +223,7 @@ def _cli_console_follows_columns() -> None:
     tests look for. libedit builds (macOS, uv-managed CPython) do not, which
     is why the failure only shows on distro interpreters.
     """
-    from sbxloop.cli import app as app_module
+    from lantern.cli import app as app_module
 
     console = app_module.console
     # These are rich internals; fail loudly if a rich upgrade renames them
@@ -235,24 +235,24 @@ def _cli_console_follows_columns() -> None:
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point HOME at the test's tmp dir, so the sbxloop home defaults to
-    ``tmp_path/.sbxloop`` and no test reads (or writes!) the operator's
-    real home. ``SBXLOOP_HOME`` is cleared for the same reason: a developer
+    """Point HOME at the test's tmp dir, so the lantern home defaults to
+    ``tmp_path/.lantern`` and no test reads (or writes!) the operator's
+    real home. ``LANTERN_HOME`` is cleared for the same reason: a developer
     shell that exports it must not redirect the suite."""
     monkeypatch.setenv("HOME", str(tmp_path))
     # Path.home() reads USERPROFILE on Windows, so pin it too.
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.delenv("SBXLOOP_HOME", raising=False)
+    monkeypatch.delenv("LANTERN_HOME", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    # Lay the home out the way `sbxloop init` leaves it, so commands that
+    # Lay the home out the way `lantern init` leaves it, so commands that
     # check the layout (doctor) see an initialised host; a test about an
     # uninitialised host removes the record itself.
-    from sbxloop.paths import SbxloopHome
+    from lantern.paths import LanternHome
 
-    home = SbxloopHome(tmp_path / ".sbxloop")
+    home = LanternHome(tmp_path / ".lantern")
     home.ensure_tree()
-    home.write_record(sbxloop_version="test", created_by="tests/conftest.py")
+    home.write_record(lantern_version="test", created_by="tests/conftest.py")
     # The CLI pins tempfile.tempdir to the home's tmp/ once it exists; that
     # is process-global, and this test's home is gone when the next test
     # runs. Start every test from the platform default.

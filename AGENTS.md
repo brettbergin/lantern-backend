@@ -1,6 +1,6 @@
-# sbxloop
+# Lantern
 
-Read this first. It says what sbxloop is for, what it optimises for, and how
+Read this first. It says what Lantern is for, what it optimises for, and how
 work lands here. `CLAUDE.md` is a symlink to this file.
 
 ## What this is
@@ -19,7 +19,7 @@ fourth, `plan` (one level of a plan proposed from a read-only checkout and
 delivered to the plan record, never the forge). Nothing in this codebase may assume the task ends in code, and the
 trail fixture `tests/unit/test_code_run_trail.py` holds a `code` run
 byte-identical across every change the workload kind brings — read
-`docs/architecture.md` "Workloads" before touching either. sbxloop's own
+`docs/architecture.md` "Workloads" before touching either. lantern's own
 shape — Python, one maintainer with admin, an unprotected default branch, no
 services — is an edge case, not the default to design for.
 
@@ -52,7 +52,7 @@ Each of these has broken a real run when violated.
   `tests/unit/test_prompts.py` and `scripts/check_self_references.py`
   enforce this.
 - **Every knob lands in three places:** the config model, the example config
-  (`packages/sbxloop/src/sbxloop/data/sbxloop.toml.example`) and the knob
+  (`packages/lantern/src/lantern/data/lantern.toml.example`) and the knob
   table in `docs/user-guide.md` — with a per-repo override wherever
   `RepoConfig` already narrows.
 - **Secrets never appear in events, logs or `sbx` argv.** Names travel;
@@ -63,16 +63,16 @@ Each of these has broken a real run when violated.
 ## Non-goals
 
 - Not a CI system, not a code host, not a general chat bot.
-- Not a way to modify sbxloop with sbxloop. This repository is worked on by
+- Not a way to modify Lantern with lantern. This repository is worked on by
   people and their coding agents directly.
 
 ## Where things live
 
 `docs/architecture.md` is the map; this is the legend.
 
-- `packages/sbxloop/src/sbxloop/` — the host orchestrator.
+- `packages/lantern/src/lantern/` — the host orchestrator.
   - `cli/` — typer commands, `doctor`, `init`, `backup`.
-  - `paths.py` — the home: every host path derives from `SbxloopHome`.
+  - `paths.py` — the home: every host path derives from `LanternHome`.
     `homeinit.py` builds it, `homemigrate.py` moves an old installation
     into it, `backup.py` snapshots it.
   - `daemon/` — the always-on outer loop: sources, store, control, chat
@@ -95,11 +95,11 @@ Each of these has broken a real run when violated.
     capabilities an install cannot grant itself, the config model.
   - `configedit/` — the operator config edited one key at a time (what a
     key accepts, the comment-keeping write, the loader's verdict, the
-    backup); the console, `sbxloop config set` and the daemon's tools share
+    backup); the console, `lantern config set` and the daemon's tools share
     it.
   - `data/` — the example config and secrets file, the `init` presets and
     the home's launcher and unit templates, shipped as package data.
-- `packages/sbxloop-worker/src/sbxloop_worker/` — runs inside the sandbox.
+- `packages/lantern-worker/src/lantern_worker/` — runs inside the sandbox.
   `protocol.py` is the host↔worker contract; `backends/` are the agents.
 - `tests/fakes/fake_github.py` — the GitHub every test runs against.
   `tests/fixtures/ecosystems/` — one repository shape per toolchain family.
@@ -119,8 +119,8 @@ Each of these has broken a real run when violated.
      `make test` — the ~770 process-bound `slow` tests too, ~15 min — or
      CI, which runs all of it sharded, before a merge. Never a hand-picked
      subset in place of either.
-- `sbxloop.toml.example` at the root is a symlink into
-  `packages/sbxloop/src/sbxloop/data/`. Edit the target; update
+- `lantern.toml.example` at the root is a symlink into
+  `packages/lantern/src/lantern/data/`. Edit the target; update
   `tests/unit/test_examples.py` when keys change.
 - Sandbox behaviour is verified on CI runners only — never against a
   maintainer's or a customer's machine.

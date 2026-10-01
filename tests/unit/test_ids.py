@@ -1,4 +1,4 @@
-from sbxloop import ids
+from lantern import ids
 
 
 def test_run_id_shape_and_uniqueness() -> None:
@@ -36,5 +36,5 @@ def test_task_id_rejects_zero() -> None:
 
 
 def test_branch_name_takes_the_operators_prefix() -> None:
-    assert ids.branch_name("r12345678") == "sbxloop/r12345678"
+    assert ids.branch_name("r12345678") == "lantern/r12345678"
     assert ids.branch_name("r12345678", "bot/") == "bot/r12345678"

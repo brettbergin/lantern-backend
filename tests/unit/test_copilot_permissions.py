@@ -19,14 +19,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop_worker.backends.copilot import (
+from lantern_worker.backends.copilot import (
     READ_ONLY_ALLOWED_KINDS,
     SDK_PERMISSION_KINDS,
     CopilotBackend,
     installed_sdk_permission_kinds,
     read_only_denial,
 )
-from sbxloop_worker.protocol import JobRequest
+from lantern_worker.protocol import JobRequest
 
 
 class TestReadOnlyDenial:
@@ -108,8 +108,8 @@ class TestReadOnlyHandler:
         """A denied request must leave a trace (#123): the tracker tally
         rides back on the JobResult and the event stream records the kind,
         so a crippled critic is auditable instead of invisible."""
-        from sbxloop_worker.backends.copilot import SessionHealthTracker
-        from sbxloop_worker.protocol import Event, EventTypes
+        from lantern_worker.backends.copilot import SessionHealthTracker
+        from lantern_worker.protocol import Event, EventTypes
 
         job = JobRequest(
             job_id="j1",
@@ -141,7 +141,7 @@ class TestReadOnlyHandler:
         """The handler must thread request.tool_call_id into the tracker so
         the rejected call's success=False completion event is not tallied
         as a tool failure (which would degrade the critic on every denial)."""
-        from sbxloop_worker.backends.copilot import SessionHealthTracker
+        from lantern_worker.backends.copilot import SessionHealthTracker
 
         job = JobRequest(
             job_id="j1",
@@ -205,7 +205,7 @@ class TestToolCallCeiling:
         )
 
     def test_governor_is_pure(self) -> None:
-        from sbxloop_worker.backends.copilot import ToolCallGovernor
+        from lantern_worker.backends.copilot import ToolCallGovernor
 
         g = ToolCallGovernor(3)
         assert [g.decide() for _ in range(3)] == [None, None, None]
@@ -217,8 +217,8 @@ class TestToolCallCeiling:
         assert ToolCallGovernor(0).cap is None  # 0 = unbounded
 
     def test_auto_mode_approves_until_the_cap_then_nudges(self, stub_copilot_rpc: None) -> None:
-        from sbxloop_worker.backends.copilot import SessionHealthTracker, ToolCallGovernor
-        from sbxloop_worker.protocol import Event, EventTypes
+        from lantern_worker.backends.copilot import SessionHealthTracker, ToolCallGovernor
+        from lantern_worker.protocol import Event, EventTypes
 
         emitted: list[tuple[str, dict[str, object]]] = []
 
@@ -260,7 +260,7 @@ class TestToolCallCeiling:
             del sys.modules["copilot.session"]
 
     def test_read_only_mode_caps_before_the_allowlist(self, stub_copilot_rpc: None) -> None:
-        from sbxloop_worker.backends.copilot import SessionHealthTracker, ToolCallGovernor
+        from lantern_worker.backends.copilot import SessionHealthTracker, ToolCallGovernor
 
         tracker = SessionHealthTracker()
         governor = ToolCallGovernor(1)

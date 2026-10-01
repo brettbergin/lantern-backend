@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit
+from lantern.config import Config
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.conftest import FakeSbx
 from tests.unit.test_hostgit import describe, git, make_repo
 from tests.unit.test_provision import TOKENS

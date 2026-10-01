@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import json
 
-from sbxloop.config import Config
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.config import Config
+from lantern.engine.phases import PhaseRunner
+from lantern_worker.protocol import JobRequest, JobResult
 
 PLAN = {"title": "t", "tasks": [{"id": "t1", "title": "look"}]}
 

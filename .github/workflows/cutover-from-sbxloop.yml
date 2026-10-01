@@ -1,0 +1,237 @@
+name: Cut over from sbxloop
+
+# One time per host: move the deploy host from the sbxloop installation
+# (~/.sbxloop, the sbxloop-daemon unit) to Lantern (~/.lantern,
+# lantern-daemon). sbxloop became Lantern with no compatibility aliases, so
+# "Deploy the daemon" cannot upgrade across the rename: it finds no Lantern
+# home and stops before touching anything (docs/self-deploy.md, Cutovers).
+#
+# The run drains the old daemon under a pause hold, stops it, installs the
+# given Lantern release into a fresh home with `lantern init --from-sbxloop`
+# (config, secrets, App key and workspaces carried and renamed; state starts
+# fresh), starts Lantern and health-checks it. A failure after the old daemon
+# stopped puts it back: the new home is moved aside, the old units are
+# re-rendered and the old daemon restarted. The old home is never modified,
+# so it stays a rollback until `purge` removes it in a later run.
+#
+# Same trust boundary as deploy.yml: manual dispatch only, from main.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Lantern release to install (X.Y.Z). Ignored with purge."
+        required: false
+        default: ""
+      purge:
+        description: "Only remove the old sbxloop home and units (Lantern must be healthy)."
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-daemon
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  cutover:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]
+    timeout-minutes: 360
+    env:
+      HOST: ${{ vars.LANTERN_DEPLOY_HOST || 'db' }}
+      OLD_UNIT: sbxloop-daemon.service
+      UNIT: lantern-daemon.service
+      SANDBOXD: sbx-sandboxd.service
+      HOLD: cutover-${{ github.run_id }}
+      VERSION: ${{ inputs.version }}
+      CURRENT_JQ: >-
+        if .current != null then "\(.current.run_id) — \(.current.title)"
+        elif (.claiming // null) != null then "claiming \(.claiming)"
+        else "idle" end
+
+    steps:
+      - name: Resolve host paths
+        run: |
+          set -euo pipefail
+          old="${HOME}/.sbxloop"
+          new="${HOME}/.lantern"
+          {
+            echo "OLD_HOME=${old}"
+            echo "OLD=${old}/bin/sbxloop"
+            echo "LANTERN_HOME=${new}"
+            echo "LANTERN=${new}/bin/lantern"
+            echo "VENV_LANTERN=${new}/venv/bin/lantern"
+            echo "RUNNER_DIR=${HOME}/actions-runner"
+          } >> "$GITHUB_ENV"
+
+      - name: Purge the old installation
+        if: inputs.purge
+        run: |
+          set -euo pipefail
+          systemctl --user is-active --quiet "${UNIT}" || { echo "::error::${UNIT} is not active; not purging the rollback"; exit 1; }
+          "${LANTERN}" doctor || { echo "::error::lantern doctor is unhappy; not purging the rollback"; exit 1; }
+          systemctl --user disable "${OLD_UNIT}" 2>/dev/null || true
+          rm -f "${HOME}/.config/systemd/user/${OLD_UNIT}"
+          systemctl --user daemon-reload
+          rm -rf -- "${OLD_HOME}"
+          echo "::notice::removed ${OLD_HOME} and ${OLD_UNIT}"
+
+      - name: Check the starting point
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must be X.Y.Z"; exit 1; }
+          [ -x "${OLD}" ] || { echo "::error::no sbxloop installation at ${OLD_HOME}"; exit 1; }
+          [ -f "${OLD_HOME}/config/sbxloop.toml" ] || { echo "::error::${OLD_HOME} has no config/sbxloop.toml"; exit 1; }
+          if [ -e "${LANTERN_HOME}" ]; then
+            echo "::error::${LANTERN_HOME} already exists — a cutover already ran; move it aside to retry"
+            exit 1
+          fi
+          [ -x "${RUNNER_DIR}/run.sh" ] || { echo "::error::no Actions runner at ${RUNNER_DIR}"; exit 1; }
+
+      - name: Take the hold
+        id: hold
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          "${OLD}" daemon ctl pause --hold "${HOLD}" --timeout 30 || true
+
+      - name: Wait for the old daemon to go idle
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          # The deploy's drain (deploy.yml): never stop under a live run.
+          waited=0
+          misses=0
+          while :; do
+            set +e
+            status="$("${OLD}" daemon ctl status --json --timeout 30)"
+            rc=$?
+            set -e
+            if [ "${rc}" -eq 0 ]; then
+              misses=0
+              current="$(jq -r "${CURRENT_JQ}" <<<"${status}")"
+              if [ "${current}" = "idle" ]; then
+                echo "idle after ${waited}s"
+                exit 0
+              fi
+              echo "not idle (${current}) — waiting (${waited}s so far)"
+            else
+              misses=$((misses + 1))
+              echo "no answer from the daemon (${misses}/20)"
+              [ "${misses}" -lt 20 ] || { echo "::warning::no daemon answered for 5 min; nothing to drain"; exit 0; }
+            fi
+            sleep 15
+            waited=$((waited + 15))
+          done
+
+      - name: Stop sbxloop
+        id: stop
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          timeout 300 systemctl --user stop "${OLD_UNIT}"
+          timeout 300 systemctl --user stop "${SANDBOXD}" || true
+          systemctl --user disable "${OLD_UNIT}"
+
+      - name: Install Lantern from the sbxloop home
+        id: install
+        if: ${{ !inputs.purge }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          installer="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh?ref=${WORKFLOW_SHA}" \
+            -H 'Accept: application/vnd.github.raw+json' > "${installer}"
+          LANTERN_VERSION="${VERSION}" \
+            LANTERN_INIT_ARGS="--runner ${RUNNER_DIR} --from-sbxloop ${OLD_HOME}" \
+            sh "${installer}"
+          rm -f "${installer}"
+
+      - name: Start Lantern
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          systemctl --user daemon-reload
+          systemctl --user reset-failed "${SANDBOXD}" "${UNIT}" || true
+          timeout 300 systemctl --user start "${SANDBOXD}"
+          timeout 300 systemctl --user start "${UNIT}"
+
+      - name: Health check
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::health check failed: $1"; exit 1; }
+          systemctl --user is-active --quiet "${UNIT}" || fail "unit is not active"
+          got="$("${VENV_LANTERN}" --version | awk '{print $2}')"
+          [ "${got}" = "${VERSION}" ] || fail "version is ${got}, expected ${VERSION}"
+          "${LANTERN}" doctor || fail "lantern doctor is unhappy"
+          "${LANTERN}" daemon ctl status --json --timeout 300 >/dev/null || fail "daemon did not answer ctl status"
+          before="$(systemctl --user show "${UNIT}" -p NRestarts --value)"
+          sleep 45
+          systemctl --user is-active --quiet "${UNIT}" || fail "unit died within 45s of starting"
+          after="$(systemctl --user show "${UNIT}" -p NRestarts --value)"
+          [ "${before}" = "${after}" ] || fail "unit restarted ${before} -> ${after} within 45s (crash loop)"
+          echo "::notice::${HOST} is healthy on Lantern ${VERSION}"
+
+      - name: Bake the sandbox template
+        # As deploy.yml re-bakes after an upgrade: the sbxloop host's template
+        # carried the old worker under the old name. Best effort — without it
+        # provisioning runs the install ladder, it does not fail.
+        if: ${{ !inputs.purge }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ ! -f "${OLD_HOME}/state/bake.json" ]; then
+            echo "the sbxloop home never baked a template; nothing to bake"
+            exit 0
+          fi
+          "${LANTERN}" bake </dev/null
+
+      - name: Put sbxloop back
+        if: failure() && !inputs.purge && steps.stop.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          echo "::error::cutover failed — restoring sbxloop"
+          systemctl --user stop "${UNIT}" "${SANDBOXD}" 2>/dev/null || true
+          systemctl --user disable "${UNIT}" 2>/dev/null || true
+          if [ -e "${LANTERN_HOME}" ]; then
+            mv "${LANTERN_HOME}" "${LANTERN_HOME}.failed-${GITHUB_RUN_ID}"
+          fi
+          # Re-render and re-enable the old home's units, the runner's included.
+          "${OLD}" init --systemd --no-sbx --runner "${RUNNER_DIR}"
+          systemctl --user daemon-reload
+          systemctl --user reset-failed "${SANDBOXD}" "${OLD_UNIT}" || true
+          timeout 300 systemctl --user start "${SANDBOXD}"
+          timeout 300 systemctl --user start "${OLD_UNIT}"
+          "${OLD}" daemon ctl status --json --timeout 300 >/dev/null \
+            || { echo "::error::ROLLBACK ALSO FAILED — ${HOST} needs a human"; exit 1; }
+          echo "sbxloop is back"
+
+      - name: Release the hold
+        if: always() && steps.hold.outcome == 'success'
+        run: |
+          # Only the old daemon knows this hold; a healthy Lantern starts unpaused.
+          if systemctl --user is-active --quiet "${OLD_UNIT}"; then
+            "${OLD}" daemon ctl resume --hold "${HOLD}" --timeout 60 \
+              || echo "::warning::could not release hold ${HOLD}"
+          fi
+
+      - name: Report
+        if: always() && !inputs.purge
+        env:
+          RESULT: ${{ job.status }}
+        run: |
+          if [ "${RESULT}" = "success" ]; then
+            echo "✅ \`${HOST}\` is now Lantern \`${VERSION}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif systemctl --user is-active --quiet "${OLD_UNIT}"; then
+            echo "❌ cutover of \`${HOST}\` to Lantern \`${VERSION}\` ${RESULT}; sbxloop is running again." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ cutover of \`${HOST}\` ${RESULT}; neither daemon is running — needs a human." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -3,11 +3,11 @@
 import json
 from typing import Any, cast
 
-from sbxloop.api.collaboration import CollaborationStore
-from sbxloop.api.projector import Projector
-from sbxloop.api.stream import StreamHub
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import chat_item_id
+from lantern.api.collaboration import CollaborationStore
+from lantern.api.projector import Projector
+from lantern.api.stream import StreamHub
+from lantern.daemon.model import WorkItem
+from lantern.ghids import chat_item_id
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 
 
@@ -104,7 +104,7 @@ def test_source_identity_requires_a_complete_message_id(api: Any) -> None:
     # link is an equality on the message id the item was admitted with.
     headers, channel, item = setup_work(api, suffix="unrelated")
     with api.harness.dstore.read() as session:
-        from sbxloop.db.daemon_models import WorkItemRow
+        from lantern.db.daemon_models import WorkItemRow
 
         row = session.get(WorkItemRow, item.item_id)
         assert row is not None
@@ -120,7 +120,7 @@ def _work_results(api: Any, headers: dict[str, str], channel: str) -> list[dict[
     return [message for message in messages if message["kind"] == "work_result"]
 
 
-def test_workload_runner_result_is_credited_to_angie(api: Any) -> None:
+def test_workload_runner_result_is_credited_to_lantern(api: Any) -> None:
     # A runner turn names no participant; its result still has an author.
     headers, channel, item = setup_work(api, request={"intent": "workload"})
     queued = api.client.get(f"/v1/channels/{channel}/work", headers=headers).json()
@@ -144,8 +144,8 @@ def test_mentioned_agent_keeps_credit_for_its_result(api: Any) -> None:
     assert results[0]["work"]["agent_slug"] == "operator"
 
 
-def test_stored_unattributed_result_reads_back_as_angie(api: Any) -> None:
-    # Rows written before attribution existed stay as stored; reads credit Angie.
+def test_stored_unattributed_result_reads_back_as_lantern(api: Any) -> None:
+    # Rows written before attribution existed stay as stored; reads credit Lantern.
     headers, channel, _ = setup_work(api, request={"intent": "workload"})
     snapshot = api.client.get(f"/v1/channels/{channel}/work", headers=headers).json()[0]
     stored = api.ctx.collaboration.append_work_result(
@@ -164,7 +164,7 @@ def test_stored_unattributed_result_reads_back_as_angie(api: Any) -> None:
     assert legacy["work"]["agent_slug"] == "concierge"
     assert legacy["work"]["state"] == "completed"
     with api.harness.dstore.read() as session:
-        from sbxloop.db.collaboration_models import MessageRow
+        from lantern.db.collaboration_models import MessageRow
 
         row = session.get(MessageRow, "msg_work_legacy")
         assert row is not None
@@ -241,7 +241,7 @@ def test_a_stored_result_from_before_artifacts_still_serializes(api: Any) -> Non
     api.harness.dstore.mark_failed(item.item_id, "sandbox unavailable", api.clock(), requeue=False)
     messages = api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()
     result = next(m for m in messages if m["kind"] == "work_result")
-    from sbxloop.db.collaboration_models import MessageRow
+    from lantern.db.collaboration_models import MessageRow
 
     with api.harness.dstore.immediate_transaction() as session:
         row = session.get(MessageRow, result["id"])
@@ -278,7 +278,7 @@ def test_projector_catalogues_finished_runs_before_delivering_work() -> None:
 def test_a_run_whose_catalog_fails_does_not_stop_delivery(api: Any, monkeypatch: Any) -> None:
     """One run's unreadable files cost that result its file list, not every
     channel's delivery nor the channel's own history."""
-    from sbxloop.db.collaboration_models import MessageRow
+    from lantern.db.collaboration_models import MessageRow
 
     headers, channel, item = setup_work(api)
     other = api.client.post("/v1/channels", json={}, headers=headers).json()["id"]

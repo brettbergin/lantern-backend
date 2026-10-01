@@ -5,8 +5,8 @@ from typing import cast
 
 import pytest
 
-from sbxloop.config import RepoConfig
-from sbxloop.engine.engine import LoopEngine, Pipeline
+from lantern.config import RepoConfig
+from lantern.engine.engine import LoopEngine, Pipeline
 from tests.fakes.fake_gitlab import FakeGitlab
 
 

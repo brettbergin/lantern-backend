@@ -9,26 +9,26 @@ from pathlib import Path
 import pytest
 from dotenv import dotenv_values
 
-from sbxloop.config import Config, load_config, load_secrets_env
-from sbxloop.paths import HOME_ENV, SbxloopHome
+from lantern.config import Config, load_config, load_secrets_env
+from lantern.paths import HOME_ENV, LanternHome
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SENTINEL = "SBXLOOP_TEST_DOTENV_SENTINEL"
+SENTINEL = "LANTERN_TEST_DOTENV_SENTINEL"
 
 
 @pytest.fixture(autouse=True)
 def _clean_sentinels(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ensure vars our secrets files set never leak across tests."""
-    for name in (SENTINEL, "SBXLOOP_MODEL", "COPILOT_GITHUB_TOKEN"):
+    for name in (SENTINEL, "LANTERN_MODEL", "COPILOT_GITHUB_TOKEN"):
         monkeypatch.delenv(name, raising=False)
     yield  # type: ignore[misc]
     os.environ.pop(SENTINEL, None)
-    os.environ.pop("SBXLOOP_MODEL", None)
+    os.environ.pop("LANTERN_MODEL", None)
 
 
 def secrets_file(root: Path, text: str) -> Path:
-    home = SbxloopHome(root)
+    home = LanternHome(root)
     home.config.mkdir(parents=True, exist_ok=True)
     home.secrets_env.write_text(text)
     return home.secrets_env
@@ -36,27 +36,27 @@ def secrets_file(root: Path, text: str) -> Path:
 
 class TestLoadSecretsEnv:
     def test_loads_the_homes_file_into_environ(self, tmp_path: Path) -> None:
-        # HOME is tmp_path (autouse fixture), so the home is tmp_path/.sbxloop.
-        path = secrets_file(tmp_path / ".sbxloop", f"{SENTINEL}=from-secrets\n")
+        # HOME is tmp_path (autouse fixture), so the home is tmp_path/.lantern.
+        path = secrets_file(tmp_path / ".lantern", f"{SENTINEL}=from-secrets\n")
         assert load_secrets_env() == path
         assert os.environ[SENTINEL] == "from-secrets"
 
     def test_real_environment_wins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(SENTINEL, "from-real-env")
-        secrets_file(tmp_path / ".sbxloop", f"{SENTINEL}=from-secrets\n")
+        secrets_file(tmp_path / ".lantern", f"{SENTINEL}=from-secrets\n")
         load_secrets_env()
         assert os.environ[SENTINEL] == "from-real-env"
 
     def test_missing_file_is_noop(self) -> None:
         assert load_secrets_env() is None
 
-    def test_sbxloop_home_relocates_the_file(self, tmp_path: Path) -> None:
+    def test_lantern_home_relocates_the_file(self, tmp_path: Path) -> None:
         path = secrets_file(tmp_path / "elsewhere", f"{SENTINEL}=moved\n")
         assert load_secrets_env({HOME_ENV: str(tmp_path / "elsewhere")}) == path
         assert os.environ[SENTINEL] == "moved"
 
     def test_hermetic_mapping_reads_nothing(self, tmp_path: Path) -> None:
-        secrets_file(tmp_path / ".sbxloop", f"{SENTINEL}=from-secrets\n")
+        secrets_file(tmp_path / ".lantern", f"{SENTINEL}=from-secrets\n")
         assert load_secrets_env({}) is None
         assert SENTINEL not in os.environ
 
@@ -67,27 +67,27 @@ class TestLoadSecretsEnv:
         while the home resolver fell back to the user directory — the host
         ran out of one home and read no secrets from it. Both answer the
         same now, from ``USERPROFILE`` alone."""
-        from sbxloop.paths import resolve_home_root
+        from lantern.paths import resolve_home_root
 
         profile = tmp_path / "Users" / "Ada"
-        path = secrets_file(profile / ".sbxloop", f"{SENTINEL}=from-userprofile\n")
+        path = secrets_file(profile / ".lantern", f"{SENTINEL}=from-userprofile\n")
         env = {"USERPROFILE": str(profile)}
-        assert resolve_home_root(env) == profile / ".sbxloop"
+        assert resolve_home_root(env) == profile / ".lantern"
         assert load_secrets_env(env) == path
         assert os.environ[SENTINEL] == "from-userprofile"
 
 
 class TestConfigIntegration:
     def test_load_config_reads_secrets_settings(self, tmp_path: Path) -> None:
-        secrets_file(tmp_path / ".sbxloop", "SBXLOOP_MODEL=secrets-model\n")
+        secrets_file(tmp_path / ".lantern", "LANTERN_MODEL=secrets-model\n")
         config = load_config(cwd=tmp_path)  # env=None -> real environ + secrets.env
         assert config.model == "secrets-model"
 
     def test_explicit_env_mapping_stays_hermetic(self, tmp_path: Path) -> None:
-        secrets_file(tmp_path / ".sbxloop", "SBXLOOP_MODEL=secrets-model\n")
+        secrets_file(tmp_path / ".lantern", "LANTERN_MODEL=secrets-model\n")
         config = load_config(cwd=tmp_path, env={})
         assert config.model == "auto"  # secrets.env not consulted
-        assert "SBXLOOP_MODEL" not in os.environ  # and not loaded at all
+        assert "LANTERN_MODEL" not in os.environ  # and not loaded at all
 
 
 class TestTrustBoundary:
@@ -107,10 +107,10 @@ class TestTrustBoundary:
         from tests.unit.test_hostgit import make_repo
 
         root = make_repo(tmp_path)
-        (root / ".env").write_text("SBXLOOP_MODEL=from-the-app\n")
+        (root / ".env").write_text("LANTERN_MODEL=from-the-app\n")
         config = load_config(cwd=root)
         assert config.model == "auto"
-        assert "SBXLOOP_MODEL" not in os.environ
+        assert "LANTERN_MODEL" not in os.environ
 
 
 class TestEnvExample:
@@ -137,15 +137,15 @@ class TestEnvExample:
 
     def test_example_documents_where_it_lives(self) -> None:
         text = (REPO_ROOT / ".env.example").read_text()
-        assert "~/.sbxloop/config/secrets.env" in text
+        assert "~/.lantern/config/secrets.env" in text
         assert "0600" in text
-        assert "~/.config/sbxloop" not in text
+        assert "~/.config/lantern" not in text
 
     def test_example_names_every_credential_env_var_the_code_reads(self) -> None:
-        from sbxloop.daemon.discord import TOKEN_ENV as DISCORD_TOKEN_ENV
-        from sbxloop.daemon.slack import APP_TOKEN_ENV, BOT_TOKEN_ENV
-        from sbxloop.sbx.provision import GH_TOKEN_ENVS
-        from sbxloop.sbx.secretstate import COPILOT_TOKEN_ENV
+        from lantern.daemon.discord import TOKEN_ENV as DISCORD_TOKEN_ENV
+        from lantern.daemon.slack import APP_TOKEN_ENV, BOT_TOKEN_ENV
+        from lantern.sbx.provision import GH_TOKEN_ENVS
+        from lantern.sbx.secretstate import COPILOT_TOKEN_ENV
 
         text = (REPO_ROOT / ".env.example").read_text()
         for name in (
@@ -158,16 +158,16 @@ class TestEnvExample:
             assert name in text, f"{name} missing from .env.example"
 
     def test_example_commented_settings_are_valid_config(self, tmp_path: Path) -> None:
-        # Every commented-out SBXLOOP_* line must round-trip through the
+        # Every commented-out LANTERN_* line must round-trip through the
         # config loader once uncommented, so the example can't rot.
         lines = (REPO_ROOT / ".env.example").read_text().splitlines()
         env: dict[str, str] = {}
         for line in lines:
             stripped = line.lstrip("#").strip()
-            if stripped.startswith("SBXLOOP_") and "=" in stripped:
+            if stripped.startswith("LANTERN_") and "=" in stripped:
                 key, _, value = stripped.partition("=")
                 env[key] = value
-        assert env, "expected commented SBXLOOP_ examples"
+        assert env, "expected commented LANTERN_ examples"
         config = load_config(cwd=tmp_path, env=env)
         assert isinstance(config, Config)
         assert config.github.repo == "you/your-repo"

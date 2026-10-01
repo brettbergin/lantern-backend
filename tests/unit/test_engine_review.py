@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.engine.review import (
+from lantern.engine.review import (
     FIX_TASK_PREFIX,
     FIX_TASK_TITLE,
     MAX_INLINE_COMMENTS,
@@ -28,7 +28,7 @@ from sbxloop.engine.review import (
     split_test,
     unanswered_findings,
 )
-from sbxloop.vcs.github.ops import FailedCheck, ReviewComment
+from lantern.vcs.github.ops import FailedCheck, ReviewComment
 
 
 def finding(
@@ -113,7 +113,7 @@ class TestReviewBody:
             "**Review verdict: approve** (round 2)\n\nlooked for the four; clean"
         )
         assert "Findings without a line anchor:\n- `src/app.py` [minor] README is stale" in body
-        assert body.endswith("<sub>sbxloop review round 2 of run `r1abc`</sub>")
+        assert body.endswith("<sub>lantern review round 2 of run `r1abc`</sub>")
         assert "further inline comment" not in body
 
     def test_overflow_past_the_cap_is_named_not_dropped_silently(self) -> None:
@@ -132,7 +132,7 @@ class TestReviewBody:
         assert body.startswith("**Review verdict: changes requested** (round 3)\n\none real defect")
         assert "Findings without a thread of their own:\n- `src/gone.py:99` [major]" in body
         assert "src/app.py:12" not in body
-        assert body.endswith("<sub>sbxloop review round 3 of run `r1`</sub>")
+        assert body.endswith("<sub>lantern review round 3 of run `r1`</sub>")
         assert "Findings without a thread" not in review_body(
             verdict, run_id="r1", round=3, in_body=[]
         )
@@ -497,7 +497,7 @@ class TestFixTask:
 
 
 def test_review_body_unanchored_lists_every_finding() -> None:
-    from sbxloop.engine.review import ReviewFinding, ReviewVerdict, review_body
+    from lantern.engine.review import ReviewFinding, ReviewVerdict, review_body
 
     verdict = ReviewVerdict(
         verdict="approve",
@@ -510,7 +510,7 @@ def test_review_body_unanchored_lists_every_finding() -> None:
     body = review_body(verdict, run_id="r1", round=2, anchored=False)
     assert body.startswith("**Review verdict: approve** (round 2)\n\nfine")
     assert "Findings:\n- `a.py:3` [nit] anchored nit\n- `b.py` [minor] unanchored" in body
-    assert body.endswith("<sub>sbxloop review round 2 of run `r1`</sub>")
+    assert body.endswith("<sub>lantern review round 2 of run `r1`</sub>")
     # the anchored shape lists only what has no inline comment
     anchored = review_body(verdict, run_id="r1", round=2)
     assert "anchored nit" not in anchored and "unanchored" in anchored

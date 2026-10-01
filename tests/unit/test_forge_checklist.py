@@ -2,7 +2,7 @@
 
 On a forge with no native sub-issues (GitLab, by policy), a published
 parent lists its children in a block of its description between
-``<!-- sbx-plan:children -->`` markers. sbxloop rewrites that block and
+``<!-- sbx-plan:children -->`` markers. lantern rewrites that block and
 nothing else, and a block a person broke is reported, never repaired.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.vcs.checklist import (
+from lantern.vcs.checklist import (
     END,
     START,
     ChecklistEntry,

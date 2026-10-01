@@ -1,4 +1,4 @@
-"""`sbxloop bake` tests: scratch sandbox, install ladder, template save.
+"""`lantern bake` tests: scratch sandbox, install ladder, template save.
 
 The install ladder execs are scripted (the real-pip path is covered in
 test_worker_client); the template save/seed round trip runs against the
@@ -12,22 +12,22 @@ from pathlib import Path
 
 import pytest
 
-import sbxloop
-from sbxloop import toolchains
-from sbxloop.config import Config
-from sbxloop.errors import BakeError
-from sbxloop.sbx.bake import (
+import lantern
+from lantern import toolchains
+from lantern.config import Config
+from lantern.errors import BakeError
+from lantern.sbx.bake import (
     DEFAULT_TEMPLATE_REF,
     bake_record_path,
     bake_template,
     load_bake_record,
 )
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
 from tests.conftest import FakeSbx
 
 BOX = "bakebox"
-VENV_PY = "/home/agent/.sbxloop/venv/bin/python"
+VENV_PY = "/home/agent/.lantern/venv/bin/python"
 
 
 @pytest.fixture
@@ -61,16 +61,16 @@ def script_install(
         fake_sbx.script(f"exec {BOX} sh -c {toolchain.probe}", returncode=0)
     # The batched probe the bake records from (#615): what landed.
     fake_sbx.script(
-        f"exec {BOX} sh -c : sbxloop-toolchain-probe",
+        f"exec {BOX} sh -c : lantern-toolchain-probe",
         returncode=probe_rc,
         stdout="".join(f"{name}\n" for name in missing or []),
     )
     fake_sbx.script(f"exec {BOX} sh -c sudo -n apt-get", returncode=0)
     fake_sbx.script(f'exec {BOX} sh -c for p in "$@"', stdout="")
     fake_sbx.script(f"exec {BOX} python3 -m venv", returncode=0)
-    fake_sbx.script(f"exec {BOX} /home/agent/.sbxloop/venv/bin/pip", returncode=0)
-    fake_sbx.script(f"exec {BOX} {VENV_PY} -c", stdout=f"{sbxloop.__version__}\n")
-    fake_sbx.script(f"exec {BOX} {VENV_PY} -m sbxloop_worker", returncode=64)
+    fake_sbx.script(f"exec {BOX} /home/agent/.lantern/venv/bin/pip", returncode=0)
+    fake_sbx.script(f"exec {BOX} {VENV_PY} -c", stdout=f"{lantern.__version__}\n")
+    fake_sbx.script(f"exec {BOX} {VENV_PY} -m lantern_worker", returncode=64)
     fake_sbx.script(f"exec {BOX} {VENV_PY} -m copilot", returncode=runtime_rc)
 
 
@@ -118,8 +118,8 @@ class TestBakeHappyPath:
         apt = [c[-1] for c in execs if "apt-get" in c[-1]]
         assert len(apt) == 1 and "python3.14-venv" in apt[0].split()
         assert not [c for c in execs if c[2:6] == ["python3", "-m", "pip", "install"]]
-        saved = fake_sbx.state / "templates" / "sbxloop-baked_latest" / "fs"
-        manifest = json.loads((saved / "home/agent/.sbxloop/bake.json").read_text())
+        saved = fake_sbx.state / "templates" / "lantern-baked_latest" / "fs"
+        manifest = json.loads((saved / "home/agent/.lantern/bake.json").read_text())
         assert manifest["python"] == VENV_PY
 
     def test_bake_saves_template_and_records(
@@ -129,15 +129,15 @@ class TestBakeHappyPath:
         record = bake_template(cli, config, name=BOX)
 
         assert record.ref == DEFAULT_TEMPLATE_REF
-        assert record.worker_version == sbxloop.__version__
+        assert record.worker_version == lantern.__version__
         assert record.python == VENV_PY
         assert record.runtime_cached
 
         # template saved AFTER the manifest was written into the VM
         assert ["template", "save", BOX, DEFAULT_TEMPLATE_REF] in fake_sbx.invocations("template")
-        saved = fake_sbx.state / "templates" / "sbxloop-baked_latest" / "fs"
-        manifest = json.loads((saved / "home/agent/.sbxloop/bake.json").read_text())
-        assert manifest["worker_version"] == sbxloop.__version__
+        saved = fake_sbx.state / "templates" / "lantern-baked_latest" / "fs"
+        manifest = json.loads((saved / "home/agent/.lantern/bake.json").read_text())
+        assert manifest["worker_version"] == lantern.__version__
         assert manifest["python"] == VENV_PY
         assert manifest["runtime_cached"] is True
         assert manifest["languages"] == ["python"]
@@ -207,8 +207,8 @@ class TestBakeHappyPath:
         assert toolchains.GO.probe in probes
         assert toolchains.PYTHON.probe not in probes
         assert record.languages == ("go",)
-        saved = fake_sbx.state / "templates" / "sbxloop-baked_latest" / "fs"
-        manifest = json.loads((saved / "home/agent/.sbxloop/bake.json").read_text())
+        saved = fake_sbx.state / "templates" / "lantern-baked_latest" / "fs"
+        manifest = json.loads((saved / "home/agent/.lantern/bake.json").read_text())
         assert manifest["languages"] == ["go"]
 
     def test_bake_records_only_what_landed(
@@ -249,7 +249,7 @@ class TestBakeHappyPath:
             SandboxSpec(name="fromtpl", role="agent", workspace=workspace, template=record.ref)
         )
         fs = fake_sbx.sandbox_fs("fromtpl")
-        assert (fs / "home/agent/.sbxloop/bake.json").is_file()
+        assert (fs / "home/agent/.lantern/bake.json").is_file()
         # the mount model still points at the NEW sandbox's workspace
         assert (fs / "workspace").resolve() == workspace.resolve()
 
@@ -261,8 +261,8 @@ class TestBakeOptions:
         script_install(fake_sbx, runtime_rc=1)
         record = bake_template(cli, config, name=BOX)
         assert not record.runtime_cached
-        saved = fake_sbx.state / "templates" / "sbxloop-baked_latest" / "fs"
-        manifest = json.loads((saved / "home/agent/.sbxloop/bake.json").read_text())
+        saved = fake_sbx.state / "templates" / "lantern-baked_latest" / "fs"
+        manifest = json.loads((saved / "home/agent/.lantern/bake.json").read_text())
         assert manifest["runtime_cached"] is False
 
     def test_no_runtime_cache_skips_download(
@@ -298,8 +298,8 @@ class TestBakeFailure:
         fake_sbx.script(f"exec {BOX} python3 -c import sys", stdout="python3.14-venv\n")
         fake_sbx.script(f"exec {BOX} sh -c sudo -n apt-get", returncode=100)
         fake_sbx.script(f"exec {BOX} python3 -m pip install", returncode=0)
-        fake_sbx.script(f"exec {BOX} python3 -c import sbxloop_worker", stdout=sbxloop.__version__)
-        fake_sbx.script(f"exec {BOX} python3 -m sbxloop_worker", returncode=64)
+        fake_sbx.script(f"exec {BOX} python3 -c import lantern_worker", stdout=lantern.__version__)
+        fake_sbx.script(f"exec {BOX} python3 -m lantern_worker", returncode=64)
         script_install(fake_sbx)
 
         with pytest.raises(BakeError, match="isolated worker virtualenv"):
@@ -351,7 +351,7 @@ class TestBakeFailure:
             json.dumps(
                 {
                     "ref": DEFAULT_TEMPLATE_REF,
-                    "worker_version": sbxloop.__version__,
+                    "worker_version": lantern.__version__,
                     "python": VENV_PY,
                     "runtime_cached": True,
                     "baked_at": 0.0,

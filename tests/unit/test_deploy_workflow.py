@@ -21,13 +21,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sbxloop.sbx.provision import gh_credential_status
+from lantern.sbx.provision import gh_credential_status
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 EXAMPLE = ROOT / "contrib" / "workflows" / "deploy-daemon.yml.example"
 
-_EXTRAS_RE = re.compile(r"sbxloop(?:-\S*?\.whl)?\[([\w,]+)\]")
+_EXTRAS_RE = re.compile(r"lantern[-_]backend(?:-\S*?\.whl)?\[([\w,]+)\]")
 
 
 @pytest.fixture(scope="module")
@@ -62,7 +62,7 @@ class TestWorkflowCredentials:
             if mode == "app"
             else {"GH_TOKEN": "host-pat"}
         )
-        host_steps = [step for step in job["steps"] if '"${SBXLOOP}"' in step.get("run", "")]
+        host_steps = [step for step in job["steps"] if '"${LANTERN}"' in step.get("run", "")]
         assert host_steps
         for step in host_steps:
             # Actions overlays workflow, job and step env on the host's env.
@@ -90,11 +90,11 @@ class TestWorkflowCredentials:
 
 def test_pdf_analyzer_identity_is_provisioned_before_deploy_hold(deploy: str) -> None:
     step = _step(deploy, "Prepare isolated PDF analyzer")
-    assert 'ANALYSIS_SBX="${SBXLOOP_HOME}/bin/sbx"' in step
-    assert "--app-name sbxloop-analysis login" in step
+    assert 'ANALYSIS_SBX="${LANTERN_HOME}/bin/sbx"' in step
+    assert "--app-name lantern-analysis login" in step
     assert "--password-stdin" in step
-    assert "--app-name sbxloop-analysis policy init deny-all" in step
-    assert "--app-name sbxloop-analysis policy deny network '**'" in step
+    assert "--app-name lantern-analysis policy init deny-all" in step
+    assert "--app-name lantern-analysis policy deny network '**'" in step
     assert deploy.index("name: Prepare isolated PDF analyzer") < deploy.index(
         "name: Take the deploy hold"
     )
@@ -114,7 +114,7 @@ def test_rollback_fetches_the_previous_release_wheels(deploy: str) -> None:
     assert rollback.count('GH_TOKEN="${ACTIONS_TOKEN}" VERSION="${PREV}" DIST="${prev_dist}"') == 2
     assert '"${PIPELINE}" download-wheels' in rollback
     assert '"${PIPELINE}" verify-download' in rollback
-    assert "${prev_dist}/sbxloop_worker-${PREV}-py3-none-any.whl" in rollback
+    assert "${prev_dist}/lantern_worker-${PREV}-py3-none-any.whl" in rollback
     steps = {s["name"]: s for s in yaml.safe_load(deploy)["jobs"]["deploy"]["steps"]}
     # The Actions token reaches the helper only; host commands keep their own.
     assert steps["Roll back"]["env"]["ACTIONS_TOKEN"] == "${{ github.token }}"
@@ -123,12 +123,12 @@ def test_rollback_fetches_the_previous_release_wheels(deploy: str) -> None:
 
 def test_the_example_fetches_both_releases_before_the_hold(example: str) -> None:
     fetch = _step(example, "Fetch the release wheels")
-    assert '-m sbxloop.releases download "${VERSION}"' in fetch
-    assert '-m sbxloop.releases download "${PREV}"' in fetch
+    assert '-m lantern.releases download "${VERSION}"' in fetch
+    assert '-m lantern.releases download "${PREV}"' in fetch
     assert example.index("name: Fetch the release wheels") < example.index(
         "name: Take the deploy hold"
     )
-    assert "${DIST}/${PREV}/sbxloop_worker-${PREV}-py3-none-any.whl" in _step(example, "Roll back")
+    assert "${DIST}/${PREV}/lantern_worker-${PREV}-py3-none-any.whl" in _step(example, "Roll back")
 
 
 @pytest.mark.parametrize("fixture", ["deploy", "example"])
@@ -138,7 +138,7 @@ def test_our_packages_are_never_installed_by_name(
     """Only release wheel files: the names a rename moves to are not ours on
     any package index, so a by-name install could fetch someone else's code."""
     text = request.getfixturevalue(fixture)
-    assert not re.search(r"""["']sbxloop(?:-worker)?(?:\[[\w,]*\])?==""", text)
+    assert not re.search(r"""["']lantern(?:-worker)?(?:\[[\w,]*\])?==""", text)
     assert "pypi.org" not in text
 
 
@@ -149,7 +149,7 @@ class TestAuthenticationOutage:
     ) -> None:
         text = request.getfixturevalue(fixture)
         preflight = _step(text, "Check the host before upgrading")
-        assert '"${SBXLOOP}" doctor' in preflight
+        assert '"${LANTERN}" doctor' in preflight
         assert text.index("name: Check the host before upgrading") < text.index(
             "name: Take the deploy hold"
         )
@@ -165,13 +165,13 @@ class TestAuthenticationOutage:
         text = request.getfixturevalue(fixture)
         rollback = _step(text, "Roll back")
         script = textwrap.dedent(rollback.split("        run: |\n", 1)[1])
-        for command in ("sbxloop", "uv", "systemctl", "sleep", "python"):
+        for command in ("lantern", "uv", "systemctl", "sleep", "python"):
             path = tmp_path / command
             path.write_text(
                 "#!/bin/sh\n"
                 'case "$1" in\n'
                 '  doctor) [ "$FAILURE" != doctor ] || exit 1;;\n'
-                '  --version) echo "sbxloop $PREV";;\n'
+                '  --version) echo "lantern $PREV";;\n'
                 '  daemon) [ "$FAILURE" != status ] || exit 1;;\n'
                 '  --user) if [ "$2" = is-active ] && [ "$FAILURE" = active ]; then exit 1; fi;;\n'
                 "esac\n"
@@ -182,8 +182,8 @@ class TestAuthenticationOutage:
         env = {
             **os.environ,
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
-            "SBXLOOP": str(tmp_path / "sbxloop"),
-            "VENV_SBXLOOP": str(tmp_path / "sbxloop"),
+            "LANTERN": str(tmp_path / "lantern"),
+            "VENV_LANTERN": str(tmp_path / "lantern"),
             "VENV_PYTHON": str(tmp_path / "python"),
             "PIPELINE": "release_pipeline.py",
             "ACTIONS_TOKEN": "actions-token",
@@ -253,7 +253,7 @@ class TestNeverRestartUnderARun:
     def test_the_backup_label_carries_no_dots(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:
-        """The snapshot is taken by the sbxloop already installed, whose
+        """The snapshot is taken by the lantern already installed, whose
         label rules must hold on every release: dashes, never the dots of
         the version."""
         text = request.getfixturevalue(fixture)
@@ -325,18 +325,18 @@ class TestRollbackExtrasParity:
 def test_deploy_preserves_the_operator_installed_sbx(
     fixture: str, step: str, request: pytest.FixtureRequest
 ) -> None:
-    """Plain init would replace a newer runtime with sbxloop's pinned sbx,
+    """Plain init would replace a newer runtime with lantern's pinned sbx,
     including during rollback, when the newer runtime may have migrated
     its state. Refreshing the service must leave that runtime untouched."""
     text = request.getfixturevalue(fixture)
-    commands = re.findall(r'^\s*"\$\{SBXLOOP\}" init (.*)$', _step(text, step), re.M)
+    commands = re.findall(r'^\s*"\$\{LANTERN\}" init (.*)$', _step(text, step), re.M)
     assert commands, f"{step} does not refresh the installed service"
     assert all("--no-sbx" in command.split() for command in commands)
 
 
 class TestStructuredControl:
     """#639: the job reads the daemon through `ctl status --json` and
-    speaks through sbxloop's notifier — never prose, the secrets file or
+    speaks through lantern's notifier — never prose, the secrets file or
     the daemon's config."""
 
     @pytest.mark.parametrize("fixture", ["deploy", "example"])
@@ -346,7 +346,7 @@ class TestStructuredControl:
         text = request.getfixturevalue(fixture)
         for forbidden in (
             "secrets.env",
-            "sbxloop.toml",
+            "lantern.toml",
             "DISCORD_BOT_TOKEN",
             "SLACK_BOT_TOKEN",
             "discord.com/api",
@@ -407,7 +407,7 @@ def _resolve(
     variable: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Run the isolated `Resolve host paths` snippet with a given host
-    environment. `override` is the runner process's own SBXLOOP_HOME (unset
+    environment. `override` is the runner process's own LANTERN_HOME (unset
     when None); `variable` is the repository variable the step reads."""
     github_env = tmp_path / "github_env"
     github_env.write_text("")
@@ -415,10 +415,10 @@ def _resolve(
         "PATH": os.environ["PATH"],
         "HOME": home,
         "GITHUB_ENV": str(github_env),
-        "SBXLOOP_HOME_VAR": variable,
+        "LANTERN_HOME_VAR": variable,
     }
     if override is not None:
-        env["SBXLOOP_HOME"] = override
+        env["LANTERN_HOME"] = override
     return subprocess.run(
         ["bash", "-c", _script(text, "Resolve host paths")],
         env=env,
@@ -438,8 +438,8 @@ def _resolved(result: subprocess.CompletedProcess[str], github_env: Path) -> dic
 
 #: Every path the job addresses, and where it sits under the home.
 _DERIVED = {
-    "SBXLOOP": "bin/sbxloop",
-    "VENV_SBXLOOP": "venv/bin/sbxloop",
+    "LANTERN": "bin/lantern",
+    "VENV_LANTERN": "venv/bin/lantern",
     "VENV_PYTHON": "venv/bin/python",
     "UV": "bin/uv",
     "UV_CACHE_DIR": "cache/uv",
@@ -449,7 +449,7 @@ _DERIVED = {
 
 @pytest.mark.parametrize("fixture", ["deploy", "example"])
 class TestHomeOverride:
-    """#895: an operator may install under a custom `SBXLOOP_HOME`. The job
+    """#895: an operator may install under a custom `LANTERN_HOME`. The job
     resolves that root once and derives every path from it, so the version
     check, backup, install, health check and rollback all address the
     installation that is actually there."""
@@ -460,14 +460,14 @@ class TestHomeOverride:
         home = tmp_path / "user"
         result = _resolve(request.getfixturevalue(fixture), tmp_path, home=str(home))
         written = _resolved(result, tmp_path / "github_env")
-        assert written["SBXLOOP_HOME"] == f"{home}/.sbxloop"
+        assert written["LANTERN_HOME"] == f"{home}/.lantern"
         for key, tail in _DERIVED.items():
-            assert written[key] == f"{home}/.sbxloop/{tail}", key
+            assert written[key] == f"{home}/.lantern/{tail}", key
 
     def test_a_custom_absolute_root_survives_resolution(
         self, fixture: str, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        custom = tmp_path / "srv" / "sbxloop"
+        custom = tmp_path / "srv" / "lantern"
         result = _resolve(
             request.getfixturevalue(fixture),
             tmp_path,
@@ -475,14 +475,14 @@ class TestHomeOverride:
             override=str(custom),
         )
         written = _resolved(result, tmp_path / "github_env")
-        assert written["SBXLOOP_HOME"] == str(custom)
+        assert written["LANTERN_HOME"] == str(custom)
         for key, tail in _DERIVED.items():
             assert written[key] == f"{custom}/{tail}", key
 
     def test_a_root_containing_spaces_is_preserved(
         self, fixture: str, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        custom = tmp_path / "two words" / "sbxloop home"
+        custom = tmp_path / "two words" / "lantern home"
         result = _resolve(
             request.getfixturevalue(fixture),
             tmp_path,
@@ -490,15 +490,15 @@ class TestHomeOverride:
             override=str(custom),
         )
         written = _resolved(result, tmp_path / "github_env")
-        assert written["SBXLOOP_HOME"] == str(custom)
-        assert written["SBXLOOP"] == f"{custom}/bin/sbxloop"
+        assert written["LANTERN_HOME"] == str(custom)
+        assert written["LANTERN"] == f"{custom}/bin/lantern"
 
     def test_the_repository_variable_carries_the_home_to_the_runner(
         self, fixture: str, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
         """A runner whose own environment says nothing still deploys to the
         chosen home when the repository variable names it."""
-        custom = tmp_path / "srv" / "sbxloop"
+        custom = tmp_path / "srv" / "lantern"
         result = _resolve(
             request.getfixturevalue(fixture),
             tmp_path,
@@ -506,13 +506,13 @@ class TestHomeOverride:
             variable=str(custom),
         )
         written = _resolved(result, tmp_path / "github_env")
-        assert written["SBXLOOP_HOME"] == str(custom)
+        assert written["LANTERN_HOME"] == str(custom)
         assert written["VENV_PYTHON"] == f"{custom}/venv/bin/python"
 
     def test_a_tilde_root_expands_against_the_service_user(
         self, fixture: str, request: pytest.FixtureRequest, tmp_path: Path
     ) -> None:
-        """`SBXLOOP_HOME=~/elsewhere` is what the secrets example shows, and
+        """`LANTERN_HOME=~/elsewhere` is what the secrets example shows, and
         the loader expands it against HOME — so the job must too, rather
         than reject a literal `~` as relative."""
         home = tmp_path / "user"
@@ -520,7 +520,7 @@ class TestHomeOverride:
             request.getfixturevalue(fixture), tmp_path, home=str(home), override="~/elsewhere"
         )
         written = _resolved(result, tmp_path / "github_env")
-        assert written["SBXLOOP_HOME"] == f"{home}/elsewhere"
+        assert written["LANTERN_HOME"] == f"{home}/elsewhere"
 
     @pytest.mark.parametrize("bad", ["relative/home", "./home", "/srv/two\nlines"])
     def test_a_root_it_cannot_address_stops_before_anything_is_touched(
@@ -544,8 +544,8 @@ class TestHostAgnostic:
     a user or a home directory."""
 
     def test_the_host_is_one_variable(self, deploy: str) -> None:
-        assert "runs-on: [self-hosted, \"${{ vars.SBXLOOP_DEPLOY_HOST || 'db' }}\"]" in deploy
-        assert "HOST: ${{ vars.SBXLOOP_DEPLOY_HOST || 'db' }}" in deploy
+        assert "runs-on: [self-hosted, \"${{ vars.LANTERN_DEPLOY_HOST || 'db' }}\"]" in deploy
+        assert "HOST: ${{ vars.LANTERN_DEPLOY_HOST || 'db' }}" in deploy
         # The default is the only place the dogfood host's name appears.
         assert len(re.findall(r"\bdb\b", deploy)) == 3  # the two above + the comment
 
@@ -560,9 +560,9 @@ class TestHostAgnostic:
         resolve = _step(text, "Resolve host paths")
         # The launcher is derived from the resolved home, and the only home
         # spelled out is the default the resolution falls back to.
-        assert 'echo "SBXLOOP=${root}/bin/sbxloop"' in resolve
-        assert 'root="${HOME}/.sbxloop"' in resolve
-        assert ".sbxloop/bin" not in resolve
+        assert 'echo "LANTERN=${root}/bin/lantern"' in resolve
+        assert 'root="${HOME}/.lantern"' in resolve
+        assert ".lantern/bin" not in resolve
         assert "WORKDIR" not in text and 'cd "${' not in text  # the home is the home
         assert "needs a human" in _step(text, "Roll back")
         assert "${HOST} needs a human" in _step(text, "Roll back")
@@ -571,8 +571,8 @@ class TestHostAgnostic:
         assert "brettbergin" not in example
         assert not re.search(r"\bdb\b", example)
         assert "|| 'db'" not in example
-        assert 'runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST }}"]' in example
-        assert "-m sbxloop.releases latest" in _step(example, "Resolve the target version")
+        assert 'runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST }}"]' in example
+        assert "-m lantern.releases latest" in _step(example, "Resolve the target version")
 
 
 class TestDocsSplit:
@@ -592,24 +592,24 @@ class TestDocsSplit:
         assert not re.search(r"\bdb\b", guide)
         assert "ssh " not in guide and "/home/" not in guide
         assert "deploy.yml" not in guide  # that is the self-deploy reference's
-        assert "<owner>/<repo>" in guide and "SBXLOOP_DEPLOY_HOST" in guide
+        assert "<owner>/<repo>" in guide and "LANTERN_DEPLOY_HOST" in guide
 
     def test_generic_guide_points_at_the_self_deploy_reference(self, guide: str) -> None:
         assert "self-deploy.md" in guide
         reference = (ROOT / "docs" / "self-deploy.md").read_text()
-        assert "brettbergin/sbxloop" in reference and "SBXLOOP_DEPLOY_HOST" in reference
+        assert "brettbergin/lantern-backend" in reference and "LANTERN_DEPLOY_HOST" in reference
         assert "#639" in reference  # the structured-status cutover note
 
     def test_systemd_upgrade_section_leads_with_the_manual_path(self, systemd_readme: str) -> None:
         section = systemd_readme.split("## Upgrading", 1)[1].split("\n## ", 1)[0]
         first_fence = section.split("```bash", 1)[1].split("```", 1)[0]
         # The release's own wheels, checked — never a by-name index install.
-        assert "sbxloop init --no-sbx --version X.Y.Z" in first_fence
+        assert "lantern init --no-sbx --version X.Y.Z" in first_fence
         assert "pip install" not in first_fence and "==X.Y.Z" not in first_fence
-        assert "sbxloop backup" in first_fence
-        assert "sbxloop init --systemd --no-sbx" in first_fence
+        assert "lantern backup" in first_fence
+        assert "lantern init --systemd --no-sbx" in first_fence
         assert "ctl status --json" in first_fence
-        assert "reset-failed sbxloop-daemon" in first_fence
+        assert "reset-failed lantern-daemon" in first_fence
         # The workflow is the optional afterthought, below the commands.
         assert section.index("deploy-daemon.yml.example") > section.index("reset-failed")
         assert "Automated, via" not in section
@@ -626,21 +626,21 @@ class TestDocsSplit:
         the unit could not start. init renders it for the real directory."""
         section = guide.split("### The runner", 1)[1].split("\n### ", 1)[0]
         assert "cp contrib/" not in guide and "~/.config/systemd/user/" not in section
-        assert 'sbxloop init --systemd --no-sbx --runner "$HOME/actions-runner"' in section
+        assert 'lantern init --systemd --no-sbx --runner "$HOME/actions-runner"' in section
         # init enables, never starts, so the start is its own command.
         assert "systemctl --user start github-runner" in section
         assert "--now" not in section
         # …and the systemd README documents the same flag.
-        assert "sbxloop init --systemd --runner ~/actions-runner" in systemd_readme
+        assert "lantern init --systemd --runner ~/actions-runner" in systemd_readme
 
     def test_the_documented_command_leaves_no_placeholder_in_the_unit(self, tmp_path: Path) -> None:
         """The other half of #896: what that command renders is startable."""
-        from sbxloop.homeinit import render_unit
-        from sbxloop.paths import SbxloopHome
+        from lantern.homeinit import render_unit
+        from lantern.paths import LanternHome
 
         runner = tmp_path / "actions-runner"
         text = render_unit(
-            "github-runner.service", SbxloopHome(tmp_path / "home"), runner_dir=runner
+            "github-runner.service", LanternHome(tmp_path / "home"), runner_dir=runner
         )
         assert f"WorkingDirectory={runner}" in text
         assert f"ExecStart={runner}/run.sh" in text

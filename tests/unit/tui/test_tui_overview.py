@@ -12,13 +12,13 @@ from pathlib import Path
 
 from textual.containers import VerticalScroll
 
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.overview import PAGES, OverviewScreen, PageRail, count, hm
-from sbxloop.tui.screens.run_detail import RunDetailScreen
-from sbxloop.tui.widgets.band import Segment, legend, paint, widths
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop_worker.protocol import Usage
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
+from lantern.tui.screens.overview import PAGES, OverviewScreen, PageRail, count, hm
+from lantern.tui.screens.run_detail import RunDetailScreen
+from lantern.tui.widgets.band import Segment, legend, paint, widths
+from lantern.tui.widgets.panel import TextPanel
+from lantern_worker.protocol import Usage
 from tests.fakes.rawdb import exec_raw
 from tests.unit.tui.conftest import drive, make_app, until
 
@@ -26,14 +26,14 @@ DAY = 86400.0
 
 
 def page_text(app: object) -> str:
-    from sbxloop.tui.app import SbxloopTui
+    from lantern.tui.app import LanternTui
 
-    assert isinstance(app, SbxloopTui)
+    assert isinstance(app, LanternTui)
     page = app.screen.query_one("#page", VerticalScroll)
     return "\n".join(w.content_text for w in page.walk_children() if isinstance(w, TextPanel))
 
 
-def seed_week(home: SbxloopHome) -> None:
+def seed_week(home: LanternHome) -> None:
     """A week the pages have something to say about: a costly run, a run
     parked most of a day, two failures sharing a cause, one cancelled."""
     now = time.time()
@@ -102,7 +102,7 @@ def test_a_band_fills_its_width_exactly() -> None:
     assert legend([]).plain == ""
 
 
-def test_every_page_states_its_finding_then_draws(seeded: SbxloopHome) -> None:
+def test_every_page_states_its_finding_then_draws(seeded: LanternHome) -> None:
     seed_week(seeded)
 
     async def scenario() -> None:
@@ -151,7 +151,7 @@ def test_every_page_states_its_finding_then_draws(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_the_page_rail_marks_the_page_and_uses_letters(seeded: SbxloopHome) -> None:
+def test_the_page_rail_marks_the_page_and_uses_letters(seeded: LanternHome) -> None:
     """Digits belong to the console's rail; Overview's pages take letters
     so a page cannot steal a screen's key."""
     assert {item.key for item in PAGES}.isdisjoint({str(n) for n in range(1, 9)})
@@ -170,7 +170,7 @@ def test_the_page_rail_marks_the_page_and_uses_letters(seeded: SbxloopHome) -> N
     drive(scenario)
 
 
-def test_o_opens_the_costliest_run(seeded: SbxloopHome) -> None:
+def test_o_opens_the_costliest_run(seeded: LanternHome) -> None:
     """The spike is one keystroke from the run behind it."""
     seed_week(seeded)
 
@@ -187,10 +187,10 @@ def test_o_opens_the_costliest_run(seeded: SbxloopHome) -> None:
 
 
 def test_an_empty_window_says_so_rather_than_drawing_nothing(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     StateStore(home.state_db).close()
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 
@@ -203,7 +203,7 @@ def test_an_empty_window_says_so_rather_than_drawing_nothing(tmp_path: Path) -> 
     drive(scenario)
 
 
-def test_the_two_rails_sit_beside_each_other(seeded: SbxloopHome) -> None:
+def test_the_two_rails_sit_beside_each_other(seeded: LanternHome) -> None:
     """Overview carries a second rail beside the console's own, and the two
     must not share a column.
 
@@ -213,7 +213,7 @@ def test_the_two_rails_sit_beside_each_other(seeded: SbxloopHome) -> None:
     Daemon. Geometry is the only thing that catches that — every content
     assertion still passed while the screen was unreadable.
     """
-    from sbxloop.tui.widgets.navrail import NavRail
+    from lantern.tui.widgets.navrail import NavRail
 
     async def scenario() -> None:
         app = make_app(seeded)
@@ -238,7 +238,7 @@ def test_the_two_rails_sit_beside_each_other(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_a_narrow_terminal_drops_the_page_rail_and_keeps_the_page(seeded: SbxloopHome) -> None:
+def test_a_narrow_terminal_drops_the_page_rail_and_keeps_the_page(seeded: LanternHome) -> None:
     """Two rails cost 26 columns before any content; below the threshold
     both get out of the way and the letters still switch pages."""
 
@@ -258,7 +258,7 @@ def test_a_narrow_terminal_drops_the_page_rail_and_keeps_the_page(seeded: Sbxloo
     drive(scenario)
 
 
-def test_the_pages_use_the_space_they_were_given(seeded: SbxloopHome) -> None:
+def test_the_pages_use_the_space_they_were_given(seeded: LanternHome) -> None:
     """Five pages behind a rail only earn the rail if they have something
     on them. They shipped at 15 to 22% of the body filled — a two-level
     navigation for content that fitted on one screen."""
@@ -278,7 +278,7 @@ def test_the_pages_use_the_space_they_were_given(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_cost_says_which_phase_burns_the_turns(seeded: SbxloopHome) -> None:
+def test_cost_says_which_phase_burns_the_turns(seeded: LanternHome) -> None:
     """A total says how much; only the split says where, and only the
     split is actionable."""
     seed_week(seeded)
@@ -299,7 +299,7 @@ def test_cost_says_which_phase_burns_the_turns(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_health_says_where_the_loop_went_round_again(seeded: SbxloopHome) -> None:
+def test_health_says_where_the_loop_went_round_again(seeded: LanternHome) -> None:
     seed_week(seeded)
 
     async def scenario() -> None:
@@ -319,7 +319,7 @@ def test_health_says_where_the_loop_went_round_again(seeded: SbxloopHome) -> Non
     drive(scenario)
 
 
-def test_flow_says_how_long_work_took_to_land(seeded: SbxloopHome) -> None:
+def test_flow_says_how_long_work_took_to_land(seeded: LanternHome) -> None:
     seed_week(seeded)
 
     async def scenario() -> None:
@@ -338,7 +338,7 @@ def test_flow_says_how_long_work_took_to_land(seeded: SbxloopHome) -> None:
 
 
 def test_plural_counts_one_thing_once() -> None:
-    from sbxloop.tui.screens.overview import plural
+    from lantern.tui.screens.overview import plural
 
     assert plural(1, "day") == "1 day"
     assert plural(0, "day") == "0 days" and plural(2, "run") == "2 runs"

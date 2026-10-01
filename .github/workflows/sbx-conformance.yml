@@ -30,15 +30,15 @@ permissions:
 
 env:
   SBX_INSTALL_DIR: /home/runner/.docker/sbx
-  SBXLOOP_APP_NAME: sbxloop-conformance
+  LANTERN_APP_NAME: lantern-conformance
   # The app-scoped containerd socket exceeds sbx's 104-byte Unix path limit
   # under the runner's default ~/.local/state directory.
   XDG_STATE_HOME: /tmp/sbx-state
-  # The home defaults to ~/.sbxloop; the cache/upload steps below target
-  # .sbxloop/state/conformance in the checkout, so pin the home there.
-  SBXLOOP_HOME: ${{ github.workspace }}/.sbxloop
+  # The home defaults to ~/.lantern; the cache/upload steps below target
+  # .lantern/state/conformance in the checkout, so pin the home there.
+  LANTERN_HOME: ${{ github.workspace }}/.lantern
   # Init reuses this checkout's environment instead of installing a release.
-  UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.sbxloop/venv
+  UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/.lantern/venv
 
 jobs:
   conformance:
@@ -51,8 +51,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-packages
 
-      - name: Initialize sbxloop home
-        run: uv run sbxloop init --no-sbx
+      - name: Initialize lantern home
+        run: uv run lantern init --no-sbx
 
       - name: Enable KVM and user namespaces
         run: |
@@ -89,11 +89,11 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           echo -n "" | gnome-keyring-daemon --unlock --components=secrets || true
-          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name "$SBXLOOP_APP_NAME" login --username "$DOCKERHUB_USERNAME" --password-stdin
-          sbx --app-name "$SBXLOOP_APP_NAME" version | tee sbx-version.out
+          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name "$LANTERN_APP_NAME" login --username "$DOCKERHUB_USERNAME" --password-stdin
+          sbx --app-name "$LANTERN_APP_NAME" version | tee sbx-version.out
 
       - name: sbx policy init balanced
-        run: sbx --app-name "$SBXLOOP_APP_NAME" policy init balanced
+        run: sbx --app-name "$LANTERN_APP_NAME" policy init balanced
 
       # Rolling cache: each run restores the newest previous verdict set and
       # saves its own, so run_conformance sees the last-probed sbx version
@@ -101,7 +101,7 @@ jobs:
       - name: Restore conformance verdict cache
         uses: actions/cache/restore@v4
         with:
-          path: .sbxloop/state/conformance
+          path: .lantern/state/conformance
           key: sbx-conformance-${{ github.run_id }}
           restore-keys: |
             sbx-conformance-
@@ -115,13 +115,13 @@ jobs:
           COPILOT_GITHUB_TOKEN: unused
         run: |
           set -o pipefail
-          uv run sbxloop doctor --deep --fail-on-drift 2>&1 | tee doctor-deep.out
+          uv run lantern doctor --deep --fail-on-drift 2>&1 | tee doctor-deep.out
 
       - name: Save conformance verdict cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .sbxloop/state/conformance
+          path: .lantern/state/conformance
           key: sbx-conformance-${{ github.run_id }}
 
       - uses: actions/upload-artifact@v4
@@ -131,11 +131,11 @@ jobs:
           path: |
             doctor-deep.out
             sbx-version.out
-            .sbxloop/state/conformance/*.json
+            .lantern/state/conformance/*.json
           if-no-files-found: ignore
 
       - name: Cleanup
         if: always()
         run: |
-          uv run sbxloop sandbox rm --all || true
-          sbx --app-name "$SBXLOOP_APP_NAME" logout --yes || true
+          uv run lantern sandbox rm --all || true
+          sbx --app-name "$LANTERN_APP_NAME" logout --yes || true

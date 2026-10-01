@@ -25,8 +25,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
 from tests.fakes.legacy_db import daemon_db, insert_daemon_row, raw_daemon_rows
 
 REPO = "o/r"
@@ -209,7 +209,7 @@ class TestTerminalRowsRestartByLabel:
         db = old_db(tmp_path)
         old_row(db, "8", state="cancelled", claimed=1, run_id="r_old")
         store = DaemonStore(db)
-        with caplog.at_level(logging.INFO, logger="sbxloop.daemon.store"):
+        with caplog.at_level(logging.INFO, logger="lantern.daemon.store"):
             assert store.upsert_new(rediscovered("8"), now=9.0) is True
         messages = [r.getMessage() for r in caplog.records]
         assert any("store.item_requeued_by_label" in m for m in messages)
@@ -285,13 +285,13 @@ class TestPriorArtifactRecovery:
     def test_branch_and_pr_are_recovered_from_the_old_run_record(self, tmp_path: Path) -> None:
         db = old_db(tmp_path)
         old_row(db, "21", state="cancelled", claimed=1, run_id="r_old")
-        self._engine_run(db, "r_old", branch="sbxloop/r_old", pr_number=42)
+        self._engine_run(db, "r_old", branch="lantern/r_old", pr_number=42)
         store = DaemonStore(db)
 
         assert store.upsert_new(rediscovered("21"), now=9.0) is True
         prior = store.prior_attempt("gh:issue:21")
         assert prior is not None
-        assert (prior.run_id, prior.branch, prior.pr_number) == ("r_old", "sbxloop/r_old", 42)
+        assert (prior.run_id, prior.branch, prior.pr_number) == ("r_old", "lantern/r_old", 42)
         store.close()
 
     def test_a_run_that_never_pushed_leaves_no_branch_to_reuse(self, tmp_path: Path) -> None:

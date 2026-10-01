@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.control import dispatch
-from sbxloop.daemon.model import WorkItem
+from lantern.daemon.control import dispatch
+from lantern.daemon.model import WorkItem
 from tests.fakes.rawdb import exec_raw, query_raw
 from tests.unit.test_daemon_loop import FakeSource, Harness, gh_item
 from tests.unit.test_daemon_merge_gate import GateFrontend
@@ -194,7 +194,7 @@ class TestRelease:
     def test_a_release_the_daemon_cannot_resume_does_not_count(self, tmp_path: Path) -> None:
         """The release is not charged to the crash-resume budget: releasing
         with a budget of zero still resumes the run."""
-        from sbxloop.config import Config
+        from lantern.config import Config
 
         config = Config.model_validate(
             {
@@ -263,7 +263,7 @@ class TestStore:
     def test_a_pre_kind_gate_table_upgrades_in_place(self, tmp_path: Path) -> None:
         import sqlite3
 
-        from sbxloop.daemon.store import DaemonStore, apply_daemon_schema
+        from lantern.daemon.store import DaemonStore, apply_daemon_schema
 
         # Built by the pre-ORM schema functions and then cut back to the
         # shape that predates `kind`, so it carries no schema stamp — which
@@ -296,7 +296,7 @@ class TestStore:
             store.close()
 
     def test_resume_for_release_only_moves_a_gated_item(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         store = DaemonStore(tmp_path / "state.db")
         try:

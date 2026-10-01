@@ -1,4 +1,4 @@
-"""The ecosystem fixture matrix (#644): one row per project shape sbxloop
+"""The ecosystem fixture matrix (#644): one row per project shape lantern
 must not mistake for a Python repo, walked through every generalization
 surface that has landed.
 
@@ -17,11 +17,11 @@ from typing import NamedTuple
 
 import pytest
 
-from sbxloop import toolchains
-from sbxloop.config import Config
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
-from sbxloop.verifylint import config_override_problems, project_gate
+from lantern import toolchains
+from lantern.config import Config
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
+from lantern.verifylint import config_override_problems, project_gate
 from tests.conftest import FakeSbx
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "ecosystems"

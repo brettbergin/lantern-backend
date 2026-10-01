@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
+from lantern.config import Config
 
 
 def test_push_is_off_and_names_no_relay_by_default() -> None:

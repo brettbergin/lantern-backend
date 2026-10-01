@@ -7,8 +7,8 @@ from pathlib import Path
 
 from alembic import command
 
-from sbxloop.db import ensure_schema, open_engine
-from sbxloop.db.schema import _config
+from lantern.db import ensure_schema, open_engine
+from lantern.db.schema import _config
 
 
 def test_oidc_session_revision_is_additive_and_rerunnable(tmp_path: Path) -> None:

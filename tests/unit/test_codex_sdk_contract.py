@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop_worker.backends.codex import CodexBackend
-from sbxloop_worker.protocol import EventTypes, JobRequest
+from lantern_worker.backends.codex import CodexBackend
+from lantern_worker.protocol import EventTypes, JobRequest
 
 pytestmark = pytest.mark.slow
 FAKE_SERVER = Path(__file__).resolve().parents[1] / "fakes" / "fake_codex_stdio.py"

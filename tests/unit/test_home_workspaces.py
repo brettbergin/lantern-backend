@@ -10,16 +10,16 @@ from typing import Any
 import pytest
 from git import Repo
 
-from sbxloop import hostgit
-from sbxloop.cli.doctor import workspace_checks
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import ProvisionError
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit
+from lantern.cli.doctor import workspace_checks
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.errors import ProvisionError
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.unit.test_daemon_loop import FakeSource
 
 
@@ -60,7 +60,7 @@ class TestCloneWorkspace:
 
 class TestConfigDefault:
     def test_default_counts_only_once_it_is_a_checkout(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         config = Config.model_validate({"home": str(home.root), "github": {"repo": "Acme/Widget"}})
         default = config.default_workspace_for_repo("Acme/Widget")
         assert default == home.workspaces / "Acme" / "Widget"
@@ -80,7 +80,7 @@ class TestConfigDefault:
         """A home that happens to live inside some git checkout: the default
         directory is inside a work tree, but it is not the repository's own."""
         Repo.init(tmp_path)
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         config = Config.model_validate({"home": str(home.root), "github": {"repo": "o/n"}})
         default = config.default_workspace_for_repo("o/n")
         assert default is not None
@@ -88,7 +88,7 @@ class TestConfigDefault:
         assert config.workspace_for_repo("o/n") is None
 
     def test_operators_checkout_wins(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         mine = tmp_path / "mine"
         mine.mkdir()
         (home.workspaces / "o" / "n").mkdir(parents=True)
@@ -308,8 +308,8 @@ class TestDaemonClonesOnFirstUse:
         loop._ensure_workspace(repo)
         assert calls == [(f"http://forge.example:8929/{repo}", home.workspaces / repo)]
 
-    def make_loop(self, tmp_path: Path, repo: str = "o/n") -> tuple[DaemonLoop, SbxloopHome]:
-        home = SbxloopHome(tmp_path / "h")
+    def make_loop(self, tmp_path: Path, repo: str = "o/n") -> tuple[DaemonLoop, LanternHome]:
+        home = LanternHome(tmp_path / "h")
         home.ensure_tree()
         config = Config.model_validate({"home": str(home.root), "github": {"repo": repo}})
         loop = DaemonLoop(
@@ -399,7 +399,7 @@ class TestDaemonClonesOnFirstUse:
     def test_operators_checkout_is_never_cloned_over(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         home.ensure_tree()
         mine = tmp_path / "mine"
         Repo.init(mine)
@@ -421,7 +421,7 @@ class TestDaemonClonesOnFirstUse:
 
 class TestDoctor:
     def test_rows_say_where_each_repository_works(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         mine = tmp_path / "mine"
         mine.mkdir()
         config = Config.model_validate(

@@ -158,7 +158,7 @@ def ensure_bot(admin: Client, state: dict[str, str]) -> str:
     token = state.get("GITEA_BOT_TOKEN", "")
     if token_works(token):
         return token
-    name = f"sbxloop-live-{secrets.token_hex(3)}"
+    name = f"lantern-live-{secrets.token_hex(3)}"
     out = gitea_cli(
         "admin", "user", "generate-access-token", "--username", BOT, "--token-name", name,
         "--scopes", "write:repository,write:issue,read:user", "--raw",
@@ -260,16 +260,16 @@ def main() -> int:
     admin_password = ensure_admin(state)
     admin_token = state.get("GITEA_ADMIN_TOKEN", "")
     if not token_works(admin_token):
-        admin_token = mint_token(ADMIN, admin_password, "sbxloop-live-admin", ["all"])
+        admin_token = mint_token(ADMIN, admin_password, "lantern-live-admin", ["all"])
     admin = Client(API, token_header(admin_token), "site admin")
     dev_password = ensure_user(admin, state, DEVELOPER, "GITEA_DEVELOPER_PASSWORD")
     rev_password = ensure_user(admin, state, REVIEWER, "GITEA_REVIEWER_PASSWORD")
     dev_token = state.get("GITEA_TOKEN", "")
     if not token_works(dev_token):
-        dev_token = mint_token(DEVELOPER, dev_password, "sbxloop-live", HUMAN_SCOPES)
+        dev_token = mint_token(DEVELOPER, dev_password, "lantern-live", HUMAN_SCOPES)
     rev_token = state.get("GITEA_REVIEWER_TOKEN", "")
     if not token_works(rev_token):
-        rev_token = mint_token(REVIEWER, rev_password, "sbxloop-live", HUMAN_SCOPES)
+        rev_token = mint_token(REVIEWER, rev_password, "lantern-live", HUMAN_SCOPES)
     bot_token = ensure_bot(admin, state)
     developer = Client(API, token_header(dev_token), "write collaborator")
     reviewer = Client(API, token_header(rev_token), "write collaborator")
@@ -277,15 +277,15 @@ def main() -> int:
     write_env_file(
         LIVE_ENV,
         {
-            "SBXLOOP_LIVE_CA_FILE": str(LIVE_ENV.parent / "certs" / "ca.crt"),
-            "SBXLOOP_LIVE_GITEA_URL": API,
-            "SBXLOOP_LIVE_GITEA_VERSION": version,
-            "SBXLOOP_LIVE_GITEA_REPO": SLUG,
-            "SBXLOOP_LIVE_GITEA_PULL": str(seeded["pull"]),
-            "SBXLOOP_LIVE_GITEA_ADMIN": ADMIN,
-            "SBXLOOP_LIVE_GITEA_DEVELOPER": DEVELOPER,
-            "SBXLOOP_LIVE_GITEA_REVIEWER": REVIEWER,
-            "SBXLOOP_LIVE_GITEA_BOT": BOT,
+            "LANTERN_LIVE_CA_FILE": str(LIVE_ENV.parent / "certs" / "ca.crt"),
+            "LANTERN_LIVE_GITEA_URL": API,
+            "LANTERN_LIVE_GITEA_VERSION": version,
+            "LANTERN_LIVE_GITEA_REPO": SLUG,
+            "LANTERN_LIVE_GITEA_PULL": str(seeded["pull"]),
+            "LANTERN_LIVE_GITEA_ADMIN": ADMIN,
+            "LANTERN_LIVE_GITEA_DEVELOPER": DEVELOPER,
+            "LANTERN_LIVE_GITEA_REVIEWER": REVIEWER,
+            "LANTERN_LIVE_GITEA_BOT": BOT,
             "GITEA_ADMIN_PASSWORD": admin_password,
             "GITEA_DEVELOPER_PASSWORD": dev_password,
             "GITEA_REVIEWER_PASSWORD": rev_password,
@@ -296,7 +296,7 @@ def main() -> int:
         },
     )
     print(f"gitea {version} at {WEB}")
-    print(f"  api root        SBXLOOP_LIVE_GITEA_URL = {API}")
+    print(f"  api root        LANTERN_LIVE_GITEA_URL = {API}")
     print(f"  repository      {SLUG}, pull request #{seeded['pull']} from {BRANCH}")
     print(f"  site admin      {ADMIN}         token in GITEA_ADMIN_TOKEN")
     print(f"  developer       {DEVELOPER}     token in GITEA_TOKEN (write collaborator)")

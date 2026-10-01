@@ -9,14 +9,14 @@ import time
 
 from textual.widgets import Button
 
-from sbxloop.daemon.mailbox import MailboxClient
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.chat import ChannelTail, choice_spec, compose_outbound, is_addressed
-from sbxloop.tui.screens.chat import ChatScreen
-from sbxloop.tui.widgets.chat_input import ChatInput
-from sbxloop.tui.widgets.message import ChoiceButton
-from sbxloop.tui.widgets.thread import ThreadView
+from lantern.daemon.mailbox import MailboxClient
+from lantern.daemon.store import DaemonStore
+from lantern.paths import LanternHome
+from lantern.tui.chat import ChannelTail, choice_spec, compose_outbound, is_addressed
+from lantern.tui.screens.chat import ChatScreen
+from lantern.tui.widgets.chat_input import ChatInput
+from lantern.tui.widgets.message import ChoiceButton
+from lantern.tui.widgets.thread import ThreadView
 from tests.unit.tui.conftest import drive, make_app, until
 
 
@@ -31,7 +31,7 @@ def test_compose_outbound_mirrors_the_routing_rules() -> None:
     assert button.row_id == 12 and button.value == "timing" and button.id == "choice-12-2"
 
 
-def seed_chat(state_dir: SbxloopHome) -> DaemonStore:
+def seed_chat(state_dir: LanternHome) -> DaemonStore:
     dstore = DaemonStore(state_dir.state_db)
     now = time.time()
     dstore.local_post("control", "🚀 daemon started", now=now - 60)
@@ -55,7 +55,7 @@ def seed_chat(state_dir: SbxloopHome) -> DaemonStore:
     return dstore
 
 
-def test_chat_screen_shows_rows_sends_addressed_text_and_clicks(seeded: SbxloopHome) -> None:
+def test_chat_screen_shows_rows_sends_addressed_text_and_clicks(seeded: LanternHome) -> None:
     dstore = seed_chat(seeded)
 
     async def scenario() -> None:
@@ -124,7 +124,7 @@ def test_chat_screen_shows_rows_sends_addressed_text_and_clicks(seeded: SbxloopH
     drive(scenario)
 
 
-def test_edits_reactions_and_gate_resolution_repaint_in_place(seeded: SbxloopHome) -> None:
+def test_edits_reactions_and_gate_resolution_repaint_in_place(seeded: LanternHome) -> None:
     dstore = seed_chat(seeded)
     dstore.create_merge_gate("r_live", "gh:issue:41", "o/r", 172, "u", None, ["brett"], "tok", 1.0)
     prompt = dstore.local_post(
@@ -159,17 +159,17 @@ def test_edits_reactions_and_gate_resolution_repaint_in_place(seeded: SbxloopHom
     drive(scenario)
 
 
-def test_read_only_console_sends_nothing(seeded: SbxloopHome) -> None:
+def test_read_only_console_sends_nothing(seeded: LanternHome) -> None:
     seed_chat(seeded)
 
     async def scenario() -> None:
-        from sbxloop.config import Config
-        from sbxloop.tui.app import SbxloopTui
+        from lantern.config import Config
+        from lantern.tui.app import LanternTui
         from tests.unit.tui.conftest import FakeCtl, live_status
 
         config = Config.model_validate({"home": str(seeded)})
         mailbox = MailboxClient(seeded.state_db, operator_id="brett")
-        app = SbxloopTui(
+        app = LanternTui(
             config, seeded, mailbox=mailbox, ctl=FakeCtl(live_status()), read_only=True
         )
         async with app.run_test(size=(140, 45)) as pilot:
@@ -183,7 +183,7 @@ def test_read_only_console_sends_nothing(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_channel_tail_reports_new_then_changed(seeded: SbxloopHome) -> None:
+def test_channel_tail_reports_new_then_changed(seeded: LanternHome) -> None:
     dstore = seed_chat(seeded)
     client = MailboxClient(seeded.state_db, operator_id="brett")
     tail = ChannelTail("control")

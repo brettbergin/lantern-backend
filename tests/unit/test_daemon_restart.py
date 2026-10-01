@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.loop import RESTART_MARKER_KEY, UNSUPERVISED_REFUSAL
+from lantern.config import Config
+from lantern.daemon.loop import RESTART_MARKER_KEY, UNSUPERVISED_REFUSAL
 from tests.unit.test_daemon_loop import Harness, RecordingFrontend
 
 
@@ -167,7 +167,7 @@ class TestConfigChangeReport:
         return notice.text
 
     def test_now_in_effect(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("SBXLOOP_DAEMON__MAX_RUNS_PER_DAY", raising=False)
+        monkeypatch.delenv("LANTERN_DAEMON__MAX_RUNS_PER_DAY", raising=False)
         assert self._restarted(tmp_path, monkeypatch) == (
             "restarted to apply set daemon.max_runs_per_day = 20 (by brett) — now in effect"
         )
@@ -175,7 +175,7 @@ class TestConfigChangeReport:
     def test_another_layer_still_wins(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        text = self._restarted(tmp_path, monkeypatch, SBXLOOP_DAEMON__MAX_RUNS_PER_DAY="24")
+        text = self._restarted(tmp_path, monkeypatch, LANTERN_DAEMON__MAX_RUNS_PER_DAY="24")
         assert text == (
             "restarted to apply set daemon.max_runs_per_day = 20 (by brett) — written, but "
             "env sets `24` and wins"

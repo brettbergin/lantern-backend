@@ -16,9 +16,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from sbxloop.daemon.chat import CHOICE_QUESTION_CAP
-from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion
-from sbxloop.daemon.concierge import ConciergeReply
+from lantern.daemon.chat import CHOICE_QUESTION_CAP
+from lantern.daemon.chat_choices import Choice, ChoiceQuestion
+from lantern.daemon.concierge import ConciergeReply
 from tests.unit.test_daemon_discord import (
     BOT_USER,
     FakeConcierge,

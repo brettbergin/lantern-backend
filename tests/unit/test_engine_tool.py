@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.engine.model import TOOL_STAGES, TaskNeeds, TaskSpec
-from sbxloop.errors import ConfigError
-from sbxloop.events import HostEventTypes
-from sbxloop.sbx.naming import run_name
+from lantern.engine.model import TOOL_STAGES, TaskNeeds, TaskSpec
+from lantern.errors import ConfigError
+from lantern.events import HostEventTypes
+from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
 from tests.unit.test_engine import Harness
 
@@ -219,7 +219,7 @@ class TestToolRun:
     ) -> None:
         """The recipe staged the run's inputs; a sandbox that came up
         without them has no work."""
-        from sbxloop.errors import ProvisionError
+        from lantern.errors import ProvisionError
 
         monkeypatch.setenv("SBX_FAKE_NO_MOUNT", "1")
         harness.script([])
@@ -232,7 +232,7 @@ class TestToolRun:
         """The command ran and its files are on the host; a run interrupted
         while publishing re-enters there, on a fresh sandbox that receives
         no shell job."""
-        from sbxloop.engine.engine import LoopEngine
+        from lantern.engine.engine import LoopEngine
 
         harness.script([])
         engine = harness.engine()

@@ -4,11 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop import hostgit, toolchains
-from sbxloop.config import Config
-from sbxloop.errors import ConfigError, ProvisionError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit, toolchains
+from lantern.config import Config
+from lantern.errors import ConfigError, ProvisionError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 
 
 @pytest.mark.parametrize(
@@ -161,7 +161,7 @@ def test_auxiliary_fetches_use_the_selected_repo_not_the_default_forge(
 
 
 def test_fix_round_base_fetch_uses_the_run_forge(tmp_path, monkeypatch):
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.engine.engine import LoopEngine
 
     engine = LoopEngine.__new__(LoopEngine)
     engine.config = Config.model_validate(
@@ -191,7 +191,7 @@ def test_fix_round_base_fetch_uses_the_run_forge(tmp_path, monkeypatch):
 
 
 def test_configured_tool_repository_url_resolves_to_its_authenticated_clone():
-    from sbxloop.entrygraph import resolve_targets
+    from lantern.entrygraph import resolve_targets
 
     config = Config.model_validate(
         {

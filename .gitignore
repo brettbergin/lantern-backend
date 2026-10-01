@@ -217,10 +217,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# sbxloop
-.sbxloop/
-packages/sbxloop/src/sbxloop/_vendor/
+# lantern
+.lantern/
+packages/lantern/src/lantern/_vendor/
 
 # written at build time by hatch-vcs
-packages/sbxloop/src/sbxloop/_version.py
-packages/sbxloop-worker/src/sbxloop_worker/_version.py
+packages/lantern/src/lantern/_version.py
+packages/lantern-worker/src/lantern_worker/_version.py

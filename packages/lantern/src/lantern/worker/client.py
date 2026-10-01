@@ -1,0 +1,1680 @@
+"""WorkerClient: install the worker into a sandbox and run jobs through it.
+
+Three transports:
+
+- **stream** (default): one blocking ``sbx exec`` per job; the worker mirrors
+  its JSONL events to stdout, which the host parses line-by-line and
+  republishes on the EventBus. The result file is fetched afterwards with
+  ``cp`` — stdout is telemetry, the result file is the outcome.
+- **resident**: one ``sbx exec`` per sandbox runs ``lantern_worker serve``;
+  jobs go in on its stdin, events and results come back on its stdout
+  (``lantern.worker.resident``). Every sbx call costs about a second of
+  backend round trip, so this saves two to three of them per job and one
+  per host-tool response. Needs per-job stdin delivery (``job_env``), which
+  is the provisioner's proof that this sbx passes exec stdin through; a
+  client without it, or whose server never reports ready, streams as before.
+- **poll**: the worker is launched detached (``nohup ... &``); the host tails
+  the in-sandbox events file by byte offset every ``poll_interval`` seconds.
+  Fallback for environments where long-running exec streams are unreliable.
+
+Host-side timeouts are ``job.timeout_s`` plus a grace period; on expiry the
+worker process is killed inside the sandbox (pattern-scoped pkill) and
+WorkerTimeoutError is raised.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import codecs
+import contextlib
+import json
+import queue
+import re
+import shlex
+import threading
+import time
+from collections import deque
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+
+import lantern
+from lantern import toolchains
+from lantern.config import Limits, WorkerTransport
+from lantern.errors import SbxError, WorkerError, WorkerTimeoutError
+from lantern.events import EventBus, HostEventTypes
+from lantern.log import get_logger
+from lantern.provider import ProviderRecovery
+from lantern.sbx.models import ExecResult
+from lantern.sbx.sandbox import (
+    BAKE_MANIFEST,
+    ENV_FILE,
+    EVENTS_DIR,
+    JOB_ENV_VAR,
+    JOBS_DIR,
+    RESULTS_DIR,
+    TOOLS_DIR,
+    VENV_DIR,
+    VENV_PYTHON as DEFAULT_PYTHON,
+    Sandbox,
+)
+from lantern.worker.hosttools import HostToolBroker, HostToolHandler
+from lantern.worker.resident import ResidentWorker
+from lantern.worker.wheel import resolve_worker_wheel
+from lantern_worker.protocol import Event, EventTypes, HostToolResponse, JobRequest, JobResult
+
+# Wheels must keep their canonical filename when staged: pip validates the
+# name-version-python-abi-platform structure of the FILENAME itself and
+# refuses to install a renamed wheel ("Invalid wheel filename").
+STAGED_WHEEL_DIR = "/tmp"  # nosec B108 - path inside the sandbox VM, not host tmp
+
+_SMOKE_BASE = "/tmp/lantern-smoke"  # nosec B108 - path inside the sandbox VM, not host tmp
+
+# Ask the worker whether a backend can run in this sandbox, without starting
+# a session (see WorkerClient.backend_ready). Exits nonzero on
+# BackendUnavailableError — the same precondition run_session opens with, so
+# there is no second copy of "what this backend needs" to drift. argv: the
+# backend name.
+_BACKEND_PROBE = (
+    "import sys; from lantern_worker.backends import ensure_available; "
+    "ensure_available(sys.argv[1])"
+)
+
+# One in-sandbox orchestrator for the whole prebake verification: manifest
+# read+parse, import/version check, and entrypoint smoke — each formerly its
+# own `sbx exec` round trip (#127). Runs under the template's system python3
+# (templates ship it; a template without it fails the probe and degrades to
+# the install ladder, same as any other probe failure). argv:
+# manifest_path expected_version default_python smoke_base. Emits exactly one
+# JSON verdict line on stdout; the host maps stages onto the same decisions
+# and log messages the serial probes produced. The "ok" verdict carries the
+# language set the bake recorded (#615) so the log can say what the template
+# was built for; what is actually on PATH is answered by the toolchain probe
+# that follows (_toolchain_probe), which covers git (#252) and every selected
+# language alike.
+_PREBAKE_PROBE = """\
+import json, subprocess, sys
+
+manifest_path, expected, default_python, smoke_base = sys.argv[1:5]
+
+
+def emit(stage, **extra):
+    print(json.dumps({"stage": stage, **extra}))
+    sys.exit(0)
+
+
+def run(argv):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True)
+    except OSError:
+        return None
+
+
+def tail(proc):
+    if proc is None:
+        return "interpreter not found"
+    parts = [p.strip() for p in (proc.stderr, proc.stdout) if p and p.strip()]
+    return "\\n".join(parts)[-2000:] or "(no output)"
+
+
+try:
+    with open(manifest_path) as f:
+        raw = f.read()
+except OSError:
+    emit("no-manifest")
+try:
+    manifest = json.loads(raw)
+    baked = str(manifest["worker_version"])
+    python = str(manifest.get("python") or default_python)
+except (ValueError, KeyError, TypeError):
+    emit("bad-manifest")
+if baked != expected:
+    emit("stale", baked=baked)
+check = run([python, "-c", "import lantern_worker; print(lantern_worker.__version__)"])
+if check is None or check.returncode != 0 or check.stdout.strip() != expected:
+    emit("import-failed", rc=check.returncode if check else -1, output=tail(check))
+smoke = run(
+    [
+        python,
+        "-m",
+        "lantern_worker",
+        "run",
+        "--job",
+        smoke_base + "-missing.json",
+        "--events",
+        smoke_base + ".events.jsonl",
+        "--result",
+        smoke_base + ".result.json",
+    ]
+)
+if smoke is None or smoke.returncode != 64:
+    emit("smoke-failed", rc=smoke.returncode if smoke else -1, output=tail(smoke))
+emit("ok", python=python, languages=manifest.get("languages"))
+"""
+
+#: The event keys that name the agent speaking. Only the host sets them.
+_IDENTITY_KEYS = ("agent_slug", "agent_name")
+
+
+def _identity(agent: str | None, named: Mapping[str, str] | None) -> dict[str, str]:
+    """What a job's agent.* events are stamped with: the persona label
+    under ``agent``, then the named agent's slug and name when given."""
+    identity = {} if agent is None else {"agent": agent}
+    for key in _IDENTITY_KEYS:
+        value = (named or {}).get(key)
+        if value:
+            identity[key] = value
+    return identity
+
+
+# The batched toolchain presence probe: every selected toolchain's own probe
+# in one `sh -c`, printing the names of the ones that fail. One exec round
+# trip whatever the size of the set — round trips are the cost (#127) — and
+# the same probes the install ladder runs one by one. The leading no-op is a
+# stable prefix for tests to script the answer by.
+_TOOLCHAIN_PROBE_MARK = ": lantern-toolchain-probe"
+
+
+def _toolchain_probe(selected: Sequence[toolchains.Toolchain]) -> str:
+    parts = [_TOOLCHAIN_PROBE_MARK]
+    for toolchain in selected:
+        parts.append(f"( {toolchain.probe} ) >/dev/null 2>&1 || printf '%s\\n' {toolchain.name}")
+    return "; ".join(parts)
+
+
+log = get_logger(__name__)
+
+
+# Echoed to both streams by a setup command's script once the login shell has
+# read its profile, so what the image prints on login can be told from what the
+# command produced. A target's sandbox image is free to announce itself — a
+# version manager, a banner, an MOTD — and none of that is the operator's
+# command talking, least of all in the error it failed with, where a long
+# enough banner pushed the real message out of the tail.
+SETUP_MARK = "lantern-setup-begin"
+
+
+def _after_mark(text: str, mark: str) -> str:
+    """What a stream carried after ``mark``'s own line.
+
+    The first occurrence, not the last. The profile runs before the mark is
+    echoed, so the first one is always the script's own — which leaves a
+    command that echoes the token itself with all of its output.
+    """
+    _profile, separator, rest = text.partition(f"{mark}\n")
+    return rest if separator else text
+
+
+def _apt_lock_contended(result: ExecResult) -> bool:
+    output = f"{result.stderr}\n{result.stdout}".lower()
+    return (
+        result.returncode == 100
+        and "lock" in output
+        and any(
+            marker in output
+            for marker in (
+                "held by process",
+                "resource temporarily unavailable",
+                "is another process using it",
+            )
+        )
+    )
+
+
+def _apt_failure_hint(result: ExecResult) -> str:
+    if _apt_lock_contended(result):
+        return "another apt/dpkg process still holds the lock; retry after it finishes"
+    output = f"{result.stderr}\n{result.stdout}".lower()
+    if "permission denied" in output or "are you root" in output:
+        return "check the sandbox user's sudo permissions"
+    if "unable to locate package" in output or "has no installation candidate" in output:
+        return "check the package name and the configured apt repositories"
+    if any(
+        marker in output
+        for marker in ("failed to fetch", "could not resolve", "temporary failure resolving")
+    ):
+        return "check the sandbox network policy, DNS and configured apt mirrors"
+    return (
+        "inspect apt's output; rc=100 alone does not distinguish locks, mirrors or package errors"
+    )
+
+
+def _output_tail(result: ExecResult, limit: int = 2000, *, mark: str | None = None) -> str:
+    """Combined stderr+stdout tail: sbx exec surfaces some in-sandbox errors
+    on stdout, so stderr alone can be empty exactly when it matters.
+
+    ``mark`` names a token the script echoes to both streams once the login
+    profile has run; everything before it is the profile's and is dropped. A
+    stream without the mark is kept whole — the script never reached the echo,
+    so whatever is there is the diagnostic.
+    """
+    stderr, stdout = result.stderr, result.stdout
+    if mark is not None:
+        stderr, stdout = _after_mark(stderr, mark), _after_mark(stdout, mark)
+    combined = "\n".join(part.strip() for part in (stderr, stdout) if part.strip())
+    return combined[-limit:] if combined else "(no output)"
+
+
+def _scrub(text: str, secrets: Sequence[str]) -> str:
+    """Blank delivered secret values out of an output tail before it becomes
+    an event: an operator's setup command is free to `env` or echo a URL
+    with the token in it, and events are the run's public record."""
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        text = text.replace(secret, "***")
+    return text
+
+
+class WorkerClient:
+    def __init__(
+        self,
+        sandbox: Sandbox,
+        bus: EventBus | None = None,
+        *,
+        transport: WorkerTransport = "stream",
+        python: str = DEFAULT_PYTHON,
+        poll_interval: float = 2.0,
+        grace_s: float = 60.0,
+        role: str | None = None,
+        backend: str | None = None,
+        limits: Limits | None = None,
+        credential_refresh: Callable[[], None] | None = None,
+        job_env: Callable[[], Mapping[str, str]] | None = None,
+    ) -> None:
+        self.sandbox = sandbox
+        self.bus = bus or EventBus()
+        self.transport = transport
+        self.python = python
+        self.poll_interval = poll_interval
+        self.grace_s = grace_s
+        # Set by install(): True when a prebaked template carried a working
+        # worker and the install ladder was skipped entirely.
+        self.prebaked = False
+        # Names of the toolchains a verified template lacked and install()
+        # provisioned on top of it (#615) — what the sandbox.prebaked event
+        # and doctor's advice are built from.
+        self.prebake_topup: list[str] = []
+        # The operator's `apt_packages` (#681) that install() found missing
+        # and installed — what the sandbox.setup event reports; empty when
+        # the template already carried them all.
+        self.apt_installed: list[str] = []
+        # Sandbox role for enriching resource telemetry (the worker doesn't
+        # know which sandbox it lives in), and guardrail thresholds to pass
+        # through to the worker's heartbeat sampler.
+        self.role = role
+        # The host's configured agent backend, stamped onto agent.* events
+        # that arrive without one (an older worker), so chat can always name
+        # provider+model.
+        self.backend = backend
+        self.limits = limits
+        # Invoked before each submit when set (github role under GitHub App
+        # auth): re-mints and rewrites the in-VM env file when the
+        # installation token nears expiry, so this job's worker process
+        # starts with a live credential. See Provisioner.gh_refresher.
+        self.credential_refresh = credential_refresh
+        # Per-job stdin env delivery (#592): when set, each job's exports are
+        # computed fresh and piped into the launch shell's stdin, so
+        # credentials are never at rest on the sandbox filesystem. See
+        # Provisioner.job_env — None means the sandbox's credentials arrive
+        # another way (sbx secret proxy, or the env-file fallback).
+        self.job_env = job_env
+        self.mcp_prepare: (
+            Callable[
+                [JobRequest, HostToolHandler | None],
+                contextlib.AbstractContextManager[tuple[JobRequest, HostToolHandler | None]],
+            ]
+            | None
+        ) = None
+        # job_id -> who is speaking, supplied at submit(): the persona label
+        # (planner, executor, ...) under `agent`, and the named agent taking
+        # the phase under `agent_slug`/`agent_name` when the run has one.
+        # Stamped onto that job's agent.* events so the transcript can say
+        # who is speaking (the worker doesn't know which phase it serves).
+        self._job_agents: dict[str, dict[str, str]] = {}
+        # job_id -> the broker answering that job's host-tool requests
+        # (see lantern.worker.hosttools); registered for the life of submit().
+        self._brokers: dict[str, HostToolBroker] = {}
+        self.provider_recovery: ProviderRecovery | None = None
+        self._model_context: dict[str, dict[str, str | None]] = {}
+        # The resident transport's server for this sandbox, started on the
+        # first job that can use it; `_resident_broken` remembers a server
+        # that never reported ready, so the client streams from then on
+        # rather than paying the wait on every job.
+        self._resident: ResidentWorker | None = None
+        self._resident_broken = False
+
+    def close(self) -> None:
+        """Release what the client holds in the sandbox: the resident worker,
+        when one runs. Jobs in flight are cancelled by the server on its
+        way out. Safe to call more than once, or never (a removed sandbox
+        ends the server too)."""
+        resident, self._resident = self._resident, None
+        if resident is not None:
+            resident.close()
+
+    # -- install -----------------------------------------------------------
+
+    def install(
+        self,
+        *,
+        extras: str = "copilot",
+        wheel: Path | None = None,
+        timeout: float = 600.0,
+        no_deps: bool = False,
+        system_site_packages: bool = False,
+        ensure_dev_tools: bool = False,
+        languages: Sequence[str] | None = None,
+        versions: Mapping[str, toolchains.ToolchainVersion] | None = None,
+        expect_prebaked: bool = False,
+        apt_packages: Sequence[str] = (),
+    ) -> None:
+        """Install lantern-worker into the sandbox, venv-first with fallbacks.
+
+        ``expect_prebaked`` (set when ``[sandbox].template`` is configured)
+        first probes for a template baked by ``lantern bake``: a bake
+        manifest whose worker version matches this host, verified with the
+        same entrypoint smoke check the ladder ends with. On success the
+        whole ladder is skipped; any verification failure degrades to the
+        ladder below, so a stale template costs one probe, never a run.
+
+        Sandbox templates ship python3 but often lack python3-venv
+        (Debian/Ubuntu split ensurepip out). The ladder:
+
+        1. ``python3 -m venv`` — the clean path.
+        2. On a venv/ensurepip failure: probe the running ``python3`` and
+           install its matching ``python3.X-venv`` plus ``python3-pip``
+           with apt, then retry the venv. The distro's unversioned venv
+           package may target a different interpreter from the image's.
+        3. Still no venv: **user-site fallback** — ``python3 -m pip install
+           --user`` (adding ``--break-system-packages`` when pip reports an
+           externally-managed environment), and the worker runs under the
+           system ``python3``. ``self.python`` is updated so submit() uses
+           the right interpreter either way.
+
+        ``no_deps``/``system_site_packages`` are test seams for hermetic
+        installs; production uses full dependency resolution of the worker
+        wheel's third-party dependencies (PyPI is reachable under the
+        balanced network policy). The worker itself is always this host's
+        wheel, never fetched by name.
+
+        ``ensure_dev_tools`` additionally makes the sandbox dev-ready for
+        the AGENT's own work (see _ensure_dev_tools) — the engine sets it
+        for the agent sandbox only, passing the run's resolved
+        ``languages``. ``None`` is the default set (Python); an empty
+        sequence is *no* language toolchain at all — a workload's box
+        (#801) gets the baseline tools and its backend's runtime only.
+        ``versions`` selects the series each toolchain is provisioned at
+        (#627): the workspace's ``requires-python`` / ``.nvmrc`` verdicts
+        that ``toolchains.resolve_languages`` read on the host. Absent, or
+        for a toolchain it does not name, the registry default is used.
+        ``apt_packages`` are the operator's own OS packages (#681), ensured
+        after the toolchains on both the prebaked and the ladder path — see
+        :meth:`_ensure_apt_packages` for why they, unlike the toolchains,
+        are not best-effort.
+        """
+        started = time.monotonic()
+        log.info(
+            "worker.install_start",
+            sandbox=self.sandbox.name,
+            role=self.role,
+            expect_prebaked=expect_prebaked,
+            ensure_dev_tools=ensure_dev_tools,
+            languages=None if languages is None else list(languages),
+            versions={k: v.series for k, v in versions.items()} if versions else None,
+        )
+        if expect_prebaked and self._verify_prebaked():
+            self.prebaked = True
+            if ensure_dev_tools:
+                self._top_up_prebaked(timeout, languages, versions)
+                self._ensure_apt_packages(apt_packages, timeout)
+            self._ensure_backend_runtime(extras, timeout)
+            log.info(
+                "worker.installed",
+                sandbox=self.sandbox.name,
+                role=self.role,
+                prebaked=True,
+                duration_s=round(time.monotonic() - started, 1),
+            )
+            return
+        if ensure_dev_tools:
+            self._ensure_dev_tools(timeout, languages, versions)
+            self._ensure_apt_packages(apt_packages, timeout)
+            self._ensure_search_fallback(timeout)
+        wheel = wheel if wheel is not None else resolve_worker_wheel()
+        if wheel is None:
+            # Never `lantern-worker==X` from an index: the worker only ever
+            # comes from this host's own release wheel (lantern.releases).
+            raise WorkerError(
+                f"no lantern-worker {lantern.__version__} wheel on this host to install "
+                "into the sandbox; the installed lantern is missing its vendored worker "
+                "wheel — reinstall it from its GitHub Release (`lantern update` or the "
+                "install script)"
+            )
+        staged = f"{STAGED_WHEEL_DIR}/{wheel.name}"
+        self.sandbox.cp_in(wheel, staged)
+        target = f"{staged}[{extras}]" if extras else staged
+
+        if self._create_venv(timeout, system_site_packages):
+            self.python = DEFAULT_PYTHON
+            pip = [f"{VENV_DIR}/bin/pip", "install", "--quiet"]
+            if no_deps:
+                pip.append("--no-deps")
+            self._check(self.sandbox.exec([*pip, target], timeout=timeout), "worker install")
+        else:
+            self.python = "python3"
+            self._pip_user_install(target, timeout=timeout, no_deps=no_deps)
+
+        verify = self.sandbox.exec(
+            [self.python, "-c", "import lantern_worker; print(lantern_worker.__version__)"]
+        )
+        self._check(verify, "worker import check")
+        installed = verify.stdout.strip()
+        if installed != lantern.__version__:
+            raise WorkerError(
+                f"worker version {installed!r} does not match host {lantern.__version__!r}"
+            )
+        log.info(
+            "worker.installed",
+            sandbox=self.sandbox.name,
+            role=self.role,
+            prebaked=False,
+            python=self.python,
+            version=installed,
+            duration_s=round(time.monotonic() - started, 1),
+        )
+
+        self._ensure_backend_runtime(extras, timeout)
+
+        # Entrypoint smoke check: importing the package proves nothing about
+        # `python -m lantern_worker` actually executing under sbx exec. A run
+        # against a missing job file must exit 64 (the worker's usage-error
+        # code) — anything else means jobs would die with no result file,
+        # so fail HERE with full output instead of at the first real job.
+        smoke = self._entrypoint_smoke(self.python)
+        if smoke.returncode != 64:
+            raise WorkerError(
+                "worker entrypoint check failed "
+                f"(rc={smoke.returncode}, expected 64): {_output_tail(smoke)}"
+            )
+
+    def verify_installed(self) -> bool:
+        """Is a matching worker already installed under ``self.python``?
+
+        The two checks the install ladder ends with — version equals the
+        host's, entrypoint exits 64 — as a cheap probe for reusing a
+        long-lived sandbox (the daemon's concierge box survives restarts;
+        a host upgrade must re-install rather than trust it).
+        """
+        try:
+            verify = self.sandbox.exec(
+                [self.python, "-c", "import lantern_worker; print(lantern_worker.__version__)"]
+            )
+        except SbxError:
+            return False
+        if not verify.ok or verify.stdout.strip() != lantern.__version__:
+            return False
+        try:
+            return self._entrypoint_smoke(self.python).returncode == 64
+        except SbxError:
+            return False
+
+    def backend_ready(self, backend: str) -> bool:
+        """Is this sandbox equipped to run ``backend``?
+
+        :meth:`verify_installed` answers "is *a* worker of this version
+        installed", which is backend-blind: the worker is installed with the
+        configured backend's extra, so a box provisioned under copilot has
+        the Copilot SDK and no Claude Code CLI while reporting the very same
+        version. A reuse gate built on the version alone therefore keeps a
+        box the configured backend cannot run in (#533) — the operator's
+        only symptom being every concierge message failing.
+
+        The probe asks the worker's own precondition
+        (``backends.ensure_available``), so the answer stays in one place
+        rather than being re-derived host-side.
+        """
+        try:
+            probe = self.sandbox.exec([self.python, "-c", _BACKEND_PROBE, backend])
+        except SbxError:
+            return False
+        return probe.ok
+
+    def _entrypoint_smoke(self, python: str) -> ExecResult:
+        """Run the worker entrypoint against a missing job file; a healthy
+        install exits 64 (the worker's usage-error code)."""
+        return self.sandbox.exec(
+            [
+                python,
+                "-m",
+                "lantern_worker",
+                "run",
+                "--job",
+                f"{_SMOKE_BASE}-missing.json",
+                "--events",
+                f"{_SMOKE_BASE}.events.jsonl",
+                "--result",
+                f"{_SMOKE_BASE}.result.json",
+            ]
+        )
+
+    def _verify_prebaked(self) -> bool:
+        """Fast prerequisite probe against a prebaked template.
+
+        One ``sbx exec`` runs the whole chain in-sandbox (_PREBAKE_PROBE):
+        read the bake manifest ``lantern bake`` left in the template, then
+        re-run the two checks the install ladder ends with (version match,
+        entrypoint exits 64) under the interpreter the bake recorded —
+        formerly three exec round trips (#127). Any failure returns False —
+        the caller falls back to the install ladder, so a stale or foreign
+        template degrades to today's behavior instead of failing the run.
+        """
+        probe = self.sandbox.exec(
+            [
+                "python3",
+                "-c",
+                _PREBAKE_PROBE,
+                BAKE_MANIFEST,
+                lantern.__version__,
+                DEFAULT_PYTHON,
+                _SMOKE_BASE,
+            ]
+        )
+        verdict: dict[str, object] = {}
+        if probe.ok and probe.stdout.strip():
+            try:
+                parsed = json.loads(probe.stdout.strip().splitlines()[-1])
+                if isinstance(parsed, dict):
+                    verdict = parsed
+            except ValueError:
+                pass
+        stage = verdict.get("stage")
+        fallback = "running the install ladder"
+        if stage is None:
+            log.warning(
+                "worker.prebake_no_verdict",
+                sandbox=self.sandbox.name,
+                rc=probe.returncode,
+                output=_output_tail(probe),
+                action=fallback,
+            )
+            return False
+        if stage == "no-manifest":
+            log.info(
+                "worker.prebake_no_manifest",
+                sandbox=self.sandbox.name,
+                manifest=BAKE_MANIFEST,
+                action=fallback,
+            )
+            return False
+        if stage == "bad-manifest":
+            log.warning(
+                "worker.prebake_bad_manifest",
+                sandbox=self.sandbox.name,
+                manifest=BAKE_MANIFEST,
+                action=fallback,
+            )
+            return False
+        if stage == "stale":
+            log.warning(
+                "worker.prebake_stale_template",
+                sandbox=self.sandbox.name,
+                baked=verdict.get("baked"),
+                host=lantern.__version__,
+                action=fallback,
+                hint="re-run `lantern bake` to refresh the template",
+            )
+            return False
+        if stage == "import-failed":
+            log.warning(
+                "worker.prebake_import_failed",
+                sandbox=self.sandbox.name,
+                rc=verdict.get("rc"),
+                output=verdict.get("output") or "(no output)",
+                action=fallback,
+            )
+            return False
+        if stage == "smoke-failed":
+            log.warning(
+                "worker.prebake_smoke_failed",
+                sandbox=self.sandbox.name,
+                rc=verdict.get("rc"),
+                expected_rc=64,
+                output=verdict.get("output") or "(no output)",
+                action=fallback,
+            )
+            return False
+        python = verdict.get("python")
+        if stage != "ok" or not isinstance(python, str) or not python:
+            log.warning(
+                "worker.prebake_unrecognized_verdict",
+                sandbox=self.sandbox.name,
+                stage=stage,
+                action=fallback,
+            )
+            return False
+        self.python = python
+        baked = verdict.get("languages")
+        log.info(
+            "worker.prebake_verified",
+            sandbox=self.sandbox.name,
+            version=lantern.__version__,
+            python=python,
+            languages=baked if isinstance(baked, list) else None,
+        )
+        return True
+
+    def missing_toolchains(
+        self, selected: Sequence[toolchains.Toolchain]
+    ) -> list[toolchains.Toolchain] | None:
+        """Which of ``selected`` are absent from the sandbox, probed in one
+        exec round trip; None when the probe itself could not run, which
+        the caller must not read as "all present"."""
+        if not selected:
+            return []
+        try:
+            result = self.sandbox.exec(["sh", "-c", _toolchain_probe(selected)])
+        except SbxError as exc:
+            log.warning("worker.toolchain_probe_failed", sandbox=self.sandbox.name, error=str(exc))
+            return None
+        if not result.ok:
+            log.warning(
+                "worker.toolchain_probe_failed",
+                sandbox=self.sandbox.name,
+                rc=result.returncode,
+                output=_output_tail(result),
+            )
+            return None
+        absent = set(result.stdout.split())
+        return [tc for tc in selected if tc.name in absent]
+
+    def _top_up_prebaked(
+        self,
+        timeout: float,
+        languages: Sequence[str] | None,
+        versions: Mapping[str, toolchains.ToolchainVersion] | None = None,
+    ) -> None:
+        """Make a verified template dev-ready for THIS run's languages (#615).
+
+        A template is baked for one language set — the config's, at bake
+        time — and a run may resolve another (a workspace that turned out
+        to be Go, a config edited since). The template used to be trusted
+        wholesale: the run logged its worker verified and the agent met
+        `go: command not found` on turn one. Now the full selected set is
+        probed in one round trip and whatever is missing is provisioned
+        exactly as the install ladder would have, named in
+        ``worker.prebake_topup`` so an operator knows the bake is behind.
+        A probe that cannot answer degrades to the ladder's own per-tool
+        probes: never proceed silently without a toolchain. A declared
+        series (#627) is probed as that series, so a template baked at the
+        default Python tops up 3.11 for a ``requires-python = "<3.12"``
+        project instead of trusting the wrong interpreter.
+        """
+        selected = (
+            *toolchains.BASELINE_TOOLS,
+            *toolchains.resolve(
+                toolchains.DEFAULT_LANGUAGES if languages is None else languages, versions
+            ),
+        )
+        missing = self.missing_toolchains(selected)
+        if missing is None:
+            self._ensure_dev_tools(timeout, languages, versions)
+            return
+        if not missing:
+            log.debug("worker.dev_tools_present", sandbox=self.sandbox.name)
+            return
+        self.prebake_topup = [tc.name for tc in missing]
+        log.info(
+            "worker.prebake_topup",
+            sandbox=self.sandbox.name,
+            added=self.prebake_topup,
+            hint="the template was baked for a different language set; re-run "
+            "`lantern bake` to stop paying this on every provision",
+        )
+        self._provision_toolchains(missing, timeout)
+
+    def _ensure_backend_runtime(self, extras: str, timeout: float) -> None:
+        """The chosen agent backend's in-sandbox runtime, probe-first (#533).
+
+        The claude extra's SDK spawns the Claude Code CLI, which the pip
+        package does not bundle: ensure Node (the javascript toolchain) and
+        then ``@anthropic-ai/claude-code``. Best-effort and loud, like every
+        other ensure — the backend itself fails with a clear
+        BackendUnavailableError if the CLI still is not on PATH.
+        """
+        if "claude" not in {part.strip() for part in extras.split(",")}:
+            return
+        selected = (*toolchains.resolve(["javascript"]), toolchains.CLAUDE_CODE)
+        missing = [tc for tc in selected if not self.sandbox.exec(["sh", "-c", tc.probe]).ok]
+        if missing:
+            self._provision_toolchains(missing, timeout)
+
+    def _ensure_dev_tools(
+        self,
+        timeout: float,
+        languages: Sequence[str] | None = None,
+        versions: Mapping[str, toolchains.ToolchainVersion] | None = None,
+    ) -> None:
+        """Best-effort: make the sandbox dev-ready for the agent's own work.
+
+        This provisions the toolchains for ``languages`` (see
+        ``lantern.toolchains``) before the agent's first turn, so it does not
+        burn revision budget bootstrapping its own compiler. Empty selects
+        the default, which is Python — the case this ensure was born for.
+        ``toolchains.BASELINE_TOOLS`` (git #252, yq/jq #751) is provisioned on top of
+        whatever was selected: a project's tests shell out to git whatever
+        its language, so it is not an opt-in.
+
+        Field failure (0.4.0): templates ship a system python without
+        ensurepip. The worker self-heals its OWN venv (the ladder below),
+        but when that apt heal silently fails the worker still succeeds via
+        the user-site fallback — leaving python3-venv missing, so the
+        AGENT's `python3 -m venv` for the project it is building dies with
+        "ensurepip is not available" on every revision until the budget
+        exhausts. Since #140 that is one entry in a registry rather than the
+        only ecosystem with a head start, but the semantics are the ones
+        that failure taught us:
+
+        - **Probe first.** A template that already ships a toolchain needs
+          no apt and no network at all.
+        - **Batch the apt path.** All still-missing apt packages go into one
+          ``update && install``, so N selected languages is one round trip.
+        - **Never fatal, but loud.** Warn with the toolchain named; worker
+          installation has its own ladder and the agent retains
+          ``sudo apt-get`` as an escape hatch.
+        """
+        selected = (
+            *toolchains.BASELINE_TOOLS,
+            *toolchains.resolve(
+                toolchains.DEFAULT_LANGUAGES if languages is None else languages, versions
+            ),
+        )
+        missing = [tc for tc in selected if not self.sandbox.exec(["sh", "-c", tc.probe]).ok]
+        if not missing:
+            log.debug("worker.dev_tools_present", sandbox=self.sandbox.name)
+            return
+        self._provision_toolchains(missing, timeout)
+
+    def _install_apt(self, packages: Sequence[str], timeout: float) -> ExecResult:
+        """Retry confirmed apt lock contention, including the update lists lock.
+
+        All provisioning apt paths share this policy. Apt owns its locks;
+        never delete them or try to hold them on apt's behalf. Retry the
+        whole idempotent batch at most twelve times, five seconds apart,
+        within the caller's original timeout (including command runtime).
+        Other errors return immediately with their original diagnostics.
+        """
+        command = [
+            "sh",
+            "-c",
+            f"sudo -n apt-get update -q && sudo -n apt-get install -y -q {shlex.join(packages)}",
+        ]
+        deadline = time.monotonic() + timeout
+        result = self.sandbox.exec(command, timeout=timeout)
+        for attempt in range(12):
+            if not _apt_lock_contended(result) or deadline - time.monotonic() <= 5.0:
+                return result
+            log.info(
+                "worker.apt_lock_wait",
+                sandbox=self.sandbox.name,
+                retry=attempt + 1,
+                delay_s=5.0,
+            )
+            time.sleep(5.0)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return result
+            result = self.sandbox.exec(command, timeout=remaining)
+        return result
+
+    def _provision_toolchains(
+        self, missing: Sequence[toolchains.Toolchain], timeout: float
+    ) -> None:
+        """Install already-probed-missing toolchains: one pooled apt call,
+        then each entry's install script. Best-effort and loud, see
+        ``_ensure_dev_tools``."""
+        log.info(
+            "worker.toolchains_provisioning",
+            sandbox=self.sandbox.name,
+            toolchains=[tc.name for tc in missing],
+        )
+        packages = toolchains.apt_packages(missing)
+        apt_ok = True
+        if packages:
+            apt_for = [tc for tc in missing if tc.apt_packages]
+            result = self._install_apt(packages, timeout)
+            apt_ok = result.ok
+            if not result.ok:
+                log.warning(
+                    "worker.dev_tools_ensure_failed",
+                    sandbox=self.sandbox.name,
+                    toolchains=[tc.name for tc in apt_for],
+                    rc=result.returncode,
+                    wanted="; ".join(tc.wanted for tc in apt_for),
+                    output=_output_tail(result),
+                    hint=_apt_failure_hint(result),
+                )
+        for toolchain in missing:
+            if toolchain.install_script is None:
+                continue
+            if not apt_ok and toolchain.apt_packages:
+                log.warning(
+                    "worker.toolchain_installer_skipped",
+                    sandbox=self.sandbox.name,
+                    toolchain=toolchain.name,
+                    reason="apt prerequisites did not install; "
+                    "the agent must bootstrap this toolchain",
+                )
+                continue
+            # A compile-from-source entry (ruby-build) declares how long it
+            # needs; the caller's budget is a floor, never a cap on it.
+            result = self.sandbox.exec(
+                ["sh", "-c", toolchain.install_script],
+                timeout=max(timeout, toolchain.install_budget or 0.0),
+            )
+            if not result.ok:
+                log.warning(
+                    "worker.dev_tools_ensure_failed",
+                    sandbox=self.sandbox.name,
+                    toolchains=[toolchain.name],
+                    rc=result.returncode,
+                    wanted=toolchain.wanted,
+                    hint="the agent has to bootstrap this itself; a blocked installer "
+                    "domain is the usual cause — check the sandbox network policy",
+                    output=_output_tail(result),
+                )
+
+    def _ensure_apt_packages(self, packages: Sequence[str], timeout: float) -> None:
+        """The operator's `[sandbox] apt_packages` (#681), probe-first.
+
+        One ``dpkg -s`` pass names what the template lacks; the rest is one
+        ``apt-get update && install``, so a template baked with the list
+        (``lantern bake`` passes it) costs a probe and no network. Unlike
+        the toolchain ensure this is NOT best-effort: the operator named
+        these packages because the project does not build without them, so
+        a failed install is a provisioning failure that names the package
+        and apt's last lines — not a run that spends its revision budget
+        rediscovering the missing library.
+        """
+        if not packages:
+            return
+        probe = self.sandbox.exec(
+            [
+                "sh",
+                "-c",
+                'for p in "$@"; do dpkg -s "${p%%=*}" >/dev/null 2>&1 || echo "$p"; done',
+                "lantern-apt-probe",
+                *packages,
+            ],
+            timeout=timeout,
+        )
+        if not probe.ok:
+            raise WorkerError(
+                f"could not probe apt packages {list(packages)} (rc={probe.returncode}): "
+                f"{_output_tail(probe)}"
+            )
+        missing = [line.strip() for line in probe.stdout.splitlines() if line.strip()]
+        if not missing:
+            log.debug("worker.apt_packages_present", sandbox=self.sandbox.name, packages=packages)
+            return
+        log.info("worker.apt_packages_installing", sandbox=self.sandbox.name, packages=missing)
+        result = self._install_apt(missing, timeout)
+        if not result.ok:
+            raise WorkerError(
+                f"apt packages {missing} did not install (rc={result.returncode}); "
+                f"{_apt_failure_hint(result)}: {_output_tail(result)}"
+            )
+        self.apt_installed = missing
+
+    def run_setup(
+        self,
+        commands: Sequence[str],
+        *,
+        run_id: str,
+        cwd: str,
+        timeout: float = 600.0,
+    ) -> None:
+        """The operator's `[sandbox] setup_commands` (#681), in order.
+
+        Each runs in the workspace under a login shell with the same
+        environment a job's worker process gets — the delivered exports
+        (per-job stdin, or the in-VM env file), so a registry credential or
+        a `[sandbox] env` value is in scope — and under the sandbox's
+        egress policy as already applied. Its exit code, duration and
+        output tail become one ``sandbox.setup`` event; the first non-zero
+        exit stops the sequence and fails provisioning naming the command,
+        because the project would not build for the agent either.
+
+        The tail is the command's own output: whatever the image prints on
+        login is cut at ``SETUP_MARK``, so a banner cannot crowd out the
+        message a failing command ended the run with.
+        """
+        for command in commands:
+            started = time.monotonic()
+            payload = self._env_payload()
+            script = f"cd {shlex.quote(cwd)} && {command}"
+            # First in the login shell's script, and ahead of the environment:
+            # the profile has run by the time the mark is echoed, so it divides
+            # the image's own output from everything lantern and the operator
+            # then do — an env file that fails to source still has its say.
+            mark = f"echo {SETUP_MARK}; echo {SETUP_MARK} >&2; "
+            if payload is None:
+                # The env file is what the worker process loads at startup;
+                # a template without one (no secrets, proxy delivery) runs
+                # the command in the profile's environment alone.
+                inner = shlex.join(
+                    ["sh", "-lc", f"{mark}[ -f {ENV_FILE} ] && . {ENV_FILE}; {script}"]
+                )
+                cmd = ["sh", "-c", f"exec {inner}"]
+            else:
+                inner = shlex.join(
+                    ["sh", "-lc", f'{mark}eval "${JOB_ENV_VAR}"; unset {JOB_ENV_VAR}; {script}']
+                )
+                cmd = ["sh", "-c", f'{JOB_ENV_VAR}="$(cat)" exec {inner}']
+            result = self.sandbox.exec(cmd, timeout=timeout, stdin=payload)
+            tail = _output_tail(result, mark=SETUP_MARK)
+            if payload is not None:
+                tail = _scrub(tail, self._secret_values(payload))
+            duration = round(time.monotonic() - started, 1)
+            self.bus.emit(
+                HostEventTypes.SANDBOX_SETUP,
+                run_id,
+                sandbox=self.sandbox.name,
+                command=command,
+                rc=result.returncode,
+                duration_s=duration,
+                tail=tail,
+            )
+            log.info(
+                "worker.setup_command",
+                sandbox=self.sandbox.name,
+                command=command,
+                rc=result.returncode,
+                duration_s=duration,
+            )
+            if not result.ok:
+                raise WorkerError(
+                    f"setup command failed (rc={result.returncode}) after {duration}s: "
+                    f"{command}\n{tail}"
+                )
+
+    @staticmethod
+    def _secret_values(payload: str) -> list[str]:
+        """The delivered values worth scrubbing from a command's output: any
+        export long enough to be a credential rather than a mode flag."""
+        values: list[str] = []
+        for line in payload.splitlines():
+            _key, _sep, quoted = line.removeprefix("export ").partition("=")
+            value = "".join(shlex.split(quoted)) if quoted else ""
+            if len(value) >= 8:
+                values.append(value)
+        return values
+
+    # The worker reroutes the Copilot CLI's glob/grep tools to a PATH ripgrep
+    # on non-4-KiB-page guests (USE_BUILTIN_RIPGREP=false, issue #122); this
+    # probe answers whether that reroute would have a binary to land on.
+    _SEARCH_FALLBACK_PROBE = 'test "$(getconf PAGESIZE)" = 4096 || command -v rg >/dev/null'
+
+    def _ensure_search_fallback(self, timeout: float) -> None:
+        """Best-effort: a PATH ripgrep for non-4-KiB-page guests (issue #122).
+
+        The Copilot CLI's bundled ripgrep is a jemalloc build compiled for
+        4 KiB pages; on guests with a larger page size (16 KiB is common
+        for Apple-silicon microVMs) it aborts at startup ("<jemalloc>:
+        Unsupported system page size") and the agent silently loses its
+        search tools. The worker reroutes glob/grep to the system ripgrep
+        via ``USE_BUILTIN_RIPGREP=false`` on such guests — this ensure
+        installs that ripgrep. Probe first: a 4 KiB guest, or one that
+        already ships ``rg``, needs no apt and no network at all. Never
+        fatal: the worker also warns in the transcript when the reroute
+        has no binary to land on.
+        """
+        probe = self.sandbox.exec(["sh", "-c", self._SEARCH_FALLBACK_PROBE])
+        if probe.ok:
+            return
+        result = self._install_apt(["ripgrep"], timeout)
+        if not result.ok:
+            log.warning(
+                "worker.search_fallback_ensure_failed",
+                sandbox=self.sandbox.name,
+                rc=result.returncode,
+                output=_output_tail(result),
+                hint="this guest's page size is not 4096 and no system ripgrep could be "
+                "installed, so the agent's glob/grep tools will abort (jemalloc "
+                "'Unsupported system page size')",
+            )
+
+    def _create_venv(self, timeout: float, system_site_packages: bool) -> bool:
+        venv_cmd = ["python3", "-m", "venv"]
+        if system_site_packages:
+            venv_cmd.append("--system-site-packages")
+        venv_cmd.append(VENV_DIR)
+
+        result = self.sandbox.exec(venv_cmd, timeout=timeout)
+        if result.ok:
+            return True
+        output = f"{result.stdout} {result.stderr}".lower()
+        if ("ensurepip" in output or "venv" in output) and self._repair_venv(timeout):
+            result = self.sandbox.exec(venv_cmd, timeout=timeout)
+            if result.ok:
+                return True
+        log.warning(
+            "worker.venv_failed",
+            sandbox=self.sandbox.name,
+            rc=result.returncode,
+            output=_output_tail(result),
+            action="falling back to a user-site install with the system python3",
+            hint="repair the base image's matching python3.X-venv package and re-run lantern bake",
+        )
+        return False
+
+    def _repair_venv(self, timeout: float) -> bool:
+        # Query the interpreter, never parse executable paths or the error's
+        # suggested command. A template may select a newer Python than apt's
+        # python3-venv metapackage serves.
+        probe = self.sandbox.exec(
+            [
+                "python3",
+                "-c",
+                "import sys; print('python%d.%d-venv' % sys.version_info[:2])",
+            ],
+            timeout=timeout,
+        )
+        package = probe.stdout.strip()
+        if not probe.ok or re.fullmatch(r"python3\.[0-9]+-venv", package) is None:
+            log.warning(
+                "worker.venv_repair_failed",
+                sandbox=self.sandbox.name,
+                reason="could not determine the running python3's matching venv package",
+                rc=probe.returncode,
+                output=_output_tail(probe),
+            )
+            return False
+        result = self._install_apt([package, "python3-pip"], timeout)
+        if not result.ok:
+            log.warning(
+                "worker.venv_repair_failed",
+                sandbox=self.sandbox.name,
+                package=package,
+                rc=result.returncode,
+                output=_output_tail(result),
+            )
+        return result.ok
+
+    def _pip_user_install(self, target: str, *, timeout: float, no_deps: bool) -> None:
+        pip = ["python3", "-m", "pip", "install", "--quiet", "--user"]
+        if no_deps:
+            pip.append("--no-deps")
+        result = self.sandbox.exec([*pip, target], timeout=timeout)
+        if not result.ok and "externally-managed" in f"{result.stdout} {result.stderr}".lower():
+            # PEP 668 (Ubuntu 24.04+): system pip refuses --user without an
+            # explicit opt-out.
+            result = self.sandbox.exec([*pip, "--break-system-packages", target], timeout=timeout)
+        self._check(result, "worker install (user-site fallback)")
+
+    @staticmethod
+    def _check(result: ExecResult, step: str) -> None:
+        if not result.ok:
+            raise WorkerError(f"{step} failed (rc={result.returncode}): {_output_tail(result)}")
+
+    # -- submit ------------------------------------------------------------
+
+    def submit(
+        self,
+        job: JobRequest,
+        *,
+        agent: str | None = None,
+        tool_handler: HostToolHandler | None = None,
+        agent_phase: str | None = None,
+        model_source: str | None = None,
+        agent_identity: Mapping[str, str] | None = None,
+    ) -> JobResult:
+        """Run one job. ``agent_identity`` (``agent_slug``, ``agent_name``)
+        names the agent taking the job; it is stamped on the job's agent.*
+        events and never taken from the worker."""
+        identity = _identity(agent, agent_identity)
+        if job.kind == "agent.session":
+            if self.provider_recovery is not None:
+                pinned = self.provider_recovery.pin_model(job)
+                if pinned.model != job.model:
+                    model_source = "interrupted call"
+                job = pinned
+            self._model_context[job.job_id] = {
+                "requested_model": job.model,
+                "model_source": model_source,
+                "agent_phase": agent_phase,
+            }
+        try:
+            if job.kind == "agent.session" and self.provider_recovery is not None:
+                return self.provider_recovery.submit(
+                    job,
+                    lambda request: self._submit_once(
+                        request, identity=identity, tool_handler=tool_handler
+                    ),
+                    self.bus,
+                )
+            return self._submit_once(job, identity=identity, tool_handler=tool_handler)
+        finally:
+            self._model_context.pop(job.job_id, None)
+
+    def _submit_once(
+        self,
+        job: JobRequest,
+        *,
+        identity: Mapping[str, str] | None = None,
+        tool_handler: HostToolHandler | None = None,
+    ) -> JobResult:
+        """Run one job to completion.
+
+        ``tool_handler`` answers the job's host-tool calls (``job.host_tools``)
+        from a host thread pool while the session runs; the two must travel
+        together — a tool the model can call but nobody answers would only
+        time out. ``host_tools_dir`` is filled in here (per-job directory
+        under TOOLS_DIR) unless the caller set it.
+        """
+        if self.credential_refresh is not None:
+            self.credential_refresh()
+        if any(server.mediated for server in job.mcp_servers):
+            if self.mcp_prepare is None:
+                raise WorkerError("credentialed MCP has no host mediator")
+            with self.mcp_prepare(job, tool_handler) as (prepared, handler):
+                return self._submit_once(prepared, identity=identity, tool_handler=handler)
+        if bool(job.host_tools) != (tool_handler is not None):
+            raise WorkerError(
+                "job.host_tools and tool_handler must be given together "
+                f"(host_tools={len(job.host_tools)}, handler={tool_handler is not None})"
+            )
+        if tool_handler is not None:
+            if job.host_tools_dir is None:
+                job = job.model_copy(update={"host_tools_dir": f"{TOOLS_DIR}/{job.job_id}"})
+            broker = HostToolBroker(self.sandbox, job, tool_handler, deliver=self._deliver_tool)
+            self._brokers[job.job_id] = broker
+            try:
+                return self._submit_as(job, identity)
+            finally:
+                self._brokers.pop(job.job_id, None)
+                broker.close()
+        return self._submit_as(job, identity)
+
+    def _submit_as(self, job: JobRequest, identity: Mapping[str, str] | None) -> JobResult:
+        if identity:
+            self._job_agents[job.job_id] = dict(identity)
+        try:
+            return self._submit(job)
+        finally:
+            self._job_agents.pop(job.job_id, None)
+
+    def _submit(self, job: JobRequest) -> JobResult:
+        job_path = f"{JOBS_DIR}/{job.job_id}.json"
+        events_path = f"{EVENTS_DIR}/{job.job_id}.jsonl"
+        result_path = f"{RESULTS_DIR}/{job.job_id}.json"
+        resident = self._resident_worker()
+        if resident is not None:
+            return self._submit_resident(job, resident, events_path, result_path)
+        self.sandbox.write_text(job_path, job.model_dump_json())
+
+        argv = [
+            self.python,
+            *(["-I"] if self.role == "service" else []),
+            "-m",
+            "lantern_worker",
+            "run",
+            "--job",
+            job_path,
+            "--events",
+            events_path,
+            "--result",
+            result_path,
+            "--env-file",
+            ENV_FILE,
+        ]
+        # cwd travels on argv (not only in the job JSON) so the worker
+        # process itself chdirs there — agent SDK sessions inherit it.
+        if job.cwd:
+            argv += ["--cwd", job.cwd]
+        if job.host_tools_dir:
+            argv += ["--tools-dir", job.host_tools_dir]
+        if self.limits is not None:
+            argv += [
+                "--disk-warn",
+                str(self.limits.disk_warn),
+                "--disk-abort",
+                str(self.limits.disk_abort),
+                "--mem-warn",
+                str(self.limits.mem_warn),
+                "--mem-abort",
+                str(self.limits.mem_abort),
+            ]
+        # sbx injects secrets through the sandbox session/profile machinery;
+        # a bare exec'd process may not see them. Run the worker under a
+        # login shell so the sandbox environment is fully loaded.
+        payload = self._env_payload()
+        if payload is None:
+            wrapped = ["sh", "-lc", shlex.join(argv)]
+        else:
+            # Per-job stdin env delivery (#592): the login shell evals the
+            # delivered exports AFTER its profile ran, so they beat anything
+            # the profile stamped (a stale sbx sentinel included) and the
+            # values never touch the sandbox filesystem or any argv.
+            wrapped = [
+                "sh",
+                "-lc",
+                f'eval "${JOB_ENV_VAR}"; unset {JOB_ENV_VAR}; exec {shlex.join(argv)}',
+            ]
+        deadline = time.monotonic() + job.timeout_s + self.grace_s
+        started = time.monotonic()
+        log.info(
+            "worker.job_submit",
+            job=job.job_id,
+            kind=job.kind,
+            sandbox=self.sandbox.name,
+            role=self.role,
+            transport=self.transport,
+            timeout_s=job.timeout_s,
+            cwd=job.cwd,
+        )
+        if self.transport == "poll":
+            self._run_poll(job, wrapped, events_path, result_path, deadline, payload)
+            diagnostics = ""
+        else:
+            diagnostics = self._run_stream(job, wrapped, deadline, payload)
+        result = self._fetch_result(job, result_path, events_path, diagnostics)
+        log.info(
+            "worker.job_done",
+            job=job.job_id,
+            kind=job.kind,
+            sandbox=self.sandbox.name,
+            status=result.status,
+            error=result.error.message[:200] if result.error is not None else None,
+            exit_code=result.exit_code,
+            duration_s=round(time.monotonic() - started, 1),
+        )
+        return result
+
+    # -- resident transport ------------------------------------------------
+
+    def _resident_worker(self) -> ResidentWorker | None:
+        """The sandbox's resident worker, started if need be; None when this
+        client does not use one (another transport, no stdin delivery, or a
+        server that could not be started)."""
+        if self.transport != "resident" or self.job_env is None or self._resident_broken:
+            return None
+        resident = self._resident
+        if resident is not None and resident.alive:
+            return resident
+        resident = ResidentWorker(self)
+        try:
+            resident.start()
+        except WorkerError as exc:
+            # Nothing in the VM answered: fall back to one exec per job for
+            # the rest of this client's life, and say so once.
+            self._resident_broken = True
+            log.warning(
+                "worker.resident_unavailable",
+                sandbox=self.sandbox.name,
+                role=self.role,
+                error=str(exc)[:500],
+            )
+            return None
+        self._resident = resident
+        return resident
+
+    def _submit_resident(
+        self, job: JobRequest, resident: ResidentWorker, events_path: str, result_path: str
+    ) -> JobResult:
+        broker = self._brokers.get(job.job_id)
+        if broker is not None:
+            # The server removes the job's tools directory when the job
+            # ends; the broker need not spend an exec on it.
+            broker.cleanup_in_sandbox = False
+        started = time.monotonic()
+        log.info(
+            "worker.job_submit",
+            job=job.job_id,
+            kind=job.kind,
+            sandbox=self.sandbox.name,
+            role=self.role,
+            transport="resident",
+            timeout_s=job.timeout_s,
+            cwd=job.cwd,
+        )
+        resident.refresh_env()
+        deadline = time.monotonic() + job.timeout_s + self.grace_s
+        result = resident.submit(
+            job, events_path=events_path, result_path=result_path, deadline=deadline
+        )
+        log.info(
+            "worker.job_done",
+            job=job.job_id,
+            kind=job.kind,
+            sandbox=self.sandbox.name,
+            status=result.status,
+            error=result.error.message[:200] if result.error is not None else None,
+            exit_code=result.exit_code,
+            duration_s=round(time.monotonic() - started, 1),
+        )
+        return result
+
+    def _deliver_tool(self, job_id: str, response: HostToolResponse) -> bool:
+        """Hand a host-tool response to the resident worker running the job;
+        False when the job is not on one (the broker copies the file)."""
+        resident = self._resident
+        if resident is None or not resident.alive or job_id not in resident.pending:
+            return False
+        try:
+            resident.deliver_tool(job_id, response)
+        except WorkerError:
+            return False
+        return True
+
+    def _env_payload(self) -> str | None:
+        """The `export KEY=VALUE` lines to pipe into this job's launch, or
+        None when no per-job env delivery is configured. Computed fresh per
+        job so a rotating credential (App installation tokens) is always
+        live without anything to rewrite in the VM."""
+        if self.job_env is None:
+            return None
+        exports = self.job_env()
+        if not exports:
+            return None
+        return "".join(
+            f"export {key}={shlex.quote(value)}\n" for key, value in sorted(exports.items())
+        )
+
+    # -- stream transport --------------------------------------------------
+
+    def _run_stream(
+        self, job: JobRequest, argv: list[str], deadline: float, payload: str | None = None
+    ) -> str:
+        """Run the worker via a blocking exec; returns diagnostics (exit code
+        + stderr tail) for the no-result failure path."""
+        if payload is None:
+            proc = self.sandbox.exec_stream(argv)
+        else:
+            # The outer plain shell captures ALL of stdin before the login
+            # shell (argv) starts, so the worker never contends for the pipe.
+            outer = f'{JOB_ENV_VAR}="$(cat)" exec {shlex.join(argv)}'
+            proc = self.sandbox.exec_stream(["sh", "-c", outer], stdin_pipe=True)
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(payload)
+                proc.stdin.close()
+            except OSError:
+                # A launch that died before reading its stdin surfaces
+                # through the normal no-result diagnostics below.
+                log.debug("worker.env_pipe_broken", job=job.job_id, sandbox=self.sandbox.name)
+        lines: queue.Queue[str | None] = queue.Queue()
+        stderr_tail: deque[str] = deque(maxlen=50)
+
+        def reader() -> None:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                lines.put(line)
+            lines.put(None)
+
+        def err_reader() -> None:
+            # stderr must be drained: an unread PIPE deadlocks a chatty
+            # worker once the 64KB buffer fills — and its content is the
+            # only clue when the process dies before writing a result.
+            assert proc.stderr is not None
+            for line in proc.stderr:
+                stderr_tail.append(line.rstrip())
+
+        threading.Thread(target=reader, name="lantern-stream-reader", daemon=True).start()
+        threading.Thread(target=err_reader, name="lantern-stderr-reader", daemon=True).start()
+
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    log.warning(
+                        "worker.job_timeout",
+                        job=job.job_id,
+                        sandbox=self.sandbox.name,
+                        transport="stream",
+                        timeout_s=job.timeout_s,
+                        grace_s=self.grace_s,
+                    )
+                    self._kill(job, proc)
+                    raise WorkerTimeoutError(
+                        f"job {job.job_id} exceeded {job.timeout_s}s (+{self.grace_s}s grace)"
+                    )
+                try:
+                    line = lines.get(timeout=min(remaining, 0.5))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                self._handle_line(job, line)
+        finally:
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=self.grace_s)
+        parts = [f"exec rc={proc.returncode}"]
+        if stderr_tail:
+            parts.append("stderr: " + " | ".join(stderr_tail)[-1500:])
+        return "; ".join(parts)
+
+    def _handle_line(self, job: JobRequest, line: str) -> Event | None:
+        """Publish one stdout/events line; returns the parsed Event (None for
+        blank or non-event lines) so callers can act on event types without
+        re-parsing or substring-matching the raw line."""
+        line = line.strip()
+        if not line:
+            return None
+        try:
+            event = Event.from_json_line(line)
+        except ValueError:
+            self.bus.publish(
+                Event.now(EventTypes.WORKER_STDOUT, job.run_id, job_id=job.job_id, line=line)
+            )
+            return None
+        # A worker controls its stream and durable log. Host-only events
+        # can trigger actions (including file uploads), so they must never
+        # enter the host bus through this untrusted ingress.
+        worker_types = {value for name, value in vars(EventTypes).items() if name.isupper()}
+        if (
+            event.type not in worker_types
+            or event.run_id != job.run_id
+            or event.job_id not in (None, job.job_id)
+        ):
+            log.warning(
+                "worker.event_rejected",
+                job=job.job_id,
+                sandbox=self.sandbox.name,
+                event_type=event.type[:100],
+            )
+            return None
+        # Older workers omit job_id on some telemetry. The transport, not
+        # the payload, owns its identity; bind accepted events to this job.
+        event = event.model_copy(update={"run_id": job.run_id, "job_id": job.job_id})
+        if self.role is not None and event.type in (
+            EventTypes.SANDBOX_RESOURCES,
+            EventTypes.SANDBOX_RESOURCES_WARNING,
+        ):
+            event.data["role"] = self.role
+        # Which named agent is speaking is the host's to say: a worker that
+        # names one is forging it.
+        for key in _IDENTITY_KEYS:
+            event.data.pop(key, None)
+        speaker = self._job_agents.get(job.job_id, {})
+        if event.type.startswith("agent."):
+            # Host-owned request metadata, separate from SDK-reported identity.
+            event.data.update(self._model_context.get(job.job_id, {}))
+            event.data.update(speaker)
+            if self.backend is not None:
+                # Diagnostic data, not authority: a fallback worker can
+                # truthfully report a different backend from the config.
+                event.data.setdefault("backend", self.backend)
+        self.bus.publish(event)
+        if event.type == EventTypes.AGENT_TOOL_REQUEST:
+            broker = self._brokers.get(job.job_id)
+            if broker is not None:
+                broker.dispatch(event)
+        return event
+
+    # -- poll transport ----------------------------------------------------
+
+    def _run_poll(
+        self,
+        job: JobRequest,
+        argv: list[str],
+        events_path: str,
+        result_path: str,
+        deadline: float,
+        payload: str | None = None,
+    ) -> None:
+        quoted = shlex.join(argv)
+        if payload is None:
+            script = f"nohup {quoted} >/dev/null 2>&1 & echo $!"
+        else:
+            # The foreground `$(cat)` consumes ALL of stdin before nohup
+            # detaches (a prefix assignment on the `&` command would run the
+            # substitution in the async subshell and race the closing pipe);
+            # the env travels to the login shell by inheritance, never disk.
+            script = (
+                f'{JOB_ENV_VAR}="$(cat)"; export {JOB_ENV_VAR}; '
+                f"nohup {quoted} >/dev/null 2>&1 & echo $!"
+            )
+        launch = self.sandbox.exec(["sh", "-c", script], stdin=payload)
+        if not launch.ok:
+            log.warning(
+                "worker.launch_failed",
+                job=job.job_id,
+                sandbox=self.sandbox.name,
+                rc=launch.returncode,
+                stderr=launch.stderr.strip()[:500],
+            )
+            raise WorkerError(f"failed to launch worker: {launch.stderr.strip()[:2000]}")
+        pid = launch.stdout.strip().splitlines()[-1] if launch.stdout.strip() else ""
+        log.debug(
+            "worker.launched",
+            job=job.job_id,
+            sandbox=self.sandbox.name,
+            pid=pid or None,
+            poll_interval_s=self.poll_interval,
+        )
+
+        drain = _PollDrain(self, job, events_path).drain
+
+        while True:
+            if time.monotonic() > deadline:
+                log.warning(
+                    "worker.job_timeout",
+                    job=job.job_id,
+                    sandbox=self.sandbox.name,
+                    transport="poll",
+                    timeout_s=job.timeout_s,
+                    grace_s=self.grace_s,
+                )
+                self._kill(job, None)
+                raise WorkerTimeoutError(
+                    f"job {job.job_id} exceeded {job.timeout_s}s (+{self.grace_s}s grace)"
+                )
+            time.sleep(self.poll_interval)
+            if drain():
+                break
+            if pid:
+                alive = self.sandbox.exec(
+                    ["sh", "-c", f"kill -0 {pid} 2>/dev/null && echo alive || echo dead"]
+                )
+                if "dead" in alive.stdout:
+                    # Worker exited between polls: drain whatever remains.
+                    log.debug("worker.exited", job=job.job_id, pid=pid)
+                    drain()
+                    break
+
+    # -- helpers -----------------------------------------------------------
+
+    def _kill(self, job: JobRequest, proc: object) -> None:
+        # Pattern is job-id scoped so concurrent workers are never collateral.
+        log.warning("worker.kill", job=job.job_id, sandbox=self.sandbox.name)
+        try:
+            self.sandbox.exec(["pkill", "-f", f"lantern_worker.*{job.job_id}"])
+        except Exception:
+            log.warning("worker.kill_failed", job=job.job_id, exc_info=True)
+        if proc is not None:
+            try:
+                proc.kill()  # type: ignore[attr-defined]
+            except Exception:
+                log.debug("worker.kill_proc_failed", job=job.job_id, exc_info=True)
+
+    def _events_tail(self, events_path: str, lines: int = 5) -> str:
+        if not events_path:
+            return ""
+        with contextlib.suppress(Exception):
+            result = self.sandbox.exec(
+                ["sh", "-c", f"tail -n {lines} {events_path} 2>/dev/null || true"]
+            )
+            return result.stdout.strip().replace("\n", " | ")[-1500:]
+        return ""
+
+    def _fetch_result(
+        self,
+        job: JobRequest,
+        result_path: str,
+        events_path: str = "",
+        diagnostics: str = "",
+    ) -> JobResult:
+        try:
+            raw = self.sandbox.read_text(result_path)
+        except SbxError as exc:
+            detail = [f"worker for job {job.job_id} produced no result file ({result_path})"]
+            if diagnostics:
+                detail.append(diagnostics)
+            tail = self._events_tail(events_path)
+            if tail:
+                detail.append(f"last events: {tail}")
+            raise WorkerError("; ".join(detail)) from exc
+        try:
+            result = JobResult.model_validate_json(raw)
+        except ValueError as exc:
+            raise WorkerError(f"invalid result file for job {job.job_id}: {exc}") from exc
+        if result.job_id != job.job_id:
+            raise WorkerError(f"result job_id mismatch: expected {job.job_id}, got {result.job_id}")
+        return result
+
+
+class _PollDrain:
+    """Byte-offset tail reader over the in-sandbox events file.
+
+    ``tail -c`` offsets are raw bytes with no character alignment, so each
+    chunk is fetched base64-encoded — binary-safe through the text-mode exec
+    (no newline translation or decode errors can perturb the byte count) —
+    and the offset advances by decoded byte length. A split multibyte UTF-8
+    character is held by the incremental decoder until the next chunk
+    completes it; a split line is held in the partial-line buffer until its
+    newline arrives.
+
+    Completion is signalled only by a *parsed* event of type worker.end:
+    substring-matching the raw line would false-trigger on an agent message
+    that merely mentions the protocol literal.
+    """
+
+    def __init__(self, client: WorkerClient, job: JobRequest, events_path: str) -> None:
+        self.client = client
+        self.job = job
+        self.events_path = events_path
+        self.offset = 0
+        self.buffer = ""
+        self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def drain(self) -> bool:
+        """Publish any newly completed event lines; True once worker.end is seen."""
+        chunk = self.client.sandbox.exec(
+            ["sh", "-c", f"tail -c +{self.offset + 1} {self.events_path} 2>/dev/null | base64"]
+        )
+        try:
+            raw = base64.b64decode(chunk.stdout) if chunk.stdout else b""
+        except binascii.Error:
+            log.warning(
+                "worker.poll_chunk_undecodable", events=self.events_path, action="retry next poll"
+            )
+            return False
+        if not raw:
+            return False
+        self.offset += len(raw)
+        finished = False
+        *complete, self.buffer = (self.buffer + self.decoder.decode(raw)).split("\n")
+        for line in complete:
+            event = self.client._handle_line(self.job, line)
+            if event is not None and event.type == EventTypes.WORKER_END:
+                finished = True
+        return finished

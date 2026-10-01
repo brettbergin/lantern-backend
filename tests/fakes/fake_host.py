@@ -1,6 +1,6 @@
 """A Linux host with whatever preparation a test wants it to have (#898).
 
-Every capability :mod:`sbxloop.hostprep` probes is answered here through the
+Every capability :mod:`lantern.hostprep` probes is answered here through the
 seams the real class already takes — an ``access`` callable, a ``which``
 callable and a runner for the two systemd commands — so the matrix runs
 against the *real* ``HostPrep`` logic on any runner, whatever that runner's
@@ -14,7 +14,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from sbxloop.hostprep import HostPrep
+from lantern.hostprep import HostPrep
 
 #: The states this fake's ``systemctl --user is-system-running`` can report.
 #: "offline" is what a session with no user manager answers.
@@ -57,7 +57,7 @@ def fake_prep(
 
     def which(name: str, path: str | None = None) -> str | None:
         if name == "mkfs.ext4":
-            # `path` is the augmented lookup when sbxloop adds the sbin
+            # `path` is the augmented lookup when lantern adds the sbin
             # directories and the bare one when it asks whether this
             # account would find the tool itself.
             augmented = path is not None and "/usr/sbin" in path

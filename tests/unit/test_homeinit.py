@@ -1,4 +1,4 @@
-"""``sbxloop init``: the home laid out, installed into and wired, without a
+"""``lantern init``: the home laid out, installed into and wired, without a
 network or a shell — every command and download goes through a fake."""
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop import releases
-from sbxloop.cli.app import app
-from sbxloop.homeinit import (
+from lantern import releases
+from lantern.cli.app import app
+from lantern.homeinit import (
     RUNNER_UNIT,
     SBX_VERSION,
     UNIT_NAMES,
@@ -32,7 +32,7 @@ from sbxloop.homeinit import (
     sbx_asset_name_matches,
     template,
 )
-from sbxloop.paths import SbxloopHome
+from lantern.paths import LanternHome
 from tests.fakes.fake_host import fake_prep
 
 runner = CliRunner()
@@ -45,7 +45,7 @@ class FakeRun:
     installed executable answering ``sbx version`` with the version whose
     installer wrote it, which is how a leftover binary gives itself away."""
 
-    def __init__(self, home: SbxloopHome, sbx_version: str = SBX_VERSION) -> None:
+    def __init__(self, home: LanternHome, sbx_version: str = SBX_VERSION) -> None:
         self.home = home
         self.sbx_version = sbx_version
         self.calls: list[list[str]] = []
@@ -122,10 +122,10 @@ class RecordingRun:
 
 
 def release_files(version: str) -> dict[str, bytes]:
-    """One sbxloop release's wheels and the manifest that vouches for them."""
+    """One lantern release's wheels and the manifest that vouches for them."""
     wheels = {
-        releases.wheel_name("sbxloop", version): f"host {version}".encode(),
-        releases.wheel_name("sbxloop-worker", version): f"worker {version}".encode(),
+        releases.wheel_name("lantern-backend", version): f"host {version}".encode(),
+        releases.wheel_name("lantern-worker", version): f"worker {version}".encode(),
     }
     manifest = {
         "schema": 1,
@@ -144,7 +144,7 @@ class FakeFetch:
 
     def __call__(self, url: str, target: Path) -> None:
         self.urls.append(url)
-        prefix = "https://github.com/brettbergin/sbxloop/releases/download/v"
+        prefix = "https://github.com/brettbergin/lantern-backend/releases/download/v"
         if url.startswith(prefix):
             version, name = url.removeprefix(prefix).split("/", 1)
             target.write_bytes(self.tampered.get(name, release_files(version)[name]))
@@ -201,15 +201,15 @@ def installer_fails(
 
 def make(
     tmp_path: Path, host: Any = None, **overrides: Any
-) -> tuple[SbxloopHome, HomeInit, FakeRun, FakeFetch, list[str]]:
+) -> tuple[LanternHome, HomeInit, FakeRun, FakeFetch, list[str]]:
     """Init against a *prepared* Linux host unless a test says otherwise.
 
     The host's own kvm device, PATH and session never reach these tests in
-    either direction: every capability `sbxloop init` probes comes from
+    either direction: every capability `lantern init` probes comes from
     ``fake_prep``, so the same assertions hold on a laptop, a CI runner and
     a container.
     """
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     options = InitOptions(**{"version": "1.2.3", **overrides})
     run, fetch, said = FakeRun(home, options.sbx_version), FakeFetch(), []
     init = HomeInit(
@@ -240,11 +240,11 @@ class TestWindowsHost:
             calls.append([str(a) for a in argv])
             return subprocess.CompletedProcess([str(a) for a in argv], 0, "", "")
 
-        monkeypatch.setattr("sbxloop.hostfiles._run", fake_run)
+        monkeypatch.setattr("lantern.hostfiles._run", fake_run)
         return calls
 
     def test_the_launcher_is_a_cmd_and_there_is_no_sbx_wrapper(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        home = LanternHome(tmp_path / "home", os_name="nt")
         options = InitOptions(version="1.2.3", sbx=False, systemd=False)
         init = HomeInit(
             home,
@@ -259,8 +259,8 @@ class TestWindowsHost:
             user_units=tmp_path / "units",
         )
         init.execute()
-        assert home.launcher.name == "sbxloop.cmd" and home.launcher.is_file()
-        assert r"venv\Scripts\sbxloop.exe" in home.launcher.read_text()
+        assert home.launcher.name == "lantern.cmd" and home.launcher.is_file()
+        assert r"venv\Scripts\lantern.exe" in home.launcher.read_text()
         assert not home.sbx_launcher.exists()
         assert any("no sbx wrapper" in note for note in init.report.notes)
 
@@ -268,7 +268,7 @@ class TestWindowsHost:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("shutil.which", lambda _name: None)
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        home = LanternHome(tmp_path / "home", os_name="nt")
         options = InitOptions(version="1.2.3", sbx=True, systemd=False)
         fetch = FakeFetch()
         run = FakeRun(home, options.sbx_version)
@@ -299,7 +299,7 @@ class TestWindowsHost:
         assert "install sbx" in step
 
     def test_windows_msi_requires_local_app_data(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        home = LanternHome(tmp_path / "home", os_name="nt")
         init = HomeInit(
             home,
             InitOptions(version="1.2.3"),
@@ -313,7 +313,7 @@ class TestWindowsHost:
             init.plan()
 
     def test_failed_msi_never_stamps_the_version(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        home = LanternHome(tmp_path / "home", os_name="nt")
         run = FakeRun(home)
         run.fail = {"msiexec /i": 1603}
         init = HomeInit(
@@ -332,7 +332,7 @@ class TestWindowsHost:
     def test_generated_config_is_written_as_utf8(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        home = LanternHome(tmp_path / "home", os_name="nt")
         original = Path.write_text
         encodings: list[str | None] = []
 
@@ -358,8 +358,8 @@ class TestWindowsHost:
     ) -> None:
         """A mode is not privacy on Windows, so init reaches for the ACL
         instead — and a failure there raises rather than leaving the file
-        open (:mod:`sbxloop.hostfiles`)."""
-        home = SbxloopHome(tmp_path / "home", os_name="nt")
+        open (:mod:`lantern.hostfiles`)."""
+        home = LanternHome(tmp_path / "home", os_name="nt")
         options = InitOptions(version="1.2.3", sbx=False, systemd=False)
         HomeInit(
             home,
@@ -389,11 +389,11 @@ class TestLayout:
         assert home.missing_directories() == []
         assert home.launcher.stat().st_mode & 0o111 and home.sbx_launcher.stat().st_mode & 0o111
         launcher = home.launcher.read_text()
-        assert 'exec "$home/venv/bin/sbxloop" "$@"' in launcher
+        assert 'exec "$home/venv/bin/lantern" "$@"' in launcher
         # nothing sourced, nothing exported: the launcher carries no secrets
         assert "set -a" not in launcher and "source" not in launcher
         assert not any(line.lstrip().startswith(". ") for line in launcher.splitlines())
-        # the interpreter: uv fetched into bin/, python installed, venv made, sbxloop pinned
+        # the interpreter: uv fetched into bin/, python installed, venv made, lantern pinned
         assert fetch.urls[0].startswith("https://astral.sh/uv/")
         uv = str(home.uv)
         assert [uv, "python", "install", "3.13"] in run.calls
@@ -401,12 +401,12 @@ class TestLayout:
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
         wheels = home.tmp / "release-v1.2.3"
         assert pip[-2:] == [
-            str(wheels / "sbxloop_worker-1.2.3-py3-none-any.whl"),
-            f"{wheels / 'sbxloop-1.2.3-py3-none-any.whl'}[discord,slack]",
+            str(wheels / "lantern_worker-1.2.3-py3-none-any.whl"),
+            f"{wheels / 'lantern_backend-1.2.3-py3-none-any.whl'}[discord,slack]",
         ]
         assert "--python" in pip and str(home.venv_python) in pip
         # our packages: the release's own files, checked, never by name
-        base = "https://github.com/brettbergin/sbxloop/releases/download/v1.2.3/"
+        base = "https://github.com/brettbergin/lantern-backend/releases/download/v1.2.3/"
         assert base + "release-manifest.json" in fetch.urls
         assert not any("==" in word for word in pip)
         assert not wheels.exists()
@@ -429,8 +429,8 @@ class TestLayout:
         assert not any("start" in c for c in run.calls)
         # stamped
         record = home.read_record()
-        assert record is not None and record.sbxloop_version == "1.2.3"
-        assert record.created_by == "sbxloop init"
+        assert record is not None and record.lantern_version == "1.2.3"
+        assert record.created_by == "lantern init"
         assert "record" in report.done and "launchers" in report.done
 
     def test_second_run_keeps_what_is_there(self, tmp_path: Path) -> None:
@@ -483,10 +483,10 @@ class TestLayout:
         _, upgrade, run, fetch, _ = make(tmp_path, version="1.2.4", sbx_version="0.39.0")
         upgrade.execute()
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
-        assert pip[-1].endswith("sbxloop-1.2.4-py3-none-any.whl[discord,slack]")
+        assert pip[-1].endswith("lantern_backend-1.2.4-py3-none-any.whl[discord,slack]")
         assert any("tags/v0.39.0" in u for u in fetch.urls)
         assert home.sbx_version_file.read_text().strip() == "0.39.0"
-        assert home.read_record().sbxloop_version == "1.2.4"  # type: ignore[union-attr]
+        assert home.read_record().lantern_version == "1.2.4"  # type: ignore[union-attr]
 
     @pytest.mark.parametrize("manifest", [True, False])
     def test_wheels_directory_feeds_the_install(self, tmp_path: Path, manifest: bool) -> None:
@@ -499,11 +499,11 @@ class TestLayout:
         init.execute()
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
         assert pip[-2:] == [
-            str(wheels / "sbxloop_worker-1.2.3-py3-none-any.whl"),
-            f"{wheels / 'sbxloop-1.2.3-py3-none-any.whl'}[discord,slack]",
+            str(wheels / "lantern_worker-1.2.3-py3-none-any.whl"),
+            f"{wheels / 'lantern_backend-1.2.3-py3-none-any.whl'}[discord,slack]",
         ]
         assert "--find-links" not in pip
-        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
+        assert not any("brettbergin/lantern-backend" in url for url in fetch.urls)
 
     def test_a_development_build_installs_from_its_own_wheels(self, tmp_path: Path) -> None:
         """CI's native install smoke test builds this checkout, whose version
@@ -511,15 +511,15 @@ class TestLayout:
         wheels = tmp_path / "dist"
         wheels.mkdir()
         for name in (
-            "sbxloop-1.2.4.dev3-py3-none-any.whl",
-            "sbxloop_worker-1.2.4.dev3-py3-none-any.whl",
+            "lantern_backend-1.2.4.dev3-py3-none-any.whl",
+            "lantern_worker-1.2.4.dev3-py3-none-any.whl",
         ):
             (wheels / name).write_bytes(b"built here")
         _, init, run, fetch, _ = make(tmp_path, version="1.2.4.dev3", wheels=wheels)
         init.execute()
         pip = next(c for c in run.calls if c[1:3] == ["pip", "install"])
-        assert pip[-1] == f"{wheels / 'sbxloop-1.2.4.dev3-py3-none-any.whl'}[discord,slack]"
-        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
+        assert pip[-1] == f"{wheels / 'lantern_backend-1.2.4.dev3-py3-none-any.whl'}[discord,slack]"
+        assert not any("brettbergin/lantern-backend" in url for url in fetch.urls)
 
     def test_a_wheels_directory_that_contradicts_its_manifest_is_refused(
         self, tmp_path: Path
@@ -528,7 +528,7 @@ class TestLayout:
         wheels.mkdir()
         for name, data in release_files("1.2.3").items():
             (wheels / name).write_bytes(data)
-        (wheels / "sbxloop-1.2.3-py3-none-any.whl").write_bytes(b"swapped")
+        (wheels / "lantern_backend-1.2.3-py3-none-any.whl").write_bytes(b"swapped")
         _, init, run, _, _ = make(tmp_path, wheels=wheels)
         with pytest.raises(InitError, match="SHA-256"):
             init.execute()
@@ -538,12 +538,12 @@ class TestLayout:
         wheels = tmp_path / "dist"
         wheels.mkdir()
         _, init, run, _, _ = make(tmp_path, wheels=wheels)
-        with pytest.raises(InitError, match=r"has no sbxloop_worker-1\.2\.3"):
+        with pytest.raises(InitError, match=r"has no lantern_worker-1\.2\.3"):
             init.execute()
         assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
 
     @pytest.mark.parametrize(
-        "name", ["sbxloop-1.2.3-py3-none-any.whl", "sbxloop_worker-1.2.3-py3-none-any.whl"]
+        "name", ["lantern_backend-1.2.3-py3-none-any.whl", "lantern_worker-1.2.3-py3-none-any.whl"]
     )
     def test_a_download_that_does_not_match_the_manifest_is_never_installed(
         self, tmp_path: Path, name: str
@@ -560,14 +560,14 @@ class TestLayout:
         with pytest.raises(InitError, match=r"stable X\.Y\.Z"):
             init.execute()
         assert not any(c[1:3] == ["pip", "install"] for c in run.calls)
-        assert not any("brettbergin/sbxloop" in url for url in fetch.urls)
+        assert not any("brettbergin/lantern-backend" in url for url in fetch.urls)
 
     def test_unbuilt_version_is_refused_without_a_pin(self, tmp_path: Path) -> None:
         _, init, *_ = make(tmp_path, version=None)
         init.options = InitOptions(version=None)  # type: ignore[misc]
-        import sbxloop
+        import lantern
 
-        if sbxloop.__version__ != "0.0.0":
+        if lantern.__version__ != "0.0.0":
             pytest.skip("a built checkout knows its version")
         with pytest.raises(InitError, match="--version"):
             init.execute()
@@ -604,7 +604,7 @@ class TestSbxInstall:
 
     def test_doctor_warns_against_the_series_init_installs(self) -> None:
         # An `init` default must not draw doctor's "parsing may drift" note.
-        from sbxloop.cli.doctor import TESTED_SBX_SERIES
+        from lantern.cli.doctor import TESTED_SBX_SERIES
 
         assert SBX_VERSION.startswith(TESTED_SBX_SERIES + ".")
 
@@ -687,12 +687,12 @@ class TestSbxInstall:
         home, init, _run, _, _ = make(tmp_path, systemd=True)
         units = tmp_path / "units"
         units.mkdir()
-        (units / "sbxloop-daemon.service").write_text("[Unit]\nDescription=old\n")
+        (units / "lantern-daemon.service").write_text("[Unit]\nDescription=old\n")
         report = init.execute()
-        moved = home.backups / "units" / "sbxloop-daemon.service"
+        moved = home.backups / "units" / "lantern-daemon.service"
         assert moved.read_text() == "[Unit]\nDescription=old\n"
-        assert not (units / "sbxloop-daemon.service").exists()  # the link is systemctl's job
-        assert any("moved the previous sbxloop-daemon.service" in n for n in report.notes)
+        assert not (units / "lantern-daemon.service").exists()  # the link is systemctl's job
+        assert any("moved the previous lantern-daemon.service" in n for n in report.notes)
 
     def test_runner_unit_is_rendered_on_request(self, tmp_path: Path) -> None:
         home, init, run, _, _ = make(tmp_path, systemd=True, runner_dir=tmp_path / "actions-runner")
@@ -704,13 +704,13 @@ class TestSbxInstall:
 
     def test_runner_unit_carries_the_home_it_was_installed_under(self, tmp_path: Path) -> None:
         """#895: a job on this runner deploys to the installation that is
-        there, not to whatever `$HOME/.sbxloop` would be."""
+        there, not to whatever `$HOME/.lantern` would be."""
         home, init, _run, _, _ = make(
             tmp_path, systemd=True, runner_dir=tmp_path / "actions-runner"
         )
         init.execute()
         text = home.unit("github-runner.service").read_text()
-        assert f"Environment=SBXLOOP_HOME={home.root}" in text
+        assert f"Environment=LANTERN_HOME={home.root}" in text
 
     def test_uv_on_path_is_copied_into_the_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -728,17 +728,17 @@ class TestSbxInstall:
 
 class TestTemplates:
     def test_units_carry_no_placeholder_and_no_home_relative_paths(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         for name in UNIT_NAMES:
             text = render_unit(name, home)
             assert "@HOME@" not in text and "%h" not in text
             assert f"{home.root}/bin/" in text
-        assert "Environment=SBXLOOP_HOME=" + str(home.root) in render_unit(
-            "sbxloop-daemon.service", home
+        assert "Environment=LANTERN_HOME=" + str(home.root) in render_unit(
+            "lantern-daemon.service", home
         )
-        assert "WorkingDirectory=" + str(home.root) in render_unit("sbxloop-daemon.service", home)
+        assert "WorkingDirectory=" + str(home.root) in render_unit("lantern-daemon.service", home)
         # #953: a clean stop or restart exits 143 (SIGTERM) and is not a failure
-        daemon_unit = render_unit("sbxloop-daemon.service", home)
+        daemon_unit = render_unit("lantern-daemon.service", home)
         assert "SuccessExitStatus=143" in daemon_unit and "Restart=always" in daemon_unit
 
     def test_sandboxd_is_supervised_through_its_pid_file(self, tmp_path: Path) -> None:
@@ -746,7 +746,7 @@ class TestTemplates:
         Type=simple unit saw its main process exit at once, restarted, and
         left the real daemon orphaned holding containerd's lock. The unit
         detaches on purpose and follows the pid file sandboxd writes."""
-        unit = render_unit("sbx-sandboxd.service", SbxloopHome(tmp_path / "h"))
+        unit = render_unit("sbx-sandboxd.service", LanternHome(tmp_path / "h"))
         assert values_of(unit, "Type") == ["forking"]
         assert parse_words(values_of(unit, "ExecStart")[0])[1:] == ["daemon", "start", "-d"]
         # sbx keeps its state under $XDG_STATE_HOME (%S in a user unit), app "sandboxes"
@@ -754,20 +754,20 @@ class TestTemplates:
         assert values_of(unit, "Restart") == ["always"]
 
     def test_launchers_bind_to_their_own_home(self) -> None:
-        for name in ("sbxloop.launcher.sh", "sbx.launcher.sh"):
+        for name in ("lantern.launcher.sh", "sbx.launcher.sh"):
             text = template(name)
             assert text.startswith("#!/bin/sh\n")
-            assert 'export SBXLOOP_HOME="$home"' in text
+            assert 'export LANTERN_HOME="$home"' in text
             assert "/usr/sbin:/sbin" in text  # mkfs.ext4 for sandboxd's block driver
             assert "DBUS_SESSION_BUS_ADDRESS" in text
         assert 'exec "$home/sbx/bin/sbx" "$@"' in template("sbx.launcher.sh")
 
     def test_the_windows_launcher_binds_to_its_own_home_too(self) -> None:
-        text = template("sbxloop.launcher.cmd")
-        assert 'set "SBXLOOP_HOME=%~dp0.."' in text
-        assert r"venv\Scripts\sbxloop.exe" in text
+        text = template("lantern.launcher.cmd")
+        assert 'set "LANTERN_HOME=%~dp0.."' in text
+        assert r"venv\Scripts\lantern.exe" in text
         # the same trust boundary as the POSIX one: the launcher carries no
-        # secrets and reads none — sbxloop reads config\\secrets.env itself.
+        # secrets and reads none — lantern reads config\\secrets.env itself.
         code = [ln for ln in text.splitlines() if not ln.strip().lower().startswith("rem")]
         assert not any("secrets" in ln for ln in code)
 
@@ -796,10 +796,10 @@ class TestTemplates:
         assert sbx_asset_name_matches(name, system=system, machine=machine) is ok
 
     def test_path_hint(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path)
+        home = LanternHome(tmp_path)
         assert path_hint(home, {"PATH": f"/usr/bin:{home.bin}"}) is None
         assert path_hint(home, {"PATH": "/usr/bin"}) == f'export PATH="{home.bin}:$PATH"'
-        windows = SbxloopHome(tmp_path / "h", os_name="nt")
+        windows = LanternHome(tmp_path / "h", os_name="nt")
         assert path_hint(windows, {"PATH": "C:\\Windows"}).startswith("setx PATH")
 
 
@@ -885,7 +885,7 @@ class TestUnitPaths:
     own way, and a unit that spells one wrong starts the wrong command — or
     nothing at all."""
 
-    def render_all(self, home: SbxloopHome, runner: Path) -> dict[str, str]:
+    def render_all(self, home: LanternHome, runner: Path) -> dict[str, str]:
         return {
             name: render_unit(name, home, runner_dir=runner) for name in (*UNIT_NAMES, RUNNER_UNIT)
         }
@@ -899,16 +899,16 @@ class TestUnitPaths:
         ],
     )
     def test_every_directive_carries_the_whole_path(self, root: str) -> None:
-        home = SbxloopHome(Path(root))
+        home = LanternHome(Path(root))
         runner = Path(f"{root}/Actions Runner")
         units = self.render_all(home, runner)
 
-        daemon = units["sbxloop-daemon.service"]
+        daemon = units["lantern-daemon.service"]
         assert parse_words(values_of(daemon, "ExecStart")[0]) == [
-            f"{root}/bin/sbxloop",
+            f"{root}/bin/lantern",
             "daemon",
         ]
-        assert environment_of(daemon) == {"SBXLOOP_HOME": root, "PYTHONUNBUFFERED": "1"}
+        assert environment_of(daemon) == {"LANTERN_HOME": root, "PYTHONUNBUFFERED": "1"}
         assert working_directory_of(daemon) == root
 
         sandboxd = units["sbx-sandboxd.service"]
@@ -923,14 +923,14 @@ class TestUnitPaths:
             "daemon",
             "stop",
         ]
-        assert environment_of(sandboxd)["SBXLOOP_HOME"] == root
+        assert environment_of(sandboxd)["LANTERN_HOME"] == root
 
         runner_unit = units[RUNNER_UNIT]
         assert parse_words(values_of(runner_unit, "ExecStart")[0]) == [f"{runner}/run.sh"]
         assert working_directory_of(runner_unit) == str(runner)
 
     def test_a_simple_path_renders_exactly_as_before(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "home")
+        home = LanternHome(tmp_path / "home")
         runner = tmp_path / "runner"
         for name, unit in self.render_all(home, runner).items():
             plain = (
@@ -939,8 +939,8 @@ class TestUnitPaths:
             assert unit == plain, name
 
     def test_a_path_in_a_comment_reads_as_the_operator_typed_it(self) -> None:
-        home = SbxloopHome(Path("/home/alice/Loop Data"))
-        unit = render_unit("sbxloop-daemon.service", home)
+        home = LanternHome(Path("/home/alice/Loop Data"))
+        unit = render_unit("lantern-daemon.service", home)
         assert "# at /home/alice/Loop Data and linked into" in unit
 
     @pytest.mark.parametrize(
@@ -955,13 +955,13 @@ class TestUnitPaths:
         ],
     )
     def test_what_systemd_cannot_carry_stops_init_by_name(self, root: str, message: str) -> None:
-        home = SbxloopHome(Path(root))
+        home = LanternHome(Path(root))
         with pytest.raises(InitError) as caught:
-            render_unit("sbxloop-daemon.service", home)
+            render_unit("lantern-daemon.service", home)
         assert message in str(caught.value) and repr(root) in str(caught.value)
 
     def test_a_runner_directory_is_checked_the_same_way(self) -> None:
-        home = SbxloopHome(Path("/home/alice/loop"))
+        home = LanternHome(Path("/home/alice/loop"))
         with pytest.raises(InitError) as caught:
             render_unit(RUNNER_UNIT, home, runner_dir=Path("/home/o'brien/runner"))
         assert "/home/o'brien/runner" in str(caught.value)
@@ -973,7 +973,7 @@ class TestUnitPaths:
         with pytest.raises(InitError, match="not a directive"):
             _render_unit_line("@HOME@", values)
         with pytest.raises(InitError, match="open the executable word"):
-            _render_unit_line("ExecStart=-@HOME@/bin/sbxloop", values)
+            _render_unit_line("ExecStart=-@HOME@/bin/lantern", values)
 
     def test_an_argument_word_keeps_its_dollar_out_of_expansion(self) -> None:
         # No template puts a path in an argument today; the rule that says how
@@ -995,9 +995,9 @@ class TestUnitPaths:
     def test_systemd_itself_accepts_the_rendered_units(self, tmp_path: Path) -> None:
         # Dummy executables at the real paths, verified read-only: nothing is
         # installed, started, or enabled on the host running the test.
-        home = SbxloopHome(tmp_path / "sbxloop home 50% $x")
+        home = LanternHome(tmp_path / "lantern home 50% $x")
         runner = tmp_path / "actions runner"
-        for executable in (home.bin / "sbxloop", home.bin / "sbx", runner / "run.sh"):
+        for executable in (home.bin / "lantern", home.bin / "sbx", runner / "run.sh"):
             executable.parent.mkdir(parents=True, exist_ok=True)
             executable.write_text("#!/bin/sh\n")
             executable.chmod(0o755)
@@ -1024,16 +1024,16 @@ class TestCli:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["init", "--project"])
         assert result.exit_code == 0, result.output
-        assert (tmp_path / "sbxloop.toml").is_file()
-        assert not (tmp_path / ".sbxloop" / "bin" / "sbxloop").exists()
+        assert (tmp_path / "lantern.toml").is_file()
+        assert not (tmp_path / ".lantern" / "bin" / "lantern").exists()
 
     def test_dry_run_prints_the_plan_for_the_home(self, tmp_path: Path) -> None:
-        # HOME is tmp_path (autouse fixture): the home is tmp_path/.sbxloop.
+        # HOME is tmp_path (autouse fixture): the home is tmp_path/.lantern.
         result = runner.invoke(app, ["init", "--dry-run", "--systemd"])
         assert result.exit_code == 0, result.output
-        assert f"sbxloop home: {tmp_path / '.sbxloop'}" in result.output
+        assert f"lantern home: {tmp_path / '.lantern'}" in result.output
         assert "would tree" in result.output and "would systemd" in result.output
-        assert not (tmp_path / ".sbxloop" / "bin" / "sbxloop").exists()
+        assert not (tmp_path / ".lantern" / "bin" / "lantern").exists()
 
     def test_unknown_preset_is_refused_before_anything_happens(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["init", "--preset", "huge-repo", "--dry-run"])
@@ -1052,20 +1052,20 @@ class TestUvDirectories:
 
     def arrange(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **overrides: Any
-    ) -> tuple[SbxloopHome, HomeInit, RecordingRun, FakeRun]:
+    ) -> tuple[LanternHome, HomeInit, RecordingRun, FakeRun]:
         monkeypatch.setattr("shutil.which", lambda _name: None)  # no uv on PATH: fetch it
         home, init, run, _fetch, _said = make(tmp_path, **overrides)
         recorder = RecordingRun(run)
         init.run = recorder
         return home, init, recorder, run
 
-    def wanted(self, home: SbxloopHome) -> dict[str, str]:
+    def wanted(self, home: LanternHome) -> dict[str, str]:
         return {
             "UV_PYTHON_INSTALL_DIR": str(home.python),
             "UV_CACHE_DIR": str(home.cache / "uv"),
         }
 
-    def assert_home_scoped(self, home: SbxloopHome, seen: dict[str, str | None]) -> None:
+    def assert_home_scoped(self, home: LanternHome, seen: dict[str, str | None]) -> None:
         wanted = self.wanted(home)
         assert {key: seen[key] for key in wanted} == wanted
 
@@ -1110,7 +1110,7 @@ class TestUvDirectories:
         fake_uv.write_text("#!uv\n")
         fake_uv.chmod(0o755)
         monkeypatch.setattr("shutil.which", lambda name: str(fake_uv) if name == "uv" else None)
-        copied_home = SbxloopHome(other / "home")
+        copied_home = LanternHome(other / "home")
         copied = RecordingRun(FakeRun(copied_home))
         HomeInit(
             copied_home,

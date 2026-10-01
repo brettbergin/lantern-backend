@@ -1,4 +1,4 @@
-"""The interactive, repeatable setup of the three sbxloop integrations."""
+"""The interactive, repeatable setup of the three lantern integrations."""
 
 from __future__ import annotations
 
@@ -8,21 +8,21 @@ from pathlib import Path
 from dotenv import dotenv_values
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.config import load_config
-from sbxloop.paths import SbxloopHome
+from lantern.cli.app import app
+from lantern.config import load_config
+from lantern.paths import LanternHome
 
 runner = CliRunner()
 
 
-def _home(tmp_path: Path) -> SbxloopHome:
-    return SbxloopHome(tmp_path / ".sbxloop")
+def _home(tmp_path: Path) -> LanternHome:
+    return LanternHome(tmp_path / ".lantern")
 
 
 def _config(tmp_path: Path):
     return load_config(
         cwd=tmp_path,
-        env={"HOME": str(tmp_path), "SBXLOOP_HOME": str(_home(tmp_path).root)},
+        env={"HOME": str(tmp_path), "LANTERN_HOME": str(_home(tmp_path).root)},
     )
 
 

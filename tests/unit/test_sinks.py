@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.engine import sinks
-from sbxloop.engine.model import Published, TaskNeeds, TaskOutput, TaskRecord, TaskSpec
+from lantern.engine import sinks
+from lantern.engine.model import Published, TaskNeeds, TaskOutput, TaskRecord, TaskSpec
 
 
 def record(
@@ -99,7 +99,7 @@ class TestText:
         tasks = [record("a", output=out("wrote a"))]
         body = sinks.issue_body(tasks, "T", tasks, run_id="r1", outcome="do the thing\n")
         assert body.startswith("T — 1/1 task(s) passed the judge\n")
-        assert body.endswith("---\n*sbxloop run `r1`*\n\n**Asked:** do the thing\n")
+        assert body.endswith("---\n*lantern run `r1`*\n\n**Asked:** do the thing\n")
         huge = [record("a", output=out("z" * (sinks.MAX_ISSUE_BODY_CHARS + 10)))]
         clipped = sinks.issue_body(huge, None, huge, run_id="r1", outcome="o")
         assert len(clipped) <= sinks.MAX_ISSUE_BODY_CHARS
@@ -138,5 +138,5 @@ class TestText:
         )
 
     def test_result_label_carries_the_descriptor(self) -> None:
-        label = sinks.result_label("sbxloop:result")
-        assert (label.name, label.color) == ("sbxloop:result", "6f42c1")
+        label = sinks.result_label("lantern:result")
+        assert (label.name, label.color) == ("lantern:result", "6f42c1")

@@ -12,13 +12,13 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.discord import DiscordBridge, _Pending, format_for_discord, headline_text
-from sbxloop.daemon.discord_format import Chunk
-from sbxloop.daemon.model import DaemonNotice, RunReport, WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.errors import DaemonError
-from sbxloop.events import Event, EventBus
+from lantern.config import Config
+from lantern.daemon.discord import DiscordBridge, _Pending, format_for_discord, headline_text
+from lantern.daemon.discord_format import Chunk
+from lantern.daemon.model import DaemonNotice, RunReport, WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.errors import DaemonError
+from lantern.events import Event, EventBus
 
 
 def ev(type: str, **data: Any) -> Event:
@@ -39,7 +39,7 @@ class FakeEmbed:
 
 @pytest.fixture(autouse=True)
 def _discord_adapters_without_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
-    from sbxloop.daemon import discord as bridge_module
+    from lantern.daemon import discord as bridge_module
 
     monkeypatch.setattr(bridge_module, "_to_embed", lambda spec: FakeEmbed(spec.clamped()))
     monkeypatch.setattr(bridge_module, "_allowed_mentions_none", lambda: "none")
@@ -47,7 +47,7 @@ def _discord_adapters_without_the_extra(monkeypatch: pytest.MonkeyPatch) -> None
 
 class TestClip:
     def test_clamps_bad_limits(self) -> None:
-        from sbxloop.daemon.discord import DISCORD_MAX_MESSAGE, _clip
+        from lantern.daemon.discord import DISCORD_MAX_MESSAGE, _clip
 
         # review: limit <= 0 or absurdly large must never yield an over-cap
         # string that Discord rejects
@@ -94,7 +94,7 @@ class FakeUser:
         self.bot = bot
 
 
-BOT_USER = FakeUser(777, "sbxloop", bot=True)
+BOT_USER = FakeUser(777, "lantern", bot=True)
 
 
 class FakeMessage:
@@ -353,7 +353,7 @@ class FakeConcierge:
     """Concierge stand-in: answers from a script; can call on_tool first."""
 
     def __init__(self, replies: list[Any] | None = None) -> None:
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         self.replies = list(replies or [ConciergeReply("hello from the concierge")])
         self.turns: list[tuple[str, str]] = []
@@ -375,7 +375,7 @@ class FakeConcierge:
     ) -> Any:
         import concurrent.futures
 
-        from sbxloop_worker.protocol import HostToolResponse
+        from lantern_worker.protocol import HostToolResponse
 
         self.turns.append((text, author))
         self.author_ids = [*getattr(self, "author_ids", []), author_id]
@@ -793,7 +793,7 @@ class TestBridge:
             bridge.close()
 
     def test_mention_goes_to_the_concierge_and_the_reply_is_posted(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         concierge = FakeConcierge([ConciergeReply("two runs today; `r1` is live")])
         concierge.tool_calls = [("sbx_control", {"command": "status"}, True)]
@@ -810,7 +810,7 @@ class TestBridge:
             # The channel is the operator's: the bridge says so explicitly,
             # with a principal holding every capability (#1274), rather than
             # leaving the turn to be trusted by default.
-            from sbxloop.daemon.controls.principal import Principal
+            from lantern.daemon.controls.principal import Principal
 
             assert concierge.principals == [Principal.trusted("Discord user `brett`", "discord")]
             # tool-note audit line, then the reply threaded under the question
@@ -828,7 +828,7 @@ class TestBridge:
         """A restart the concierge's tool asked for (#969) must not begin
         under the answer: `reply.after` runs after the send — for an error
         reply too, since the tool already promised it."""
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         seen_at_effect: list[list[str]] = []
         concierge = FakeConcierge()
@@ -863,7 +863,7 @@ class TestBridge:
         outcome: str,
         send_yields: bool,
     ) -> None:
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         result = "two runs today"
         reply: Any = ConciergeReply(result)
@@ -938,7 +938,7 @@ class TestBridge:
             bridge.close()
 
     def test_concierge_error_reply_gets_a_warning(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         concierge = FakeConcierge(
             [ConciergeReply("", ok=False, error="that took longer than 180s")]
@@ -955,7 +955,7 @@ class TestBridge:
             bridge.close()
 
     def test_long_concierge_reply_is_split(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         long = "\n\n".join(f"paragraph {i} " + "x" * 300 for i in range(12))
         concierge = FakeConcierge([ConciergeReply(long)])
@@ -1261,7 +1261,7 @@ class TestBridge:
             assert wait_for(lambda: bridge.dstore.discord_thread("r1") is not None)
             control = client.channels[42]
             headline = control.messages[bridge.dstore.discord_thread("r1").headline_id]  # type: ignore[union-attr]
-            bus.emit("sandbox.workspace_clone", "r1", source="/p", target="/t", branch="sbxloop/r1")
+            bus.emit("sandbox.workspace_clone", "r1", source="/p", target="/t", branch="lantern/r1")
             assert wait_for(lambda: getattr(headline, "edits", 0) >= 1)
             bus.emit("run.deliver", "r1", repo="o/r", pr=3, url="https://x/pull/3")
             assert wait_for(lambda: getattr(headline, "edits", 0) >= 2)
@@ -1518,7 +1518,7 @@ class TestAckMarks:
         """Answering a clarifying question runs a second turn against the
         *same* message. A ⏳ landing after that message's ✅ reads as a
         fresh ask nobody is working on, so it is dropped."""
-        from sbxloop.daemon.chat import ACK_ANSWERED, ACK_RECEIVED
+        from lantern.daemon.chat import ACK_ANSWERED, ACK_RECEIVED
 
         concierge = FakeConcierge()
         bridge, client, _ = make_bridge(tmp_path, concierge=concierge)
@@ -1563,7 +1563,7 @@ class TestRunWatches:
     finish posts an @mention notice in the control channel."""
 
     def test_author_id_is_the_mentionable_form(self) -> None:
-        from sbxloop.daemon.discord import _author_id, _author_name
+        from lantern.daemon.discord import _author_id, _author_name
 
         control = FakeChannel(FakeClient(), 42)
         msg = FakeMessage("hi", control)
@@ -1600,7 +1600,7 @@ class TestRunWatches:
         Drive an actual `Concierge` — not `FakeConcierge`, which never adds
         the tag — wired to `bridge.on_watch`, so the seam the two test files
         used to test in contradictory isolation is now actually crossed."""
-        from sbxloop.engine.store import StateStore
+        from lantern.engine.store import StateStore
         from tests.unit.test_daemon_concierge import make, turn
 
         bridge, _client, _floop = make_bridge(tmp_path)
@@ -1806,7 +1806,7 @@ class TestRunWatches:
         grew without bound for runs evicted before they ever finish (and
         left `DaemonStore.clear_run_watch` dead code, exercised only by a
         store-level unit test). The eviction path now calls it."""
-        import sbxloop.daemon.chat as chat_mod
+        import lantern.daemon.chat as chat_mod
 
         monkeypatch.setattr(chat_mod, "WATCHERS_CAP", 1)
         bridge, _, _ = make_bridge(tmp_path)
@@ -2117,7 +2117,7 @@ class TestSendSuppressesUnfurls:
         assert "📎 `f10.txt`" in channel.sent[0] and "📎 `f11.txt`" in channel.sent[0]
 
     def test_send_with_our_embed_masks_urls_instead_of_flagging(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord_format import EmbedSpec
+        from lantern.daemon.discord_format import EmbedSpec
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2127,7 +2127,7 @@ class TestSendSuppressesUnfurls:
         assert channel.sent_kwargs[0].get("embed") is not None
 
     def test_embed_rejection_retry_is_text_only_and_suppressed(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord_format import EmbedSpec
+        from lantern.daemon.discord_format import EmbedSpec
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2178,7 +2178,7 @@ class TestEditsKeepSuppression:
         assert len(msg.content) <= 200
 
     def test_edit_with_our_embed_masks_urls_instead(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord_format import EmbedSpec
+        from lantern.daemon.discord_format import EmbedSpec
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2222,7 +2222,7 @@ class TestEditsKeepSuppression:
             bridge.close()
 
     def test_concierge_note_edit_is_suppressed(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord import _ConciergeTurn
+        from lantern.daemon.discord import _ConciergeTurn
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2235,7 +2235,7 @@ class TestEditsKeepSuppression:
         assert "gh pr list" in turn.note.content
 
     def test_steer_status_edit_is_suppressed(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord import _Pending
+        from lantern.daemon.discord import _Pending
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2311,7 +2311,7 @@ class TestEmbedsArePreserved:
         assert Config().discord.embeds is True
 
     def test_format_module_still_exports_the_embed_path(self) -> None:
-        from sbxloop.daemon import discord_format as fmt
+        from lantern.daemon import discord_format as fmt
 
         assert fmt.EmbedSpec is not None
         assert hasattr(fmt.EmbedSpec(title="t"), "clamped")
@@ -2372,7 +2372,7 @@ class TestEmbedsArePreserved:
         assert isinstance(channel.sent_kwargs[-1].get("embed"), FakeEmbed)
 
     def test_embeds_false_uses_text_twins_and_suppresses_unfurls(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord_format import finish_text, headline_text, summary_text
+        from lantern.daemon.discord_format import finish_text, headline_text, summary_text
 
         bridge, client, _ = make_bridge(tmp_path, embeds=False)
         item, report = self._item(), self._report()
@@ -2467,7 +2467,7 @@ CHOICE_Q = None
 
 
 def _question() -> Any:
-    from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion
+    from lantern.daemon.chat_choices import Choice, ChoiceQuestion
 
     return ChoiceQuestion(
         prompt="What do you want changed?",
@@ -2560,7 +2560,7 @@ class TestChoiceComponents:
             return await real_send(text, **kwargs)
 
         channel.send = send  # type: ignore[method-assign]
-        with caplog.at_level(logging.WARNING, logger="sbxloop.daemon.discord"):
+        with caplog.at_level(logging.WARNING, logger="lantern.daemon.discord"):
             asyncio.run(bridge._send_choices(channel, "", _question()))
         record = next(r for r in caplog.records if "choices_view_send_failed" in r.getMessage())
         # structlog carries the caught exception through as the exc_info
@@ -2628,7 +2628,7 @@ class TestChoiceComponents:
     def test_timeout_disables_the_buttons_and_says_typing_works(
         self, tmp_path: Path, stub_discord: Any
     ) -> None:
-        from sbxloop.daemon.discord import TIMED_OUT_NOTE
+        from lantern.daemon.discord import TIMED_OUT_NOTE
 
         bridge, client, _ = make_bridge(tmp_path)
         channel = client.channels[42]
@@ -2665,7 +2665,7 @@ class TestChoiceComponents:
     def test_a_click_before_bind_resolves_through_the_pending_key(
         self, tmp_path: Path, stub_discord: Any
     ) -> None:
-        from sbxloop.daemon.discord import _build_choice_view
+        from lantern.daemon.discord import _build_choice_view
 
         bridge, _client, _ = make_bridge(tmp_path)
         seen: list[str] = []
@@ -2695,8 +2695,8 @@ class TestChoiceComponents:
     ) -> None:
         """#573: the whole path — the click fires from inside `send`, before
         `_post_choice_question` can learn the posted message id."""
-        from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.chat_choices import Choice, ChoiceQuestion
+        from lantern.daemon.concierge import ConciergeReply
 
         question = ChoiceQuestion(
             prompt="What do you want changed?",
@@ -2750,7 +2750,7 @@ def make_gate(
     state: str = "open",
     kind: str = "merge",
 ) -> Any:
-    from sbxloop.daemon.store import MergeGate
+    from lantern.daemon.store import MergeGate
 
     held = kind == "publish"
     return MergeGate(
@@ -2884,7 +2884,7 @@ class TestGateButtonHandler:
         return Interaction()
 
     def test_click_approves_with_attribution(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord import _GateHandler
+        from lantern.daemon.discord import _GateHandler
 
         bridge, _, floop = make_bridge(tmp_path)
         calls: list[tuple[str, str | None]] = []
@@ -2901,7 +2901,7 @@ class TestGateButtonHandler:
         assert "approved" in note and ephemeral
 
     def test_a_refusal_answers_ephemerally(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord import _GateHandler
+        from lantern.daemon.discord import _GateHandler
 
         bridge, _, floop = make_bridge(tmp_path)
 
@@ -2915,7 +2915,7 @@ class TestGateButtonHandler:
         assert "merge failed" in note and "no merge gate" in note
 
     def test_a_hold_button_speaks_of_releasing(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord import _GateHandler
+        from lantern.daemon.discord import _GateHandler
 
         bridge, _, floop = make_bridge(tmp_path)
 
@@ -2933,7 +2933,7 @@ class TestGateViewRearm:
     def test_ready_rearms_open_and_approving_gates_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.daemon import discord as bridge_module
+        from lantern.daemon import discord as bridge_module
 
         bridge, client, _ = make_bridge(tmp_path)
         built: list[str] = []

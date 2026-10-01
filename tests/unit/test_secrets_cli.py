@@ -1,4 +1,4 @@
-"""CLI tests for the `sbxloop secrets` command group."""
+"""CLI tests for the `lantern secrets` command group."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.secretstate import COPILOT_TOKEN_ENV, COPILOT_TOKEN_HOST
+from lantern.cli.app import app
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.secretstate import COPILOT_TOKEN_ENV, COPILOT_TOKEN_HOST
 from tests.conftest import FakeSbx
 
 runner = CliRunner()
@@ -31,7 +31,7 @@ def custom_state(fake_sbx: FakeSbx) -> dict[str, dict[str, str]]:
     return data["custom"]
 
 
-def register_stale(fake_sbx: FakeSbx, scope: str = "sbxloop-dead-agent") -> None:
+def register_stale(fake_sbx: FakeSbx, scope: str = "lantern-dead-agent") -> None:
     """A leftover registration owned by a sandbox that no longer exists."""
     SbxCLI().secret_set_custom(
         host=COPILOT_TOKEN_HOST, env=COPILOT_TOKEN_ENV, value="old", sandbox=scope
@@ -43,7 +43,7 @@ class TestList:
         register_stale(fake_sbx)
         result = runner.invoke(app, ["secrets", "list"])
         assert result.exit_code == 0
-        assert "sbxloop-dead-agent" in result.output
+        assert "lantern-dead-agent" in result.output
         assert "stale" in result.output
         assert "clean" in result.output  # points at the remedy
 
@@ -146,7 +146,7 @@ class TestRotate:
         self, fake_sbx: FakeSbx, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(COPILOT_TOKEN_ENV, "github_pat_new")
-        fake_sbx.script("exec sbxloop-secretcheck", returncode=1)
+        fake_sbx.script("exec lantern-secretcheck", returncode=1)
         result = runner.invoke(app, ["secrets", "rotate"])
         assert result.exit_code == 0, result.output
         assert "plain-env fallback" in result.output
@@ -154,7 +154,7 @@ class TestRotate:
     def test_plain_env_strategy_skips_verification(
         self, fake_sbx: FakeSbx, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (workdir / "sbxloop.toml").write_text('secret_strategy = "plain-env"\n')
+        (workdir / "lantern.toml").write_text('secret_strategy = "plain-env"\n')
         monkeypatch.setenv(COPILOT_TOKEN_ENV, "github_pat_new")
         result = runner.invoke(app, ["secrets", "rotate"])
         assert result.exit_code == 0, result.output
@@ -165,11 +165,11 @@ class TestRotate:
     def test_warns_about_live_sandboxes(
         self, fake_sbx: FakeSbx, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx.models import SandboxSpec
+        from lantern.sbx.models import SandboxSpec
 
-        SbxCLI().create(SandboxSpec(name="sbxloop-r9-agent", role="agent", workspace=workdir))
+        SbxCLI().create(SandboxSpec(name="lantern-r9-agent", role="agent", workspace=workdir))
         monkeypatch.setenv(COPILOT_TOKEN_ENV, "github_pat_new")
         result = runner.invoke(app, ["secrets", "rotate", "--no-verify"])
         assert result.exit_code == 0, result.output
-        assert "sbxloop-r9-agent" in result.output
+        assert "lantern-r9-agent" in result.output
         assert "sandbox rm --all" in result.output

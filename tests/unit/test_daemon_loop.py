@@ -16,14 +16,14 @@ from typing import Any, cast
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.daemon import loop as loop_mod
-from sbxloop.daemon.loop import DaemonLoop, RunHandle, day_window
-from sbxloop.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
-from sbxloop.daemon.sources import IssueComment, IssueContext, LinkedIssue
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import (
+from lantern import hostgit
+from lantern.config import Config
+from lantern.daemon import loop as loop_mod
+from lantern.daemon.loop import DaemonLoop, RunHandle, day_window
+from lantern.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
+from lantern.daemon.sources import IssueComment, IssueContext, LinkedIssue
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import (
     TERMINAL_RUN_STATES,
     Published,
     RunResult,
@@ -31,10 +31,10 @@ from sbxloop.engine.model import (
     TaskRecord,
     TaskSpec,
 )
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import RunCancelledError, SbxError, StateError, WorkerError
-from sbxloop.events import Event, EventBus
-from sbxloop.sbx.naming import run_name
+from lantern.engine.store import StateStore
+from lantern.errors import RunCancelledError, SbxError, StateError, WorkerError
+from lantern.events import Event, EventBus
+from lantern.sbx.naming import run_name
 from tests.fakes.ops_stub import OpsStub
 from tests.fakes.rawdb import backdate, query_raw
 from tests.unit.test_hostgit import (
@@ -191,7 +191,7 @@ class Harness:
             # The engine's shape for a run one round short (#523): PR open,
             # the review budget spent past its limit, the budget recorded.
             self.store.set_run_pr(
-                run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+                run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
             )
             self.store.set_run_state(run_id, "reviewing")
             limit = cfg.landing.max_review_rounds + self.store.get_run(run_id).granted_rounds
@@ -211,7 +211,7 @@ class Harness:
             )
         if kind in ("merged", "blocked", "gated", "awaiting_review", "held_by_draft"):
             self.store.set_run_pr(
-                run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+                run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
             )
         if kind in ("awaiting_review", "held_by_draft"):
             # The engine's record of the park (#675): what the base wants —
@@ -585,11 +585,11 @@ class TestSettle:
 class TestOutcomeAndConfig:
     def test_outcome_text_is_the_issue_plus_provenance(self, tmp_path: Path) -> None:
         h = Harness(tmp_path)
-        gh = gh_item("4", title="Fix it", body="details\n\n<!-- sbxloop-claim abc -->\n")
+        gh = gh_item("4", title="Fix it", body="details\n\n<!-- lantern-claim abc -->\n")
         text = h.loop.outcome_text(gh)
         assert text.startswith("Fix it\n\ndetails")
         assert "GitHub issue #4 in o/r (https://x/issues/4)" in text
-        assert "sbxloop-claim" not in text
+        assert "lantern-claim" not in text
         assert "backlog" not in text and "AUDIT" not in text
         # A source with no discussion to offer changes nothing.
         assert "Discussion" not in text and "Linked" not in text
@@ -656,7 +656,7 @@ class TestOutcomeContext:
         cannot answer costs the run nothing but that exclusion."""
 
         class Provisioner:
-            login: str | None = "sbxloop[bot]"
+            login: str | None = "lantern[bot]"
 
             def gh_bot_login(self, repo: str | None = None) -> str | None:
                 return self.login
@@ -679,7 +679,7 @@ class TestOutcomeContext:
         h = self.harness(tmp_path)
         h.loop.github = Github()  # type: ignore[assignment]
         h.loop.outcome_text(gh_item("4"))
-        assert h.source.asked[-1] == ("gh:issue:4", ("sbxloop[bot]", True))
+        assert h.source.asked[-1] == ("gh:issue:4", ("lantern[bot]", True))
         assert Github.failures == []
         Github.provisioner.login = None
         text = h.loop.outcome_text(gh_item("4"))
@@ -785,7 +785,7 @@ class TestOperatorCancel:
             # By default: what the engine raises at the next boundary after
             # request_cancel. Tests may substitute an infra error to model a
             # failure racing with the cancel.
-            raise error(f"run {run_id} interrupted; resume with `sbxloop resume {run_id}`")
+            raise error(f"run {run_id} interrupted; resume with `lantern resume {run_id}`")
 
         h.loop._runner = runner
         t = threading.Thread(target=h.loop.tick)
@@ -1176,7 +1176,7 @@ class TestShutdownAndRecovery:
         h.outcomes = ["merged"]
         h.loop.recover()
         h.loop.tick()
-        agent, gh = "sbxloop-r_live-agent", "sbxloop-r_live-github"
+        agent, gh = "lantern-r_live-agent", "lantern-r_live-github"
         new_agent = run_name(h.config.paths, "r_live", "agent")
         new_gh = run_name(h.config.paths, "r_live", "github")
         assert [c for c in calls if c[0] == "rm"] == [
@@ -1353,8 +1353,8 @@ class TestSourceBackoff:
         assert status["source_failures"] == 1
         assert status["source_retry_in_s"] == 2 * interval
         assert status["consecutive_failures"] == 0
-        from sbxloop.daemon.control import dispatch
-        from sbxloop.daemon.discord_format import COLOR_WARN, status_embed
+        from lantern.daemon.control import dispatch
+        from lantern.daemon.discord_format import COLOR_WARN, status_embed
 
         assert "polling failed" in dispatch(h.loop, "status").text
         assert status_embed(status).color == COLOR_WARN
@@ -1552,7 +1552,7 @@ class TestOperatorItemControls:
         assert [c[0] for c in h.source.calls].count("claim") == 1  # claim kept across retry
 
     def test_row_override_outranks_pending_cancel(self, tmp_path: Path) -> None:
-        """`!sbx cancel` then, before the engine stops, `sbxloop daemon
+        """`!sbx cancel` then, before the engine stops, `lantern daemon
         abandon` from another shell: the row already states the item's
         fate, so the abandon wins (no 'cancelled' report, no retry) and the
         consumed CancelRequest cannot leak onto the next run."""
@@ -1593,7 +1593,7 @@ class TestOperatorItemControls:
 
     def test_recover_reports_item_abandoned_offline(self, tmp_path: Path) -> None:
         """Field scenario of #229: the daemon is *not* running, the item is
-        left running/pinned, `sbxloop daemon abandon` flips the row only.
+        left running/pinned, `lantern daemon abandon` flips the row only.
         The next daemon start must report the abandon to the source, close
         the run's ledger and remove the dead run's sandboxes — once."""
         h = Harness(tmp_path)
@@ -1618,13 +1618,13 @@ class TestOperatorItemControls:
         h.dstore.abandon("gh:issue:1", "operator: doomed plan", 4.0)  # CLI, no daemon
         h.loop.recover()
         assert h.source.calls == [("abandoned", "operator: doomed plan")]
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.naming import run_name
 
         assert removed == [
             run_name(h.config.paths, "r_dead", "agent"),
-            "sbxloop-r_dead-agent",
+            "lantern-r_dead-agent",
             run_name(h.config.paths, "r_dead", "github"),
-            "sbxloop-r_dead-github",
+            "lantern-r_dead-github",
         ]
         rows = query_raw(h.dstore, "SELECT result FROM daemon_runs WHERE run_id = 'r_dead'")
         assert rows[0][0] == "abandoned"
@@ -1635,7 +1635,7 @@ class TestOperatorItemControls:
         assert len(h.source.calls) == 1
 
     def test_recover_closes_run_of_item_requeued_offline(self, tmp_path: Path) -> None:
-        """Same, for `sbxloop daemon requeue` with no daemon: the crashed
+        """Same, for `lantern daemon requeue` with no daemon: the crashed
         run's ledger row is still open; recovery closes it (no source
         report — requeue is not a verdict) and the item is dispatched fresh."""
         h = Harness(tmp_path)
@@ -1688,7 +1688,7 @@ class TestOperatorItemControls:
     def test_cli_retry_of_failed_item_reaches_the_source_before_dispatch(
         self, tmp_path: Path
     ) -> None:
-        """A row-only `sbxloop daemon retry` (other process) cannot call
+        """A row-only `lantern daemon retry` (other process) cannot call
         report_requeued, so the GitHub issue would keep its failed label.
         The row carries the debt; the next tick pays it before the fresh
         dispatch — once."""
@@ -1744,13 +1744,13 @@ class TestOperatorItemControls:
         h.dstore.finish_ledger("r_dead", "interrupted", 3.0)
         h.dstore.mark_resume_pending("gh:issue:1", 4.0)
         h.loop.abandon_item("gh:issue:1", "never mind")
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.naming import run_name
 
         assert removed == [
             run_name(h.config.paths, "r_dead", "agent"),
-            "sbxloop-r_dead-agent",
+            "lantern-r_dead-agent",
             run_name(h.config.paths, "r_dead", "github"),
-            "sbxloop-r_dead-github",
+            "lantern-r_dead-github",
         ]
         assert h.source.calls == [("abandoned", "never mind")]
         removed.clear()
@@ -1761,9 +1761,9 @@ class TestOperatorItemControls:
         h.loop.requeue_item("gh:issue:1")  # same for an unpin
         assert removed == [
             run_name(h.config.paths, "r_dead2", "agent"),
-            "sbxloop-r_dead2-agent",
+            "lantern-r_dead2-agent",
             run_name(h.config.paths, "r_dead2", "github"),
-            "sbxloop-r_dead2-github",
+            "lantern-r_dead2-github",
         ]
         assert h.dstore.unsettled_runs() == []
 
@@ -1907,7 +1907,7 @@ class TestLogging:
         return [
             r.getMessage()
             for r in caplog.records
-            if r.name == "sbxloop.daemon.loop" and f"'event': '{name}'" in r.getMessage()
+            if r.name == "lantern.daemon.loop" and f"'event': '{name}'" in r.getMessage()
         ]
 
     def test_dispatch_and_finish_are_logged_with_ids_and_duration(
@@ -1933,7 +1933,7 @@ class TestLogging:
     ) -> None:
         import logging
 
-        from sbxloop.log import get_logger
+        from lantern.log import get_logger
 
         h = Harness(tmp_path)
         h.source.items = [gh_item()]
@@ -1942,14 +1942,14 @@ class TestLogging:
         def runner(
             item: WorkItem, cfg: Config, run_id: str, bus: EventBus, resume: bool
         ) -> RunResult:
-            get_logger("sbxloop.test.inside").info("inside.run")
+            get_logger("lantern.test.inside").info("inside.run")
             seen.append(run_id)
             return h.runner(item, cfg, run_id, bus, resume)
 
         h.loop._runner = runner
         with caplog.at_level(logging.INFO):
             h.loop.tick()
-        (inside,) = [r.getMessage() for r in caplog.records if r.name == "sbxloop.test.inside"]
+        (inside,) = [r.getMessage() for r in caplog.records if r.name == "lantern.test.inside"]
         assert f"'run': '{seen[0]}'" in inside and "'item': 'gh:issue:1'" in inside
 
     def test_idle_reason_logged_on_change_not_every_tick(
@@ -2588,7 +2588,7 @@ class TestPauseHolds:
         real_claim = h.source.claim
 
         def claim(item: WorkItem) -> bool:
-            from sbxloop.daemon.control import dispatch
+            from lantern.daemon.control import dispatch
 
             status = h.loop.status()
             seen.append((status["claiming"], dispatch(h.loop, "status").text))
@@ -2622,7 +2622,7 @@ class TestDeployChoreography:
     HOLD = "deploy-123"
 
     def _status(self, loop: DaemonLoop) -> dict[str, Any]:
-        from sbxloop.daemon.control import dispatch
+        from lantern.daemon.control import dispatch
 
         reply = dispatch(loop, "status")
         assert reply.status is not None
@@ -2634,7 +2634,7 @@ class TestDeployChoreography:
         return {"text": lines, "raw": reply.status}
 
     def _deploy(self, h: Harness, *, operator_pauses_during_wait: bool = False) -> DaemonLoop:
-        from sbxloop.daemon.control import dispatch
+        from lantern.daemon.control import dispatch
 
         loop = h.loop
         # Take the deploy hold.
@@ -2696,7 +2696,7 @@ class TestDeployChoreography:
         """Timed out waiting, or failed before the upgrade: the `always()`
         release step is the only thing that runs, and it must not resume a
         daemon the operator paused."""
-        from sbxloop.daemon.control import dispatch
+        from lantern.daemon.control import dispatch
 
         h = Harness(tmp_path)
         h.loop.pause(by="brett")
@@ -2971,7 +2971,7 @@ class TestClaimProtocol:
         import os
         import signal
 
-        from sbxloop.daemon.loop import defer_signals
+        from lantern.daemon.loop import defer_signals
 
         h = Harness(tmp_path)
         h.source.items = [gh_item()]
@@ -3005,7 +3005,7 @@ class TestRepoHealthSurface:
     class HealthySource(FakeSource):
         def __init__(self) -> None:
             super().__init__()
-            from sbxloop.daemon.sources import RepoHealth
+            from lantern.daemon.sources import RepoHealth
 
             self.health = [RepoHealth("o/a"), RepoHealth("o/b", 4, None, True, "gone", 1.0)]
 
@@ -3014,7 +3014,7 @@ class TestRepoHealthSurface:
             return list(self.health)
 
         def resume_repo(self, repo: str) -> Any:
-            from sbxloop.daemon.sources import RepoHealth
+            from lantern.daemon.sources import RepoHealth
 
             if repo != "o/b":
                 raise KeyError(f"unknown repository {repo!r}")
@@ -3180,7 +3180,7 @@ class TestWorkloadIntake:
                 state = "completed" if kind == "workload" else "merged"
                 if kind == "code":
                     h.store.set_run_pr(
-                        run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+                        run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
                     )
                 h.store.set_run_state(run_id, state)
                 return RunResult(run_id=run_id, state=state, kind=kind)

@@ -20,12 +20,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from sbxloop.api.app import create_app
-from sbxloop.api.auth.store import ApiAuthStore
-from sbxloop.api.context import ApiContext
-from sbxloop.api.turns import TurnCoordinator
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.store import DaemonStore
+from lantern.api.app import create_app
+from lantern.api.auth.store import ApiAuthStore
+from lantern.api.context import ApiContext
+from lantern.api.turns import TurnCoordinator
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.store import DaemonStore
 from tests.api.conftest import build
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -428,7 +428,7 @@ def test_cancel_channel_settles_queued_turns_of_a_deleted_channel(tmp_path: Path
             finally:
                 first.set_result(ConciergeReply("finished anyway"))
             assert api.ctx.turns.wait_idle(WAIT_S)
-            from sbxloop.db.collaboration_models import MessageRow, TurnRow
+            from lantern.db.collaboration_models import MessageRow, TurnRow
 
             with api.loop.dstore.read() as session:
                 rows = [session.get(TurnRow, turn_id) for turn_id in ids]
@@ -448,7 +448,7 @@ def test_recovery_keeps_each_channels_turns_in_sequence(api: Any) -> None:
     ]
     from sqlalchemy import select
 
-    from sbxloop.db.collaboration_models import LocalUserRow
+    from lantern.db.collaboration_models import LocalUserRow
 
     with api.loop.dstore.read() as session:
         user_id = session.scalars(select(LocalUserRow)).one().id

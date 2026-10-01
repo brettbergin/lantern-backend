@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
+from lantern.config import Config
 from tests.fakes.fake_github import FakeGithub
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -565,8 +565,8 @@ def test_deploy_notice_overrides_the_channel_through_the_old_notifier_signature(
 def test_deploy_notify_command_uses_the_installed_notifier_without_github(
     tmp_path, monkeypatch, capsys
 ):
-    import sbxloop.config as config_module
-    from sbxloop.daemon import notify
+    import lantern.config as config_module
+    from lantern.daemon import notify
 
     config = Config.model_validate(
         {
@@ -604,12 +604,12 @@ def cli(api, tmp_path, monkeypatch):
     fake.release_tags.append({"name": "v1.0.2", "commit": {"sha": "b" * 40}})
     fake.release_payloads.append(release("1.0.2", "b" * 40))
     monkeypatch.setattr(pipeline, "Github", lambda repo: client)
-    monkeypatch.setattr(pipeline, "command", lambda *args: f"sbxloop {current[0]}")
+    monkeypatch.setattr(pipeline, "command", lambda *args: f"lantern {current[0]}")
     monkeypatch.setattr(pipeline.time, "time", lambda: 10000)
     for key, value in {
         "GITHUB_REPOSITORY": "o/r",
-        "SBXLOOP_HOME": str(tmp_path),
-        "VENV_SBXLOOP": "unused",
+        "LANTERN_HOME": str(tmp_path),
+        "VENV_LANTERN": "unused",
         "GITHUB_OUTPUT": str(tmp_path / "outputs"),
         "MANUAL": "false",
         "INPUT_VERSION": "",

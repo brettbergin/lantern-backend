@@ -25,17 +25,17 @@ the internals are in [architecture.md](architecture.md#the-remote-api-listener).
 
 ## Installation
 
-The API runs **inside `sbxloop daemon`**: one process owns execution, and the
+The API runs **inside `lantern daemon`**: one process owns execution, and the
 listener is a second way in, never a second scheduler. Install the `api`
 extra's packages into the home's venv and switch it on:
 
 ```bash
-~/.sbxloop/bin/uv pip install --python ~/.sbxloop/venv/bin/python \
+~/.lantern/bin/uv pip install --python ~/.lantern/venv/bin/python \
   'fastapi>=0.115' 'uvicorn[standard]>=0.30' 'pyjwt[crypto]>=2.9'
 ```
 
 ```toml
-# $SBXLOOP_HOME/config/sbxloop.toml
+# $LANTERN_HOME/config/lantern.toml
 [api]
 enabled = true
 bind = "127.0.0.1"        # loopback by default; your reverse proxy terminates TLS
@@ -56,7 +56,7 @@ public chronology's lag.
 
 ## Local collaboration
 
-The API can also serve a single-user local product such as Angie. This is an
+The API can also serve a single-user local product such as Lantern. This is an
 additive layer around the existing run API: it uses the daemon's store,
 concierge, operation controls, schedules, events, artifacts, and usage instead
 of starting another scheduler or opening another SQLite writer.
@@ -77,11 +77,11 @@ people in through the provider. `GET /v1/auth/providers` needs no token and
 answers:
 
 ```json
-{"local": true, "assistant_name": "Angie",
+{"local": true, "assistant_name": "Lantern",
  "oidc": {"id": "authentik", "label": "Authentik",
           "authorize_url": "https://auth.example.com/application/o/authorize/",
-          "client_id": "angie", "scopes": ["openid", "email", "profile"],
-          "end_session_url": "https://auth.example.com/application/o/angie/end-session/",
+          "client_id": "lantern", "scopes": ["openid", "email", "profile"],
+          "end_session_url": "https://auth.example.com/application/o/lantern/end-session/",
           "native_redirect_uris": []}}
 ```
 
@@ -97,7 +97,7 @@ runs Authorization Code + PKCE against `authorize_url` with its own `state`,
 ```bash
 curl -s -X POST http://127.0.0.1:8420/v1/auth/oidc/token \
   -H 'Content-Type: application/json' \
-  -d '{"provider":"authentik","code":"…","code_verifier":"…","redirect_uri":"https://angie.example.com/auth/callback","nonce":"…"}'
+  -d '{"provider":"authentik","code":"…","code_verifier":"…","redirect_uri":"https://lantern.example.com/auth/callback","nonce":"…"}'
 ```
 
 The daemon redeems the code at the provider's token endpoint as the
@@ -129,14 +129,14 @@ for the configuration and role mapping.
 | Messages    | `GET /v1/channels/{id}/messages`, `PUT .../{message}/reaction` | Ordered history and persistent message feedback              |
 | Turns       | `POST /v1/channels/{id}/turns`, `GET .../{turn}`               | Idempotent input acceptance and durable completion state     |
 | Preferences | `/v1/prompts`, `/v1/prompts/definitions`                       | Prompt context saved for the local user                      |
-| Workflows   | `/v1/workflows[/{id}]`                                         | Workflow metadata used by the Angie management screen        |
+| Workflows   | `/v1/workflows[/{id}]`                                         | Workflow metadata used by the Lantern management screen      |
 | Connections | `/v1/connections`, `/v1/connections/services`                  | Redacted status and owner management of host integrations    |
 
 ### Agents
 
 `GET /v1/agents` lists every agent a client can address, in merge order: the
-built-ins (Angie and the planner, builder, critic and operator), then the
-operator's `[[agents]]` from `sbxloop.toml`, then the agents people saved.
+built-ins (Lantern and the planner, builder, critic and operator), then the
+operator's `[[agents]]` from `lantern.toml`, then the agents people saved.
 `GET /v1/agents/{slug}` also answers an alias and a retired built-in name.
 The assistant that speaks as the product is always the slug `concierge`.
 Under its shipped name it is listed as `Concierge`, as it always has been;
@@ -144,7 +144,7 @@ an operator who renames it (a `[[agents]]` entry for `concierge` with a
 `name` and `aliases`) has it listed under that name, and its persona, the
 other agents' prompts, `GET /v1/prompts/definitions` and the refusals that
 name it use the same name. Before anyone signs in, `GET /v1/auth/providers`
-reports it as `assistant_name` (`"Angie"` unless renamed).
+reports it as `assistant_name` (`"Lantern"` unless renamed).
 Beside the original fields, each entry carries its identity (`avatar`, a
 `#rrggbb` `color`, `aliases`), its narrowing (`roles`, `tools`, `skills`,
 `mcp`, `credentials`, `interests`, `can_start`, `max_runs_per_day`),
@@ -175,7 +175,7 @@ else, with nothing saved; the agent's owner may still narrow or clear
 given, and `[agent_team] max_agent_runs_per_day` stays the ceiling where
 runs start: the agent's effective daily cap is the lower of the two, so a
 member lowers their agent's cap but never raises it above the operator's.
-Agents declared in `sbxloop.toml` are not subject to either rule; they are
+Agents declared in `lantern.toml` are not subject to either rule; they are
 read-only here. A saved agent
 whose stored spec no longer validates (a later release tightened a rule)
 is left out of listings, answers 422 `invalid_agent` on `PATCH`, and can
@@ -186,7 +186,7 @@ refused: egress stays the operator's `[policy]`. A spec that names an
 undeclared tool, `[[credentials]]` entry or `[[mcp]]` server, or has no
 name, answers 422 `invalid_agent` with the reasons in `detail` and
 `problems`. A `model` is checked against the configured backend's
-discovered model catalog when one is cached (`sbxloop list-models` refreshes
+discovered model catalog when one is cached (`lantern list-models` refreshes
 it); with no catalog the name is accepted as given and a wrong one
 surfaces in the run that uses it. A built-in or configured agent answers
 409 `agent_read_only`; a stale `expected_revision` answers 409
@@ -201,17 +201,17 @@ team or mentioned, and still answers `GET /v1/agents/{slug}`.
 
 A saved agent is addressed like a built-in: `@slug` in a turn, a
 `target_slugs` entry or a team member. It answers in a chat session under
-its first run role (Angie's own session when it has none) with its own
+its first run role (Lantern's own session when it has none) with its own
 persona. When the agent sets `model`, its turns use that model instead of
 the role's configured one, and its `model_source` reads `agent.model`. An
 agent's `handoff_agent` tool may address any enabled agent, saved ones
 included; a disabled or archived agent is refused.
 
-An ordinary turn talks to Angie without host or MCP action tools. A known
+An ordinary turn talks to Lantern without host or MCP action tools. A known
 `@agent`, an enabled `@team`, explicit `target_slugs`, or `intent=delegate`
 records work intent and enables the corresponding concierge tools. Product
 clients can instead send `intent=code` or `intent=workload` to select one of
-sbxloop's managed runners explicitly. Angie coordinates that turn without
+lantern's managed runners explicitly. Lantern coordinates that turn without
 seeding agent mentions as parallel chat participants: the code runner owns its
 decompose/build/review/fix/CI/merge lifecycle, and the workload runner owns its
 plan/execute/judge/revise/publish lifecycle. Explicit runner intents cannot be
@@ -258,11 +258,11 @@ When `/v1/capabilities` lists `collaboration.message_authors`, every message
 also carries an `author` object: `{"kind", "id", "display_name"}`. `kind` is
 `human` (a person; `id` is the user id and `display_name` their full name, or
 their username when none is set), `agent` (`id` is the agent slug and
-`display_name` its registry name, so `concierge` shows as `Angie`), or
+`display_name` its registry name, so `concierge` shows as `Lantern`), or
 `system` (turn error and stop notices; `id` and `display_name` are null).
 Messages written before authorship was recorded report the author they always
 had: the channel's user for user input, the named agent for agent replies and
-handoffs, Angie for replies and work results that name no agent. The existing
+handoffs, Lantern for replies and work results that name no agent. The existing
 `role` and `agent_slug` fields are unchanged. Turns report the same person as
 `author_id`, with `trigger` (`human` for every turn a person submits) and
 `parent_turn_id` (null until agents can start turns of their own), and
@@ -348,7 +348,7 @@ A body without them admits work exactly as before.
 
 When the item is dispatched, the daemon plans its assignment: each role takes
 the agent asked for and the built-in agent otherwise, and the lead is the one
-asked for or Angie. The plan is stored with the item, and every later attempt
+asked for or Lantern. The plan is stored with the item, and every later attempt
 at the same item reuses it, even if an agent was archived since. Issues found
 by polling run with the built-in team. Items read back with `lead_agent` (the
 planned lead once dispatched, the requested one before) and `assignment` (the
@@ -359,8 +359,8 @@ A chat turn passes its channel and, for the agents it mentioned, the run roles
 they declare to the work it starts: a workload it queues carries them, and an
 issue it files or labels leaves a note the polled item picks up. The note is
 spent by the item it fills, so an old conversation's request is never replayed
-onto work the same issue is labelled for later. A turn answered by Angie names
-Angie as the lead. An item that names its channel is delivered there even when
+onto work the same issue is labelled for later. A turn answered by Lantern names
+Lantern as the lead. An item that names its channel is delivered there even when
 its key names no message in it (as part of the channel's latest turn when it
 was admitted), and never to a channel other than its own; that holds for an
 issue (`code`) admission too, whether or not any turn in the channel named the
@@ -448,7 +448,7 @@ work's result is delivered on, and to no turn at all rather than to one
 from another channel. A run a channel asked for outside any turn of its
 own still posts and still names its files: `work.turn_id` is null on such
 a post, so a client reads it as nullable. A snapshot a run hands in that
-does not fit this shape is replaced by what sbxloop itself knows about
+does not fit this shape is replaced by what Lantern itself knows about
 the work, and a snapshot already recorded that a later build cannot read
 is reported as no snapshot: a message the reader cannot parse never costs
 the channel its message list.
@@ -475,10 +475,10 @@ the files of a run a channel they can open asked for, through
 other run's files, and an id nobody catalogued, answer the same `403`
 naming `artifacts:read` that they always did.
 
-A `post_kind` sbxloop does not know is never stored: the post is dropped and
+A `post_kind` Lantern does not know is never stored: the post is dropped and
 its dedupe key stays free. One recorded by a later build reads back as null.
 
-Discovery lists sbxloop's five native roles: `concierge`, `planner`, `builder`,
+Discovery lists lantern's five native roles: `concierge`, `planner`, `builder`,
 `critic`, and `operator`. Chat resolves their models through the existing
 configuration, using the `concierge`, `decompose`, `build`, `review`, and
 `operator_plan` phases respectively. `phase_models` also reports the remaining
@@ -604,7 +604,7 @@ through `PUT /v1/connections/{service}`. The body has `settings` (the service's
 nonsecret URL and channel fields), `credentials` (write-only tokens), and
 `activate`. Only the listed fields are accepted. Secrets are written to the
 home's private `config/secrets.env`; other settings go to its
-`config/sbxloop.toml`. Both save paths keep timestamped backups; secret
+`config/lantern.toml`. Both save paths keep timestamped backups; secret
 backups remain mode `0600`. The response contains
 only presence flags and nonsecret settings. Existing `POST /v1/connections`
 and `PATCH /v1/connections/{id}` clients still receive
@@ -628,7 +628,7 @@ Secrets supplied outside the managed file must be removed by the host operator;
 the API refuses to claim their removal. Gitea remains visible but unavailable
 until it has an execution backend. GitHub App credentials remain host-managed;
 the catalog identifies that auth method, and its check directs the operator to
-`sbxloop doctor` rather than claiming a PAT check verified the App installation.
+`lantern doctor` rather than claiming a PAT check verified the App installation.
 
 ### Repository discovery
 
@@ -686,7 +686,7 @@ asking the forge anything.
 
 `POST /v1/repositories/{id}/labels/sync` (`daemon:manage`) creates the ones
 the repository is missing and answers `200 {repository, labels, created, message, operation}` with `repo.labels_sync` recorded — the same work
-`sbxloop init-repo` does from the host, through the daemon's own forge
+`lantern init-repo` does from the host, through the daemon's own forge
 sandbox. It reads the repository first, so a repository that already carries
 every label is left untouched and reports itself compliant with `created: []`. A daemon with no forge sandbox refuses with `409 not_eligible` naming
 the command that works from the host; a forge that would not answer is `503 source_unavailable`, and the last reading stands, dated, rather than being
@@ -701,7 +701,7 @@ so); `POST /v1/daemon/restart` applies it. The file keeps a repository's
 other settings — labels, templates, workspace, sandbox packages, model
 overrides — folded under the registration of the same name; a new entry in
 the file is registered at the next start, and the file's `enabled` /
-`deliver_base` are only the initial values (`sbxloop doctor` names an entry
+`deliver_base` are only the initial values (`lantern doctor` names an entry
 the file still spells differently). The socket takes the same commands:
 `repository.add` (params), `repository.update` and `repository.remove`
 (target `repo_…`).
@@ -836,7 +836,7 @@ recorded; a different body under the same key is `409 idempotency_conflict`. A p
 (`interrupted_before_effect`) at the next start; publishing again resumes
 it. Each call records `plan.published` `{plan_id, node_id, published, failed}` (node ids) with its result.
 
-**The forge wins after publish (#2342).** sbxloop re-reads a published
+**The forge wins after publish (#2342).** Lantern re-reads a published
 plan's tree from the forge and folds it in; it never writes to the forge
 doing so, so a person's edit there is never overwritten. `GET /v1/plans/{id}` does it first when the plan has anything on the forge and its
 last reading is older than `[planning] reconcile_interval_s` (default 120
@@ -894,7 +894,7 @@ same service, on the asking person's yes and with their `plans:create`: the
 plan's `created_by` is their id, and `plan.created` names them as the actor
 with `via: "concierge"`. It writes only the draft. Its reply links the draft
 as the relative path `/plans/<plan_id>` (the id URL-encoded), which a client
-opens as its plan screen: Angie serves the page at that path on its own
+opens as its plan screen: Lantern serves the page at that path on its own
 origin, and Lantern opens the same path from a message.
 
 **Breakdown.** `POST /v1/plans/{id}/nodes/{node_id}/breakdown`
@@ -953,7 +953,7 @@ answers together with `skip`, or neither (`422`); a stale
 `expected_revision` (optional here).
 
 **Editing a published plan, attaching and detaching (#2350).** After
-publish sbxloop writes to a plan's issues only when a person asks, and
+publish Lantern writes to a plan's issues only when a person asks, and
 never over a change made on the forge. Each of these needs `plans:publish`
 and writes the forge at once; a daemon with no forge connection is `503 source_unavailable`, a forge that refuses a write `502 forge_refused` with its
 words, and a plan being published, read from the forge or written right
@@ -964,7 +964,7 @@ writes them to its issue (`plans:create` alone is `403 forbidden` naming
 `plans:publish`; moving a published node among its siblings stays
 `plans:create`). The request names `forge_version`, the version of the
 issue the client read: the node's `forge.version` — a digest of its title
-and sections as sbxloop last read or wrote them — or the one a refusal
+and sections as Lantern last read or wrote them — or the one a refusal
 answered with (a missing one is `422`). The issue is read first, the way a
 reconcile reads it; if its title or sections changed on the forge since,
 the edit is `409 forge_changed` with the forge's `forge_version` and
@@ -980,11 +980,11 @@ goal is rewritten as headings, the goal first. A dependency the edit adds
 must be a sibling that follows its issue (`409 dependency_unpublished`); a
 detached node is `409 node_detached`, an issue gone from the forge `409 issue_gone`, and a stale `expected_revision` `409 stale_revision` as
 anywhere. The version is a content digest rather than the forge's
-`updated_at` because a comment, a label or sbxloop's own checklist and
+`updated_at` because a comment, a label or lantern's own checklist and
 sub-issue writes move `updated_at` without touching what an edit
 overwrites. A limit: neither forge offers a conditional issue update, so
-a forge edit landing between sbxloop's read and its write — one request
-apart — is not seen and is overwritten (sbxloop itself holds one write
+a forge edit landing between lantern's read and its write — one request
+apart — is not seen and is overwritten (Lantern itself holds one write
 per plan at a time; the window against a person on the forge is not
 exercised against a real forge, **field-unverified**). Records
 `plan.node.changed` with `change: issue_edited`, `number`, `fields` (the
@@ -1006,7 +1006,7 @@ this plan (`409 already_in_plan` with `node_id`) or carrying another
 plan's marker (`409 in_another_plan`), a task outside its epic's
 repository or a task as the parent (`422`), a parent at its cap (`409 too_many_children`), a broken managed checklist (`409 checklist_mangled`),
 and on GitHub an issue already under another parent (GitHub's 422, `409 already_has_parent`: moving it is a person's decision there). On GitLab an
-issue listed in another parent's checklist carries no link sbxloop can
+issue listed in another parent's checklist carries no link Lantern can
 see and is not refused. Records `change: attached` with `parent_id`,
 `number`, `url`, `linked` and `reattached`.
 
@@ -1021,7 +1021,7 @@ their issues: only the `Depends on` items naming it are removed. The root
 is `422` (archive the plan instead), an unpublished node `409 node_unpublished` (remove it instead) and a detached one `409 node_detached`. Records `change: detached` with `parent_id`, `number`,
 `unlinked` (`native`, `checklist`) and `dependents`.
 
-sbxloop's own writes are what the next reconcile reads back: an edit,
+lantern's own writes are what the next reconcile reads back: an edit,
 attach or detach never shows as drift. **field-unverified**: GitHub's 422
 for a sub-issue that already has a parent is the documented answer; the
 exact status GitHub gives a cross-repository refusal is not, and any other
@@ -1163,7 +1163,7 @@ recorded) and each answering `200` with the run and its `operation_id`:
   that task first) or `409 task_not_failed`.
 - `.../run/skip` treats a task that is not under way — `failed`, `blocked`,
   `waiting` or `ready` — as done: it is `skipped` and its dependents become
-  ready. Its issue is left exactly as it is (sbxloop does not close it) and
+  ready. Its issue is left exactly as it is (Lantern does not close it) and
   its item is not touched. `409 task_in_progress` (queued or running: let it
   finish or abandon its item) or `409 task_settled`.
 
@@ -1202,7 +1202,7 @@ of its published epics is. A task an epic run skipped is done for the run
 (its dependents go ahead and the run can complete) but its issue stays
 open, and an open task keeps its epic open: closing that issue later
 finishes the epic then. With `[planning] close_completed` on for the
-node's repository (the default), sbxloop comments a summary on a finished
+node's repository (the default), Lantern comments a summary on a finished
 epic — each task as `landed`, `closed` or `skipped in the epic run, then closed on the forge`, with its pull request or delivery link where
 known, and the epic run and who started it — and closes it as completed;
 the last epic of an initiative closing does the same for the initiative
@@ -1215,7 +1215,7 @@ open. Whatever `close_completed` says, a parent's managed checklist
 ticked as its issue closes, and each node whose issue changed state is
 recorded in `forge.state` with `plan.node.changed` — `change: "closed"`
 (or `"reopened"`) for a state read from the forge, `"completed"` for a
-node sbxloop closed with a summary, each with `number`. The daemon looks
+node Lantern closed with a summary, each with `number`. The daemon looks
 when a pass of an epic run sees a task land or close and when the run
 completes; every 10 minutes, for 14 days after a run completed, while its
 epic is still open; and when a merge or delivery report closes the issue
@@ -1352,7 +1352,7 @@ otherwise. Mentioning an agent with `@slug`, or targeting it, adds it as a
 `mention` participant when the turn is accepted. Changes record
 `collaboration.participant.added`, `.updated` and `.removed` with
 `{channel_id, agent_slug}`; an agent starting and finishing its part of a
-turn records `collaboration.participant.activity` with `{channel_id, agent_slug, status}` (`thinking`, then `idle`; Angie reports as `concierge`).
+turn records `collaboration.participant.activity` with `{channel_id, agent_slug, status}` (`thinking`, then `idle`; Lantern reports as `concierge`).
 
 An agent's reply is prose in the channel, so `@slug` in it addresses that
 agent: a follow-up turn is accepted for it, with `trigger: "mention"`, the
@@ -1486,7 +1486,7 @@ A message that arrived over a bridge carries `origin`:
 ```
 
 `thread_id` is set as well when it came in through a link to one thread.
-Angie shows it as a "via" badge; it is `null` for everything typed here.
+Lantern shows it as a "via" badge; it is `null` for everything typed here.
 
 Who somebody is on a bridge is theirs to prove, once:
 
@@ -1509,12 +1509,12 @@ anyone the bridge admits types there, a mapped account or a guest where the
 link allows one, and the turn runs for that person without the `post` check
 a turn started here makes: the channel's owner linked the surface, so
 whoever may post on it may post in the channel, whether or not they could
-open it in Angie. A restart keeps the same rule: an accepted turn whose
+open it in Lantern. A restart keeps the same rule: an accepted turn whose
 message arrived over a bridge is recovered for its author, mapped or guest,
 rather than dropped because that author cannot read the channel. Mentions
 work as they do here: `@slug` in a linked message targets that agent and
 joins it to the channel, and it is that agent that answers (so `@slug stop`
-reaches it too); a message naming nobody is answered by Angie. When a
+reaches it too); a message naming nobody is answered by Lantern. When a
 linked message cannot be accepted, the surface hears a refusal only if it
 was worded for people (a channel that is gone, say); any other failure is
 reported as "check the daemon logs" and detailed there alone.
@@ -1627,15 +1627,15 @@ push. Notifications are kept as long as the chronology
 
 ## Clients and tokens
 
-sbxloop issues its own tokens. A client is registered on the host with the
+Lantern issues its own tokens. A client is registered on the host with the
 capabilities it may hold; its secret is printed once:
 
 ```bash
-sbxloop api client create ci-reporter --cap runs:read --cap audit:read
-sbxloop api client create deployer --cap runs:read --cap daemon:manage
-sbxloop api client list
-sbxloop api client revoke cli_…
-sbxloop api key rotate           # the signing key; the previous one stands until its tokens expire
+lantern api client create ci-reporter --cap runs:read --cap audit:read
+lantern api client create deployer --cap runs:read --cap daemon:manage
+lantern api client list
+lantern api client revoke cli_…
+lantern api key rotate           # the signing key; the previous one stands until its tokens expire
 ```
 
 A client exchanges its secret for a short-lived access token and a rotating
@@ -1656,7 +1656,7 @@ Rules a client can rely on:
 - Bearer only: `Authorization: Bearer <access token>`, on every request and
   on the WebSocket's upgrade (or its first frame); never a cookie, never the
   query string.
-- The access token is an Ed25519-signed JWT (`iss=sbxloop`, `aud=sbxloop-api`),
+- The access token is an Ed25519-signed JWT (`iss=lantern`, `aud=lantern-api`),
   valid for `[api] access_token_ttl_s` (15 minutes by default). Its
   capabilities are what the client held when it was minted **and still
   holds**: a grant narrowed later narrows the live token at once; a revoked
@@ -2010,7 +2010,7 @@ A worker sandbox can never reach the daemon's API. Two facts hold it:
   backend, the toolchains or the registries — and `[sandbox] extra_allow_domains`
   refuses a bare address, a loopback name, a container runtime's host
   alias and `*` (`tests/unit/test_api_isolation.py`).
-- `sbxloop doctor --deep` probes it live: the `api-host-unreachable`
+- `lantern doctor --deep` probes it live: the `api-host-unreachable`
   conformance probe asks, from inside a scratch sandbox, for the API's
   `/health/live` answer on `[api] port` at the guest's loopback,
   `host.docker.internal`, its default gateway and the `[api] bind` address,

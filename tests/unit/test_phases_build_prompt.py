@@ -7,11 +7,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sbxloop import toolchains
-from sbxloop.config import Config
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern import toolchains
+from lantern.config import Config
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import PhaseRunner
+from lantern_worker.protocol import JobRequest, JobResult
 
 
 class RecordingAgent:

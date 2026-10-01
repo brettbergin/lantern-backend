@@ -1,4 +1,4 @@
-"""`sbxloop list-models`: host-side SDK model listing.
+"""`lantern list-models`: host-side SDK model listing.
 
 The real SDK is never installed in the unit environment; these tests inject
 a stub `copilot` module into sys.modules shaped like the field-verified
@@ -19,15 +19,15 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.cli.models import (
+from lantern.cli.app import app
+from lantern.cli.models import (
     auth_hint,
     fetch_models,
     format_context,
     format_efforts,
     model_row,
 )
-from sbxloop.errors import SbxloopError
+from lantern.errors import LanternError
 
 runner = CliRunner()
 
@@ -37,7 +37,7 @@ def test_successful_listing_caches_only_picker_metadata(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("SBXLOOP_HOME", str(home))
+    monkeypatch.setenv("LANTERN_HOME", str(home))
     install_stub_sdk(monkeypatch, SAMPLE_MODELS)
 
     result = runner.invoke(app, ["list-models", "--json"])
@@ -147,7 +147,7 @@ def install_stub_sdk(
 class TestFetchModels:
     def test_missing_sdk_is_actionable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(sys.modules, "copilot", None)  # forces ImportError
-        with pytest.raises(SbxloopError, match="github-copilot-sdk is not installed"):
+        with pytest.raises(LanternError, match="github-copilot-sdk is not installed"):
             fetch_models()
 
     def test_returns_sdk_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,7 +159,7 @@ class TestFetchModels:
         monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
         monkeypatch.delenv("GH_TOKEN", raising=False)
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-        with pytest.raises(SbxloopError, match="not authenticated") as excinfo:
+        with pytest.raises(LanternError, match="not authenticated") as excinfo:
             fetch_models()
         assert "COPILOT_GITHUB_TOKEN" in str(excinfo.value)
 
@@ -212,7 +212,7 @@ class TestListModelsCommand:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         install_stub_sdk(monkeypatch, models=SAMPLE_MODELS)
-        monkeypatch.setenv("SBXLOOP_MODEL", "gpt-5-mini")
+        monkeypatch.setenv("LANTERN_MODEL", "gpt-5-mini")
         result = runner.invoke(app, ["list-models"])
         assert result.exit_code == 0
         assert "◀ = configured model (gpt-5-mini)" in result.output
@@ -221,7 +221,7 @@ class TestListModelsCommand:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         install_stub_sdk(monkeypatch, models=SAMPLE_MODELS)
-        monkeypatch.setenv("SBXLOOP_MODEL", "gone-4")
+        monkeypatch.setenv("LANTERN_MODEL", "gone-4")
         result = runner.invoke(app, ["list-models"])
         assert result.exit_code == 0
         assert "not in this list" in result.output
@@ -250,7 +250,7 @@ class TestListModelsCommand:
         assert "github-copilot-sdk is not installed" in result.output
         # the SDK itself, never our own package by name from an index
         assert "'github-copilot-sdk>=" in result.output
-        assert "sbxloop[copilot]" not in result.output
+        assert "lantern-backend[copilot]" not in result.output
 
     def test_sdk_failure_exits_2(self, workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         install_stub_sdk(monkeypatch, error=RuntimeError("boom"))

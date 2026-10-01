@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from sbxloop.api import ws as ws_module
+from lantern.api import ws as ws_module
 from tests.api.conformance.conftest import Client, register
 
 MUTATIONS = [

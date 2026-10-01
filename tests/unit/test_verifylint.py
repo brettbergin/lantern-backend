@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.verifylint import (
+from lantern.verifylint import (
     CONFIG_SCOPED_TOOLS,
     GATE_DETECTORS,
     command_heads,
@@ -302,7 +302,7 @@ class TestBashisms:
             assert lint_verify_commands([cmd], ["go"]), cmd
 
     def test_nested_shell_wrapper_flagged(self) -> None:
-        """Field failure r7ef26eht (first sbxloop-on-sbxloop run): the plan
+        """Field failure r7ef26eht (first lantern-on-lantern run): the plan
         wrapped a `git status | awk '{print $2}'` guard in `sh -c "..."`;
         the runner's own `sh -c` expanded `$2` first, awk printed whole
         lines, and a correct change failed every revision and the replan."""
@@ -974,7 +974,7 @@ class TestGateNeedsItsToolchain:
         assert project_gate(tmp_path, languages=("javascript", "python")) == "npm run check"
 
     def test_every_language_detector_names_a_registry_toolchain(self) -> None:
-        from sbxloop.toolchains import supported_languages
+        from lantern.toolchains import supported_languages
 
         known = set(supported_languages())
         for detector in GATE_DETECTORS:
@@ -1023,7 +1023,7 @@ class TestConfigOverrideRule:
         return tmp_path
 
     def test_the_real_world_case_is_flagged(self, tmp_path: Path) -> None:
-        workspace = self._workspace(tmp_path, '[tool.mypy]\nfiles = ["packages/sbxloop/src"]\n')
+        workspace = self._workspace(tmp_path, '[tool.mypy]\nfiles = ["packages/lantern/src"]\n')
         (problem,) = lint_verify_commands(
             ["uv run mypy packages"], ["python"], uv_project=True, workspace=workspace
         )
@@ -1112,10 +1112,10 @@ class TestConfigOverrideRule:
         )
 
     def test_mypy_path_inside_files_is_allowed(self, tmp_path: Path) -> None:
-        workspace = self._workspace(tmp_path, '[tool.mypy]\nfiles = ["packages/sbxloop/src"]\n')
+        workspace = self._workspace(tmp_path, '[tool.mypy]\nfiles = ["packages/lantern/src"]\n')
         assert (
             lint_verify_commands(
-                ["uv run mypy packages/sbxloop/src/sbxloop/verifylint.py"],
+                ["uv run mypy packages/lantern/src/lantern/verifylint.py"],
                 ["python"],
                 uv_project=True,
                 workspace=workspace,
@@ -1152,7 +1152,7 @@ class TestConfigOverrideRule:
 
     def test_module_flag_argument_is_not_a_path(self, tmp_path: Path) -> None:
         workspace = self._workspace(tmp_path, '[tool.mypy]\nfiles = ["src"]\n')
-        assert lint_verify_commands(["uv run mypy -p sbxloop"], [], workspace=workspace) == []
+        assert lint_verify_commands(["uv run mypy -p lantern"], [], workspace=workspace) == []
 
     def test_workspace_defaults_to_cwd(self, tmp_path: Path, monkeypatch) -> None:
         self._workspace(tmp_path, '[tool.mypy]\nfiles = ["src"]\n')
@@ -1322,11 +1322,11 @@ class TestConfigOverrideAcrossEcosystems:
         message: the field-failure case, narrowing inside the set, and the
         bare form."""
         (tmp_path / "pyproject.toml").write_text(
-            '[tool.mypy]\nfiles = ["packages/sbxloop/src"]\n', encoding="utf-8"
+            '[tool.mypy]\nfiles = ["packages/lantern/src"]\n', encoding="utf-8"
         )
         (problem,) = config_override_problems("uv run mypy packages", tmp_path)
         assert "OVERRIDES" in problem and "only narrows the run" in problem
-        assert config_override_problems("uv run mypy packages/sbxloop/src/sbxloop", tmp_path) == []
+        assert config_override_problems("uv run mypy packages/lantern/src/lantern", tmp_path) == []
         assert config_override_problems("uv run mypy", tmp_path) == []
 
 

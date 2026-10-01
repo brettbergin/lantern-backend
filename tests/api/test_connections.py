@@ -6,8 +6,8 @@ from typing import Any
 
 import httpx
 
-from sbxloop.api.routes import connections
-from sbxloop.config import Config
+from lantern.api.routes import connections
+from lantern.config import Config
 
 
 def test_discord_probe_checks_bot_and_channel(monkeypatch: Any) -> None:

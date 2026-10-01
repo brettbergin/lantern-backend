@@ -1,0 +1,6062 @@
+"""LoopEngine: one run from outcome to merged pull request.
+
+    DECOMPOSE → (BUILD → VERIFY)* → GATE → DELIVER → REVIEW ⇄ FIX → CI → LAND
+
+The task graph is built and verified under the revision/replan budgets;
+then the run gates the whole tree, delivers it as a draft PR, reviews its
+own diff, spends bounded fix rounds on what the review, CI or the base
+branch object to, and merges. Every stage is a run state and every
+transition is checkpointed in SQLite, so a crash at any point resumes at
+that stage with a fresh sandbox pair — the PR branch on GitHub is the
+durable copy of the work once one exists.
+
+Failure semantics:
+
+- Budget exhaustion (revisions/replans) fails the *task*; dependents are
+  skipped and the run ends ``failed`` before delivering anything. One
+  exception: revisions exhausted by *verify-command* failures spend a
+  replan first when budget remains — the builder cannot edit the
+  decomposer-authored verify commands, so only a fresh session's fresh
+  approach can unstick work that disagrees with where a check looks.
+- Round exhaustion (``[landing] max_review_rounds`` / ``max_ci_rounds``)
+  ends the run ``failed`` with the PR left open as a draft and the budget
+  that ran out recorded on the run (``runs.exhausted``). The run is one
+  round short, not broken: ``grant_rounds`` extends its budgets and a
+  ``resume()`` then continues on the same branch and PR with the review
+  history intact (#523) — the daemon does this once by itself
+  (``[landing] retry_rounds``), an operator as often as they like.
+- GitHub refusing to finish the PR — a protection rule, a draft that will
+  not clear, CI that never reports — ends the run ``blocked``: nothing a
+  further round would change, a human has to look, and the run resumes at
+  ``landing`` once they have.
+- Infrastructure errors (worker/sbx crashes) propagate after state is
+  persisted — equivalent to a kill. ``resume()`` re-provisions a fresh
+  sandbox pair (sandboxes are cattle; the workspace and SQLite state
+  persist on the host) and continues from the last committed transition:
+  a stage whose result was never committed re-runs from its start. Resume
+  rehydrates the run's persisted config and pins the workspace from the
+  runs table, so on-disk config edits (or a different cwd) cannot silently
+  change the run's rules or relocate its workspace; drift is surfaced as a
+  ``run.config_drift`` event.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import queue
+import shlex
+import shutil
+import tarfile
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Any, NamedTuple
+
+from pydantic import ValidationError
+
+from lantern import hostgit, repofiles
+from lantern.agentmodels import model_for_phase, refreshed_models, run_model_repo
+from lantern.agents.assignment import AgentAssignment, AgentBinding
+from lantern.config import (
+    DEFAULT_PR_TITLE_TEMPLATE,
+    GITHUB_SINKS,
+    Config,
+    RepoConfig,
+    VerifyMode,
+    _flatten,
+    load_config,
+    load_secrets_env,
+)
+from lantern.deliver import (
+    conventional_title,
+    conventional_titles,
+    deliver_workspace,
+    ensure_repository,
+    render_naming,
+)
+from lantern.engine import sinks
+from lantern.engine.checks import CheckJudgment, check_policy_reader
+from lantern.engine.followups import FollowupFiler, recorded_review_rounds
+from lantern.engine.issue_lookup import IssueLookup
+from lantern.engine.landing import (
+    AwaitingReview,
+    Blocked,
+    CiTimeout,
+    Closed,
+    Gated,
+    HumanObjection,
+    Landed,
+    LandingOutcome,
+    NeedsFix,
+    UpdateState,
+    land,
+    poll_checks,
+    resolve_identity,
+)
+from lantern.engine.model import (
+    MAX_OUTPUT_FILES,
+    PIPELINE_STAGES,
+    PR_BODY_FILE,
+    RESUMABLE_RUN_STATES,
+    TERMINAL_RUN_STATES,
+    FixKind,
+    Published,
+    RunKind,
+    RunRecord,
+    RunResult,
+    RunState,
+    SteerVerdict,
+    TaskGraph,
+    TaskOutput,
+    TaskRecord,
+    TaskSpec,
+    TaskState,
+    artifacts_dir,
+    run_summary,
+    scan_artifacts,
+)
+from lantern.engine.phases import (
+    VERIFY_FAILURE_PREFIX,
+    PhaseRunner,
+    ToolDigest,
+    VerifyFailure,
+    clip,
+    clip_head_tail,
+    verify_suspect_feedback,
+)
+from lantern.engine.planning import (
+    PLAN_SINK,
+    PROPOSE_TASK_ID,
+    PlanBrief,
+    PlanDesk,
+    PlanProposal,
+    PlanReplan,
+    plan_task,
+)
+from lantern.engine.reconcile import (
+    ReconcileOutcome,
+    acknowledge_human_threads,
+    note_nonblocking,
+    post_confirmations,
+    reconcile_human,
+    reconcile_round,
+)
+from lantern.engine.review import (
+    PR_TITLE_FILE,
+    CarriedVerdict,
+    Reconciliation,
+    ReviewFinding,
+    ReviewRound,
+    ReviewVerdict,
+    closed_anchors,
+    fix_brief,
+    fix_task,
+    is_fix_task,
+    prior_findings,
+    reconcile,
+    reconcile_anchor,
+    render_fix_history,
+    render_review_history,
+    review_body,
+    split_carried,
+    unanswered_findings,
+)
+from lantern.engine.service import ServiceOps
+from lantern.engine.store import PhaseAttemptRecord, PostedRecord, StateStore
+from lantern.errors import (
+    BudgetExceededError,
+    ConfigError,
+    DeliveryError,
+    DeliveryPermissionError,
+    EmptyDeliveryError,
+    GithubOpsError,
+    InvalidOutputTwice,
+    LanternError,
+    PlanDeliveryError,
+    ProvisionError,
+    RunCancelledError,
+    SbxError,
+    StateError,
+    WorkerError,
+)
+from lantern.events import EventBus, Hook, HostEventTypes
+from lantern.gc import workspace_pruned
+from lantern.ids import branch_name, new_job_id, new_message_id, new_run_id
+from lantern.log import get_logger
+from lantern.policy import EgressGranter, egress_rejection
+from lantern.provider import ProviderHeldError, ProviderRecovery
+from lantern.sbx import registries
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.pair import SandboxPair
+from lantern.sbx.provision import ContinueBranch, Provisioner
+from lantern.sbx.sandbox import LANTERN_DIR
+from lantern.vcs.github.labels import ensure_label
+from lantern.vcs.github.ops import (
+    FailedCheck,
+    Identity,
+    MalformedResponse,
+    PostedFinding,
+    ReviewComment,
+    SubmittedReview,
+    identities_match,
+    user_identity,
+)
+from lantern.vcs.github.permissions import workflows_write_granted
+from lantern.vcs.protocol import VcsOps
+from lantern.verifylint import services_evidence
+from lantern.worker.client import WorkerClient
+from lantern_worker.protocol import JobRequest
+
+if TYPE_CHECKING:
+    from lantern.agents.memory import MemoryService
+
+log = get_logger(__name__)
+
+GithubOpsFactory = Callable[[WorkerClient, str], VcsOps]
+ServiceOpsFactory = Callable[..., ServiceOps]  # ServiceOps.__init__'s signature
+
+
+class _Reprovision(Exception):
+    """Internal: the run's grants changed what its sandboxes must be (a
+    workload's plan was granted a credential, #758) — leave this pair and
+    drive again from ``stage`` on a fresh one, the way a resume does."""
+
+    def __init__(self, stage: str) -> None:
+        super().__init__(stage)
+        self.stage = stage
+
+
+class ChatMessage(NamedTuple):
+    """One queued interactive chat message, waiting for a phase boundary.
+
+    ``task_id`` names the task lane the message is *for*: it waits in that
+    lane's own mailbox and is answered when that task reaches a boundary,
+    so a message meant for one task is not answered by whichever lane
+    happened to get there first. ``agent_slug`` names the agent that was
+    mentioned, so the answer comes back in that agent's persona. Both are
+    None for an ordinary message, which behaves exactly as it always has.
+    """
+
+    message_id: str
+    text: str
+    task_id: str | None = None
+    agent_slug: str | None = None
+
+
+@dataclass
+class PriorArtifacts:
+    """What a previous attempt at this work item pushed to origin (#600):
+    the branch it delivered on and the pull request it opened. Offered to
+    :meth:`LoopEngine.start`; adopted only if GitHub still has them."""
+
+    branch: str | None = None
+    pr_number: int | None = None
+
+
+@dataclass
+class Pipeline:
+    """Everything one run's stages share while its sandbox pair is alive."""
+
+    run_id: str
+    outcome: str
+    pair: SandboxPair
+    phases: PhaseRunner
+    granter: EgressGranter
+    deadline: float
+    # None when the run has no repository: the pipeline then ends after
+    # the gate, `completed`.
+    ops: VcsOps | None
+    repo: str | None
+    # Which stage list drives the run (#755): the developer pipeline for
+    # `code`, plan → execute → judge → publish for `workload`.
+    kind: RunKind = "code"
+    # The service sandbox's ops (#765); None for a run granted no
+    # credential, which then has no service sandbox at all.
+    service: ServiceOps | None = None
+    # The provisioner the pair came from — a workload's plan may ask for a
+    # repository checkout after the pair is up (#758).
+    provisioner: Provisioner | None = None
+    # Why the workload's plan was refused (#758), when it was: the run's
+    # reason, in place of a task's failure.
+    needs_refused: str | None = None
+    # The run's repository entry (per-repo deliver_base, token_env, …) with
+    # the daemon-wide [github] defaults already folded in; None when the run
+    # has no repository.
+    repo_config: RepoConfig | None = None
+    # The loop's own GitHub identity, read once and only when landing asks
+    # (to tell a human's review objection from its own posted review).
+    login: str | None = None
+    # Whether that identity is a GitHub App, when the source that answered
+    # said (#622): True from the App slug, the PAT's `GET /user` type,
+    # or the PR author's; None from `[github] bot_login` or an unknown.
+    is_bot: bool | None = None
+    # App mode: ``<slug>[bot]``, resolved on the host from the credential
+    # itself (one cached GET /app per process); None under a PAT, where
+    # GET /user answers instead. See ``_login``.
+    bot_login: str | None = None
+    # Whether the PR's author is that identity (#513): then GitHub refuses
+    # REQUEST_CHANGES/APPROVE and the review is posted as PR comments
+    # instead. Decided once per drive, on the first review round.
+    self_review: bool | None = None
+    # When the latest delivery happened, for the "no check runs yet" settle
+    # window; None on a resume (the wait then settles from its own start).
+    delivered_at: float | None = None
+    fix_kinds: dict[str, FixKind] = field(default_factory=dict)
+    # Human objections a `NeedsFix("human")` round is answering, held until
+    # the fix re-delivers so the reply can name the sha that carries it.
+    pending_human: tuple[HumanObjection, ...] = ()
+    # The head commit of a previous attempt's branch this run adopted
+    # (#600). The first delivery parents on it, so that attempt's commits
+    # stay in the branch's history instead of being force-moved away.
+    prior_head: str | None = None
+    # The adopted branch itself, pinned before the first delivery so no new
+    # branch name is generated; None for an ordinary run.
+    branch: str | None = None
+    # The previous attempt's still-open pull request, reattached to rather
+    # than opening a second one for the same head.
+    prior_pr: int | None = None
+    # Whether the repository has Issues enabled, from the up-front probe
+    # (#631): False downgrades follow-up filing to the PR comment; None when
+    # the probe could not say (the 410 on the first filing then decides).
+    issues_enabled: bool | None = None
+
+
+#: The prompt whose session does a task's work, per run kind: a task's
+#: events and its assignee belong to the agent taking it. A tool run has no
+#: agent doing anything.
+_WORKING_PHASE: dict[str, str] = {"code": "build", "workload": "operator_execute"}
+#: The prompt behind each phase-attempt name that an agent session fills;
+#: every other attempt (verify, gate, setup, a tool run's commands) is
+#: mechanical and belongs to nobody.
+_PROMPT_BY_RECORDED_PHASE: dict[str, str] = {
+    "decompose": "decompose",
+    "plan": "operator_plan",
+    "build": "build",
+    "execute": "operator_execute",
+    "judge": "operator_judge",
+    "review": "review",
+    "steer": "steer",
+    # A plan run's turns: its clarifying questions and its proposal.
+    "clarify": "plan",
+    "propose": "plan",
+}
+
+
+class LoopEngine:
+    def __init__(
+        self,
+        config: Config | None = None,
+        *,
+        store: StateStore | None = None,
+        bus: EventBus | None = None,
+        hooks: Sequence[Hook] = (),
+        sbx: SbxCLI | None = None,
+        worker_python: str | None = None,
+        install_workers: bool | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        github_ops: GithubOpsFactory | None = None,
+        service_ops: ServiceOpsFactory | None = None,
+        trigger_label: str | None = None,
+        memory: MemoryService | None = None,
+        plan_desk: PlanDesk | None = None,
+    ) -> None:
+        # Library parity with the CLI: the home's secrets.env supplies tokens
+        # and settings even when the caller passes a prebuilt Config (real
+        # env vars still win).
+        load_secrets_env()
+        self.config = config or load_config()
+        # The daemon's trigger label for this run's repository, set only when
+        # a daemon dispatched the run (#631): follow-up issues then tell the
+        # reader which label queues them. None under `lantern run`, where no
+        # daemon watches the repository and the instruction would mislead.
+        self.trigger_label = trigger_label
+        self.store = store or StateStore(self.config.paths.state_db)
+        # Every agent's long-term memory, for the memory tools of an agent
+        # whose `tools` name `memory` (the daemon's store). None offers none.
+        self.memory = memory
+        # The plan record a `plan` run reads its brief from and delivers
+        # its proposal to; None for every other kind, and a `plan` run
+        # refuses to start without one.
+        self.plan_desk = plan_desk
+        # The checkouts a plan run cut into its pair's data directory, by
+        # run: its clarifying turn and its proposal read the same tree.
+        self._plan_cut: dict[str, tuple[list[tuple[str, str]], Path | None]] = {}
+        self.bus = bus or EventBus()
+        self.sbx = sbx or SbxCLI(app_name=self.config.app_name or None)
+        self.worker_python = (
+            worker_python if worker_python is not None else (self.config.worker_python)
+        )
+        self.install_workers = (
+            install_workers if install_workers is not None else self.config.install_workers
+        )
+        # Which collaborators were derived from config (vs passed explicitly):
+        # resume() re-derives exactly these after rehydrating the run's
+        # persisted config, and leaves caller-supplied ones alone.
+        self._sbx_from_config = sbx is None
+        self._worker_python_from_config = worker_python is None
+        self._install_workers_from_config = install_workers is None
+        self.clock = clock
+        # The seam a test uses to script GitHub: every github.op the run
+        # makes goes through the ops this factory returns.
+        self._github_ops: GithubOpsFactory = github_ops or self._default_github_ops
+        # Same seam for the service sandbox's ops (#765).
+        self._service_ops: ServiceOpsFactory = service_ops or ServiceOps
+        # In-process cancellation (Ctrl-C in the TUI): checked at the same
+        # phase boundaries as the store's cancelled state, but leaves the
+        # persisted run state alone so the run stays resumable.
+        self._cancel_event = threading.Event()
+        # Set by anything that should cut a wait short — a chat message, a
+        # cancel — so a poll interval never delays an answer.
+        self._wake = threading.Event()
+        # Seconds this run spent waiting on GitHub (CI, landing). Excluded
+        # from the agent wall-clock budget: that bounds work, not waiting.
+        self._waited_s = 0.0
+        # What the last forge poll waited on and how many times in a row:
+        # the wait starts short and doubles while the same thing is waited
+        # on, and starts over when the wait is for something else.
+        self._poll_waiting: str | None = None
+        self._poll_streak = 0
+        # Latest sandbox.resources sample per sandbox role, fed by the bus;
+        # consulted for the disk guardrail and the harvest-truncation note.
+        self._last_resources: dict[str, dict[str, object]] = {}
+        # Interactive chat mailbox: messages posted from any thread (the CLI
+        # chat form) queue here and are absorbed at phase boundaries — the
+        # same boundaries cancellation uses. All bus/store activity for a
+        # message happens on the engine thread when it is drained.
+        self._chat_queue: queue.SimpleQueue[ChatMessage] = queue.SimpleQueue()
+        # One mailbox per targeted task (S-A11). A lane drains only its own,
+        # so a message addressed to a task is answered by that task's lane
+        # however many lanes are in flight; the shared mailbox above keeps
+        # its "whichever lane wins the lock" behaviour for untargeted ones.
+        self._task_chat_queues: dict[str, queue.SimpleQueue[ChatMessage]] = {}
+        self._task_chat_lock = threading.Lock()
+        self._steer_attempts = 0
+        # Held while one task lane drains the chat mailbox. Taken
+        # non-blocking: with several lanes in flight every one of them
+        # reaches a phase boundary, and the queue only needs draining once —
+        # a lane that finds the lock taken carries on rather than piling up
+        # behind an LLM round trip it does not need to wait for.
+        self._chat_lock = threading.Lock()
+        # Serialises the operations that act on the shared agent sandbox
+        # rather than on one task's own state: egress grants (which rewrite
+        # the sandbox's network policy) and artifact harvests (which copy the
+        # whole workspace out). Concurrent lanes would otherwise interleave
+        # inside them.
+        self._sandbox_lock = threading.RLock()
+        # Agent-session ids this process created, so BUILD only ever
+        # resumes one that still exists. `task.session_id` is persisted, but
+        # sandboxes are cattle: a resumed run gets a fresh pair and every
+        # session id from the previous incarnation is dead. Membership here
+        # is the difference between "this session is one turn old" and "this
+        # session belonged to a VM that no longer exists".
+        self._live_sessions: set[str] = set()
+        # A restart's offer of the previous attempt's pushed branch/PR
+        # (#600); empty for an ordinary run and for a resume.
+        self._prior = PriorArtifacts()
+        # The named agents this run was given, persisted with the
+        # run and read back on resume. None: the run was started without an
+        # assignment and every phase is the built-in's.
+        self._assignment: AgentAssignment | None = None
+        for hook in hooks:
+            self.bus.attach_hook(hook)
+        self.bus.subscribe(self._persist_event)
+        self.bus.subscribe(self._track_resources)
+
+    def _persist_event(self, event: object) -> None:
+        from lantern_worker.protocol import Event
+
+        assert isinstance(event, Event)
+        self.store.append_event(event)
+
+    def _track_resources(self, event: object) -> None:
+        from lantern_worker.protocol import Event, EventTypes
+
+        assert isinstance(event, Event)
+        if event.type == EventTypes.SANDBOX_RESOURCES:
+            role = str(event.data.get("role") or "agent")
+            self._last_resources[role] = dict(event.data)
+
+    # -- public API --------------------------------------------------------
+
+    def start(
+        self,
+        outcome: str,
+        *,
+        run_id: str | None = None,
+        tasks: Sequence[TaskSpec] | None = None,
+        repo: str | None = None,
+        prior_branch: str | None = None,
+        prior_pr: int | None = None,
+        workspace_source: str | None = None,
+        credentials: Sequence[str] = (),
+        kind: RunKind = "code",
+        profile: str | None = None,
+        expects_mount: bool | None = None,
+        assignment: AgentAssignment | None = None,
+        warm: bool = False,
+    ) -> RunResult:
+        """Drive a fresh run all the way through.
+
+        ``warm`` says ``run_id`` names a warm sandbox set (#47): its
+        sandboxes are already provisioned and provisioning reuses them.
+
+        ``tasks`` pre-seeds the task graph and so skips DECOMPOSE — for work
+        that is *already* decomposed. A normal run passes nothing.
+
+        ``prior_branch``/``prior_pr`` are what a previous attempt at this
+        work item left on the GitHub origin (#600). A restart offers them
+        here; the run adopts them once GitHub confirms the branch is still
+        there and still related to the base branch, and otherwise starts
+        fresh with a logged reason. Nothing here can fail the run.
+
+        ``repo`` is the ``owner/name`` this run belongs to — the repository
+        its work item came from. It narrows the engine's GitHub config to
+        that one repository for the whole run (and is persisted with the
+        run, so a resume routes there too); ``None`` keeps the configured
+        default, which is the only repository when just one is configured.
+
+        ``workspace_source`` labels where the run's tree came from for the
+        first event — a caller that chose it (the CLI's ``--workspace`` or
+        the git checkout around the command) says so; otherwise the config
+        speaks for itself. The workspace path itself always rides along, so
+        a run that is about to work on nothing announces it up front.
+
+        ``credentials`` names the ``[[credentials]]`` this run is granted
+        (#765): they are provisioned into a third, service sandbox, and the
+        build session gets the ``call_service`` tool for them. Every name
+        must be in the catalogue — checked here, before the run row exists.
+        Empty (every ``code`` run) changes nothing.
+
+        ``kind`` (#755) picks the stage list: ``code`` is the developer
+        pipeline above; ``workload`` runs the operator persona — plan,
+        execute, judge, publish — in its own per-run data directory, on
+        the agent sandbox alone (no github sandbox, no clone). It is
+        persisted with the run, so a resume re-enters the same stages
+        whatever the on-disk config says by then.
+
+        ``expects_mount`` says whether the agent sandbox must see the
+        run's directory. A caller that seeded inputs into it — a workload
+        recipe staging the code the run executes — says ``True``, so a
+        sandbox that came up without them fails provisioning instead of
+        starting on an empty directory. ``None`` leaves the decision to
+        provisioning, which is what every ordinary run passes.
+
+        ``profile`` names the ``[[workloads]]`` profile a workload runs
+        under (#758) — the `[workload] default` when None; a run with no
+        profile at all may declare no needs. It is pinned into the run's
+        persisted config with its budget overrides applied, so a resume
+        runs under the same bounds.
+
+        ``assignment`` names the agents taking the run's phases, decided by
+        the host. It is persisted with the run; a default assignment (the
+        built-in team) changes no prompt and no event.
+        """
+        run_id = run_id or new_run_id()
+        if profile is not None and kind != "workload":
+            raise ConfigError("a workload profile applies to `--kind workload` runs only")
+        if kind == "tool":
+            # A tool run is its recipe: every task is a command the host
+            # chose, and there is no planner to write one. Fail here, before
+            # the run row exists, rather than provision a sandbox for nothing.
+            if not tasks or any(t.command is None for t in tasks):
+                raise ConfigError("a `tool` run is seeded with tasks that each carry a command")
+            if credentials:
+                raise ConfigError("a `tool` run holds no credentials: it has no agent to use them")
+            # The recipe staged the run's inputs; a sandbox that came up
+            # without them has no work, so the mount is required unless the
+            # caller says otherwise.
+            expects_mount = True if expects_mount is None else expects_mount
+        if kind == "plan":
+            # A plan run proposes one level of a plan and delivers it to the
+            # plan record; with no record to read or deliver to there is no
+            # run. Its one task is seeded here, from the brief.
+            if self.plan_desk is None:
+                raise ConfigError("a `plan` run delivers to a plan record, and none was given")
+            if tasks or credentials:
+                raise ConfigError("a `plan` run is seeded from its plan and holds no credentials")
+            tasks = [plan_task(self.plan_desk.brief())]
+            # The checkout is cut into the data directory once the sandbox
+            # is up; a sandbox that cannot see it has nothing to read.
+            expects_mount = True if expects_mount is None else expects_mount
+        self._select_repo(repo)
+        if kind == "workload":
+            self.config = self.config.for_workload_profile(profile)
+        if kind != "code":
+            self.config = self.config.model_copy(update={"run_model_repo": repo or ""})
+        granted = [c.name for c in self.config.credentials_named(credentials)]
+        self.store.create_run(
+            run_id, outcome, self.config.model_dump_json(), credentials=granted, kind=kind
+        )
+        self._assignment = assignment
+        if assignment is not None:
+            self.store.set_run_assignment(run_id, assignment.to_json())
+        if tasks:
+            self.store.save_tasks(run_id, list(tasks))
+            self._record_assignees(run_id, kind, [spec.id for spec in tasks])
+        if kind == "plan":
+            assert self.plan_desk is not None  # nosec B101 - checked above
+            self.plan_desk.started(run_id)
+        if kind != "code":
+            # The data dir is cut at provisioning (`sandbox.workspace_mount`
+            # names it); the start event says only that no checkout is in
+            # play. A code run's event is untouched — its `kind` is implied,
+            # as it is for every run recorded before there were two.
+            self.bus.emit(
+                HostEventTypes.RUN_START,
+                run_id,
+                outcome=outcome,
+                seeded=len(tasks or ()),
+                kind=kind,
+                workspace=None,
+                workspace_source="data-dir",
+            )
+            self._prior = PriorArtifacts(branch=None, pr_number=None)
+            return self._drive(run_id, outcome, expects_mount=expects_mount, warm=warm)
+        workspace = self.config.workspace_for_repo(self.config.primary_repo)
+        self.bus.emit(
+            HostEventTypes.RUN_START,
+            run_id,
+            outcome=outcome,
+            seeded=len(tasks or ()),
+            workspace=str(workspace) if workspace is not None else None,
+            workspace_source=workspace_source
+            or self.config.workspace_source(self.config.primary_repo),
+        )
+        self._prior = PriorArtifacts(branch=prior_branch, pr_number=prior_pr)
+        return self._drive(run_id, outcome, expects_mount=expects_mount, warm=warm)
+
+    def _select_repo(self, repo: str | None) -> None:
+        """Pin this engine's GitHub config to the run's repository.
+
+        Narrowing happens before the run row is written, so the persisted
+        config carries the one repository and a resume — which rehydrates
+        that config — routes every GitHub call to the same place. An unknown
+        selector is a configuration error, not a silent delivery elsewhere.
+        """
+        if repo is not None and self.config.find_repo(repo) is None:
+            known = ", ".join(r.repo for r in self.config.repo_list()) or "none"
+            raise StateError(f"repository {repo!r} is not configured (configured: {known})")
+        self.config = self.config.for_repo(repo, workspace=self.config.workspace_for_repo(repo))
+
+    def resume(self, run_id: str, *, release_provider_hold: bool = True) -> RunResult:
+        """Continue a run from the last stage it committed.
+
+        A run interrupted before it delivered anything re-enters its task
+        graph; one interrupted afterwards re-enters the pipeline stage it
+        was in (``runs.stage``), on a fresh sandbox pair that cloned its PR
+        branch — so a crash during a CI wait costs a re-poll, not a rebuild.
+        """
+        run = self.store.get_run(run_id)
+        if run.state not in RESUMABLE_RUN_STATES:
+            raise StateError(f"run {run_id} is {run.state}; only unfinished runs can resume")
+        if run.exhausted is not None:
+            # Resuming as-is would spend a whole review round only to
+            # re-exhaust at the first request for changes.
+            raise StateError(
+                f"run {run_id} exhausted its {run.exhausted} fix rounds; grant more first "
+                f"(`lantern resume {run_id} --grant-rounds N`, or `lantern daemon ctl "
+                f"grant-rounds {run_id} N` under the daemon)"
+            )
+        self._refuse_if_pruned(run_id)
+        stage = run.stage or run.state
+        if run.state in TERMINAL_RUN_STATES:
+            # A failed run is both terminal (so gc may take it) and resumable.
+            # gc claims a directory only while the run is terminal, in one
+            # write transaction with its marker; leaving the terminal set
+            # BEFORE touching the workspace — and re-checking after — means
+            # whichever of the two committed first wins, and a sweep in
+            # another process can never pull the workspace out from under a
+            # resume that already passed the guard.
+            self.store.set_run_state(run_id, "provisioning")
+            try:
+                self._refuse_if_pruned(run_id)
+            except StateError:
+                self.store.set_run_state(run_id, run.state)
+                raise
+            # The reason belonged to the attempt that stopped; a resumed run
+            # earns its own or ends merged.
+            self.store.set_run_reason(run_id, None)
+        self._rehydrate_config(run_id)
+        self._assignment = self._stored_assignment(run_id)
+        recovery = ProviderRecovery(self.store, self.config.agent.backend)
+        if release_provider_hold and recovery.pending(run_id):
+            recovery.release()
+        recovery.check()
+        pending_chat: dict[str, ChatMessage] = {}
+        for _, event in self.store.events(run_id, type_prefix="chat."):
+            message_id = str(event.data.get("message_id"))
+            if event.type == "chat.provider_pending":
+                # The target rides the event, so a resumed run still answers
+                # a targeted message in the lane and the persona it named.
+                pending_chat[message_id] = ChatMessage(
+                    message_id,
+                    str(event.data["text"]),
+                    task_id=event.data.get("task_id"),
+                    agent_slug=event.data.get("agent_slug"),
+                )
+            elif event.type == HostEventTypes.CHAT_REPLY:
+                pending_chat.pop(message_id, None)
+        for message in pending_chat.values():
+            self._queue_chat(message)
+        self.bus.emit(
+            HostEventTypes.RUN_START,
+            run_id,
+            outcome=run.outcome,
+            resumed=True,
+            # The persisted kind, never the on-disk config's idea (#755).
+            **({"kind": run.kind} if run.kind != "code" else {}),
+        )
+        # The first provisioning decided whether the agent must see this
+        # workspace; a harvest-mode run resumes as one instead of failing
+        # the mount check its empty per-run dir was never going to pass.
+        return self._drive(
+            run_id,
+            run.outcome,
+            workspace=run.workspace,
+            stage=stage,
+            expects_mount=run.mounted if run.workspace is not None else None,
+        )
+
+    def _refuse_if_pruned(self, run_id: str) -> None:
+        if workspace_pruned(self.store, run_id):
+            # The workspace pin would be re-created empty and the agent's
+            # prior work is gone; say so rather than resuming into nothing.
+            raise StateError(
+                f"run {run_id}: its workspace was removed by gc (see `lantern logs {run_id} "
+                "--type daemon.gc`); it cannot be resumed — start a new run"
+            )
+
+    def cancel(self, run_id: str) -> None:
+        run = self.store.get_run(run_id)  # raises for unknown runs
+        if run.state in TERMINAL_RUN_STATES:
+            # Rewriting a finished run to cancelled would corrupt history
+            # (and `status` output); only in-flight runs are cancellable.
+            raise StateError(f"run {run_id} is already {run.state}; nothing to cancel")
+        self.store.set_run_state(run_id, "cancelled")
+        self._wake.set()
+
+    def request_cancel(self) -> None:
+        """Ask a running engine (from another thread) to stop at the next
+        phase boundary. In-process only: unlike ``cancel`` it does not touch
+        the persisted run state, so the interrupted run remains resumable."""
+        self._cancel_event.set()
+        self._wake.set()
+
+    def post_user_message(
+        self, text: str, *, task_id: str | None = None, agent_slug: str | None = None
+    ) -> str:
+        """Queue an interactive chat message for the run this engine is
+        driving. Thread-safe; returns the message id. The agent pauses at
+        the next phase boundary — or, during a CI or landing wait, at once —
+        answers over a read-only STEER session, and applies any course
+        change the reply calls for.
+
+        ``task_id`` addresses one task: the message waits in that task's own
+        mailbox and is answered when *that* lane reaches its boundary, which
+        is what makes steering one task meaningful with several in flight.
+        A task that finishes with messages still waiting hands them to the
+        shared mailbox rather than swallowing them. ``agent_slug`` names the
+        agent that was mentioned, and the answer comes back in its persona.
+        Both omitted, this is the message it always was.
+        """
+        message = ChatMessage(new_message_id(), text, task_id=task_id, agent_slug=agent_slug)
+        self._queue_chat(message)
+        self._wake.set()
+        return message.message_id
+
+    def _queue_chat(self, message: ChatMessage) -> None:
+        """Put ``message`` in the mailbox it is addressed to."""
+        if message.task_id is None:
+            self._chat_queue.put(message)
+            return
+        with self._task_chat_lock:
+            mailbox = self._task_chat_queues.setdefault(message.task_id, queue.SimpleQueue())
+        mailbox.put(message)
+
+    # -- resume config rehydration ------------------------------------------
+
+    def _rehydrate_config(self, run_id: str) -> None:
+        """Adopt the config persisted when the run was created, so a resumed
+        run keeps its original rules (budgets, backend, github toggles,
+        workspace) even if the on-disk config changed — or the resume happens
+        from a different directory — in between.
+
+        Tokens still come from the current environment (they are never
+        persisted), and ``home`` stays the one that located the run: the
+        store is already open there. The debug/cleanup toggles
+        (``keep_sandboxes``, ``keep_on_failure``) also stay resume-time
+        choices — they are operator intent about THIS attempt, not run
+        identity, and flipping keep on to debug a crashing run must work.
+        Sandbox CPU/memory limits also come from the current operator config:
+        a saved run cannot retain an allocation the operator has reduced.
+        Model settings refresh separately at each new phase from the original
+        config location; the run's explicit --model override remains pinned.
+        Drift from the config this engine was built with is reported via a
+        ``run.config_drift`` event, never applied silently.
+        """
+        raw = self.store.get_run_config(run_id)
+        try:
+            legacy = not json.loads(raw)
+        except ValueError:
+            legacy = False
+        if legacy:
+            # Row predates config persistence; current config is all we have.
+            return
+        try:
+            stored = Config.model_validate_json(raw)
+        except ValidationError as exc:
+            message = (
+                "persisted run config no longer validates (config schema "
+                "changed since the run started?); resuming with the current "
+                f"config instead: {exc}"
+            )
+            log.warning("run.config_invalid_on_resume", run=run_id, detail=message)
+            self.bus.emit(HostEventTypes.RUN_CONFIG_DRIFT, run_id, message=message)
+            return
+        stored = stored.model_copy(
+            update={
+                "home": self.config.home,
+                "keep_sandboxes": self.config.keep_sandboxes,
+                "keep_on_failure": self.config.keep_on_failure,
+            }
+        )
+        current = self.config
+        stored._model_env = current._model_env
+        if stored.model_source_dir is None:
+            stored.model_source_dir = current.model_source_dir
+        if stored.workload.default is not None:
+            # The run was pinned to a profile (#758): the live config under
+            # that same profile is the fair comparison; a profile that is
+            # gone by now shows as drift, which it is.
+            with contextlib.suppress(ConfigError):
+                current = current.for_workload_profile(stored.workload.default)
+        drift = self._config_drift(stored, current)
+        if drift:
+            message = (
+                "resuming with the run's original config except current sandbox "
+                "CPU/memory limits; the current config "
+                "differs (model settings refresh before each new phase): " + "; ".join(drift)
+            )
+            log.warning("run.config_drift", run=run_id, drift=drift)
+            self.bus.emit(HostEventTypes.RUN_CONFIG_DRIFT, run_id, message=message)
+        resource_keys = {"cpus", "memory"} | {
+            f"{purpose}_{key}"
+            for purpose in ("concierge", "github", "service")
+            for key in ("cpus", "memory")
+        }
+        stored.sandbox = stored.sandbox.model_copy(
+            update={key: getattr(current.sandbox, key) for key in resource_keys}
+        )
+        # An override removed from the live config must disappear from the
+        # resumed allocation too. The repository's other pinned rules survive.
+        for entry in stored.vcs.repos:
+            live = current.find_repo(entry.repo)
+            entry.cpus = live.cpus if live is not None else None
+            entry.memory = live.memory if live is not None else None
+        self.config = stored
+        if self._worker_python_from_config:
+            self.worker_python = stored.worker_python
+        if self._install_workers_from_config:
+            self.install_workers = stored.install_workers
+        if self._sbx_from_config:
+            self.sbx = SbxCLI(app_name=stored.app_name or None)
+
+    @staticmethod
+    def _config_drift(stored: Config, current: Config) -> list[str]:
+        """Dotted keys where the run's persisted config and the config this
+        engine was built with disagree, with both values."""
+        stored_flat = _flatten(stored.model_dump(mode="json"))
+        current_flat = _flatten(current.model_dump(mode="json"))
+        # `github.enabled_repo_count` is bookkeeping recorded when a run's
+        # config was narrowed to its repository, not an operator setting: it
+        # differs from the live config by construction and says nothing about
+        # drift.
+        # `agents` is the live agent catalogue, not a setting a run is pinned
+        # to.
+        ignore = {
+            "agents",
+            "github.enabled_repo_count",
+            "run_model_override",
+            "run_model_repo",
+            "model_source_dir",
+        }
+        return [
+            f"{key} (run: {stored_flat.get(key)!r}, current: {current_flat.get(key)!r})"
+            for key in sorted(stored_flat.keys() | current_flat.keys())
+            if key not in ignore and stored_flat.get(key) != current_flat.get(key)
+        ]
+
+    # -- named agents ------------------------------------------------------
+
+    def _stored_assignment(self, run_id: str) -> AgentAssignment | None:
+        """The assignment the run was started with, with any task handed
+        to another of its agents since."""
+        raw = self.store.get_run_assignment(run_id)
+        if raw is None:
+            return None
+        return AgentAssignment.from_json(raw).with_tasks(self.store.task_assignees(run_id))
+
+    def _credited(self) -> AgentAssignment | None:
+        """The assignment when it credits anyone; a default one does not."""
+        assignment = self._assignment
+        return None if assignment is None or assignment.is_default() else assignment
+
+    def _record_assignees(self, run_id: str, kind: RunKind, task_ids: Sequence[str]) -> None:
+        """Write down which agent does each task's work."""
+        phase = _WORKING_PHASE.get(kind)
+        if self._assignment is None or phase is None:
+            return
+        assignees: dict[str, str] = {}
+        for task_id in task_ids:
+            binding = self._assignment.binding_for(phase, task_id)
+            if binding is not None:
+                assignees[task_id] = binding.slug
+        self.store.set_task_assignees(run_id, assignees)
+
+    def _record_phase(self, run_id: str, phase: str, **values: Any) -> None:
+        """``store.record_phase``, naming the agent that took an agent phase."""
+        prompt = _PROMPT_BY_RECORDED_PHASE.get(phase)
+        if self._assignment is not None and prompt is not None:
+            binding = self._assignment.binding_for(prompt, values.get("task_id"))
+            if binding is not None:
+                values["agent_slug"] = binding.slug
+        self.store.record_phase(run_id, phase, **values)
+
+    @contextlib.contextmanager
+    def _assignment_stamps(self, run_id: str, kind: RunKind) -> Iterator[None]:
+        """While the run is driven, credit the host events emitted within a
+        task or a phase to the agent taking it. Nothing is stamped without
+        an assignment, or with a default one."""
+        assignment = self._credited()
+        if assignment is None:
+            yield
+            return
+        working = _WORKING_PHASE.get(kind)
+
+        def stamp(event_type: str, data: dict[str, Any]) -> None:
+            if "agent_slug" in data:
+                return
+            binding = None
+            if event_type.startswith("task."):
+                task_id = data.get("task_id")
+                if working is not None:
+                    binding = assignment.binding_for(
+                        working, task_id if isinstance(task_id, str) else None
+                    )
+            elif event_type == HostEventTypes.REVIEW_VERDICT:
+                binding = assignment.binding_for("review")
+            elif event_type == HostEventTypes.CHAT_REPLY:
+                binding = assignment.binding_for("steer")
+            elif event_type in (HostEventTypes.RUN_FOLLOWUPS, HostEventTypes.RUN_DELIVER):
+                binding = assignment.lead_binding()
+            if binding is not None:
+                data["agent_slug"] = binding.slug
+
+        unstamp = self.bus.stamp_run(run_id, stamp)
+        try:
+            yield
+        finally:
+            unstamp()
+
+    # -- run driver --------------------------------------------------------
+
+    def _drive(
+        self,
+        run_id: str,
+        outcome: str,
+        *,
+        workspace: Path | None = None,
+        stage: str | None = None,
+        expects_mount: bool | None = None,
+        warm: bool = False,
+    ) -> RunResult:
+        kind = self.store.get_run(run_id).kind
+        with self._assignment_stamps(run_id, kind):
+            try:
+                result = self._drive_run(
+                    run_id,
+                    outcome,
+                    workspace=workspace,
+                    stage=stage,
+                    expects_mount=expects_mount,
+                    warm=warm,
+                )
+            except LanternError as exc:
+                if kind == "plan":
+                    self._plan_failed(run_id, str(exc))
+                raise
+        # A plan run that ends any way but with its proposal delivered tells
+        # the plan so; a provider hold is a pause, not an end, and neither is
+        # the wait for a person's answers.
+        if kind == "plan" and result.state not in (
+            "completed",
+            "provider_held",
+            "awaiting_answers",
+        ):
+            self._plan_failed(run_id, result.reason or f"the run ended {result.state}")
+        return result
+
+    def _plan_failed(self, run_id: str, reason: str) -> None:
+        """Tell the plan record its generation ended without a proposal —
+        once per run end, and never at the cost of the run's own report."""
+        if self.plan_desk is None:
+            return
+        try:
+            self.plan_desk.failed(run_id, reason)
+        except Exception:
+            log.warning("run.plan_failed_notice", run=run_id, exc_info=True)
+
+    def _drive_run(
+        self,
+        run_id: str,
+        outcome: str,
+        *,
+        workspace: Path | None = None,
+        stage: str | None = None,
+        expects_mount: bool | None = None,
+        warm: bool = False,
+    ) -> RunResult:
+        self._waited_s = 0.0
+        deadline = self.clock() + self.config.budgets.max_wall_clock_s
+        ProviderRecovery(self.store, self.config.agent.backend).check()
+        self._set_run_state(run_id, "provisioning")
+        # A restart pins its clone to the branch the previous attempt pushed
+        # BEFORE the workspace is cut (#600), so the agent starts from that
+        # work, the review diff describes it, and the delivered tree is the
+        # one the agent actually built. Pinning after provisioning would
+        # only change where the result lands.
+        provisioner = Provisioner(self.sbx, self.config, self.bus)
+        # A resumed run's workspace is pinned from the runs table — never
+        # recomputed from config, which would silently relocate it (#60).
+        # The run's repository (its config was narrowed to it in
+        # _select_repo) scopes the github sandbox's token and remote. The
+        # credentials the run was granted (#765) are read back from the
+        # run row so a resume re-provisions the same service sandbox — and
+        # so is its kind (#755), which decides the sandboxes it gets.
+        run_row = self.store.get_run(run_id)
+        provider_recovery = ProviderRecovery(self.store, self.config.agent.backend)
+        recovering_provider = provider_recovery.pending(run_id)
+        credentials, kind = run_row.credentials, run_row.kind
+        # A warm set (#47) is reused the way a provider recovery reuses a
+        # surviving pair: the boxes are in the inventory under this run id.
+        pair = provisioner.ensure_pair(
+            run_id,
+            workspace,
+            self.config.primary_repo,
+            expects_mount=expects_mount,
+            credentials=credentials,
+            kind=kind,
+            continue_branch=self._continue_branch(),
+            **({"reuse_sandboxes": True} if recovering_provider or warm else {}),
+        )
+        assert pair.workspace is not None
+        self._confirm_prior_checkout(run_id, pair)
+        if workspace is not None and pair.workspace != workspace:
+            raise StateError(
+                f"run {run_id} workspace mismatch: the run recorded {workspace} "
+                f"but provisioning produced {pair.workspace}; refusing to "
+                "continue in a relocated workspace"
+            )
+        self.store.set_run_workspace(run_id, pair.workspace, pair.mounted)
+        if pair.keep:
+            # keep_sandboxes: mark up front so `sandbox prune` respects it.
+            self.store.set_run_kept(run_id, "manual")
+        state: RunState
+        reason: str | None
+        again: _Reprovision | None = None
+        try:
+            with pair:
+                try:
+                    agent = WorkerClient(
+                        pair.agent,
+                        self.bus,
+                        transport=self.config.worker_transport,
+                        python=self.worker_python,
+                        role="agent",
+                        backend=self.config.agent.backend,
+                        limits=self.config.limits,
+                        # Per-job stdin delivery when provisioning chose it;
+                        # None keeps the launch exactly as before (#592).
+                        job_env=provisioner.job_env(
+                            "agent", self.config.primary_repo, sandbox=pair.agent
+                        ),
+                    )
+                    agent.provider_recovery = provider_recovery
+                    github = (
+                        WorkerClient(
+                            pair.github,
+                            self.bus,
+                            transport=self.config.worker_transport,
+                            python=self.worker_python,
+                            role="github",
+                            limits=self.config.limits,
+                            # App auth: keep the installation token fresh for
+                            # every github op; None under a PAT — and under
+                            # stdin delivery, where job_env re-mints per job.
+                            credential_refresh=provisioner.gh_refresher(
+                                pair.github, self.config.primary_repo
+                            ),
+                            job_env=provisioner.job_env(
+                                "github", self.config.primary_repo, sandbox=pair.github
+                            ),
+                        )
+                        if pair.github is not None
+                        else None
+                    )
+                    service_client = (
+                        WorkerClient(
+                            pair.service,
+                            self.bus,
+                            transport=self.config.worker_transport,
+                            python=self.worker_python,
+                            role="service",
+                            limits=self.config.limits,
+                            # The credentials — and the registries' (#766)
+                            # — ride the same non-proxy road as GH_TOKEN
+                            # (#765): per job over stdin when this sbx
+                            # passes it, else the in-VM env file.
+                            job_env=provisioner.job_env(
+                                "service",
+                                self.config.primary_repo,
+                                sandbox=pair.service,
+                                credentials=credentials,
+                            ),
+                        )
+                        if pair.service is not None
+                        else None
+                    )
+                    if service_client is not None:
+                        from lantern.worker.mcp import McpBroker
+
+                        agent.mcp_prepare = McpBroker(lambda: service_client).prepare
+                    service = (
+                        self._service_ops(
+                            service_client,
+                            run_id,
+                            self.bus,
+                            self.config.credentials_named(credentials),
+                            self.config.credentialed_registries_for(self.config.primary_repo),
+                            workdir=pair.agent_workdir,
+                            workspace=pair.workspace,
+                            agent=agent,
+                        )
+                        if service_client is not None
+                        else None
+                    )
+                    if self.install_workers:
+                        self._install_workers(run_id, pair, agent, github, service_client)
+                    dependencies_ready = recovering_provider and any(
+                        row.phase == "dependencies" and row.status == "ok"
+                        for row in self.store.phase_attempts(run_id)
+                    )
+                    if service is not None and not dependencies_ready:
+                        self._fetch_dependencies(run_id, service)
+                    setup_complete = recovering_provider and stage not in (
+                        None,
+                        "created",
+                        "provisioning",
+                    )
+                    if kind == "code" and not setup_complete:
+                        # `setup_commands` prepare a cloned checkout; a
+                        # workload has none to prepare (#755).
+                        self._run_setup_commands(run_id, pair, agent)
+                    repo_config = self.config.effective_repo(None)
+                    ops = (
+                        self._github_ops(github, run_id)
+                        if github is not None and repo_config is not None
+                        else None
+                    )
+                    issues_enabled = self._ensure_delivery_repo(run_id, ops)
+                    phases = PhaseRunner(
+                        agent,
+                        self.config,
+                        run_id,
+                        outcome,
+                        workdir=pair.agent_workdir,
+                        workspace=pair.workspace,
+                        languages=pair.languages.languages,
+                        versions=pair.languages.versions,
+                        # The build session's `call_service` (#765) and
+                        # `fetch_dependencies` (#766) tools, answered on the
+                        # host through the service sandbox.
+                        host_tools=service.tool_specs() if service is not None else (),
+                        tool_handler=service.handler(phase="build" if kind == "code" else "execute")
+                        if service is not None and service.tool_specs()
+                        else None,
+                        # The judge's tool digest is read off the bus (#756);
+                        # a code run's phases never ask for one.
+                        bus=self.bus if kind == "workload" else None,
+                        session_models=self.store.session_models(run_id),
+                        store=self.store,
+                        assignment=self._assignment,
+                        memory=self.memory,
+                        narrow_service=(
+                            service.narrowed_tool_spec if service is not None else None
+                        ),
+                    )
+                    # Replay persisted chat guidance (steer_run verdicts)
+                    # so a resumed run keeps the direction the user set.
+                    for guidance in self.store.get_run_guidance(run_id):
+                        phases.add_guidance(guidance)
+                    pipeline = Pipeline(
+                        run_id=run_id,
+                        outcome=outcome,
+                        kind=kind,
+                        pair=pair,
+                        phases=phases,
+                        granter=EgressGranter(
+                            self.sbx,
+                            self.config,
+                            self.bus,
+                            run_id,
+                            pair.agent.name,
+                            repo=self.config.primary_repo,
+                            # A workload's profile bounds its hosts (#758);
+                            # a tool's recipe declares them outright.
+                            extra_allow=self._profile_egress(kind, run_id),
+                        ),
+                        deadline=deadline,
+                        ops=ops,
+                        service=service,
+                        repo=repo_config.repo if ops is not None and repo_config else None,
+                        repo_config=repo_config if ops is not None else None,
+                        bot_login=(
+                            provisioner.gh_bot_login(self.config.primary_repo)
+                            if ops is not None
+                            else None
+                        ),
+                        issues_enabled=issues_enabled,
+                        provisioner=provisioner,
+                    )
+                    try:
+                        self._adopt_prior_artifacts(pipeline)
+                        state, reason = self._run_pipeline(pipeline, stage)
+                    except _Reprovision as exc:
+                        again, state, reason = exc, "provisioning", None
+                    finally:
+                        # Harvest even when a stage raised: the sandbox is
+                        # still alive here, and partial artifacts beat none.
+                        self._harvest(run_id, pair, kind)
+                        self._report_artifacts(run_id, pair, kind)
+                except ProviderHeldError as exc:
+                    # Covers dependency preparation as well as code,
+                    # workload and steering phases. Preserve the live VM.
+                    state, reason = "provider_held", str(exc)
+                    pair.keep = True
+                    self.store.set_run_kept(run_id, "provider")
+                    self._harvest(run_id, pair, kind)
+                    if self._cancel_event.is_set():
+                        self._check_cancelled_and_clock(run_id, deadline)
+                except LanternError:
+                    # Infra failures (install, worker, sbx) are exactly what
+                    # gets diagnosed in-sandbox; decide keep before pair exit.
+                    self._keep_on_failure(run_id, pair)
+                    raise
+                if again is None and state not in (
+                    "merged",
+                    "completed",
+                    "gated",
+                    "awaiting_review",
+                    "held",
+                    "awaiting_answers",
+                ):
+                    self._keep_on_failure(run_id, pair)
+        except LanternError:
+            # State is already persisted; the exception is the kill signal.
+            raise
+        if again is not None:
+            # The grants changed the sandbox set (#758): this pair held
+            # nothing worth keeping (a plan, persisted), so it goes even
+            # under keep_sandboxes, and the run re-enters on a pair
+            # provisioned from the run row — credentials included.
+            pair.cleanup()
+            return self._drive(
+                run_id,
+                outcome,
+                workspace=pair.workspace,
+                stage=again.stage,
+                expects_mount=pair.mounted,
+            )
+        if reason:
+            self.store.set_run_reason(run_id, reason)
+        if recovering_provider and state != "provider_held" and not pair.keep:
+            self.store.set_run_kept(run_id, None)
+        self._set_run_state(run_id, state)
+        run = self.store.get_run(run_id)
+        tasks = self.store.get_tasks(run_id)
+        self.bus.emit(
+            HostEventTypes.RUN_END,
+            run_id,
+            state=state,
+            reason=reason,
+            pr=run.pr_number,
+            url=run.pr_url,
+            exhausted=run.exhausted,
+        )
+        return RunResult(
+            run_id=run_id,
+            state=state,
+            kind=kind,
+            exhausted=run.exhausted,
+            tasks=tasks,
+            workspace=pair.workspace,
+            mounted=pair.mounted,
+            kept_sandboxes=self._pair_names(pair) if pair.keep else [],
+            pr_number=run.pr_number,
+            pr_url=run.pr_url,
+            reason=reason,
+            summary=run_summary(kind, tasks, run.pr_title),
+            published=list(run.published),
+        )
+
+    def _install_workers(
+        self,
+        run_id: str,
+        pair: SandboxPair,
+        agent: WorkerClient,
+        github: WorkerClient | None,
+        service: WorkerClient | None = None,
+    ) -> None:
+        """Install the worker into every sandbox, concurrently when there is
+        more than one — the installs share nothing in-sandbox, and each is
+        seconds of exec round-trips that would otherwise stack serially
+        (#127).
+
+        A configured template is expected to be prebaked (`lantern bake`):
+        install() probes it and skips the ladder on success, falling back
+        when stale. ensure_dev_tools is for the sandboxes that run a
+        toolchain: the agent builds projects in its VM, so it gets the run's
+        resolved toolchains (`[sandbox] languages`, or what the workspace
+        declares); the service sandbox gets the package managers of the
+        run's credentialed registries (#766) — it fetches, the agent builds
+        offline — and the github sandbox, which only runs API ops, gets
+        none. Every install always runs to completion before any failure
+        propagates, so an error never unwinds into pair teardown while
+        another install is still mid-exec.
+        """
+        prebaked_expected = bool(self.config.sandbox.template)
+        roles: list[str] = ["agent"]
+        installs: list[Callable[[], None]] = [
+            partial(
+                agent.install,
+                # The backend name doubles as the worker extra ([copilot] /
+                # [claude]); the claude extra also ensures the Claude Code
+                # CLI runtime (#533).
+                extras=self.config.agent.backend,
+                ensure_dev_tools=True,
+                # The set provisioning resolved for this workspace (#624),
+                # not the config's answer alone: the allowlist was built
+                # from it, and the install must match the allowlist.
+                languages=pair.languages.languages,
+                # And the series each was declared at (#627), so the
+                # install provisions the interpreter the project asked for.
+                versions=pair.languages.versions,
+                expect_prebaked=prebaked_expected,
+                # The operator's OS packages (#681) beside the toolchains;
+                # a template baked with them makes this a dpkg probe.
+                apt_packages=self.config.apt_packages_for(self.config.primary_repo),
+            )
+        ]
+        if github is not None:
+            roles.append("github")
+            installs.append(partial(github.install, extras="", expect_prebaked=prebaked_expected))
+        if service is not None:
+            roles.append("service")
+            installs.append(
+                partial(
+                    service.install,
+                    extras="",
+                    ensure_dev_tools=False,
+                    apt_packages=["git"]
+                    if self.config.credentialed_registries_for(self.config.primary_repo)
+                    else [],
+                    expect_prebaked=prebaked_expected,
+                )
+            )
+        if len(installs) == 1:
+            installs[0]()
+        else:
+            with ThreadPoolExecutor(
+                max_workers=len(installs), thread_name_prefix="lantern-install"
+            ) as pool:
+                futures = [pool.submit(fn) for fn in installs]
+                errors: list[Exception] = []
+                for role, future in zip(roles, futures, strict=True):
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        # Only the first is raised; log each so the second
+                        # sandbox's failure is not lost with it.
+                        log.warning(
+                            "worker.install_failed",
+                            run=run_id,
+                            role=role,
+                            error=str(exc),
+                            exc_info=len(errors) > 0,
+                        )
+                        errors.append(exc)
+                if errors:
+                    raise errors[0]
+        if prebaked_expected:
+            self._emit_prebaked(run_id, pair, agent, github, service)
+        if agent.apt_installed:
+            self.bus.emit(
+                HostEventTypes.SANDBOX_SETUP,
+                run_id,
+                sandbox=pair.agent.name,
+                apt_packages=list(agent.apt_installed),
+                rc=0,
+                message=f"installed apt packages {', '.join(agent.apt_installed)}"
+                + (
+                    " the template lacked (re-run `lantern bake` to stop paying this "
+                    "on every provision)"
+                    if prebaked_expected
+                    else ""
+                ),
+            )
+
+        from lantern.modelcatalog import refresh_after_provision
+
+        refresh_after_provision(self.config)
+
+    def _fetch_dependencies(self, run_id: str, service: ServiceOps) -> None:
+        """Prepare dependencies in the agent, then verify its offline cache.
+
+        The service only downloads data. Resolution and metadata hooks use
+        the agent's existing toolchains, with no registry credentials.
+        """
+        plans = {
+            kind: registries.fetch_plan(kind, "fetch", manifests=service.manifests(kind))
+            for kind in service.kinds
+            if service.manifests(kind)
+        }
+        if not plans:
+            return
+        agent = service.agent
+        if agent is None or service.workdir is None:
+            raise ProvisionError("dependency preparation requires the agent workspace")
+        commands = {kind: list(plan.argv) for kind, plan in plans.items()}
+        selection = model_for_phase(
+            refreshed_models(self.config), "build", repo=run_model_repo(self.config)
+        )
+        job = JobRequest(
+            job_id=new_job_id(),
+            run_id=run_id,
+            kind="agent.session",
+            prompt=(
+                "Prepare this workspace's private dependencies before setup commands run. "
+                "Follow the target repository's conventions. You have no registry secrets. "
+                "Use fetch_dependencies to discover registry indexes, read metadata and "
+                "download artifacts or Git bundles through the host. Resolve transitive "
+                "and build dependencies here, and populate the documented offline caches. "
+                "Package managers, metadata hooks, extraction and builds run only here. "
+                "Keep the dependency declarations and lockfile versions unchanged. "
+                "Do not create listeners, proxies, sockets or cross-sandbox channels. "
+                "After preparation, the host will run these commands in this sandbox's "
+                "offline environment: " + json.dumps(commands) + ". "
+                'Return JSON {"ready": true, "reason": "evidence"} only after verifying '
+                'those commands succeed; otherwise return {"ready": false, "reason": "blocker"}.'
+                + "\nUser guidance:\n"
+                + "\n".join(self.store.get_run_guidance(run_id))
+            ),
+            system_message="You prepare dependency data inside the agent sandbox.",
+            model=selection.model,
+            expect="json",
+            cwd=service.workdir,
+            timeout_s=self.config.budgets.per_job_timeout_s,
+            max_tool_calls=self.config.budgets.max_tool_calls_per_phase or None,
+            host_tools=[service.fetch_tool_spec()],
+            host_tool_timeout_s=service.fetch_timeout_s + 30,
+        )
+        self.bus.emit(
+            HostEventTypes.SANDBOX_FETCH,
+            run_id,
+            job_id=job.job_id,
+            verb="prepare",
+            phase="setup",
+            ecosystems=list(plans),
+        )
+        started = time.time()
+        result = agent.submit(
+            job,
+            tool_handler=service.handler(phase="dependencies"),
+            agent="dependency-resolver",
+            agent_phase="build",
+            model_source=selection.source,
+        )
+        output = result.output_json
+        ready = result.status == "ok" and isinstance(output, dict) and output.get("ready") is True
+        attempt = 1 + sum(
+            1 for row in self.store.phase_attempts(run_id) if row.phase == "dependencies"
+        )
+        self._record_phase(
+            run_id,
+            "dependencies",
+            task_id=None,
+            attempt=attempt,
+            status="ok" if ready else "error",
+            output_json=json.dumps(output),
+            started_at=started,
+            usage=result.usage,
+            turns=result.turns,
+        )
+        if result.status != "ok" or not isinstance(output, dict) or output.get("ready") is not True:
+            reason = (
+                output.get("reason", "no verified preparation result")
+                if isinstance(output, dict)
+                else "no verified preparation result"
+            )
+            raise ProvisionError(f"dependency preparation failed in the agent sandbox: {reason}")
+        for kind, plan in plans.items():
+            check = agent.submit(
+                JobRequest(
+                    job_id=new_job_id(),
+                    run_id=run_id,
+                    kind="shell.check",
+                    argv=list(plan.argv),
+                    cwd=service.workdir,
+                    timeout_s=service.fetch_timeout_s,
+                )
+            )
+            exit_code = check.exit_code if check.exit_code is not None else -1
+            self.bus.emit(
+                HostEventTypes.SANDBOX_FETCH,
+                run_id,
+                ecosystem=kind,
+                verb="verify-offline",
+                phase="setup",
+                exit_code=exit_code,
+            )
+            if check.status != "ok" or exit_code != 0:
+                raise ProvisionError(
+                    f"offline dependency verification for {kind} failed in the agent sandbox"
+                )
+
+    def _run_setup_commands(self, run_id: str, pair: SandboxPair, agent: WorkerClient) -> None:
+        """The operator's `setup_commands` (#681) in the cloned workspace,
+        after the toolchains, registries and environment are in place and
+        before the first phase. A failure raises out of provisioning — the
+        sandbox is kept under keep_on_failure like any install failure, and
+        the run's events name the command and its output."""
+        commands = self.config.setup_commands_for(self.config.primary_repo)
+        if not commands:
+            return
+        agent.run_setup(commands, run_id=run_id, cwd=pair.agent_workdir)
+
+    def _emit_prebaked(
+        self,
+        run_id: str,
+        pair: SandboxPair,
+        agent: WorkerClient,
+        github: WorkerClient | None,
+        service: WorkerClient | None = None,
+    ) -> None:
+        """One event per sandbox saying whether the configured template's
+        baked worker was used, or was stale and the install ladder ran."""
+        clients = [(pair.agent.name, agent)]
+        if github is not None and pair.github is not None:
+            clients.append((pair.github.name, github))
+        if service is not None and pair.service is not None:
+            clients.append((pair.service.name, service))
+        for name, client in clients:
+            if not client.prebaked:
+                message = (
+                    "template not prebaked or stale; ran the install ladder "
+                    "(re-run `lantern bake` to refresh)"
+                )
+            elif client.prebake_topup:
+                message = (
+                    "prebaked worker verified; template lacked "
+                    f"{', '.join(client.prebake_topup)} for this run's languages — "
+                    "provisioned on top (re-run `lantern bake` with them configured)"
+                )
+            else:
+                message = "prebaked worker verified; install skipped"
+            self.bus.emit(
+                HostEventTypes.SANDBOX_PREBAKED,
+                run_id,
+                name=name,
+                template=self.config.sandbox.template,
+                prebaked=client.prebaked,
+                topped_up=list(client.prebake_topup),
+                message=message,
+            )
+
+    @staticmethod
+    def _pair_names(pair: SandboxPair) -> list[str]:
+        return [s.name for s in (pair.agent, pair.github, pair.service) if s is not None]
+
+    def _keep_on_failure(self, run_id: str, pair: SandboxPair) -> None:
+        """Flip the pair to kept when configured, so a failed run's evidence
+        survives for `lantern shell`. Marked in the DB for `sandbox prune`."""
+        if not self.config.keep_on_failure or pair.keep:
+            return
+        pair.keep = True
+        self.store.set_run_kept(run_id, "debug")
+        names = self._pair_names(pair)
+        self.bus.emit(
+            HostEventTypes.RUN_KEEP,
+            run_id,
+            sandboxes=names,
+            reason="debug",
+            message=(
+                f"sandboxes kept for debugging: {', '.join(names)} — "
+                f"inspect with `lantern shell {run_id}`"
+            ),
+        )
+
+    def _harvest(self, run_id: str, pair: SandboxPair, kind: RunKind = "code") -> None:
+        """Copy the in-VM work dir out to the host (unmounted runs only).
+
+        Best-effort by design: a failed copy must never fail the run.  Uses
+        ``tar`` inside the VM with the configured ``artifacts.exclude`` entries
+        so that ``.git``, venvs, and other heavy dirs are never transferred —
+        the excluded content is not delivered anyway.  The tarball is staged in
+        the VM's ``.lantern`` dir, copied out, and extracted on the host.
+
+        A workload's harvest is its data directory's salvage, kept apart
+        (``runs/<run>/data``) from ``runs/<run>/artifacts``, which holds
+        what its ``artifact`` sink delivered (#759) and nothing else.
+        """
+        if pair.mounted:
+            return
+        home = self.config.paths
+        target = home.run_data(run_id) if kind != "code" else home.run_artifacts(run_id)
+        target.mkdir(parents=True, exist_ok=True)
+        exclude = self.config.artifacts.exclude
+        # Build tar exclude flags: --exclude=<name> for each entry.
+        exclude_args = [arg for name in exclude for arg in ("--exclude", name)]
+        started = time.monotonic()
+        try:
+            self._copy_out(pair, target, [*exclude_args, "."])
+        except SbxError:
+            log.warning(
+                "run.harvest_failed",
+                run=run_id,
+                target=str(target),
+                duration_s=round(time.monotonic() - started, 1),
+                exc_info=True,
+            )
+            return
+        log.info(
+            "run.harvested",
+            run=run_id,
+            target=str(target),
+            duration_s=round(time.monotonic() - started, 1),
+        )
+
+    def _copy_out(self, pair: SandboxPair, target: Path, tar_args: Sequence[str]) -> None:
+        """Bring files out of the agent sandbox: ``tar`` in the VM over
+        ``tar_args`` (relative to the work dir), copied out and extracted
+        under ``target`` on the host. Raises ``SbxError`` when the VM's tar
+        or the copy fails; the callers decide what that costs."""
+        vm_tar = f"{LANTERN_DIR}/harvest.tar"
+        result = pair.agent.exec(["tar", "-cf", vm_tar, "-C", pair.agent_workdir, *tar_args])
+        if not result.ok:
+            raise SbxError(
+                f"tar failed (exit {result.returncode})",
+                argv=result.argv,
+                stderr=result.stderr,
+            )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            host_tar = Path(tmpdir) / "harvest.tar"
+            pair.agent.cp_out(vm_tar, host_tar)
+            with tarfile.open(host_tar) as tf:
+                tf.extractall(target, filter="data")
+
+    def _artifact_source(
+        self, run_id: str, pair: SandboxPair, kind: RunKind = "code"
+    ) -> Path | None:
+        target: Path | None
+        if kind != "code":
+            # What the artifact sink delivered (#759), when it did.
+            target = self.config.paths.run_artifacts(run_id)
+        else:
+            target = pair.workspace if pair.mounted else self.config.paths.run_artifacts(run_id)
+        return target if target is not None and target.is_dir() else None
+
+    def _report_artifacts(self, run_id: str, pair: SandboxPair, kind: RunKind = "code") -> None:
+        target = self._artifact_source(run_id, pair, kind)
+        if target is None:
+            return
+        scan = scan_artifacts(target, self.config.artifacts.exclude)
+        extra: dict[str, Any] = {}
+        if scan.excluded:
+            # Surface what the listing/delivery resolvers leave out — silent
+            # truncation is the bug (#67).
+            extra["excluded"] = dict(scan.excluded)
+        sample = self._last_resources.get("agent")
+        if sample and sample.get("level") in ("warn", "abort"):
+            # Disk was under pressure at the last sample — harvested
+            # artifacts may be truncated or missing.
+            extra["disk_used_pct"] = sample.get("disk_used_pct")
+            extra["resources_level"] = sample.get("level")
+            log.warning(
+                "run.artifacts_maybe_incomplete",
+                run=run_id,
+                disk_used_pct=sample.get("disk_used_pct"),
+                resources_level=sample.get("level"),
+                hint="sandbox disk was under pressure at the last sample",
+            )
+        self.bus.emit(
+            HostEventTypes.RUN_ARTIFACTS,
+            run_id,
+            path=str(target),
+            files=len(scan.files),
+            mounted=pair.mounted,
+            **extra,
+        )
+
+    def _default_github_ops(self, client: WorkerClient, run_id: str) -> VcsOps:
+        """The backend for a run — the forge its repository lives on
+        (#1017) — carrying the transport descriptor derived from the
+        configuration (#1015)."""
+        from lantern.vcs.backends import backend_for
+
+        entry = self.config.effective_repo(None)
+        kind = self.config.vcs_kind_for(entry.repo if entry is not None else None)
+        return backend_for(kind, client, run_id, api_url=self.config.vcs_api_url_for(kind))
+
+    def _ensure_delivery_repo(self, run_id: str, ops: VcsOps | None) -> bool | None:
+        """Probe (and, when allowed, create) the delivery repo up front.
+
+        Runs right after worker install so a missing or typo'd repository
+        fails the run before any planning or execution happens, not after
+        the work is done. A creation is surfaced as a run.deliver event so
+        the transcript records where the artifacts will land. Returns
+        whether the repository has Issues enabled (#631), read off the same
+        payload; None when there is no repository or the payload did not say.
+        """
+        entry = self.config.effective_repo(None)
+        if ops is None or entry is None:
+            return None
+        probe = ensure_repository(
+            ops, entry.repo, create=entry.create_repo, public=entry.create_public
+        )
+        if probe.created:
+            self.bus.emit(
+                HostEventTypes.RUN_DELIVER,
+                run_id,
+                repo=entry.repo,
+                created=True,
+                **({"url": probe.url} if probe.url else {}),
+            )
+        if probe.has_issues is False:
+            log.info("run.issues_disabled", run=run_id, repo=entry.repo)
+        return probe.has_issues
+
+    def _continue_branch(self) -> ContinueBranch | None:
+        """A restart's offered branch, for provisioning to cut the run's
+        clone from the previous attempt's work rather than from the base
+        branch (#600) — passed as the provisioner's own parameter (#646),
+        not smuggled through the config.
+
+        The offer is *optional* — unlike a resume, a restart has published
+        nothing of its own, so a branch that is gone from origin is a fresh
+        start with a logged reason, not a failed provision.
+        """
+        branch = self._prior.branch
+        return ContinueBranch(branch, optional=True) if branch else None
+
+    def _confirm_prior_checkout(self, run_id: str, pair: SandboxPair) -> None:
+        """Keep the branch offer only if the workspace really landed on it.
+
+        Provisioning may have fallen back to a fresh cut (the branch was
+        deleted on origin, the checkout could not fetch it) or reused an
+        existing clone. Adopting the branch for *delivery* in that case is
+        exactly the union-tree bug this pinning exists to remove: the run
+        would push a tree diffed against base onto a branch whose history
+        it never contained. Dropping the offer here makes the workspace,
+        the review diff and the delivered tree describe one history.
+        """
+        branch = self._prior.branch
+        if not branch:
+            return
+        workspace = pair.workspace
+        if workspace is None or hostgit.repo_toplevel(workspace) is None:
+            # Not a git checkout at all (an in-place plain directory): there
+            # was no branch to pin and delivery is a snapshot, so the offer
+            # is still just "land it on that branch, keeping its history".
+            return
+        actual = hostgit.current_branch(workspace)
+        if actual == branch:
+            return
+        log.info(
+            "engine.prior_branch_unusable",
+            run=run_id,
+            branch=branch,
+            reason=(
+                f"the run workspace is on {actual or 'no branch'}, not the offered "
+                "branch; starting fresh from the base branch"
+            ),
+        )
+        self._prior = PriorArtifacts()
+
+    def _adopt_prior_artifacts(self, p: Pipeline) -> None:
+        """Continue on what a previous attempt at this item pushed (#600).
+
+        A restart offers the branch (and PR) of the attempt before it. This
+        confirms with GitHub that the branch is still on origin and still
+        related to the base branch — a shared merge base — and only then
+        pins the run to it: the delivery lands on that branch, parented on
+        its head, so the earlier commits stay in the history, and the open
+        pull request for that head is refreshed rather than a second one
+        opened.
+
+        Anything unusable — no branch, an unrelated/force-diverged branch,
+        a PR that is closed or merged, a GitHub call that fails — is a
+        fresh start with one ``engine.prior_branch_unusable`` line carrying
+        the reason. This never raises: a restart that cannot reuse work is
+        still a perfectly good run.
+        """
+        prior, ops, repo = self._prior, p.ops, p.repo
+        if prior.branch is None:
+            return
+        branch = prior.branch
+        if ops is None or repo is None:
+            self._prior_unusable(p, branch, "the run has no GitHub repository")
+            return
+        base = p.repo_config.deliver_base if p.repo_config else self.config.github.deliver_base
+        try:
+            if base is None:
+                base = ops.default_branch(repo)
+            head_sha = ops.ref_lookup(repo, f"heads/{branch}")
+            if head_sha is None:
+                self._prior_unusable(p, branch, "the branch is no longer on origin")
+                return
+            problem = self._merge_base_problem(ops, repo, base, branch)
+            if problem is not None:
+                self._prior_unusable(p, branch, problem)
+                return
+            pr_number = self._prior_open_pr(ops, repo, branch, prior.pr_number)
+        except (GithubOpsError, LanternError) as exc:
+            self._prior_unusable(p, branch, f"GitHub could not confirm it: {exc}")
+            return
+        p.branch, p.prior_head, p.prior_pr = branch, head_sha, pr_number
+        log.info(
+            "engine.prior_branch_reused",
+            run=p.run_id,
+            repo=repo,
+            branch=branch,
+            head=head_sha[:12],
+            pr=pr_number,
+            base=base,
+        )
+        self.bus.emit(
+            HostEventTypes.RUN_DELIVER,
+            p.run_id,
+            repo=repo,
+            branch=branch,
+            head_sha=head_sha,
+            pr=pr_number,
+            reused=True,
+            message=f"continuing the previous attempt's branch {branch}",
+        )
+
+    def _prior_unusable(self, p: Pipeline, branch: str, reason: str) -> None:
+        """Say once, structured, why a restart is starting fresh (#600)."""
+        log.info(
+            "engine.prior_branch_unusable",
+            run=p.run_id,
+            repo=p.repo,
+            branch=branch,
+            reason=reason,
+        )
+
+    @staticmethod
+    def _merge_base_problem(ops: VcsOps, repo: str, base: str, branch: str) -> str | None:
+        """Why ``branch`` cannot be continued on ``base`` — None when the
+        two share history, the test for "this branch is still about this
+        repository's current line of work".
+
+        GitHub's compare answers 404 both for unrelated histories and for
+        a base the token cannot see (#647), and the two mean different
+        things to an operator: one is a branch to abandon, the other a
+        permissions problem that would report as "unrelated history".
+        A miss is told apart by asking for the base ref itself.
+        """
+        try:
+            data = ops.compare_lookup(repo, base, branch)
+        except MalformedResponse:
+            return f"GitHub's comparison with {base} had no usable shape"
+        if data is None:
+            if ops.ref_lookup(repo, f"heads/{base}") is None:
+                return (
+                    f"GitHub could not compare it with {base}: the base branch is not on "
+                    "origin, or the token cannot see it"
+                )
+            return f"the branch has no merge base with {base} (unrelated history)"
+        merge_base = data.get("merge_base_commit")
+        if isinstance(merge_base, dict) and merge_base.get("sha"):
+            return None
+        return f"GitHub's comparison with {base} named no merge base"
+
+    @staticmethod
+    def _prior_open_pr(ops: VcsOps, repo: str, branch: str, recorded: int | None) -> int | None:
+        """The open pull request for ``branch``, or None when there is none
+        to reattach to (it was closed or merged, so the restart opens a
+        fresh one on the same branch)."""
+        for pull in ops.pr_list_open(repo, head=branch):
+            if isinstance(pull, dict) and pull.get("number"):
+                return int(pull["number"])
+        if recorded is None:
+            return None
+        data = ops.pr_get(repo, recorded)
+        if data.get("state") == "open" and not data.get("merged"):
+            return recorded
+        return None
+
+    # -- the pipeline ------------------------------------------------------
+
+    def _run_pipeline(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        """Drive the run from ``stage`` (None: the beginning) to a terminal
+        state; returns it with the reason the run stopped short of merged."""
+        if p.kind == "tool":
+            # No agent anywhere in a tool run — including for chat: a
+            # message to its thread has nothing to steer and no one to
+            # answer it. The queue controls (cancel, resume) are the ways in.
+            return self._tool_stages(p, stage)
+        if p.kind == "plan":
+            state, reason = self._plan_stages(p, stage)
+        elif p.kind == "workload":
+            state, reason = self._workload_stages(p, stage)
+        else:
+            state, reason = self._stages(p, stage)
+        # A message that arrived during the last wait or stage still gets
+        # answered — as steer_run; there is nothing left to steer.
+        self._process_chat(p.run_id, p.phases, None, stage=f"finished ({state})")
+        return state, reason
+
+    def _tool_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        """A ``tool`` run's life: execute → publish, with no agent in either.
+
+        The recipe seeded the tasks; each one's command runs as a shell job
+        in the data directory and its checks run right behind it in the
+        same job, so "did it work" is decided by the recipe's own exit
+        criterion and nothing else. A failed command or check ends the run
+        named — there is no revision to spend, because there is no one to
+        revise. Publish hands the declared files to the sinks exactly as a
+        workload's does. A resume at ``executing`` runs the command again
+        (a recipe's command is idempotent by contract); one at
+        ``publishing`` re-enters there.
+        """
+        if stage != "publishing":
+            reason = self._stage_execute_tool(p)
+            if reason is not None:
+                return "failed", reason
+        self._check_cancelled_and_clock(p.run_id, p.deadline)
+        reason = self._stage_publish(p)
+        if reason is not None:
+            return "failed", reason
+        return "completed", None
+
+    def _stage_execute_tool(self, p: Pipeline) -> str | None:
+        """Run every seeded command, in order, each with its checks.
+
+        Per task: the declared hosts are granted (the same granter, the
+        same refusals as an agent's declared egress — `[policy] deny`
+        wins), a declared repository is cut into the data directory, and
+        one shell job carries the command followed by its checks. The
+        phase row records the whole transcript. Success means every
+        declared result file is there too; a check that passed while a
+        file the sink needs is missing is a failure, not a partial result.
+        Returns the reason the run failed, or None when every task is done.
+        """
+        run_id, pair = p.run_id, p.pair
+        self._set_run_state(run_id, "executing")
+        tasks = self.store.get_tasks(run_id)
+        self._announce_roster(run_id, tasks)
+        for task in tasks:
+            if task.state == "done":
+                continue
+            self._check_cancelled_and_clock(run_id, p.deadline)
+            spec = task.spec
+            assert spec.command is not None
+            self._set_task_state(run_id, task, "executing")
+            self.bus.emit(HostEventTypes.TASK_START, run_id, task_id=spec.id, title=spec.title)
+            reason = self._tool_inputs(p, task) or self._tool_egress(p, task)
+            if reason is None:
+                reason = self._tool_command(p, task)
+            if reason is not None:
+                task.last_feedback = reason
+                self._set_task_state(run_id, task, "failed")
+                self._emit_task_end(run_id, task)
+                return reason
+            self._set_task_state(run_id, task, "done")
+            self._emit_task_end(run_id, task)
+        if self.config.artifacts.harvest_mode == "per-task":
+            with self._sandbox_lock:
+                self._harvest(run_id, pair, p.kind)
+        return None
+
+    def _tool_inputs(self, p: Pipeline, task: TaskRecord) -> str | None:
+        """A tool task's declared repository, cut into the data directory.
+
+        The recipe names the repository; it must be one the operator
+        configured — a tool run has no profile to consult, so the
+        configuration is the whole authority — and the data directory must
+        be mounted, or the checkout would land where the command never
+        looks. Either failure is the run's reason, before anything runs.
+        """
+        repo = task.spec.needs.repo
+        if repo is None:
+            return None
+        if self.config.effective_repo(repo) is None:
+            return f"task {task.spec.id} needs repository `{repo}`, which is not configured"
+        if not p.pair.mounted:
+            return (
+                f"task {task.spec.id} needs repository `{repo}`, but the data directory is "
+                "not mounted in the agent sandbox, so a checkout there would never be seen "
+                "(see the sandbox row of `lantern doctor`)"
+            )
+        assert p.provisioner is not None and p.pair.workspace is not None
+        p.provisioner.clone_repo_into_data_dir(p.run_id, p.pair.workspace, repo)
+        return None
+
+    def _tool_egress(self, p: Pipeline, task: TaskRecord) -> str | None:
+        """Grant the task's declared hosts, or fail closed on the first the
+        operator's policy refuses.
+
+        An agent's refused egress is a line in its chronology and the agent
+        carries on without the host; a recipe's command cannot carry on
+        without one — it was declared because the command needs it — so a
+        refusal is the run's reason, named before anything runs. `[policy]
+        deny` is the only refusal possible: the declared hosts are the
+        run's own allow bound.
+        """
+        granter = p.granter
+        for host in task.spec.needs.hosts:
+            rejection = egress_rejection(host, granter.allow, granter.deny)
+            if rejection is not None:
+                return f"task {task.spec.id} needs host `{host}` — {rejection}"
+        with self._sandbox_lock:
+            granter.apply(
+                task.spec.id,
+                [(host, "declared by the recipe") for host in task.spec.needs.hosts],
+            )
+        return None
+
+    def _tool_command(self, p: Pipeline, task: TaskRecord) -> str | None:
+        """One shell job: the command, then its checks. The transcript is
+        the phase row; the first non-zero exit is the reason."""
+        run_id, phases, spec = p.run_id, p.phases, task.spec
+        assert spec.command is not None
+        commands = [spec.command, *dict.fromkeys(spec.verify_commands)]
+        started = time.time()
+        results = phases.shell_batch(commands)
+        transcript = [
+            {
+                "command": result.command,
+                "exit_code": result.exit_code,
+                "output": clip_head_tail(result.output),
+            }
+            for result in results
+        ]
+        failed = next((entry for entry in transcript if entry["exit_code"] != 0), None)
+        missing = (
+            [name for name in spec.result_files if not self._tool_result_exists(p, name)]
+            if failed is None
+            else []
+        )
+        status = "ok" if failed is None and not missing else "failed"
+        self._record_phase(
+            run_id,
+            "execute",
+            task_id=spec.id,
+            attempt=1,
+            status=status,
+            output_json=json.dumps({"commands": transcript, "missing": missing}),
+            started_at=started,
+        )
+        if failed is not None:
+            # One line on the wire: the reason is what the finish card
+            # posts, and the full transcript is already on the phase row.
+            # The recipe's command is named by the task, not repeated — it
+            # is the recipe's, and long; a check is short and is quoted.
+            named = (
+                "command" if failed["command"] == spec.command else f"check `{failed['command']}`"
+            )
+            message = (
+                f"task {spec.id}: {named} exited {failed['exit_code']}"
+                f"{_last_line(str(failed['output']))}"
+            )
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=spec.id,
+                phase="execute",
+                status="failed",
+                message=message,
+            )
+            return message
+        if missing:
+            listed = ", ".join(f"`{name}`" for name in missing)
+            message = f"task {spec.id}: the command left no {listed}, which the sink carries"
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=spec.id,
+                phase="execute",
+                status="failed",
+                message=message,
+            )
+            return message
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=spec.id,
+            phase="execute",
+            status="ok",
+            # The command is never echoed to the thread: it is the recipe's,
+            # long, and reads to a person like an install log. The task
+            # names it; the phase row carries it.
+            message=(
+                f"task {spec.id}: the command and {len(commands) - 1} check(s) passed"
+                if len(commands) > 1
+                else f"task {spec.id}: the command passed"
+            ),
+        )
+        task.output = self._tool_output(p, task)
+        self.bus.emit(
+            HostEventTypes.TASK_OUTPUT,
+            run_id,
+            task_id=spec.id,
+            attempt=1,
+            summary=task.output.summary,
+            files=task.output.file_count,
+        )
+        return None
+
+    def _tool_result_exists(self, p: Pipeline, name: str) -> bool:
+        rel = sinks.safe_relative(name)
+        if rel is None or p.pair.workspace is None:
+            return False
+        return (p.pair.workspace / rel).is_file()
+
+    def _tool_output(self, p: Pipeline, task: TaskRecord) -> TaskOutput:
+        """What a tool task produced, composed by code from what it left.
+
+        The result text is the first declared Markdown file — a recipe
+        that wants its report read in the thread writes one — clipped as
+        an agent's report is; the summary is its first line. No file, and
+        the text names the command and its files instead. Never a model's
+        words: the recipe decides what the result says.
+        """
+        spec = task.spec
+        assert p.pair.workspace is not None
+        report = ""
+        for name in spec.result_files:
+            rel = sinks.safe_relative(name)
+            if rel is not None and rel.suffix == ".md":
+                with repofiles.open_file(p.pair.workspace, str(rel)) as handle:
+                    report = handle.read().decode("utf-8", "replace")
+                break
+        if not report.strip():
+            report = f"{spec.title}: completed; result files: " + (
+                ", ".join(f"`{name}`" for name in spec.result_files) or "none declared"
+            )
+        return TaskOutput.from_report(clip(report), files=list(spec.result_files))
+
+    # -- a plan run -------------------------------------------------------
+
+    def _plan_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        """A ``plan`` run's life: the planner reads a read-only checkout,
+        asks what it needs to know, and proposes one level; the proposal is
+        delivered to the plan record — never to the forge; the run has no
+        github sandbox and no write credential to reach it with.
+
+        ``clarifying`` → (``awaiting_answers``) → ``proposing`` (#2345). A
+        run with questions parks ``awaiting_answers`` with nothing kept; the
+        answer is a resume, which re-enters ``clarifying``, finds the
+        questions settled on the plan record and goes on to propose with
+        the answers — no second clarifying turn. ``stage`` is where a resume
+        re-enters, and a proposal already validated and persisted is
+        delivered without a second turn.
+        """
+        try:
+            if stage != "proposing":
+                parked = self._stage_clarify(p)
+                if parked is not None:
+                    return parked
+            reason = self._stage_propose(p)
+        finally:
+            self._plan_cut.pop(p.run_id, None)
+        if reason is not None:
+            return "failed", reason
+        return "completed", None
+
+    def _stage_clarify(self, p: Pipeline) -> tuple[RunState, str] | None:
+        """Ask the planner whether it knows enough to propose, and park the
+        run on its questions when it does not. None to go on and propose;
+        otherwise the state the run ends in and why.
+
+        The plan record is the source of truth: questions this run already
+        asked are not asked again — settled, the run goes on; still open (a
+        resume that was not an answer), it parks again without a turn. A
+        node's earlier answers ride into the turn so they are not re-asked,
+        and ``max_questions = 0`` skips the turn altogether."""
+        run_id = p.run_id
+        desk = self.plan_desk
+        if desk is None:
+            return (
+                "failed",
+                "a `plan` run delivers to a plan record, and this engine was given none",
+            )
+        try:
+            brief = desk.brief()
+        except PlanDeliveryError as exc:
+            return "failed", str(exc)
+        mine = brief.clarification_for(run_id)
+        if mine is not None:
+            if mine.settled or mine.status == "withdrawn":
+                return None
+            return "awaiting_answers", _awaiting_reason(len(mine.questions))
+        if brief.max_questions <= 0:
+            return None
+        self._set_run_state(run_id, "clarifying")
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        reason, checkouts, home = self._plan_checkouts(p, brief)
+        if reason is not None:
+            return "failed", reason
+        self._process_chat(run_id, p.phases, None, stage="reading the repository")
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        started = time.time()
+        try:
+            answer = p.phases.clarify_plan(brief, checkouts=checkouts, home=home)
+        except InvalidOutputTwice as exc:
+            spend = p.phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "clarify",
+                task_id=PROPOSE_TASK_ID,
+                attempt=1,
+                status="failed",
+                output_json=json.dumps({"error": str(exc)}),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            why = _invalid_twice_reason(exc, "questions")
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=PROPOSE_TASK_ID,
+                phase="clarify",
+                status="failed",
+                message=why,
+            )
+            return "failed", why
+        spend = p.phases.drain_spend()
+        self._record_phase(
+            run_id,
+            "clarify",
+            task_id=PROPOSE_TASK_ID,
+            attempt=1,
+            status="ok",
+            output_json=answer.model_dump_json(),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        if answer.ready:
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=PROPOSE_TASK_ID,
+                phase="clarify",
+                status="ok",
+                message="the planner has what it needs to propose",
+            )
+            return None
+        count = len(answer.questions)
+        try:
+            desk.ask(run_id, answer.questions)
+        except PlanDeliveryError as exc:
+            return "failed", f"the plan would not take the planner's questions: {exc}"
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=PROPOSE_TASK_ID,
+            phase="clarify",
+            status="ok",
+            message=f"asked {count} question{'s' if count != 1 else ''} before proposing",
+        )
+        self.bus.emit(
+            HostEventTypes.RUN_AWAITING_ANSWERS,
+            run_id,
+            plan_id=brief.plan_id,
+            node_id=brief.node_id,
+            questions=[q.model_dump(mode="json") for q in answer.questions],
+        )
+        log.info("run.awaiting_answers", run=run_id, questions=count)
+        return "awaiting_answers", _awaiting_reason(count)
+
+    def _stage_propose(self, p: Pipeline) -> str | None:
+        """Read the brief, cut the checkouts, ask the planner once (with the
+        one validation retry every JSON phase has), persist the answer on
+        the run's task, and deliver it. Returns the reason the run failed,
+        or None once the plan record holds the proposal."""
+        run_id, phases = p.run_id, p.phases
+        desk = self.plan_desk
+        if desk is None:
+            return "a `plan` run delivers to a plan record, and this engine was given none"
+        self._set_run_state(run_id, "proposing")
+        tasks = self.store.get_tasks(run_id)
+        task = next((t for t in tasks if t.spec.id == PROPOSE_TASK_ID), None)
+        if task is None:
+            return "this plan run has no proposal task to carry its answer"
+        run = self.store.get_run(run_id)
+        if any(entry.sink == PLAN_SINK for entry in run.published):
+            # A resume after the delivery landed: the record has it.
+            return None
+        try:
+            brief = desk.brief(fresh=True)
+        except PlanDeliveryError as exc:
+            return str(exc)
+        replan = brief.mode == "replan"
+        key = "replan" if replan else "proposal"
+        answer: PlanProposal | PlanReplan | None = None
+        if task.output is not None and task.output.data.get(key) is not None:
+            model: type[PlanProposal] | type[PlanReplan] = PlanReplan if replan else PlanProposal
+            answer = model.model_validate(task.output.data[key])
+        if answer is None:
+            self._check_cancelled_and_clock(run_id, p.deadline)
+            self._set_task_state(run_id, task, "executing")
+            self.bus.emit(
+                HostEventTypes.TASK_START, run_id, task_id=task.spec.id, title=task.spec.title
+            )
+            reason, checkouts, home = self._plan_checkouts(p, brief)
+            if reason is not None:
+                return self._propose_failed(run_id, task, reason)
+            # A message that arrived while the checkout was cut steers the
+            # proposal: a run-level answer becomes guidance the prompt carries.
+            self._process_chat(run_id, phases, None, stage="reading the repository")
+            self._check_cancelled_and_clock(run_id, p.deadline)
+            started = time.time()
+            try:
+                if replan:
+                    answer = phases.replan_plan(brief, checkouts=checkouts, home=home)
+                else:
+                    answer = phases.propose_plan(brief, checkouts=checkouts, home=home)
+                    if brief.generate_root:
+                        answer.source_input = dict(brief.input)
+            except InvalidOutputTwice as exc:
+                spend = phases.drain_spend()
+                self._record_phase(
+                    run_id,
+                    "propose",
+                    task_id=task.spec.id,
+                    attempt=1,
+                    status="failed",
+                    output_json=json.dumps({"error": str(exc)}),
+                    started_at=started,
+                    usage=spend.usage,
+                    turns=spend.turns,
+                )
+                return self._propose_failed(run_id, task, _invalid_twice_reason(exc))
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "propose",
+                task_id=task.spec.id,
+                attempt=1,
+                status="ok",
+                output_json=answer.model_dump_json(),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            task.output = TaskOutput(
+                summary=_plan_summary(brief, answer),
+                data={key: answer.model_dump(mode="json")},
+            )
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="propose",
+                status="ok",
+                message=task.output.summary,
+            )
+            self._set_task_state(run_id, task, "done")
+            self.bus.emit(
+                HostEventTypes.TASK_OUTPUT,
+                run_id,
+                task_id=task.spec.id,
+                attempt=1,
+                summary=task.output.summary,
+                files=0,
+            )
+            self._emit_task_end(run_id, task)
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        try:
+            if isinstance(answer, PlanReplan):
+                delivered = desk.deliver_replan(run_id, answer)
+            else:
+                delivered = desk.deliver(run_id, answer)
+        except PlanDeliveryError as exc:
+            return f"the plan would not take the proposal: {exc}"
+        entry = Published(
+            sink=PLAN_SINK, location=delivered.location, tasks=[PROPOSE_TASK_ID], files=0
+        )
+        self.store.add_run_published(run_id, entry)
+        self.bus.emit(
+            HostEventTypes.RUN_PUBLISHED,
+            run_id,
+            sink=entry.sink,
+            location=entry.location,
+            tasks=entry.tasks,
+            files=0,
+            paths=[],
+            message=task.output.summary if task.output is not None else "proposal delivered",
+        )
+        return None
+
+    def _propose_failed(self, run_id: str, task: TaskRecord, reason: str) -> str:
+        task.last_feedback = reason
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="propose",
+            status="failed",
+            message=reason,
+        )
+        self._set_task_state(run_id, task, "failed")
+        self._emit_task_end(run_id, task)
+        return reason
+
+    def _plan_checkouts(
+        self, p: Pipeline, brief: PlanBrief
+    ) -> tuple[str | None, list[tuple[str, str]], Path | None]:
+        """Cut a checkout of the node's repository into the data directory,
+        on the host, under the host's own credential: the agent sandbox is
+        given the tree, never a token, and nothing is ever delivered from
+        it. The run's config is narrowed to that one repository, as every
+        run's is; the other repositories an initiative's epics target are
+        named to the planner by the brief, not checked out. Returns the
+        reason the run cannot read, the (repository, in-sandbox path)
+        pairs, and the host path of the checkout. The clarifying turn and
+        the proposal of one segment read the same cut."""
+        cut = self._plan_cut.get(p.run_id)
+        if cut is not None:
+            return None, list(cut[0]), cut[1]
+        if not p.pair.mounted:
+            return (
+                "the data directory is not mounted in the agent sandbox, so a checkout "
+                "there would never be seen (see the sandbox row of `lantern doctor`)",
+                [],
+                None,
+            )
+        assert p.provisioner is not None and p.pair.workspace is not None  # nosec B101
+        repo = brief.repository
+        if self.config.find_repo(repo) is None:
+            return f"repository `{repo}` is not configured on this server", [], None
+        try:
+            path = p.provisioner.clone_repo_into_data_dir(p.run_id, p.pair.workspace, repo)
+        except ProvisionError as exc:
+            return str(exc), [], None
+        where = str(PurePosixPath(p.pair.agent_workdir) / path.relative_to(p.pair.workspace))
+        self._plan_cut[p.run_id] = ([(repo, where)], path)
+        return None, [(repo, where)], path
+
+    def _workload_stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        """A ``workload`` run's life (#755): plan → execute → judge → publish.
+
+        Plan and execute are the task graph — the same shape a code run
+        walks, with the operator's prompts in place of the developer's and
+        the judge's verdict in place of the verify phase (#756) — so the
+        revision budget applies unchanged. The judging stage re-runs every
+        task's declared checks over the finished workspace, the way the
+        gate re-runs the project's; publish hands the result to its sinks.
+        A red judgment ends the run named; so does a sink that could not
+        take the result (#759). A profile with ``publish = "hold"`` parks
+        the run ``held`` between the two (#760): the result is judged and
+        persisted, nothing is published, and the release is a resume at
+        the publishing stage — which is why a resume entering *at*
+        ``publishing`` never holds again.
+        """
+        if stage not in ("judging", "publishing"):
+            failed = self._run_phases(p)
+            if failed:
+                return "failed", p.needs_refused or self._failure_reason(p.run_id)
+            stage = "judging"
+        while True:
+            self._check_cancelled_and_clock(p.run_id, p.deadline)
+            if stage == "judging":
+                reason = self._stage_judge(p)
+                if reason is not None:
+                    return "failed", reason
+                stage = "publishing"
+                held = self._hold_before_publish(p)
+                if held is not None:
+                    return "held", held
+            elif stage == "publishing":
+                reason = self._stage_publish(p)
+                if reason is not None:
+                    return "failed", reason
+                return "completed", None
+            else:  # pragma: no cover - defensive
+                raise StateError(f"run {p.run_id} in unexpected workload stage {stage}")
+
+    def _stages(self, p: Pipeline, stage: str | None) -> tuple[RunState, str | None]:
+        if stage not in PIPELINE_STAGES:
+            failed = self._run_phases(p)
+            if failed:
+                return "failed", self._failure_reason(p.run_id)
+            stage = "gating"
+        # Every fix round returns to the gate: it is one cheap shell batch
+        # and the guarantee that a red tree is never delivered, whatever the
+        # round was for.
+        while True:
+            self._check_cancelled_and_clock(p.run_id, p.deadline)
+            if stage == "gating":
+                reason = self._stage_gate(p)
+                if reason is not None:
+                    return "failed", reason
+                if p.ops is None:
+                    return "completed", None
+                stage = "delivering"
+            elif stage == "delivering":
+                try:
+                    self._stage_deliver(p)
+                except EmptyDeliveryError as exc:
+                    # Empty output cannot prove the request was satisfied.
+                    # Hand it over without automatically buying another run.
+                    return "blocked", (
+                        f"{exc}; automatic retries stopped. Check whether the request "
+                        "is already satisfied or intended changes were omitted or excluded."
+                    )
+                except DeliveryPermissionError as exc:
+                    # The credential cannot make this delivery and no
+                    # attempt would change that (#752): hand over with the
+                    # remedy named, the way a base rule the loop cannot
+                    # satisfy does — never a failed attempt to retry.
+                    return "blocked", str(exc)
+                self._stage_reconcile(p)
+                self._stage_reconcile_human(p)
+                stage = "reviewing"
+            elif stage == "reviewing":
+                verdict = self._stage_review(p)
+                if verdict.verdict == "approve":
+                    stage = "awaiting_ci"
+                    continue
+                # Every finding rides into the brief (#522): blocking ones to
+                # be addressed or refuted, the rest to be answered — addressed,
+                # refuted or deferred — rather than silently dropped.
+                reason = self._fix_round(
+                    p, "review", "the review requested changes", findings=verdict.findings
+                )
+                if reason is not None:
+                    return "failed", reason
+                stage = "gating"
+            elif stage == "fixing":
+                # Resume mid fix round: finish the task that was in flight.
+                reason = self._resume_fix(p)
+                if reason is not None:
+                    return "failed", reason
+                stage = "gating"
+            elif stage == "awaiting_ci":
+                result = self._stage_ci(p)
+                if isinstance(result, Blocked):
+                    return "blocked", result.why
+                if isinstance(result, NeedsFix):
+                    if self._automated_round_unaffordable(p, result):
+                        stage = "landing"
+                        continue
+                    reason = self._fix_round(
+                        p,
+                        result.kind,
+                        result.why,
+                        failed_checks=result.failed_checks,
+                        checks=result.checks,
+                    )
+                    if reason is not None:
+                        return "failed", reason
+                    stage = "gating"
+                    continue
+                stage = "landing"
+            elif stage == "landing":
+                outcome = self._stage_land(p)
+                if isinstance(outcome, Landed):
+                    return "merged", None
+                if isinstance(outcome, Gated):
+                    return "gated", (
+                        "parked by [landing] merge_gate — ready to merge, awaiting human approval"
+                    )
+                if isinstance(outcome, AwaitingReview):
+                    if outcome.draft:
+                        return "awaiting_review", (
+                            "ready to merge — a person converted the PR to draft; awaiting "
+                            "it being marked ready for review"
+                        )
+                    return "awaiting_review", (
+                        f"ready to merge — the base requires {outcome.wanted} "
+                        f"({outcome.approvals_have}/{outcome.approvals_required} so far), "
+                        "awaiting a reviewer on GitHub"
+                    )
+                if isinstance(outcome, Blocked):
+                    return "blocked", outcome.why
+                if isinstance(outcome, Closed):
+                    return "failed", outcome.why
+                if self._automated_round_unaffordable(p, outcome):
+                    continue
+                reason = self._fix_round(
+                    p,
+                    outcome.kind,
+                    outcome.why,
+                    failed_checks=outcome.failed_checks,
+                    objections=outcome.objections,
+                    human=outcome.human,
+                    checks=outcome.checks,
+                )
+                if reason is not None:
+                    return "failed", reason
+                stage = "gating"
+            else:  # pragma: no cover - defensive
+                raise StateError(f"run {p.run_id} in unexpected stage {stage!r}")
+
+    def _failure_reason(self, run_id: str) -> str:
+        """Why the task graph stopped, naming a suspect check when there is one.
+
+        A verify command that failed identically every attempt is not the
+        same failure as work that could not be done, and #387 is precisely
+        about that difference reaching a human instead of being spent as
+        another silent retry. The builder cannot re-author the command, so
+        the run outcome is where the diagnosis has to surface.
+        """
+        suspects = [
+            t
+            for t in self.store.get_tasks(run_id)
+            if t.state == "failed" and t.verify_suspect and t.spec.verify_commands
+        ]
+        if suspects:
+            task = suspects[0]
+            commands = ", ".join(f"`{c}`" for c in task.spec.verify_commands)
+            return (
+                f"task {task.spec.id} failed a verify command that never changed "
+                f"its result across attempts — the check looks unpassable and "
+                f"needs re-authoring: {commands}"
+            )
+        judged = self._judged_failure_reason(run_id)
+        if judged is not None:
+            return judged
+        return "a task failed or was skipped"
+
+    def _judged_failure_reason(self, run_id: str) -> str | None:
+        """A workload task the judge failed (#756): the last verdict, or the
+        judge's own failure to reach one, is the reason a human reads."""
+        for task in self.store.get_tasks(run_id):
+            if task.state != "failed":
+                continue
+            output = self.store.latest_phase_output(run_id, task.spec.id, "judge")
+            if output is None:
+                continue
+            verdict = json.loads(output)
+            if verdict.get("degraded"):
+                return (
+                    f"the judge could not reach a verdict on task {task.spec.id} "
+                    f"({verdict.get('error') or 'no usable verdict'}); the run fails closed"
+                )
+            unmet = [str(item) for item in verdict.get("unmet") or []]
+            if unmet:
+                attempts = int(verdict.get("attempt") or task.revisions or 1)
+                return (
+                    f"task {task.spec.id} failed the judgment after {attempts} attempt(s) — "
+                    f"unmet: {unmet[0]}" + (f" (+{len(unmet) - 1} more)" if len(unmet) > 1 else "")
+                )
+        return None
+
+    def _run_phases(self, p: Pipeline) -> bool:
+        """DECOMPOSE (unless seeded or resumed) and the task graph; True when
+        a task failed or was skipped."""
+        run_id, phases = p.run_id, p.phases
+        # The graph is the graph; a workload only calls its stages by the
+        # operator's names (#755).
+        planning: RunState
+        executing: RunState
+        planning, executing = (
+            ("planning", "executing") if p.kind == "workload" else ("decomposing", "building")
+        )
+        tasks = [t for t in self.store.get_tasks(run_id) if not is_fix_task(t.spec.id)]
+        if not tasks:
+            self._set_run_state(run_id, planning)
+            started = time.time()
+            graph: TaskGraph
+            if p.kind == "workload":
+                # The operator's plan (#756): the same graph, under the
+                # judge's criteria rather than a repository's checks.
+                plan = phases.plan_workload()
+                graph, title, phase = plan, plan.title, "plan"
+            else:
+                self._hint_services(run_id, phases.workspace)
+                graph = phases.decompose()
+                title, phase = graph.pr_title, "decompose"
+            if len(graph.tasks) > self.config.budgets.max_tasks:
+                raise BudgetExceededError(
+                    f"decomposition produced {len(graph.tasks)} tasks "
+                    f"(max {self.config.budgets.max_tasks})"
+                )
+            ordered = graph.topo_order()
+            self.store.save_tasks(run_id, ordered)
+            self._record_assignees(run_id, p.kind, [spec.id for spec in ordered])
+            if title:
+                self.store.set_run_title(run_id, title)
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                phase,
+                task_id=None,
+                attempt=1,
+                status="ok",
+                output_json=graph.model_dump_json(),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            tasks = self.store.get_tasks(run_id)
+
+        # Seeded recipes and resumed tasks require the same authorization as
+        # a freshly planned workload. Checkout grants are idempotent, and a
+        # fresh sandbox on resume needs its inputs checked again.
+        if p.kind == "workload" and self._grant_needs(p, tasks) is not None:
+            return True
+
+        self._set_run_state(run_id, executing)
+        self._announce_roster(run_id, tasks)
+        failed_ids, skipped_ids = self._schedule_tasks(p, tasks)
+        # Messages that arrived during the last phase still get answered
+        # (as steer_run — there is no task left to steer).
+        self._process_chat(run_id, phases, None, stage="between the task graph and the gate")
+        return bool(failed_ids or skipped_ids)
+
+    # -- a workload's needs (#758) -----------------------------------------
+
+    def _hold_before_publish(self, p: Pipeline) -> str | None:
+        """Park the run instead of publishing when its profile says
+        ``publish = "hold"``: the stage is stamped ``publishing`` first, so
+        the release — ``resume`` — re-enters exactly there. Returns the
+        reason the run stopped, None to publish now."""
+        profile = self.config.workload_profile()
+        if profile is None or profile.publish != "hold":
+            return None
+        tasks = self.store.get_tasks(p.run_id)
+        declared = sinks.sinks_declared(tasks)
+        self._set_run_state(p.run_id, "publishing")
+        log.info("run.held", run=p.run_id, profile=profile.name, sinks=declared)
+        self.bus.emit(HostEventTypes.RUN_HELD, p.run_id, profile=profile.name, sinks=declared)
+        return (
+            f'held at publishing by [[workloads]] {profile.name!r} publish = "hold" — '
+            "the result is judged and kept; release it to publish"
+        )
+
+    def _profile_egress(self, kind: RunKind, run_id: str) -> list[str]:
+        """The hosts a workload's profile lets its plan ask for, or the ones
+        a tool's recipe declared for its commands; nothing for a code run,
+        whose bounds are `[policy]` alone."""
+        if kind == "tool":
+            return list(
+                dict.fromkeys(
+                    host for task in self.store.get_tasks(run_id) for host in task.spec.needs.hosts
+                )
+            )
+        if kind != "workload":
+            return []
+        profile = self.config.workload_profile()
+        return list(profile.egress) if profile is not None else []
+
+    def _grant_needs(self, p: Pipeline, tasks: Sequence[TaskRecord]) -> str | None:
+        """Hold the plan's declared needs to the run's profile (#758).
+
+        Every need is answered before any task runs: a host must be inside
+        the profile's egress (or already in the operator's bounds) and not
+        denied; a credential must be one the profile names; a sink one it
+        lists (the `chat` sink is the default and needs no granting, #759;
+        the `pr` sink also needs the task's `repo`); a repository allowed
+        by it and configured under `[github]`.
+        The first need outside the profile fails the run closed — every
+        refusal is on the record as ``run.needs_refused`` naming the
+        lantern.toml key that would allow it, and nothing was granted.
+
+        Granted needs: hosts are applied at each task's execute entry (the
+        granter); a repository is cloned into the data directory now; a
+        credential goes on the run row, and since the service sandbox that
+        holds it is stamped at creation the run re-provisions from the
+        executing stage — one extra boot, only when a plan asked for one.
+        Returns the refusal reason, None when everything was granted (or
+        nothing was asked).
+        """
+        run_id = p.run_id
+        profile = self.config.workload_profile()
+        pname = profile.name if profile is not None else None
+        hosts: list[tuple[str, str]] = []
+        credentials: list[tuple[str, str]] = []
+        sink_needs: list[tuple[str, str]] = []
+        repos: list[tuple[str, str]] = []
+        repo_of_task: dict[str, str | None] = {}
+        for task in tasks:
+            needs = task.spec.needs
+            hosts += [(h, task.spec.id) for h in needs.hosts]
+            credentials += [(c, task.spec.id) for c in needs.credentials]
+            if needs.sink and needs.sink != sinks.DEFAULT_SINK:
+                sink_needs.append((needs.sink, task.spec.id))
+            if needs.repo:
+                repos.append((needs.repo, task.spec.id))
+            repo_of_task[task.spec.id] = needs.repo
+        if not (hosts or credentials or sink_needs or repos):
+            return None
+
+        refusals: list[str] = []
+
+        def refuse(need: str, value: str, task_id: str, key: str | None, why: str) -> None:
+            fix = f"; `{key}` in lantern.toml would allow it" if key else ""
+            message = f"task {task_id} needs {need} `{value}` — {why}{fix}"
+            refusals.append(message)
+            self.bus.emit(
+                HostEventTypes.RUN_NEEDS_REFUSED,
+                run_id,
+                profile=pname,
+                need=need,
+                value=value,
+                task_id=task_id,
+                key=key,
+                message=message,
+            )
+
+        no_profile = (
+            "the run has no workload profile" if pname is None else None,
+            "workload.default",
+        )
+        allow, deny = p.granter.allow, p.granter.deny
+        for host, task_id in hosts:
+            if no_profile[0]:
+                refuse("host", host, task_id, no_profile[1], no_profile[0])
+                continue
+            assert profile is not None
+            rejection = egress_rejection(host, allow, deny)
+            if rejection is not None and "deny" in rejection:
+                refuse("host", host, task_id, None, rejection)
+            elif rejection is not None and not profile.covers_host(host):
+                refuse(
+                    "host", host, task_id, f"workloads.{pname}.egress", f"outside profile {pname!r}"
+                )
+        for name, task_id in credentials:
+            if no_profile[0]:
+                refuse("credential", name, task_id, no_profile[1], no_profile[0])
+            elif name not in (profile.credentials if profile is not None else ()):
+                key = f"workloads.{pname}.credentials"
+                why = f"not granted by profile {pname!r}"
+                if self.config.credential(name) is None:
+                    key, why = "credentials", "not in the [[credentials]] catalogue"
+                refuse("credential", name, task_id, key, why)
+        for sink, task_id in sink_needs:
+            if no_profile[0]:
+                refuse("sink", sink, task_id, no_profile[1], no_profile[0])
+            elif sink not in (profile.sinks if profile is not None else ()):
+                refuse(
+                    "sink", sink, task_id, f"workloads.{pname}.sinks", f"not in profile {pname!r}"
+                )
+            elif sink in GITHUB_SINKS and p.ops is None:
+                refuse(
+                    "sink",
+                    sink,
+                    task_id,
+                    "github.repo",
+                    "no repository is configured to publish to",
+                )
+            elif sink == "issue" and p.issues_enabled is False:
+                refuse(
+                    "sink",
+                    sink,
+                    task_id,
+                    None,
+                    f"{self.config.primary_repo} has Issues disabled",
+                )
+            elif sink == "pr" and repo_of_task[task_id] is None:
+                refuse(
+                    "sink",
+                    sink,
+                    task_id,
+                    None,
+                    "the pr sink delivers the task's own checkout: declare `repo` on the task",
+                )
+        for repo, task_id in repos:
+            if no_profile[0]:
+                refuse("repo", repo, task_id, no_profile[1], no_profile[0])
+            elif profile is not None and not profile.repo:
+                refuse(
+                    "repo",
+                    repo,
+                    task_id,
+                    f"workloads.{pname}.repo",
+                    f"profile {pname!r} allows none",
+                )
+            elif self.config.effective_repo(repo) is None:
+                refuse("repo", repo, task_id, "github.repos", "not a configured repository")
+            elif not p.pair.mounted:
+                refuse(
+                    "repo",
+                    repo,
+                    task_id,
+                    None,
+                    "the data directory is not mounted in the agent sandbox, so a checkout "
+                    "there would never be seen (see the sandbox row of `lantern doctor`)",
+                )
+        if refusals:
+            more = f" (+{len(refusals) - 1} more)" if len(refusals) > 1 else ""
+            p.needs_refused = f"the plan's needs were refused: {refusals[0]}{more}"
+            log.info("run.needs_refused", run=run_id, profile=pname, refusals=refusals)
+            return p.needs_refused
+
+        granted_hosts = list(dict.fromkeys(h for h, _ in hosts))
+        granted_creds = list(dict.fromkeys(c for c, _ in credentials))
+        granted_sinks = list(dict.fromkeys(s for s, _ in sink_needs))
+        granted_repos = list(dict.fromkeys(r for r, _ in repos))
+        run_row = self.store.get_run(run_id)
+        new_creds = [c for c in granted_creds if c not in run_row.credentials]
+        parts = [
+            f"{label} {', '.join(f'`{v}`' for v in values)}"
+            for label, values in (
+                ("hosts", granted_hosts),
+                ("credentials", granted_creds),
+                ("sinks", granted_sinks),
+                ("repos", granted_repos),
+            )
+            if values
+        ]
+        message = f"granted under profile {pname!r}: " + "; ".join(parts)
+        if new_creds:
+            message += " — re-provisioning with the service sandbox that holds the credentials"
+        # Announced once per run. The checks above run on every pass — a
+        # re-provision and a resume must re-authorize what the graph asks
+        # for, and a need that stopped being allowed still fails the run
+        # closed — but the grant itself is one decision, and repeating it
+        # in the chronology would read as a second, different grant.
+        if not any(
+            True
+            for _, event in self.store.events(run_id, type_prefix=HostEventTypes.RUN_NEEDS_GRANTED)
+        ):
+            self.bus.emit(
+                HostEventTypes.RUN_NEEDS_GRANTED,
+                run_id,
+                profile=pname,
+                hosts=granted_hosts,
+                credentials=granted_creds,
+                sinks=granted_sinks,
+                repos=granted_repos,
+                message=message,
+            )
+            log.info("run.needs_granted", run=run_id, profile=pname, message=message)
+        assert p.pair.workspace is not None
+        for repo in granted_repos:
+            assert p.provisioner is not None
+            p.provisioner.clone_repo_into_data_dir(run_id, p.pair.workspace, repo)
+        if new_creds:
+            self.store.set_run_credentials(run_id, [*run_row.credentials, *new_creds])
+            raise _Reprovision("executing")
+        return None
+
+    @property
+    def _verify_mode(self) -> VerifyMode:
+        """What this run's verify phase and gate decide (#682)."""
+        return self.config.verify_mode_for(self.config.primary_repo)
+
+    def _hint_services(self, run_id: str, workspace: Path | None) -> None:
+        """Name the evidence of a service-backed suite (#682) before the plan
+        is written, under the one mode where it costs the run something.
+
+        A hint, not a switch: a compose file for local development says
+        nothing certain about the unit suite, and an operator who set
+        `advisory` or `ci-only` already knows. Under `full` the gate is
+        mandatory and a `connection refused` from pytest spends revisions
+        and a replan on a check no revision can pass — this is the moment
+        a human can still change the knob.
+        """
+        if self._verify_mode != "full":
+            return
+        evidence = services_evidence(workspace)
+        if not evidence:
+            return
+        log.info("verify.services_detected", run=run_id, evidence=evidence)
+        self.bus.emit(
+            HostEventTypes.VERIFY_SERVICES_DETECTED,
+            run_id,
+            evidence=evidence,
+            hint=(
+                "the suite may need services the sandbox does not have; `[sandbox] "
+                'verify_mode = "advisory"` reports a failing verify without spending '
+                'the budget on it, `"ci-only"` leaves the judging to the pull request\'s '
+                "checks (a `[[vcs.repos]]` entry sets either per repository)"
+            ),
+        )
+
+    def _verification_note(self, run_id: str) -> str:
+        """What the review and the pull request are told about verification
+        that did not gate (#682): each advisory failure still standing, or
+        that nothing ran under `ci-only`. Empty under `full`, where a green
+        verify is the precondition of getting here.
+
+        Read from the phase rows rather than in-memory state, so a resumed
+        run tells the same story — and only the latest attempt of each
+        check counts: a failure a later attempt cleared is not evidence.
+        """
+        mode = self._verify_mode
+        if mode == "ci-only":
+            return (
+                'The operator set `verify_mode = "ci-only"`: no verify command and no '
+                "project gate ran in the sandbox. The pull request's own checks are the "
+                "verification."
+            )
+        if mode != "advisory":
+            return ""
+        latest: dict[tuple[str, str | None], PhaseAttemptRecord] = {}
+        for row in self.store.phase_attempts(run_id):
+            if row.phase in ("verify", "gate"):
+                latest[(row.phase, row.task_id)] = row
+        lines: list[str] = []
+        for (phase, task_id), row in latest.items():
+            if row.status != "advisory":
+                continue
+            try:
+                data = json.loads(row.output_json or "{}")
+            except ValueError:
+                continue
+            if phase == "gate":
+                first = next(
+                    (ln for ln in str(data.get("output") or "").splitlines() if ln.strip()), ""
+                )
+                lines.append(
+                    f"- project gate `{data.get('command')}` exit {data.get('exit_code')}"
+                    + (f": {first[:200]}" if first else "")
+                )
+            else:
+                feedback = str(data.get("feedback") or "")
+                for chunk in feedback.split(VERIFY_FAILURE_PREFIX):
+                    head = chunk.strip().splitlines()
+                    if head:
+                        lines.append(f"- task {task_id}: {head[0][:200]}")
+        if not lines:
+            return (
+                'The operator set `verify_mode = "advisory"`: every verify command and '
+                "the project gate ran in the sandbox and passed."
+            )
+        return (
+            'The operator set `verify_mode = "advisory"`: these checks failed in the '
+            "sandbox and blocked nothing. Weigh each as evidence — a failure the "
+            "sandbox explains (a service it does not have: `connection refused`, a "
+            "missing database or browser) is not a finding; one the diff explains "
+            "is.\n" + "\n".join(lines)
+        )
+
+    def _announce_roster(self, run_id: str, tasks: Sequence[TaskRecord]) -> None:
+        # Announce the full roster up front (with titles) so UIs can show
+        # every task waiting immediately, instead of revealing rows one at a
+        # time as each prior task finishes. Also runs on resume, where it
+        # restores the table with each task's persisted state, and after a
+        # fix task is appended.
+        for task in tasks:
+            self.bus.emit(
+                HostEventTypes.TASK_STATE,
+                run_id,
+                task_id=task.spec.id,
+                title=task.spec.title,
+                state=task.state,
+                revisions=task.revisions,
+                replans=task.replans,
+            )
+        # The same roster as one event, for a surface that cannot hold a live
+        # table (Discord edits one status line, which has room for the current
+        # task only). Without it the decomposition reaches a human nowhere:
+        # the decomposer's own reply is JSON, and JSON is not posted.
+        self.bus.emit(
+            HostEventTypes.RUN_TASKS,
+            run_id,
+            message=f"{len(tasks)} task(s)",
+            tasks=[
+                {
+                    "id": task.spec.id,
+                    "title": task.spec.title,
+                    "state": task.state,
+                    "depends_on": list(task.spec.depends_on),
+                }
+                for task in tasks
+            ],
+        )
+
+    def _schedule_tasks(
+        self, p: Pipeline, tasks: Sequence[TaskRecord]
+    ) -> tuple[set[str], set[str]]:
+        """Drive every non-terminal task, up to ``max_parallel_tasks`` at once.
+
+        ``tasks`` arrives in dependency order, so at ``max_parallel_tasks=1``
+        this walks it front to back and is exactly the serial loop it
+        replaces: the first non-terminal task always has its dependencies
+        behind it. Above 1, readiness is evaluated explicitly instead of
+        being implied by position — a task may start once every dependency
+        has *finished*, and is skipped if any of them failed or was skipped.
+
+        The first infrastructure error stops new launches but does not
+        abandon the lanes already running: they are allowed to finish so
+        their state is checkpointed (which is what makes the run resumable),
+        and the error is re-raised afterwards.
+        """
+        run_id = p.run_id
+        done_ids = {t.spec.id for t in tasks if t.state == "done"}
+        failed_ids = {t.spec.id for t in tasks if t.state == "failed"}
+        skipped_ids = {t.spec.id for t in tasks if t.state == "skipped"}
+        waiting = [t for t in tasks if not t.terminal]
+        lanes = max(1, self.config.budgets.max_parallel_tasks)
+
+        def finished(task: TaskRecord) -> None:
+            if task.state == "failed":
+                failed_ids.add(task.spec.id)
+            elif task.state == "skipped":
+                skipped_ids.add(task.spec.id)
+            else:
+                done_ids.add(task.spec.id)
+
+        def ready(task: TaskRecord) -> bool:
+            return all(dep in done_ids | failed_ids | skipped_ids for dep in task.spec.depends_on)
+
+        running: dict[Future[None], TaskRecord] = {}
+        failure: BaseException | None = None
+        pool = ThreadPoolExecutor(max_workers=lanes, thread_name_prefix=f"lantern-task-{run_id}")
+        try:
+            while waiting or running:
+                while waiting and len(running) < lanes and failure is None:
+                    task = next((t for t in waiting if ready(t)), None)
+                    if task is None:
+                        break
+                    waiting.remove(task)
+                    blocked = [d for d in task.spec.depends_on if d in failed_ids | skipped_ids]
+                    if blocked:
+                        task.state = "skipped"
+                        skipped_ids.add(task.spec.id)
+                        self.store.update_task(run_id, task)
+                        self._emit_task_end(run_id, task)
+                        continue
+                    running[pool.submit(self._run_task, p, task)] = task
+                if not running:
+                    # Nothing in flight and nothing launchable. Either every
+                    # task is accounted for, or a lane failed and stopped new
+                    # launches — the error is re-raised below. An acyclic
+                    # graph with no failure always leaves something ready, so
+                    # this is the normal exit, not a stall.
+                    break
+                for future in wait(running, return_when=FIRST_COMPLETED).done:
+                    task = running.pop(future)
+                    try:
+                        future.result()
+                    except BaseException as exc:
+                        failure = failure or exc
+                    finished(task)
+        finally:
+            pool.shutdown(wait=True)
+        if failure is not None:
+            raise failure
+        return failed_ids, skipped_ids
+
+    # -- workload stages (#755) ---------------------------------------------
+
+    def _stage_judge(self, p: Pipeline) -> str | None:
+        """Re-run every task's checks over the finished workspace.
+
+        Each task was judged as it finished (#756), its declared checks
+        among the evidence; a later task can undo an earlier one's proof,
+        so the mechanical part of that judgment is taken once more on the
+        tree as it stands. Returns the reason the run failed, or None to
+        publish. A red check here ends the run rather than spending a fix
+        round: the per-task revisions are where the work gets its retries.
+        """
+        run_id, phases = p.run_id, p.phases
+        self._set_run_state(run_id, "judging")
+        commands = list(
+            dict.fromkeys(
+                c
+                for t in self.store.get_tasks(run_id)
+                if not is_fix_task(t.spec.id)
+                for c in t.spec.verify_commands
+            )
+        )
+        # The run's own judge rows carry no task; the per-task verdicts
+        # (#756) are the judge's, under the same phase name.
+        attempt = 1 + sum(
+            1
+            for row in self.store.phase_attempts(run_id)
+            if row.phase == "judge" and row.task_id is None
+        )
+        started = time.time()
+        results = phases.shell_batch(commands) if commands else []
+        failed = [
+            (command, result)
+            for command, result in zip(commands, results, strict=True)
+            if result.exit_code != 0
+        ]
+        status = "ok" if not failed else "failed"
+        self._record_phase(
+            run_id,
+            "judge",
+            task_id=None,
+            attempt=attempt,
+            status=status,
+            output_json=json.dumps(
+                {
+                    "commands": commands,
+                    "failed": [
+                        {
+                            "command": command,
+                            "exit_code": result.exit_code,
+                            "output": clip_head_tail(result.output),
+                        }
+                        for command, result in failed
+                    ],
+                }
+            ),
+            started_at=started,
+        )
+        if not failed:
+            message = (
+                f"{len(commands)} check(s) passed on the finished workspace"
+                if commands
+                else "no task declared a check; nothing to re-run"
+            )
+        else:
+            command, result = failed[0]
+            first_line = next(
+                (line for line in (result.output or "").splitlines() if line.strip()), ""
+            )
+            message = f"`{command}` exit {result.exit_code}: {first_line}"
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=None,
+            phase="judge",
+            status=status,
+            attempt=attempt,
+            message=message,
+        )
+        if not failed:
+            return None
+        named = ", ".join(f"`{command}` (exit {result.exit_code})" for command, result in failed)
+        return f"the judgment failed: {len(failed)} of {len(commands)} check(s) red — {named}"
+
+    def _stage_publish(self, p: Pipeline) -> str | None:
+        """Hand the result to its sinks (#759).
+
+        Each task's output goes to the sink its plan declared — the
+        ``artifact`` directory, a pull request on the checkout the task
+        asked for, a result issue in the delivery repository, the chat
+        reply — in that order, so the chat line can name what the others
+        delivered. Every delivery is recorded on the run row
+        (``published``) before the next begins, so a resume at
+        ``publishing`` skips what already landed: one issue per run,
+        however many times the stage is entered. A sink that cannot take
+        the result fails the run, named — the work is judged and on the
+        row, and a result nobody received is not a completed run.
+        Returns the reason the run failed, or None once every sink has it.
+        """
+        run_id = p.run_id
+        self._set_run_state(run_id, "publishing")
+        run = self.store.get_run(run_id)
+        tasks = self.store.get_tasks(run_id)
+        landed = {entry.sink for entry in run.published}
+        for sink in sinks.PUBLISH_ORDER:
+            carried = sinks.tasks_for(tasks, sink)
+            if not carried or sink in landed:
+                continue
+            # The host paths of the files this sink carries (#799): the
+            # chat backend attaches them to the result where it can, and
+            # names them otherwise. Only the record (``Published``) persists.
+            paths: list[str] = []
+            try:
+                if sink == "artifact":
+                    entry, paths = self._publish_artifact(p, run, carried)
+                elif sink == "pr":
+                    entry = self._publish_pr(p, run, tasks, carried)
+                elif sink == "issue":
+                    entry = self._publish_issue(p, run, tasks, carried)
+                else:
+                    entry, paths = self._publish_chat(p, run, carried)
+            except (
+                SbxError,
+                GithubOpsError,
+                DeliveryError,
+                OSError,
+                sinks.PublishError,
+            ) as exc:
+                log.warning("run.publish_failed", run=run_id, sink=sink, exc_info=True)
+                return f"publishing to {sink} failed: {exc}"
+            self.store.add_run_published(run_id, entry)
+            self.bus.emit(
+                HostEventTypes.RUN_PUBLISHED,
+                run_id,
+                sink=entry.sink,
+                location=entry.location,
+                tasks=entry.tasks,
+                files=entry.files,
+                paths=paths,
+                message=(
+                    sinks.chat_text(tasks, run.pr_title, carried)
+                    if sink == "chat"
+                    else sinks.published_line(entry)
+                ),
+            )
+        return None
+
+    def _stage_files(
+        self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
+    ) -> tuple[Path, list[str]]:
+        """Copy the files the tasks declared — only those — out to
+        ``runs/<run>/artifacts``: a host copy from a mounted workspace, a
+        tar of the listed paths from an unmounted one. Returns the
+        directory and the files' host paths, in declaration order."""
+        target = artifacts_dir(run, self.config.paths)
+        assert target is not None
+        files = sinks.declared_files(carried)
+        target.mkdir(parents=True, exist_ok=True)
+        if files:
+            if p.pair.mounted:
+                assert p.pair.workspace is not None
+                for rel in files:
+                    dest = target / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with (
+                        repofiles.open_file(p.pair.workspace, rel) as source,
+                        dest.open("wb") as out,
+                    ):
+                        shutil.copyfileobj(source, out)
+                        os.fchmod(out.fileno(), os.fstat(source.fileno()).st_mode & 0o777)
+            else:
+                self._copy_out(p.pair, target, files)
+        return target, [str(target / rel) for rel in files]
+
+    def _publish_artifact(
+        self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
+    ) -> tuple[Published, list[str]]:
+        """The artifact sink: the declared files, staged on the host."""
+        target, paths = self._stage_files(p, run, carried)
+        entry = Published(
+            sink="artifact",
+            location=str(target),
+            tasks=[t.spec.id for t in carried],
+            files=len(paths),
+        )
+        return entry, paths
+
+    def _publish_pr(
+        self,
+        p: Pipeline,
+        run: RunRecord,
+        tasks: Sequence[TaskRecord],
+        carried: Sequence[TaskRecord],
+    ) -> Published:
+        """Deliver the checkout the tasks worked in as one pull request:
+        the working tree's diff against the base, committed on the run's
+        branch and opened under the `[workload] result_label` — through
+        `deliver_workspace`, the way a code run's `_stage_deliver` does,
+        and nothing after it: no gate, no review, no CI wait. Delivery
+        is the whole publish (#759); whoever owns the repository merges.
+        The run row keeps no `pr_number`: a workload's pull request is a
+        result on the record (``published``), not a run the daemon
+        settles."""
+        assert p.ops is not None and p.pair.workspace is not None
+        repo = sinks.repo_of(carried)
+        if repo is None:
+            raise sinks.PublishError("the pr sink needs one repository declared on its tasks")
+        checkout = p.pair.workspace / repo.rsplit("/", 1)[1]
+        if not (checkout / ".git").exists():
+            raise sinks.PublishError(f"no checkout of {repo} in the data directory")
+        gh = self.config.github
+        entry = gh.effective_repo(repo)
+        title = sinks.result_title(run.pr_title, p.outcome)
+        pr_title, commit_message = self._naming_for(p, repo, entry, title, checkout)
+        branch = branch_name(run.run_id, gh.branch_prefix_for(repo))
+        pr = deliver_workspace(
+            p.ops,
+            repo,
+            run_id=run.run_id,
+            outcome=p.outcome,
+            source_dir=checkout,
+            base=entry.deliver_base if entry is not None else gh.deliver_base,
+            exclude=self.config.artifacts.exclude,
+            branch=branch,
+            title=pr_title,
+            commit_message=commit_message,
+            authored_body=sinks.pr_body(tasks, run.pr_title, carried),
+            workflows_write_granted=self._workflows_write_granted(p),
+        )
+        label = sinks.result_label(self.config.workload.result_label)
+        try:
+            ensure_label(p.ops, repo, label)
+            p.ops.pr_labels_add(repo, pr.number, [label.name])
+        except GithubOpsError:
+            # The result is delivered; a label it could not carry is not a
+            # reason to fail the run (the same rule as `_label_pr`).
+            log.warning(
+                "deliver.pr_labels_failed",
+                run=run.run_id,
+                pr=pr.number,
+                labels=[label.name],
+                exc_info=True,
+            )
+        return Published(
+            sink="pr",
+            location=pr.url,
+            tasks=[t.spec.id for t in carried],
+            files=sum(t.output.file_count for t in carried if t.output is not None),
+        )
+
+    def _publish_issue(
+        self,
+        p: Pipeline,
+        run: RunRecord,
+        tasks: Sequence[TaskRecord],
+        carried: Sequence[TaskRecord],
+    ) -> Published:
+        """File the result as one issue in the delivery repository, under
+        the `[workload] result_label` (ensured best-effort, like the
+        follow-up label: an issue GitHub cannot label is still filed) — or,
+        when the run was asked for on an issue (`[workload] result_issue`,
+        set by the daemon, #760), answer on that issue instead."""
+        assert p.ops is not None and p.repo is not None
+        body = sinks.issue_body(tasks, run.pr_title, carried, run_id=run.run_id, outcome=p.outcome)
+        asked_on = self.config.workload.result_issue
+        if asked_on is not None:
+            url = p.ops.issue_comment(p.repo, asked_on, body)
+        else:
+            label = sinks.result_label(self.config.workload.result_label)
+            ensure_label(p.ops, p.repo, label)
+            url = p.ops.issue_create(
+                p.repo, sinks.result_title(run.pr_title, p.outcome), body, labels=[label.name]
+            ).url
+        return Published(
+            sink="issue",
+            location=url,
+            tasks=[t.spec.id for t in carried],
+            files=sum(t.output.file_count for t in carried if t.output is not None),
+        )
+
+    def _publish_chat(
+        self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
+    ) -> tuple[Published, list[str]]:
+        """The chat sink is the ``run.published`` event itself: its
+        ``message`` is the reply, posted where the run was asked for by
+        whoever drives the engine (the daemon's thread, the CLI's
+        terminal). The files the tasks declared are staged on the host the
+        way the artifact sink stages them (#799) — a result that names a
+        file nobody can open is not a delivered result — and their paths
+        ride the event for the backend to attach or name."""
+        _, paths = self._stage_files(p, run, carried)
+        entry = Published(
+            sink="chat",
+            location="chat",
+            tasks=[t.spec.id for t in carried],
+            files=len(paths),
+        )
+        return entry, paths
+
+    # -- post-build stages -------------------------------------------------
+
+    def _stage_gate(self, p: Pipeline) -> str | None:
+        """Run the project's own gate over the whole tree before delivering.
+
+        The decomposer must put the gate in *some* task's verify commands,
+        but a later task can break what an earlier one proved; this is the
+        run's last mechanical check, on the tree exactly as it will be
+        delivered. A red gate spends a fix round on the CI budget — it is
+        the round red CI would have cost, caught before GitHub's compute.
+        Returns the reason the run failed, or None to continue.
+        """
+        run_id, phases = p.run_id, p.phases
+        self._set_run_state(run_id, "gating")
+        gate = phases.project_gate()
+        mode = self._verify_mode
+        attempt = 1 + sum(1 for row in self.store.phase_attempts(run_id) if row.phase == "gate")
+        started = time.time()
+        if not gate or mode == "ci-only":
+            # Under `ci-only` (#682) the gate is the pull request's checks:
+            # the same command CI runs, on the runner that has the services.
+            reason_skipped = (
+                "the project declares no gate"
+                if not gate
+                else 'verify_mode = "ci-only": the pull request\'s checks are the gate'
+            )
+            self._record_phase(
+                run_id,
+                "gate",
+                task_id=None,
+                attempt=attempt,
+                status="skipped",
+                output_json=json.dumps({"reason": reason_skipped, "command": gate}),
+                started_at=started,
+            )
+            if gate:
+                self.bus.emit(
+                    HostEventTypes.PHASE_END,
+                    run_id,
+                    task_id=None,
+                    phase="gate",
+                    status="skipped",
+                    attempt=attempt,
+                    message=f"`{gate}` not run ({reason_skipped})",
+                )
+            return None
+        result = phases.shell_batch([gate])[0]
+        passed = result.exit_code == 0
+        output = clip_head_tail(result.output)
+        # An advisory failure (#682) is recorded as its own status, not as
+        # `failed`: it blocked nothing, and `_verification_note` reads the
+        # rows back to tell the review and the pull request what stood.
+        status = "ok" if passed else ("advisory" if mode == "advisory" else "failed")
+        self._record_phase(
+            run_id,
+            "gate",
+            task_id=None,
+            attempt=attempt,
+            status=status,
+            output_json=json.dumps(
+                {"command": gate, "exit_code": result.exit_code, "output": output}
+            ),
+            started_at=started,
+        )
+        first_line = next((line for line in output.splitlines() if line.strip()), "")
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=None,
+            phase="gate",
+            status=status,
+            attempt=attempt,
+            message=f"`{gate}` passed"
+            if passed
+            else f"`{gate}` exit {result.exit_code}: {first_line}"
+            + (
+                ' (advisory: verify_mode = "advisory", not blocking)'
+                if status == "advisory"
+                else ""
+            ),
+        )
+        if passed or status == "advisory":
+            return None
+        reason = self._fix_round(
+            p,
+            "gate",
+            f"the project gate `{gate}` failed (exit {result.exit_code})",
+            failed_checks=(FailedCheck(gate, "failure", output, ""),),
+        )
+        if reason is not None:
+            return reason
+        # The fix is in; the gate is the judge of that, so it runs again
+        # (bounded: every round spends the CI budget).
+        return self._stage_gate(p)
+
+    def _workflows_write_granted(self, p: Pipeline) -> Callable[[], bool | None]:
+        """Whether the run's credential may deliver a workflow file (#752),
+        answered lazily — the delivery asks only when its plan carries one.
+        An App's grant map (from the mint, cached on the token source) or
+        a classic PAT's scopes say; a fine-grained PAT says nothing
+        (``None``) and GitHub's 403 decides at the tree."""
+
+        def check() -> bool | None:
+            if getattr(p.ops, "KIND", "github") != "github":
+                # `.github/workflows/` is GitHub's own guarded path (#752);
+                # another forge holds nothing to that permission, and the
+                # backend knows which forge it speaks to (#1017).
+                return True
+            permissions = (
+                p.provisioner.gh_app_permissions(p.repo) if p.provisioner is not None else None
+            )
+            scopes = None
+            if permissions is None and p.ops is not None:
+                try:
+                    scopes = p.ops.token_scopes()
+                except GithubOpsError:
+                    scopes = None
+            return workflows_write_granted(app_permissions=permissions, scopes=scopes)
+
+        return check
+
+    def _stage_deliver(self, p: Pipeline) -> None:
+        """Open the pull request, or refresh it: the same branch every round.
+
+        Errors propagate — the run is resumable at ``delivering`` and a
+        resume re-delivers, which is idempotent (a branch that exists is
+        force-moved, an open PR is reused).
+        """
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        assert ops is not None and repo is not None
+        self._set_run_state(run_id, "delivering")
+        run = self.store.get_run(run_id)
+        # Unmounted runs deliver the harvest; refresh it so the fix round's
+        # writes are in it.
+        self._harvest(run_id, p.pair)
+        source = self._artifact_source(run_id, p.pair)
+        if source is None:
+            raise StateError(f"run {run_id} has no artifacts directory to deliver")
+        gh, landing = self.config.github, self.config.landing
+        branch = run.branch or p.branch or branch_name(run_id, gh.branch_prefix_for(repo))
+        title = self._retitled(p, run.pr_title)
+        if title != run.pr_title:
+            self.store.set_run_title(run_id, title)
+        pr_title, commit_message = self._naming(p, title, source)
+        authored_body = self._authored_body(p)
+        # Only the first delivery of an adopted branch continues its
+        # history; once this run has delivered, later rounds force-move
+        # onto their own head as they always did.
+        parent = p.prior_head if run.branch is None else None
+        round_no = 1 + sum(1 for t in self.store.get_tasks(run_id) if is_fix_task(t.spec.id))
+        started = time.monotonic()
+        log.info(
+            "run.deliver_start",
+            run=run_id,
+            repo=repo,
+            branch=branch,
+            round=round_no,
+            draft=landing.deliver_draft,
+        )
+        pr = deliver_workspace(
+            ops,
+            repo,
+            run_id=run_id,
+            outcome=p.outcome,
+            source_dir=source,
+            base=(p.repo_config.deliver_base if p.repo_config else gh.deliver_base),
+            draft=landing.deliver_draft,
+            exclude=self.config.artifacts.exclude,
+            branch=branch,
+            closes=gh.deliver_closes,
+            pr_number=run.pr_number if run.pr_number is not None else p.prior_pr,
+            round_no=round_no,
+            parent=parent,
+            title=pr_title,
+            commit_message=commit_message,
+            authored_body=authored_body,
+            verification=self._verification_note(run_id),
+            workflows_write_granted=self._workflows_write_granted(p),
+        )
+        data = ops.pr_get(repo, pr.number)
+        head = data.get("head")
+        head_sha = str(head.get("sha")) if isinstance(head, dict) and head.get("sha") else None
+        self.store.set_run_pr(
+            run_id,
+            number=pr.number,
+            url=pr.url,
+            branch=branch,
+            head_sha=head_sha,
+            node_id=str(data["node_id"]) if data.get("node_id") else None,
+        )
+        if run.pr_number is None and p.prior_pr is None:
+            self._label_pr(p, pr.number)
+        p.delivered_at = self.clock()
+        log.info(
+            "run.delivered",
+            run=run_id,
+            repo=repo,
+            pr=pr.number,
+            url=pr.url,
+            head=head_sha,
+            duration_s=round(time.monotonic() - started, 1),
+        )
+        self.bus.emit(
+            HostEventTypes.RUN_DELIVER,
+            run_id,
+            repo=repo,
+            pr=pr.number,
+            url=pr.url,
+            branch=branch,
+            head_sha=head_sha,
+            round=round_no,
+        )
+
+    def _naming(self, p: Pipeline, title: str | None, source: Path) -> tuple[str, str]:
+        """The PR title and commit message from the `[github]` templates
+        (#621) — the repo entry's own when it overrides them. A repository
+        that lints titles as conventional commits (#678) and a title
+        template nobody set get the bare conventional title instead of
+        `lantern: {title}`, which no such lint accepts; a template the
+        operator wrote is theirs and stands."""
+        assert p.repo is not None
+        return self._naming_for(p, p.repo, p.repo_config, title, source)
+
+    def _naming_for(
+        self,
+        p: Pipeline,
+        repo: str,
+        entry: RepoConfig | None,
+        title: str | None,
+        source: Path,
+    ) -> tuple[str, str]:
+        """:meth:`_naming` for any repository — the run's own, or the one a
+        workload's pr sink delivers to (#759)."""
+        gh = self.config.github
+        title_template = (entry.pr_title_template if entry else None) or gh.pr_title_template
+        message_template = (
+            entry.commit_message_template if entry else None
+        ) or gh.commit_message_template
+
+        def render(template: str) -> str:
+            return render_naming(
+                template, title=title, outcome=p.outcome, run_id=p.run_id, repo=repo
+            )
+
+        pr_title = render(title_template)
+        if title_template == DEFAULT_PR_TITLE_TEMPLATE:
+            evidence = conventional_titles(source)
+            if evidence:
+                pr_title = conventional_title(render("{title}"))
+                log.info(
+                    "deliver.conventional_title",
+                    run=p.run_id,
+                    evidence=evidence,
+                    title=pr_title,
+                )
+        return pr_title, render(message_template)
+
+    def _authored_body(self, p: Pipeline) -> str | None:
+        """The pull request description the agent wrote, if any: the whole
+        of ``.lantern/pr-body`` under the workspace (#678) — the
+        repository's template filled in, or a fix round's corrected body —
+        read and taken away like the title file, so it names one round."""
+        path = f"{p.pair.agent_workdir}/{PR_BODY_FILE}"
+        try:
+            result = p.pair.agent.exec(["sh", "-c", 'cat "$1" && rm -f "$1"', "sh", path])
+        except SbxError:
+            log.warning("deliver.body_file_unread", run=p.run_id, path=path, exc_info=True)
+            return None
+        body = result.stdout.strip() if result.returncode == 0 else ""
+        if not body:
+            return None
+        log.info("deliver.body_from_workspace", run=p.run_id, chars=len(body))
+        return body
+
+    def _retitled(self, p: Pipeline, current: str | None) -> str | None:
+        """The PR title after a fix round: a round that had to retitle
+        (a title-lint check) leaves the new title alone in
+        ``.lantern/pr-title`` under the workspace (#621) — outside the
+        delivered tree, read here, then cleared so it names one round."""
+        path = f"{p.pair.agent_workdir}/{PR_TITLE_FILE}"
+        try:
+            # One exec: read it and take it away. A missing file is the
+            # usual case (rc 1, no stdout) and not worth a log line.
+            result = p.pair.agent.exec(["sh", "-c", 'cat "$1" && rm -f "$1"', "sh", path])
+        except SbxError:
+            log.warning("deliver.title_file_unread", run=p.run_id, path=path, exc_info=True)
+            return current
+        title = " ".join(result.stdout.split()) if result.returncode == 0 else ""
+        if not title:
+            return current
+        log.info("deliver.title_from_fix", run=p.run_id, old=current, new=title)
+        return title
+
+    def _label_pr(self, p: Pipeline, number: int) -> None:
+        """Put the repository's own ``labels`` (``[[vcs.repos]]``) on the
+        pull request the run just opened — the other half of what the config
+        promises, the issue half being applied at claim. Best effort: a
+        label refusal must not fail a delivery that succeeded."""
+        labels = list(p.repo_config.labels) if p.repo_config is not None else []
+        if not labels or p.ops is None or p.repo is None:
+            return
+        try:
+            p.ops.pr_labels_add(p.repo, number, labels)
+        except GithubOpsError:
+            log.warning(
+                "deliver.pr_labels_failed", run=p.run_id, pr=number, labels=labels, exc_info=True
+            )
+
+    def _stage_review(self, p: Pipeline) -> ReviewVerdict:
+        """The run's own adversarial review of its PR. The verdict is ours;
+        it is posted to the PR for the record."""
+        run_id, phases, ops, repo = p.run_id, p.phases, p.ops, p.repo
+        assert ops is not None and repo is not None
+        self._set_run_state(run_id, "reviewing")
+        run = self.store.get_run(run_id)
+        assert run.pr_number is not None
+        self._process_chat(run_id, phases, None, stage=f"reviewing PR #{run.pr_number}")
+        rounds = self._review_rounds(run_id)
+        round_no = len(rounds) + 1
+        diff = self._diff_for_review(p, run.head_sha)
+        started = time.time()
+        phases.issue_lookup = (
+            IssueLookup(ops, repo, run_id, self.store)
+            if self.config.landing.followups == "issues" and p.issues_enabled is not False
+            else None
+        )
+        verdict = phases.review(
+            diff=diff,
+            pr_number=run.pr_number,
+            round=round_no,
+            tasks=self.store.get_tasks(run_id),
+            history=render_review_history(rounds),
+            refuted=closed_anchors(rounds),
+            verification=self._verification_note(run_id),
+            head_sha=run.head_sha,
+        )
+        # Round n+1's word on a finding an earlier round raised belongs in
+        # that finding's own thread, not restated in a fresh review body
+        # (#520 step 4). ``posting`` is the body/inline half — summary plus
+        # genuinely new findings; ``carried`` is replied in-thread below.
+        prior = prior_findings(rounds)
+        posting, carried = split_carried(verdict, prior)
+        # The run acts on the union: new findings plus the carried ones this
+        # round says are still open, so "still open" keeps driving fix rounds.
+        # Read off ``posting``: a finding the reviewer re-filed on an old
+        # anchor is a carried still-open there, and only there (#522).
+        verdict = posting.model_copy(
+            update={"findings": [*posting.findings, *posting.carried_forward(prior)]}
+        )
+        posted_url = ""
+        posted_event = ""
+        posted_findings: tuple[PostedFinding, ...] = ()
+        posted_review_id: int | None = None
+        comments = posting.comments()
+        if comments:
+            try:
+                locations = ops.pr_review_locations(repo, run.pr_number, commit_id=run.head_sha)
+            except GithubOpsError as exc:
+                log.warning(
+                    "review.locations_unavailable",
+                    run=run_id,
+                    pr=run.pr_number,
+                    error=str(exc),
+                    hint="posting findings in the review body",
+                )
+                locations = {}
+            comments = [c for c in comments if any(c.line in h for h in locations.get(c.path, ()))]
+        inline_anchors = {f"{c.path}:{c.line}" for c in comments}
+        in_body = [f for f in posting.findings if f.anchor not in inline_anchors]
+        if in_body:
+            log.info("review.findings_in_body", run=run_id, pr=run.pr_number, findings=len(in_body))
+        try:
+            try:
+                if self._self_review(p, run.pr_number):
+                    submitted = self._post_review_as_comments(
+                        p, run.pr_number, run.head_sha, posting, comments, round_no
+                    )
+                else:
+                    submitted = ops.pr_review_create(
+                        repo,
+                        run.pr_number,
+                        verdict.event,
+                        review_body(posting, run_id=run_id, round=round_no, in_body=in_body),
+                        comments,
+                    )
+            except GithubOpsError:
+                if not comments or p.self_review:
+                    raise
+                # A finding anchored to a line outside the diff makes GitHub
+                # refuse the whole review (422), in both the requested event
+                # and the COMMENT fallback. The findings matter more than
+                # their anchors: post them in the body instead.
+                log.warning(
+                    "review.post_inline_refused",
+                    run=run_id,
+                    pr=run.pr_number,
+                    comments=len(comments),
+                    hint="re-posting the review with its findings in the body",
+                )
+                submitted = ops.pr_review_create(
+                    repo,
+                    run.pr_number,
+                    verdict.event,
+                    review_body(posting, run_id=run_id, round=round_no, anchored=False),
+                )
+            posted_url, posted_event = submitted.url, submitted.event
+            posted_review_id = submitted.review_id
+            # Every finding is accounted for, thread or not: the ones the
+            # review posted inline keep their comment/thread ids, the rest
+            # (no line, over the cap, or an anchor GitHub refused) are
+            # recorded body-only so reconciliation can still speak to them.
+            captured = {p.anchor: p for p in submitted.posted}
+            posted_findings = tuple(
+                captured.get(f.anchor, PostedFinding(f.anchor)) for f in posting.findings
+            )
+            # A carried finding still open keeps the thread it already has,
+            # so the fix round that follows reconciles onto it rather than
+            # into a body comment.
+            posted_findings += tuple(
+                PostedFinding(rec.anchor, rec.comment_id, rec.thread_id)
+                for rec in self._threads_for(run_id, [c.anchor for c in carried if not c.fixed])
+            )
+        except GithubOpsError:
+            # No longer a courtesy (#520 step 5): the review record *is* the
+            # PR's audit trail, and a round that could not post one leaves
+            # `review.url` empty — which `land()` reads as a merge block
+            # rather than merging silently (#503).
+            log.error("review.post_failed", run=run_id, pr=run.pr_number, exc_info=True)
+        self._post_confirmations(p, round_no, carried)
+        # An approving round's own `minor`/`nit` findings each opened a
+        # thread that no fix round will ever answer — there is no fix round
+        # after an approval. Answer them here, or the merge gate blocks on
+        # threads nothing in the pipeline can reconcile.
+        if verdict.verdict == "approve":
+            self._note_nonblocking(p, round_no, posted_findings, posting)
+        spend = phases.drain_spend()
+        self._record_phase(
+            run_id,
+            "review",
+            task_id=None,
+            attempt=round_no,
+            status=verdict.verdict,
+            output_json=json.dumps(
+                {
+                    "verdict": verdict.model_dump(),
+                    "review": {
+                        "url": posted_url,
+                        "event": posted_event,
+                        "id": posted_review_id,
+                    },
+                    "posted": [p._asdict() for p in posted_findings],
+                }
+            ),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        self.store.set_run_verdict(run_id, verdict.verdict)
+        self.bus.emit(
+            HostEventTypes.REVIEW_VERDICT,
+            run_id,
+            pr=run.pr_number,
+            round=round_no,
+            verdict=verdict.verdict,
+            findings=len(verdict.findings),
+            blocking=len(verdict.blocking),
+            url=posted_url,
+            posted_event=posted_event,
+            summary=" ".join(verdict.summary.split())[:300],
+        )
+        return verdict
+
+    def _self_review(self, p: Pipeline, number: int) -> bool:
+        """Is the loop reviewing a PR it authored? (#513)
+
+        One token opens the PR and reviews it, so the answer is yes on
+        every daemon run today; a second, reviewer-only identity would make
+        it no. GitHub refuses ``REQUEST_CHANGES`` and ``APPROVE`` from a
+        PR's own author, so asking is two doomed calls per round. Decided
+        once per drive from the PR's author; unknown reads as no, which
+        keeps the review-feature path (and its COMMENT fallback).
+        """
+        if p.self_review is None:
+            assert p.ops is not None and p.repo is not None
+            author: Identity = ("", None)
+            try:
+                author = user_identity(p.ops.pr_get(p.repo, number).get("user"))
+            except GithubOpsError:
+                log.warning("review.author_lookup_failed", run=p.run_id, pr=number, exc_info=True)
+            login = self._login(p)
+            p.self_review = identities_match(author, (login, p.is_bot))
+            if p.self_review:
+                log.info(
+                    "review.self_review",
+                    run=p.run_id,
+                    pr=number,
+                    login=login,
+                    hint="the loop authored this PR; GitHub refuses REQUEST_CHANGES/APPROVE "
+                    "from an author, so the review is posted as PR comments — one thread "
+                    "per finding, the verdict in a top-level comment",
+                )
+        return bool(p.self_review)
+
+    def _post_review_as_comments(
+        self,
+        p: Pipeline,
+        number: int,
+        head_sha: str | None,
+        posting: ReviewVerdict,
+        comments: Sequence[ReviewComment],
+        round_no: int,
+    ) -> SubmittedReview:
+        """The single-identity review (#513): each anchored finding as its
+        own review comment (a resolvable thread), then the verdict and every
+        finding that got no thread — no line, over the cap, or an anchor
+        GitHub refused — in one top-level PR comment."""
+        ops, repo, run_id = p.ops, p.repo, p.run_id
+        assert ops is not None and repo is not None
+        posted: tuple[PostedFinding, ...] = ()
+        if comments and head_sha:
+            posted = ops.pr_review_comments_create(repo, number, comments, commit_id=head_sha)
+        threaded = {rec.anchor for rec in posted if rec.comment_id is not None}
+        in_body = [f for f in posting.findings if f.anchor not in threaded]
+        url = ops.pr_issue_comment(
+            repo, number, review_body(posting, run_id=run_id, round=round_no, in_body=in_body)
+        )
+        return SubmittedReview(url, "COMMENT", None, posted)
+
+    def _threads_for(self, run_id: str, anchors: Sequence[str]) -> list[PostedRecord]:
+        """The thread identity earlier rounds recorded for these anchors."""
+        wanted = list(dict.fromkeys(anchors))
+        if not wanted:
+            return []
+        best: dict[str, PostedRecord] = {}
+        for rec in self.store.posted_findings(run_id):
+            if rec.anchor in wanted and not rec.body_only:
+                best[rec.anchor] = rec
+        return [best[a] for a in wanted if a in best]
+
+    def _post_confirmations(
+        self, p: Pipeline, round_no: int, carried: Sequence[CarriedVerdict]
+    ) -> None:
+        """Reply, in each carried-over finding's own thread, with this round's
+        verdict on it — and resolve the ones confirmed fixed (#520 step 4)."""
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        if ops is None or repo is None or not carried:
+            return
+        run = self.store.get_run(run_id)
+        if run.pr_number is None:
+            return
+        try:
+            outcome = post_confirmations(
+                ops,
+                repo,
+                run.pr_number,
+                run_id=run_id,
+                login=self._login(p),
+                is_bot=p.is_bot,
+                round=round_no,
+                items=carried,
+                posted=self.store.posted_findings(run_id),
+                done=self.store.confirmations(run_id, round_no),
+                record=partial(self._record_confirmation, run_id, round_no),
+            )
+        except GithubOpsError:
+            log.warning("review.confirm_failed", run=run_id, pr=run.pr_number, exc_info=True)
+            return
+        if not outcome.did_anything:
+            return
+        self.bus.emit(
+            HostEventTypes.REVIEW_RECONCILED,
+            run_id,
+            pr=run.pr_number,
+            round=round_no,
+            addressed=outcome.confirmed,
+            refuted=0,
+            unanswered=outcome.still_open,
+            replied=outcome.replied,
+            resolved=outcome.resolved,
+            body_only=outcome.body_only,
+            comment_url="",
+            confirmations=len(carried),
+        )
+
+    def _record_confirmation(
+        self, run_id: str, round: int, *, anchor: str, status: str, resolved: bool
+    ) -> None:
+        self.store.record_confirmation(run_id, round, anchor, status, resolved=resolved)
+
+    def _record_noted(
+        self, run_id: str, round: int, *, anchor: str, status: str, resolved: bool
+    ) -> None:
+        self.store.record_noted(run_id, round, anchor, status, resolved=resolved)
+
+    def _note_nonblocking(
+        self,
+        p: Pipeline,
+        round_no: int,
+        posted: Sequence[PostedFinding],
+        verdict: ReviewVerdict,
+    ) -> None:
+        """Reconcile an approving round's findings in-thread.
+
+        `approve` ends the review stage — no fix round follows, so nothing
+        else would ever speak to the threads this round's findings opened,
+        and `land()`'s reconciliation gate would block the merge on them
+        forever. Which findings need an answer is decided by reachability,
+        not severity: an `approve` may carry a `major`, and that finding
+        gets an inline thread like any other. Each gets a reply worded for
+        its severity and is resolved.
+        """
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        if ops is None or repo is None:
+            return
+        severities = {f.anchor: f.severity for f in verdict.findings}
+        if not severities:
+            return
+        run = self.store.get_run(run_id)
+        if run.pr_number is None:
+            return
+        records = [PostedRecord(round_no, f.anchor, f.comment_id, f.thread_id) for f in posted]
+        try:
+            outcome = note_nonblocking(
+                ops,
+                repo,
+                run.pr_number,
+                run_id=run_id,
+                login=self._login(p),
+                is_bot=p.is_bot,
+                round=round_no,
+                findings=severities,
+                posted=records,
+                done=self.store.noted(run_id, round_no),
+                record=partial(self._record_noted, run_id, round_no),
+            )
+        except GithubOpsError:
+            log.warning("review.noted_failed", run=run_id, pr=run.pr_number, exc_info=True)
+            return
+        if not outcome.did_anything:
+            return
+        self.bus.emit(
+            HostEventTypes.REVIEW_RECONCILED,
+            run_id,
+            pr=run.pr_number,
+            round=round_no,
+            addressed=0,
+            refuted=0,
+            unanswered=0,
+            replied=outcome.replied,
+            resolved=outcome.resolved,
+            body_only=outcome.body_only,
+            comment_url="",
+            noted=outcome.noted,
+        )
+
+    def _stage_reconcile(self, p: Pipeline) -> None:
+        """Speak each closed review round's answer back onto its own threads.
+
+        Run between a fix round's re-delivery and the next review: the
+        findings of every review round the fixer has since answered get a
+        reply on their thread (resolved when addressed), and body-only
+        findings one ``Reconciliation — round n`` comment. Best effort by
+        design — the review that follows is worth more than a failed
+        courtesy reply — but idempotent and resume-safe via the store.
+        """
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        if ops is None or repo is None:
+            return
+        run = self.store.get_run(run_id)
+        if run.pr_number is None:
+            return
+        posted = self.store.posted_findings(run_id)
+        if not posted:
+            return
+        by_round: dict[int, list[PostedRecord]] = {}
+        for rec in posted:
+            by_round.setdefault(rec.round, []).append(rec)
+        for round_ in self._review_rounds(run_id):
+            # A round whose fix task has not reported yet has nothing to say.
+            if not round_.response.strip():
+                continue
+            records = by_round.get(round_.round)
+            if not records:
+                continue
+            items = reconcile(round_)
+            if not items:
+                continue
+            try:
+                outcome = reconcile_round(
+                    ops,
+                    repo,
+                    run.pr_number,
+                    run_id=run_id,
+                    login=self._login(p),
+                    is_bot=p.is_bot,
+                    round=round_.round,
+                    head_sha=run.head_sha,
+                    posted=records,
+                    items=items,
+                    done=self.store.reconciliations(run_id, round_.round),
+                    record=partial(self._record_reconciliation, run_id, round_.round),
+                )
+            except GithubOpsError:
+                log.warning("review.reconcile_failed", run=run_id, pr=run.pr_number, exc_info=True)
+                continue
+            if outcome.did_anything:
+                self._emit_reconciled(run_id, run.pr_number, outcome)
+            self._reconcile_late_answers(p, run, round_, records, items)
+
+    def _reconcile_late_answers(
+        self,
+        p: Pipeline,
+        run: RunRecord,
+        round_: ReviewRound,
+        records: Sequence[PostedRecord],
+        items: Mapping[str, Reconciliation],
+    ) -> None:
+        """A finding round *k* left unanswered rides into later briefs (#522);
+        when a later round's report finally answers it, that answer belongs
+        on the round-*k* thread. Replied under the later round's marker and
+        record, so it is posted once and never mistaken for round *k*'s own
+        "not answered" reply."""
+        ops, repo, run_id = p.ops, p.repo, p.run_id
+        assert ops is not None and repo is not None and run.pr_number is not None
+        open_anchors = {a for a, item in items.items() if item.status == "unanswered"}
+        if not open_anchors:
+            return
+        for later in self._review_rounds(run_id):
+            if later.round <= round_.round or not later.response.strip() or not open_anchors:
+                continue
+            late = {a: reconcile_anchor(later.response, a) for a in sorted(open_anchors)}
+            late = {a: item for a, item in late.items() if item.status != "unanswered"}
+            if not late:
+                continue
+            try:
+                outcome = reconcile_round(
+                    ops,
+                    repo,
+                    run.pr_number,
+                    run_id=run_id,
+                    login=self._login(p),
+                    is_bot=p.is_bot,
+                    round=later.round,
+                    head_sha=run.head_sha,
+                    posted=[r for r in records if r.anchor in late],
+                    items=late,
+                    done=self.store.reconciliations(run_id, later.round),
+                    record=partial(self._record_reconciliation, run_id, later.round),
+                )
+            except GithubOpsError:
+                log.warning("review.reconcile_failed", run=run_id, pr=run.pr_number, exc_info=True)
+                continue
+            open_anchors -= set(late)
+            if outcome.did_anything:
+                self._emit_reconciled(run_id, run.pr_number, outcome)
+
+    def _emit_reconciled(self, run_id: str, pr: int | None, outcome: ReconcileOutcome) -> None:
+        self.bus.emit(
+            HostEventTypes.REVIEW_RECONCILED,
+            run_id,
+            pr=pr,
+            round=outcome.round,
+            addressed=outcome.addressed,
+            refuted=outcome.refuted,
+            deferred=outcome.deferred,
+            unanswered=outcome.unanswered,
+            replied=outcome.replied,
+            resolved=outcome.resolved,
+            body_only=outcome.body_only,
+            comment_url=outcome.comment_url or "",
+        )
+
+    def _stage_reconcile_human(self, p: Pipeline) -> None:
+        """Answer the human objections the last fix round was seeded with.
+
+        Their thread gets the reply; it is never resolved — a human closes
+        their own conversation. Each answered objection is recorded so the
+        next landing pass, which still sees the same standing
+        ``CHANGES_REQUESTED`` (only its author can dismiss it), does not buy
+        another full fix pass on words already answered (#520).
+        """
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        objections = p.pending_human
+        if ops is None or repo is None or not objections:
+            return
+        run = self.store.get_run(run_id)
+        if run.pr_number is None:
+            return
+        report, round_no = self._last_fix_report(run_id)
+        try:
+            outcome = reconcile_human(
+                ops,
+                repo,
+                run.pr_number,
+                run_id=run_id,
+                login=self._login(p),
+                is_bot=p.is_bot,
+                round=round_no,
+                head_sha=run.head_sha,
+                objections=objections,
+                report=report,
+                done=self.store.answered_objections(run_id),
+                record=partial(self._record_human_reply, run_id),
+            )
+        except GithubOpsError:
+            log.warning(
+                "review.human_reconcile_failed", run=run_id, pr=run.pr_number, exc_info=True
+            )
+            return
+        # Answered is answered even when the reply itself failed to post for
+        # the body-only ones: what must not repeat is the fix pass.
+        p.pending_human = ()
+        if not outcome.did_anything:
+            return
+        self.bus.emit(
+            HostEventTypes.REVIEW_RECONCILED,
+            run_id,
+            pr=run.pr_number,
+            round=outcome.round,
+            addressed=0,
+            refuted=0,
+            unanswered=0,
+            replied=outcome.replied,
+            resolved=0,
+            body_only=outcome.body_only,
+            comment_url=outcome.comment_url or "",
+            human=len(objections),
+        )
+
+    def _record_human_reply(self, run_id: str, *, key: str, status: str) -> None:
+        self.store.record_human_reply(run_id, key, status)
+
+    def _last_fix_report(self, run_id: str) -> tuple[str, int]:
+        """The most recent fix task's build report and its round number."""
+        report, seen = "", []
+        for row in self.store.phase_attempts(run_id):
+            if row.phase != "build" or not row.task_id:
+                continue
+            task_id = str(row.task_id)
+            if not is_fix_task(task_id):
+                continue
+            if task_id not in seen:
+                seen.append(task_id)
+            try:
+                report = str(json.loads(row.output_json or "{}").get("report") or "")
+            except ValueError:
+                report = ""
+        return report, len(seen)
+
+    def _record_reconciliation(
+        self, run_id: str, round: int, *, anchor: str, status: str, resolved: bool
+    ) -> None:
+        self.store.record_reconciliation(run_id, round, anchor, status, resolved=resolved)
+
+    def _diff_for_review(self, p: Pipeline, head_sha: str | None) -> str | None:
+        """The PR's diff as text, or None when the workspace has no base
+        to diff against (the reviewer then reads the tree)."""
+        workspace = p.pair.workspace
+        if workspace is None or not p.pair.mounted:
+            return None
+        # Diff against the *current* base commit, not the one the clone was
+        # cut from: after a conflict round merged the base in, the latter
+        # would show the whole base branch's movement as the run's changes.
+        base_sha: str | None = None
+        if p.ops is not None and p.repo is not None:
+            try:
+                base_sha = p.ops.ref_lookup(p.repo, f"heads/{self._base_branch(p)}")
+            except LanternError:
+                log.warning("review.base_lookup_failed", run=p.run_id, exc_info=True)
+        try:
+            return hostgit.diff_text(workspace, base_sha)
+        except LanternError:
+            log.warning("review.diff_failed", run=p.run_id, exc_info=True)
+            return None
+
+    def _review_rounds(self, run_id: str) -> list[ReviewRound]:
+        """Earlier review rounds paired with the fix round each led to
+        (:func:`recorded_review_rounds`)."""
+        return recorded_review_rounds(self.store, run_id)
+
+    def _undrafted(self, run_id: str) -> bool:
+        """Whether this run's landing has already taken its PR out of draft
+        (#677): the ``land.undraft`` event is on the run's record. After
+        it, a draft is a person's hold, not the loop's to clear."""
+        return any(True for _seq, _event in self.store.events(run_id, type_prefix="land.undraft"))
+
+    def _review_posted(self, run_id: str) -> bool:
+        """Whether the most recent review round got its record onto GitHub.
+
+        Read from the ``review`` phase rows: a round that posted carries a
+        url, a round whose post failed carries an empty one (#503). A run
+        with no review round at all has nothing to have failed, so True.
+        """
+        for row in reversed(self.store.phase_attempts(run_id)):
+            if row.phase != "review":
+                continue
+            try:
+                data = json.loads(row.output_json or "{}")
+            except ValueError:
+                return False
+            review = data.get("review") if isinstance(data, dict) else None
+            return bool(isinstance(review, dict) and review.get("url"))
+        return True
+
+    def _repost_review_record(self, p: Pipeline, number: int) -> bool:
+        """Self-heal a review round whose record never reached GitHub (#503).
+
+        The review-posted gate exists so a merge never lacks a reviewable
+        record — a requirement the loop can satisfy itself, so stranding a
+        run on a transient 422/5xx would be a gate the loop erected. The
+        repost is a PR **comment**, not a review: re-submitting the review
+        would 422 again in the common self-review deployment (#513), and
+        the findings/threads were already posted or reconciled. Idempotent
+        by a run-scoped marker read back from the PR's comments, so a
+        resume never double-posts. False — the terminal ``Blocked`` — only
+        when the repost itself failed too: GitHub writes are then broadly
+        failing, and blocking with the truth is honest.
+        """
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        assert ops is not None and repo is not None
+        stamp = f"<!-- lantern:review-record run={run_id} -->"
+        try:
+            existing = ops.issue_comments(repo, number)
+        except GithubOpsError:
+            existing = []
+        for entry in existing:
+            if isinstance(entry, dict) and stamp in str(entry.get("body") or ""):
+                return True
+        rounds = self._review_rounds(run_id)
+        if not rounds:
+            return False
+        last = rounds[-1]
+        body = (
+            f"**Review verdict: {last.verdict.verdict}** (round {last.round}) — "
+            "reposted record: the review itself could not be posted (#503).\n\n"
+            f"{last.verdict.summary}\n\n{stamp}"
+        )
+        try:
+            ops.pr_issue_comment(repo, number, body)
+        except GithubOpsError:
+            log.warning("review.repost_failed", run=run_id, pr=number, exc_info=True)
+            return False
+        log.info("review.record_reposted", run=run_id, pr=number, round=last.round)
+        return True
+
+    def _reconcile_fix(
+        self, run_id: str, task: TaskRecord, report: str
+    ) -> list[dict[str, str]] | None:
+        """The fix round's per-finding answer to the review that seeded it,
+        as JSON for the build row. None for a non-fix task, or when no
+        review round is open to reconcile against."""
+        if not is_fix_task(task.spec.id):
+            return None
+        rounds = self._review_rounds(run_id)
+        # The open round is the last one whose response is not yet recorded
+        # — this build *is* that response.
+        open_round = next((r for r in reversed(rounds) if not r.response.strip()), None)
+        if open_round is None:
+            return None
+        # The brief also carried the findings earlier rounds left unanswered
+        # (#522); this report is their answer too, or leaves them unanswered
+        # again — either way they are judged here, not forgotten.
+        carried = unanswered_findings([r for r in rounds if r is not open_round])
+        seen = {f.anchor for f in open_round.verdict.findings}
+        findings = [*open_round.verdict.findings, *[f for f in carried if f.anchor not in seen]]
+        verdict = open_round.verdict.model_copy(update={"findings": findings})
+        items = reconcile(ReviewRound(open_round.round, verdict, report))
+        return [
+            {"anchor": anchor, "status": item.status, "note": item.note, "test": item.test}
+            for anchor, item in items.items()
+        ]
+
+    def _fix_round(
+        self,
+        p: Pipeline,
+        kind: FixKind,
+        why: str,
+        *,
+        findings: Sequence[ReviewFinding] = (),
+        failed_checks: Sequence[FailedCheck] = (),
+        objections: str = "",
+        human: Sequence[HumanObjection] = (),
+        checks: CheckJudgment | None = None,
+    ) -> str | None:
+        """Spend one fix round: a seeded task built and verified like any
+        other, then back to the gate. Returns the reason the run failed —
+        the budget, or the task — or None when the fix is in.
+
+        ``checks`` is the judgment behind a CI round (#611). The advisory
+        regressions in its fix scope are recorded as spent *before* the
+        round runs, so the next landing pass merges over them rather than
+        buying them another — one round is the whole budget for a check
+        the base does not require."""
+        run_id, phases = p.run_id, p.phases
+        # Held for the reconciliation that follows the re-delivery: the
+        # human hears back on their own thread, not only in a build report.
+        p.pending_human = tuple(human)
+        counter, configured = (
+            ("review_rounds", self.config.landing.max_review_rounds)
+            if kind == "review"
+            else ("ci_rounds", self.config.landing.max_ci_rounds)
+        )
+        run = self.store.get_run(run_id)
+        # Rounds granted after an exhaustion (by the daemon's retry or an
+        # operator) extend the configured budget for this run only. The
+        # counter is rounds actually spent, so it is checked before it is
+        # bumped: a grant of N is then N real further rounds.
+        limit = configured + run.granted_rounds
+        already = run.review_rounds if counter == "review_rounds" else run.ci_rounds
+        if already >= limit:
+            budget_kind = "review" if kind == "review" else "ci"
+            self.store.set_run_exhausted(run_id, budget_kind)
+            granted = f" + {run.granted_rounds} granted" if run.granted_rounds else ""
+            return (
+                f"{kind} fix rounds exhausted ({configured} allowed by [landing] "
+                f"{counter}{granted}): {why}"
+            )
+        spent = self.store.bump_run_counter(run_id, counter)
+        if checks is not None:
+            for name in checks.fix:
+                if name not in checks.gating:
+                    self.store.record_advisory_round(run_id, name)
+        if kind == "bot":
+            self.store.record_bot_round(run_id)
+        tasks = self.store.get_tasks(run_id)
+        round_no = 1 + sum(1 for t in tasks if is_fix_task(t.spec.id))
+        verify_commands = [
+            c for t in tasks if not is_fix_task(t.spec.id) for c in t.spec.verify_commands
+        ]
+        gate = phases.project_gate()
+        if gate:
+            verify_commands.append(gate)
+        # Every fix round starts from the current base. CI judges GitHub's
+        # test merge of the branch with the base, so a red check may only
+        # exist in that merge (field run r8tzse1qa: a test that landed on
+        # main after the run branched); a fixer working on a stale clone
+        # cannot even reproduce it. A base that no longer merges cleanly
+        # is left as conflict markers the brief lists.
+        conflicts: tuple[str, ...] = ()
+        merged = self._merge_base_into_clone(p)
+        if merged is not None:
+            conflicts = merged.conflicts
+            if kind == "conflict" or conflicts:
+                why = f"{why}; {merged.message}"
+        rounds_so_far = self._review_rounds(run_id)
+        spec = fix_task(
+            round=round_no,
+            pr_number=run.pr_number,
+            brief=fix_brief(
+                pr_number=run.pr_number,
+                kind=kind,
+                why=why,
+                round=round_no,
+                findings=findings,
+                failed_checks=failed_checks,
+                objections=objections,
+                conflicts=conflicts,
+                # The fixer is a fresh session: hand it what its
+                # predecessors decided and why (#521) — and what they left
+                # unanswered, which comes back until someone answers (#522).
+                history=render_fix_history(rounds_so_far),
+                unanswered=unanswered_findings(rounds_so_far),
+                preexisting=checks.preexisting if checks is not None else (),
+                gate=gate,
+            ),
+            verify_commands=verify_commands,
+            failed_checks=failed_checks,
+        )
+        task = self.store.append_task(run_id, spec)
+        self._record_assignees(run_id, p.kind, [spec.id])
+        p.fix_kinds[spec.id] = kind
+        self.bus.emit(
+            HostEventTypes.FIX_ROUND,
+            run_id,
+            round=round_no,
+            kind=kind,
+            task_id=spec.id,
+            why=why,
+            budget=f"{spent}/{limit}",
+            pr=run.pr_number,
+        )
+        self._announce_roster(run_id, self.store.get_tasks(run_id))
+        return self._drive_fix_task(p, task)
+
+    def _automated_round_unaffordable(self, p: Pipeline, fix: NeedsFix) -> bool:
+        """A fix round that only a machine asked for, with no CI round left
+        to spend on it: advisory check regressions (#611) or an automated
+        reviewer's objection (#613). A non-human signal must never end a
+        run, so the round is recorded as spent and the landing goes on to
+        merge over it, named."""
+        checks = fix.checks
+        advisory = checks is not None and checks.advisory_only
+        if not advisory and fix.kind != "bot":
+            return False
+        run = self.store.get_run(p.run_id)
+        if run.ci_rounds < self.config.landing.max_ci_rounds + run.granted_rounds:
+            return False
+        if checks is not None and advisory:
+            for name in checks.fix:
+                self.store.record_advisory_round(p.run_id, name)
+        if fix.kind == "bot":
+            self.store.record_bot_round(p.run_id)
+        log.info(
+            "fix.automated_skipped",
+            run=p.run_id,
+            kind=fix.kind,
+            checks=list(checks.fix) if checks is not None else [],
+            hint="no CI fix round left; a signal no person gave is merged over",
+        )
+        return True
+
+    def _base_branch(self, p: Pipeline) -> str:
+        """The branch the PR targets: configured, else the repository's default.
+
+        Never a guess (#672): a run with no repository has no branch to
+        target, and every caller checks for one before asking.
+        """
+        base = p.repo_config.deliver_base if p.repo_config else self.config.github.deliver_base
+        if base:
+            return base
+        if p.ops is None or p.repo is None:
+            raise StateError(f"run {p.run_id} has no GitHub repository to take a base branch from")
+        return p.ops.default_branch(p.repo)
+
+    def _merge_base_into_clone(self, p: Pipeline) -> hostgit.MergeResult | None:
+        """Before a fix round: bring the current base into the run's clone,
+        so the fixer works on what CI actually judges and a conflict is
+        real in its working tree. Git mutations run inside the agent VM.
+        None when the run has no mounted clone to merge into; a fetch/merge
+        failure is logged and the round proceeds on the tree as it is."""
+        workspace = p.pair.workspace
+        if workspace is None or not p.pair.mounted or p.ops is None or p.repo is None:
+            return None
+        base = self._base_branch(p)
+        try:
+            assert p.provisioner is not None
+            url = self.config.clone_url_for_repo(p.repo) + ".git"
+            with hostgit.base_bundle(
+                workspace, url, base, token=p.provisioner.clone_token(p.repo)
+            ) as (sha, bundle):
+                result = p.phases.merge_from_base(base, base_sha=sha, bundle=bundle)
+        except LanternError:
+            log.warning("fix.merge_base_failed", run=p.run_id, base=base, exc_info=True)
+            return None
+        log.info(
+            "fix.merged_base",
+            run=p.run_id,
+            base=base,
+            merged=result.merged,
+            conflicts=list(result.conflicts),
+        )
+        return result
+
+    def _resume_fix(self, p: Pipeline) -> str | None:
+        """A run resumed mid fix round: finish the fix task still in flight
+        (none means the task ended before the stage moved on — nothing to do)."""
+        pending = [
+            t for t in self.store.get_tasks(p.run_id) if is_fix_task(t.spec.id) and not t.terminal
+        ]
+        if not pending:
+            return None
+        self._announce_roster(p.run_id, self.store.get_tasks(p.run_id))
+        return self._drive_fix_task(p, pending[-1])
+
+    def _drive_fix_task(self, p: Pipeline, task: TaskRecord) -> str | None:
+        self._set_run_state(p.run_id, "fixing")
+        self._run_task(p, task)
+        if task.state != "done":
+            return f"fix round {task.spec.id} failed: {task.last_feedback[:300] or task.state}"
+        return None
+
+    def _stage_ci(self, p: Pipeline) -> NeedsFix | Blocked | None:
+        """Wait for CI on the delivered head; None means green."""
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        assert ops is not None and repo is not None
+        self._set_run_state(run_id, "awaiting_ci")
+        run = self.store.get_run(run_id)
+        if not run.head_sha:
+            return Blocked("no delivered head to check")
+        round_no = 1 + sum(1 for t in self.store.get_tasks(run_id) if is_fix_task(t.spec.id))
+
+        def emit(**data: Any) -> None:
+            self.bus.emit(
+                HostEventTypes.CI_STATUS, run_id, pr=run.pr_number, round=round_no, **data
+            )
+
+        try:
+            checks = poll_checks(
+                ops,
+                repo,
+                run.head_sha,
+                number=run.pr_number,
+                cfg=self.config.landing,
+                tick=partial(self._tick, p),
+                emit=emit,
+                clock=self.clock,
+                settle_from=p.delivered_at,
+                policy_for=check_policy_reader(
+                    ops,
+                    repo,
+                    self._base_branch(p),
+                    cfg=self.config.landing,
+                    advisory_spent=self.store.advisory_rounds(run_id),
+                    number=run.pr_number,
+                ),
+            )
+        except CiTimeout as exc:
+            return Blocked(str(exc))
+        if checks.needs_approval and checks.state != "red":
+            # #612: nothing to fix and nothing to wait for — a maintainer
+            # has to approve the workflow run.
+            return Blocked(checks.summary())
+        if checks.state == "red":
+            return NeedsFix(
+                "ci",
+                checks.summary(),
+                failed_checks=tuple(
+                    c
+                    for c in (
+                        ops.change_failed_logs(repo, run.pr_number, run.head_sha)
+                        if run.pr_number is not None
+                        else ops.checks_failed_logs(repo, run.head_sha)
+                    )
+                    if c.name in checks.fix
+                ),
+                checks=checks,
+            )
+        return None
+
+    def _stage_land(self, p: Pipeline) -> LandingOutcome:
+        run_id, ops, repo = p.run_id, p.ops, p.repo
+        assert ops is not None and repo is not None
+        self._set_run_state(run_id, "landing")
+        run = self.store.get_run(run_id)
+        assert run.pr_number is not None
+        number = run.pr_number
+        update = UpdateState(attempts=run.update_attempts, head=run.update_head)
+
+        def on_update(state: UpdateState) -> None:
+            self.store.bump_run_counter(run_id, "update_attempts")
+            self.store.set_update_head(run_id, state.head)
+
+        def emit(type: str, **data: Any) -> None:
+            self.bus.emit(type, run_id, **data)
+
+        login = self._login(p)
+        outcome = land(
+            ops,
+            repo,
+            number,
+            cfg=self.config.landing,
+            branch=run.branch,
+            node_id=run.pr_node_id,
+            login=login,
+            is_bot=p.is_bot,
+            # The CI stage settled this head from its delivery; a resume
+            # enters with None and the landing settles it itself (#633).
+            settle_from=p.delivered_at,
+            update=update,
+            on_update=on_update,
+            tick=partial(self._tick, p),
+            emit=emit,
+            clock=self.clock,
+            answered=self.store.answered_objections(run_id),
+            review_posted=self._review_posted(run_id) or self._repost_review_record(p, number),
+            ack=lambda threads: acknowledge_human_threads(
+                ops, repo, number, run_id=run_id, login=login, threads=threads, is_bot=p.is_bot
+            ),
+            gate=self.config.landing.merge_gate == "chat",
+            policy_for=check_policy_reader(
+                ops,
+                repo,
+                self._base_branch(p),
+                cfg=self.config.landing,
+                advisory_spent=self.store.advisory_rounds(run_id),
+                number=number,
+            ),
+            bot_round_spent=self.store.bot_round_spent(run_id),
+            # The loop's own draft is the one it delivered and has not yet
+            # cleared (#677); after its un-draft, any draft is a person's.
+            own_draft=self.config.landing.deliver_draft and not self._undrafted(run_id),
+        )
+        if isinstance(outcome, Landed):
+            log.info(
+                "run.merged", run=run_id, pr=number, sha=outcome.sha, by_human=outcome.by_human
+            )
+            self.bus.emit(
+                HostEventTypes.RUN_MERGED,
+                run_id,
+                pr=number,
+                url=run.pr_url,
+                sha=outcome.sha,
+                by_human=outcome.by_human,
+                review_rounds=run.review_rounds,
+                ci_rounds=run.ci_rounds,
+            )
+            # Only now (#517): a run that failed or was blocked files nothing.
+            self._file_followups(p, run)
+        elif isinstance(outcome, Gated):
+            log.info("run.gated", run=run_id, pr=number, head=outcome.head)
+            self.bus.emit(
+                HostEventTypes.RUN_GATED,
+                run_id,
+                pr=number,
+                url=run.pr_url,
+                sha=outcome.head,
+                review_rounds=run.review_rounds,
+                ci_rounds=run.ci_rounds,
+            )
+            # The approve path is gh-ops-only — no engine, no sandbox — so
+            # the follow-ups are filed now, while the machinery that builds
+            # them is alive. Gate is not blocked: every bar was cleared, and
+            # follow-ups carry the follow-up label, never the trigger label.
+            self._file_followups(p, run)
+        elif isinstance(outcome, AwaitingReview):
+            log.info(
+                "run.awaiting_review",
+                run=run_id,
+                pr=number,
+                head=outcome.head,
+                approvals_required=outcome.approvals_required,
+                approvals_have=outcome.approvals_have,
+                draft=outcome.draft,
+            )
+            self.bus.emit(
+                HostEventTypes.RUN_AWAITING_REVIEW,
+                run_id,
+                pr=number,
+                url=run.pr_url,
+                sha=outcome.head,
+                approvals_required=outcome.approvals_required,
+                approvals_have=outcome.approvals_have,
+                code_owners=outcome.code_owners,
+                draft=outcome.draft,
+                review_rounds=run.review_rounds,
+                ci_rounds=run.ci_rounds,
+            )
+            # As for the gate: the daemon finishes an approved landing with
+            # gh ops alone, so the follow-ups are filed while the machinery
+            # is alive. Idempotent — a resume that merges files nothing twice.
+            self._file_followups(p, run)
+        elif isinstance(outcome, Blocked):
+            log.warning(
+                "run.blocked",
+                run=run_id,
+                pr=number,
+                why=outcome.why,
+                blockers=list(outcome.blockers),
+            )
+            self.bus.emit(
+                HostEventTypes.RUN_BLOCKED,
+                run_id,
+                pr=number,
+                url=run.pr_url,
+                why=outcome.why,
+                blockers=list(outcome.blockers),
+            )
+        return outcome
+
+    def _file_followups(self, p: Pipeline, run: RunRecord) -> None:
+        """File the run's follow-ups on its repository after the merge (#517):
+        :meth:`FollowupFiler.file` over this run's review rounds, with the
+        repository's up-front Issues probe (#631)."""
+        filer = self._followup_filer(p)
+        if filer is None:
+            return
+        filer.file(run, self._review_rounds(p.run_id), issues_enabled=p.issues_enabled)
+
+    def _followup_filer(self, p: Pipeline) -> FollowupFiler | None:
+        if p.ops is None or p.repo is None:
+            return None
+        return FollowupFiler(
+            p.ops, p.repo, self.store, self.bus, self.config, trigger_label=self.trigger_label
+        )
+
+    @staticmethod
+    def _ensure_label(ops: VcsOps, repo: str, label: str) -> None:
+        """See :meth:`FollowupFiler.ensure_label`."""
+        FollowupFiler.ensure_label(ops, repo, label)
+
+    @staticmethod
+    def _filed_on_repo(ops: VcsOps, repo: str, label: str, run_id: str) -> dict[str, str]:
+        """See :meth:`FollowupFiler.filed_on_repo`."""
+        return FollowupFiler.filed_on_repo(ops, repo, label, run_id)
+
+    def _login(self, p: Pipeline) -> str:
+        """The loop's own GitHub login, read once per drive.
+
+        Resolution order: the App's own ``<slug>[bot]`` when the host
+        resolved one (``Pipeline.bot_login`` — App mode skips ``GET
+        /user``, which an installation token cannot call: 403, #581); then
+        ``GET /user`` (PAT mode); then ``[github] bot_login``; then the
+        author of the delivered PR (the same token opened it); then ``""``
+        with a plain log line. The kind rides along (``Pipeline.is_bot``,
+        #622) so a same-named account of the other kind is not us. The empty
+        degradation is **not** harmless for landing — classification would
+        call every loop thread a human's — so landing refuses to classify
+        with it (`_reconciliation_block`) instead of misclassifying.
+        """
+        if p.login is None:
+            assert p.ops is not None and p.repo is not None
+            number = self.store.get_run(p.run_id).pr_number
+            identity = resolve_identity(
+                p.ops,
+                p.repo,
+                number,
+                bot_login=p.bot_login,
+                configured_login=self.config.github.bot_login_for(p.repo),
+                # One github-ops sandbox, one credential, delivers and
+                # reviews: the delivered PR's author is this identity. A
+                # reviewer-only credential must say False here (#622).
+                pr_author_is_loop=True,
+            )
+            p.login, p.is_bot = identity.login, identity.is_bot
+            log.info(
+                "engine.login_resolved",
+                run=p.run_id,
+                login=p.login or "(unknown)",
+                is_bot=p.is_bot,
+            )
+        return p.login
+
+    def _poll_wait_s(self, waiting: str) -> float:
+        """How long the next wait on ``waiting`` is: ``ci_poll_min_s`` the
+        first time, doubling on each further wait for the same thing, never
+        past ``ci_poll_interval_s``. A wait for something else starts over,
+        so an undraft or a mergeability read after a green CI is seen in
+        seconds rather than a full interval later."""
+        landing = self.config.landing
+        if waiting != self._poll_waiting:
+            self._poll_waiting, self._poll_streak = waiting, 0
+        wait_s = min(
+            landing.ci_poll_interval_s, landing.ci_poll_min_s * float(2**self._poll_streak)
+        )
+        self._poll_streak += 1
+        return float(wait_s)
+
+    def _tick(self, p: Pipeline, waiting: str) -> None:
+        """One wait interval between GitHub polls: honour cancellation,
+        answer chat, keep the run visibly alive, then sleep — cut short by
+        anything that sets ``_wake``. The slept time is not charged to the
+        agent wall clock."""
+        run_id = p.run_id
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        run = self.store.get_run(run_id)
+        self._process_chat(
+            run_id,
+            p.phases,
+            None,
+            stage=f"{run.state} on PR #{run.pr_number} (waiting on {waiting})",
+        )
+        self.store.touch_run(run_id)
+        started = self.clock()
+        self._wake.wait(self._poll_wait_s(waiting))
+        self._wake.clear()
+        self._waited_s += max(0.0, self.clock() - started)
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        # A message is what usually cut the wait short; answer it now rather
+        # than after a poll that may end the run.
+        self._process_chat(
+            run_id,
+            p.phases,
+            None,
+            stage=f"{run.state} on PR #{run.pr_number} (waiting on {waiting})",
+        )
+
+    # -- task state machine ------------------------------------------------
+
+    def _run_task(self, p: Pipeline, task: TaskRecord) -> None:
+        run_id, phases, pair, granter, deadline = p.run_id, p.phases, p.pair, p.granter, p.deadline
+        if task.state == "pending":
+            self._set_task_state(run_id, task, "executing")
+        self.bus.emit(
+            HostEventTypes.TASK_START, run_id, task_id=task.spec.id, title=task.spec.title
+        )
+
+        while not task.terminal:
+            self._check_cancelled_and_clock(run_id, deadline)
+            # Interactive chat: absorb queued user messages at the same
+            # boundary cancellation uses — the agent pauses here, replies,
+            # and any course change (re-plan, standing guidance) lands
+            # before the next phase runs.
+            # Addressed to this task first, in its own lane; then the
+            # shared mailbox, under the rules it always had.
+            self._process_task_chat(run_id, phases, task)
+            self._process_chat(run_id, phases, self._steer_target(task))
+            abort_reason = self._resource_abort_reason()
+            if abort_reason:
+                # Fail the task with a diagnosis instead of letting the next
+                # phase produce garbage in a full sandbox. Dependents are
+                # skipped by the normal failed-task machinery.
+                task.last_feedback = abort_reason
+                self._set_task_state(run_id, task, "failed")
+                break
+            if p.kind == "workload":
+                # The operator executes and the judge decides (#756); the
+                # task walks the same two states a code run's does.
+                if task.state == "executing":
+                    self._phase_execute(run_id, phases, task, granter, pair)
+                elif task.state == "verifying":
+                    self._phase_judge(run_id, phases, task)
+                else:  # pragma: no cover - defensive
+                    raise StateError(f"task {task.spec.id} in unexpected state {task.state}")
+            elif task.state == "executing":
+                self._phase_build(run_id, phases, task, granter)
+            elif task.state == "verifying":
+                self._phase_verify(run_id, phases, task)
+            else:  # pragma: no cover - defensive
+                raise StateError(f"task {task.spec.id} in unexpected state {task.state}")
+
+        # Task-boundary harvest narrows the loss window on long runs; the
+        # finalize harvest in _drive remains the authoritative sweep.
+        # When harvest_mode is "final", skip the mid-run copy for cheaper
+        # per-task cost on runs with large workspaces.
+        if self.config.artifacts.harvest_mode == "per-task":
+            # Copies the whole workspace out of the shared sandbox; two lanes
+            # harvesting at once would interleave into the same directory.
+            with self._sandbox_lock:
+                self._harvest(run_id, pair, p.kind)
+        # Anything still addressed to this task goes to the shared mailbox:
+        # the task it named is over, so it is answered as run-level
+        # direction rather than lost (S-A11).
+        self._release_task_chat(task)
+        self._emit_task_end(run_id, task)
+
+    def _phase_build(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord,
+        granter: EgressGranter,
+    ) -> None:
+        # Grant-late: task-declared egress is applied at BUILD entry, not at
+        # decompose time, so resumed tasks get their grants on the freshly
+        # provisioned sandbox. The grant rewrites the shared sandbox's
+        # network policy, so lanes take it in turn rather than interleaving
+        # inside it.
+        with self._sandbox_lock:
+            granter.apply(
+                task.spec.id, [(egress.domain, egress.reason) for egress in task.spec.egress]
+            )
+        started = time.time()
+        # A revision continues the same agent's own work on the same task, so
+        # it resumes that session where the SDK still has it and is handed the
+        # previous attempt's report either way. Both answer the same waste:
+        # without them a revision re-establishes everything the last attempt
+        # already knew. Resume is the stronger of the two but the more
+        # fragile — it needs the session to still exist — so the report is
+        # passed unconditionally rather than only as a fallback.
+        resume = task.session_id if task.session_id in self._live_sessions else None
+        result = phases.build(
+            task,
+            prior_report=self._prior_attempt_report(run_id, task),
+            resume_session_id=resume,
+        )
+        if resume and result.session_id != resume:
+            # A model change or an SDK resume miss can start a fresh session.
+            # The model-change reason is logged at dispatch; either way the
+            # prior report carried the context into the new session.
+            log.info(
+                "phase.resume_missed",
+                run=run_id,
+                task=task.spec.id,
+                requested=resume,
+                got=result.session_id,
+                hint="continuing in a fresh session; the prior report carried the context",
+            )
+        task.session_id = result.session_id
+        if result.session_id:
+            self._live_sessions.add(result.session_id)
+        builder_report = clip(result.output_text)
+        spend = phases.drain_spend()
+        payload: dict[str, Any] = {"report": builder_report, "session_id": result.session_id}
+        payload["requested_model"] = phases.session_models.get(result.session_id or "")
+        # A fix round's report is the per-finding answer to the review that
+        # seeded it. Parse it once, here, and persist it with the build row:
+        # the reconciliation that gets replied onto the PR threads must
+        # survive a resume, and re-deriving it later depends on the report
+        # still being parseable by whatever the code says then.
+        reconciled = self._reconcile_fix(run_id, task, builder_report)
+        if reconciled is not None:
+            payload["reconciled"] = reconciled
+            unanswered = [r["anchor"] for r in reconciled if r["status"] == "unanswered"]
+            if unanswered:
+                # Loud, not fatal (#522): a round that says nothing about a
+                # finding is incomplete; the finding rides into the next brief.
+                log.warning(
+                    "fix.unanswered_findings",
+                    run=run_id,
+                    task=task.spec.id,
+                    anchors=unanswered,
+                    hint="the fix report has no addressed/refuted/deferred line for these; "
+                    "they are carried into the next fix round as unanswered",
+                )
+                self.bus.emit(
+                    HostEventTypes.FIX_UNANSWERED,
+                    run_id,
+                    round=sum(1 for t in self.store.get_tasks(run_id) if is_fix_task(t.spec.id)),
+                    task_id=task.spec.id,
+                    anchors=unanswered,
+                )
+        self._record_phase(
+            run_id,
+            "build",
+            task_id=task.spec.id,
+            attempt=task.revisions + 1,
+            status="ok",
+            output_json=json.dumps(payload),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        # The report excerpt is the chronology's record of what this attempt
+        # did (the builder narrates its approach in prose now that no
+        # structured plan exists); the streamed agent messages carry the
+        # detail.
+        headline = " ".join((result.output_text or "").split())
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="build",
+            status="ok",
+            attempt=task.revisions + 1,
+            message=headline[:300] or "(builder produced no report)",
+        )
+        task.last_feedback = ""
+        self._set_task_state(run_id, task, "verifying")
+
+    def _phase_execute(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord,
+        granter: EgressGranter,
+        pair: SandboxPair,
+    ) -> None:
+        """One operator session on one workload task (#756): the build
+        phase's shape — grants, session resume, the prior report — with the
+        session's tool calls digested for the judge and persisted beside
+        the report, so a resumed run judges the same evidence.
+
+        The task's output (#757) is cut here too: the report's result
+        section, and the data-directory files newer than the marker the
+        task's first attempt set — listed, not claimed.
+        """
+        with self._sandbox_lock:
+            granter.apply(
+                task.spec.id,
+                [(egress.domain, egress.reason) for egress in task.spec.egress]
+                # The plan's declared hosts (#758), checked against the
+                # profile after planning; applied here, at the tightest
+                # point sbx's grant-only policy model permits.
+                + [(host, "declared in the plan's needs") for host in task.spec.needs.hosts],
+            )
+        started = time.time()
+        self._mark_task_start(run_id, pair, task)
+        resume = task.session_id if task.session_id in self._live_sessions else None
+        digest = ToolDigest()
+        result = phases.execute(
+            task,
+            prior_report=self._prior_attempt_report(run_id, task, phase="execute"),
+            resume_session_id=resume,
+            digest=digest,
+        )
+        if resume and result.session_id != resume:
+            log.info(
+                "phase.resume_missed",
+                run=run_id,
+                task=task.spec.id,
+                requested=resume,
+                got=result.session_id,
+                hint="continuing in a fresh session; the prior report carried the context",
+            )
+        task.session_id = result.session_id
+        if result.session_id:
+            self._live_sessions.add(result.session_id)
+        report = clip(result.output_text)
+        spend = phases.drain_spend()
+        self._record_phase(
+            run_id,
+            "execute",
+            task_id=task.spec.id,
+            attempt=task.revisions + 1,
+            status="ok",
+            output_json=json.dumps(
+                {
+                    "report": report,
+                    "session_id": result.session_id,
+                    "tools": digest.render(),
+                    "requested_model": phases.session_models.get(result.session_id or ""),
+                    "tool_calls": digest.total,
+                }
+            ),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        headline = " ".join((result.output_text or "").split())
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="execute",
+            status="ok",
+            attempt=task.revisions + 1,
+            message=headline[:300] or "(the operator produced no report)",
+        )
+        earlier = task.output.files if task.output is not None else []
+        files, more = self._task_files(run_id, pair, task, earlier)
+        task.output = TaskOutput.from_report(report, files=files, more_files=more)
+        self.bus.emit(
+            HostEventTypes.TASK_OUTPUT,
+            run_id,
+            task_id=task.spec.id,
+            attempt=task.revisions + 1,
+            summary=task.output.summary,
+            files=task.output.file_count,
+        )
+        task.last_feedback = ""
+        self._set_task_state(run_id, task, "verifying")
+
+    @staticmethod
+    def _task_marker(task: TaskRecord) -> str:
+        # Under the VM's own `.lantern`, never the data directory: the
+        # marker is not an output and needs no exclude.
+        return f"{LANTERN_DIR}/task-{task.spec.id}.start"
+
+    def _mark_task_start(self, run_id: str, pair: SandboxPair, task: TaskRecord) -> None:
+        """Set the task's marker before its FIRST attempt only, so a
+        revision's listing still covers what the earlier attempts left."""
+        marker = shlex.quote(self._task_marker(task))
+        try:
+            result = pair.agent.exec(
+                [
+                    "sh",
+                    "-c",
+                    f"mkdir -p {shlex.quote(LANTERN_DIR)} && [ -e {marker} ] || : > {marker}",
+                ]
+            )
+            ok, detail = result.ok, result.stderr
+        except SbxError as exc:
+            ok, detail = False, str(exc)
+        if not ok:
+            log.warning("task.mark_failed", run=run_id, task=task.spec.id, detail=detail[-300:])
+
+    def _task_files(
+        self, run_id: str, pair: SandboxPair, task: TaskRecord, earlier: Sequence[str] = ()
+    ) -> tuple[list[str], int]:
+        """The data-directory files the task's attempts touched: everything
+        newer than its marker, under the same excludes the harvest and the
+        artifact listing apply, plus the files an earlier attempt listed
+        that still exist — a resumed run's fresh sandbox has a fresh marker,
+        and the persisted output is what remembers the attempts before it.
+        Best-effort like the harvest — a failed listing is logged and the
+        output says no files, never the run."""
+        prune = " -o ".join(f"-name {shlex.quote(name)}" for name in self.config.artifacts.exclude)
+        prune_expr = f"\\( {prune} \\) -prune -o " if prune else ""
+        keep = ""
+        if earlier:
+            names = " ".join(shlex.quote(name) for name in earlier)
+            keep = f'for f in {names}; do [ -f "$f" ] && printf "%s\\n" "$f"; done; '
+        script = (
+            f"cd {shlex.quote(pair.agent_workdir)} && {keep}find . {prune_expr}"
+            f"-type f -newer {shlex.quote(self._task_marker(task))} -print"
+        )
+        try:
+            result = pair.agent.exec(["sh", "-c", script])
+        except SbxError as exc:
+            log.warning("task.files_failed", run=run_id, task=task.spec.id, detail=str(exc)[-300:])
+            return [], 0
+        if not result.ok:
+            log.warning(
+                "task.files_failed", run=run_id, task=task.spec.id, detail=result.stderr[-300:]
+            )
+            return [], 0
+        paths = sorted(
+            {
+                line[2:] if line.startswith("./") else line
+                for line in result.stdout.splitlines()
+                if line.strip()
+            }
+        )
+        return paths[:MAX_OUTPUT_FILES], max(0, len(paths) - MAX_OUTPUT_FILES)
+
+    def _phase_judge(self, run_id: str, phases: PhaseRunner, task: TaskRecord) -> None:
+        """The judge's verdict on the task's last execute attempt (#756).
+
+        Passed → done. Failed → the unmet criteria are the next attempt's
+        feedback, under ``max_revisions_per_task``; past it the task fails
+        and the verdict becomes the run's reason. A judge that produced no
+        usable verdict twice running is a degraded judge: the task fails
+        closed, named as such — silence is never a pass.
+        """
+        started = time.time()
+        attempt = task.revisions + 1
+        output = self.store.latest_phase_output(run_id, task.spec.id, "execute")
+        executed = json.loads(output) if output else {}
+        report = executed.get("report")
+        tools = executed.get("tools")
+        report = report if isinstance(report, str) else ""
+        tools = tools if isinstance(tools, str) else ""
+        evidence = phases.verify(task).results if task.spec.verify_commands else ""
+        try:
+            verdict = phases.judge(
+                task, attempt=attempt, report=report, tool_digest=tools, evidence=evidence
+            )
+        except InvalidOutputTwice as exc:
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "judge",
+                task_id=task.spec.id,
+                attempt=attempt,
+                status="failed",
+                output_json=json.dumps({"degraded": True, "error": str(exc)}),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            log.warning("judge.degraded", run=run_id, task=task.spec.id, error=str(exc)[:300])
+            self.bus.emit(
+                HostEventTypes.JUDGE_DEGRADED,
+                run_id,
+                task_id=task.spec.id,
+                attempt=attempt,
+                error=str(exc),
+            )
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="judge",
+                status="failed",
+                attempt=attempt,
+                message="the judge produced no usable verdict twice; failing closed",
+            )
+            task.last_feedback = f"the judge could not reach a verdict: {exc}"
+            self._set_task_state(run_id, task, "failed")
+            return
+        spend = phases.drain_spend()
+        self._record_phase(
+            run_id,
+            "judge",
+            task_id=task.spec.id,
+            attempt=attempt,
+            status="ok" if verdict.passed else "failed",
+            output_json=json.dumps({"degraded": False, "attempt": attempt, **verdict.model_dump()}),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        self.bus.emit(
+            HostEventTypes.JUDGE_VERDICT,
+            run_id,
+            task_id=task.spec.id,
+            attempt=attempt,
+            passed=verdict.passed,
+            unmet=list(verdict.unmet),
+            notes=verdict.notes,
+        )
+        if verdict.passed:
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="judge",
+                status="ok",
+                attempt=attempt,
+                message=" ".join(verdict.notes.split())[:300] or "every criterion met",
+            )
+            self._set_task_state(run_id, task, "done")
+            return
+        first = verdict.unmet[0]
+        more = len(verdict.unmet) - 1
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="judge",
+            status="failed",
+            attempt=attempt,
+            message=f"unmet: {first}" + (f" (+{more} more)" if more else ""),
+        )
+        feedback = "the judge found these acceptance criteria unmet:\n" + "\n".join(
+            f"- {item}" for item in verdict.unmet
+        )
+        if verdict.notes:
+            feedback += f"\n\nJudge's notes: {verdict.notes}"
+        self._register_revision(run_id, task, feedback)
+
+    def _phase_verify(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord,
+    ) -> None:
+        started = time.time()
+        mode = self._verify_mode
+        if mode == "ci-only":
+            # No verify job at all (#682): the pull request's checks judge
+            # the work in landing, on a runner that has the services. The
+            # row and the event keep the skip visible — a resumed run and a
+            # reader of the chronology both see that nothing ran.
+            self._record_phase(
+                run_id,
+                "verify",
+                task_id=task.spec.id,
+                attempt=task.revisions + 1,
+                status="skipped",
+                output_json=json.dumps(
+                    {
+                        "passed": None,
+                        "reason": 'verify_mode = "ci-only"',
+                        "commands": list(task.spec.verify_commands),
+                    }
+                ),
+                started_at=started,
+            )
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="verify",
+                status="skipped",
+                message=(
+                    f"{len(task.spec.verify_commands)} verify command(s) not run "
+                    '(verify_mode = "ci-only": the pull request\'s checks are the '
+                    "verification)"
+                ),
+            )
+            self._set_task_state(run_id, task, "done")
+            return
+        outcome = phases.verify(task)
+        passed, feedback, results = outcome.passed, outcome.feedback, outcome.results
+        advisory = not passed and mode == "advisory"
+        # `results` (the full command transcript) is persisted so a resumed
+        # run reads the evidence from phase_attempts rather than in-memory
+        # state (#61). An advisory failure (#682) gets its own status: it
+        # blocked nothing, and `_verification_note` reads the rows back.
+        self._record_phase(
+            run_id,
+            "verify",
+            task_id=task.spec.id,
+            attempt=task.revisions + 1,
+            status="ok" if passed else ("advisory" if advisory else "failed"),
+            output_json=json.dumps(
+                {"passed": passed, "feedback": clip(feedback), "results": results}
+            ),
+            started_at=started,
+        )
+        if passed:
+            self._set_task_state(run_id, task, "done")
+            return
+        # Put the failing command in the live stream: without this the
+        # transcript jumps verifying -> failed and the reason only exists
+        # in the phase_attempts table.
+        failure_count = feedback.count(VERIFY_FAILURE_PREFIX)
+        first_line = feedback.splitlines()[0] if feedback else "verify failed"
+        message = first_line if failure_count <= 1 else f"{first_line} (+{failure_count - 1} more)"
+        if advisory:
+            # The task is done on the builder's word (#682): the failure is
+            # evidence for the review and the pull request, never a
+            # revision or a replan. `verify_fingerprints` stays untouched —
+            # the suspect machinery is for checks that gate.
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="verify",
+                status="advisory",
+                message=f'{message} (advisory: verify_mode = "advisory", not blocking)',
+            )
+            self._set_task_state(run_id, task, "done")
+            return
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="verify",
+            status="failed",
+            message=message,
+        )
+        repeated = self._record_verify_failures(task, outcome.failures)
+        if repeated and task.verify_suspect:
+            # Already flagged: keep the suspect wording (never fall back to
+            # plain "revise the code" feedback for a check we know repeats)
+            # but do not spend another replan on the same diagnosis.
+            # `verify_failure` stays False deliberately: its exhaustion path
+            # spends a replan AND overwrites last_feedback with the generic
+            # "start over with a fresh approach" text, which would undo the
+            # very wording this branch exists to preserve.
+            self._register_revision(run_id, task, verify_suspect_feedback(repeated))
+            return
+        if repeated:
+            # Mechanical verify-suspect signal (#387): the same command has
+            # now failed with the same (normalised) output on a later
+            # attempt, so another revision of the code cannot change the
+            # result. Route straight to a replan that says the check is
+            # what needs re-authoring — no model call is needed to see it.
+            task.verify_suspect = True
+            self.bus.emit(
+                HostEventTypes.PHASE_END,
+                run_id,
+                task_id=task.spec.id,
+                phase="verify",
+                status="failed",
+                message=(
+                    f"verify command suspect: `{repeated[0].command}` failed identically again"
+                ),
+            )
+            self._register_verify_suspect(run_id, phases, task, repeated)
+            return
+        self._register_revision(run_id, task, feedback, verify_failure=True)
+
+    @staticmethod
+    def _record_verify_failures(
+        task: TaskRecord, failures: Sequence[VerifyFailure]
+    ) -> list[VerifyFailure]:
+        """Fingerprint this attempt's verify failures against everything the
+        task has seen before; return the ones that are exact repeats."""
+        seen = set(task.verify_fingerprints)
+        repeated: list[VerifyFailure] = []
+        for failure in failures:
+            fingerprint = failure.fingerprint
+            if fingerprint in seen:
+                repeated.append(failure)
+            else:
+                seen.add(fingerprint)
+                task.verify_fingerprints.append(fingerprint)
+        return repeated
+
+    def _register_verify_suspect(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord,
+        repeated: Sequence[VerifyFailure],
+    ) -> None:
+        """Escalate a check that cannot pass, then fall back to a fresh session.
+
+        The verify commands are decomposer-authored and the builder is told
+        it cannot edit them. That used to be the end of the story: nothing in
+        the loop re-ran decompose, so the only lever was to give the builder
+        a fresh session and hope an approach existed that satisfied the
+        command as written. When none did — because the command was asking
+        for something no arrangement of the workspace could give — the run
+        was abandoned with the work finished and every other check green
+        (field failure rkbgkf32a).
+
+        So the check is now escalated first: one bounded re-author that sees
+        that command and no other, and may replace it, drop it, or let it
+        stand. Only when it stands (or the budget is spent, or it declines)
+        does the old fresh-session replan run, and after that the task fails
+        with ``verify_suspect`` carried into the run's failure reason
+        (``_failure_reason``) so the diagnosis reaches a human.
+
+        Deliberately does NOT increment ``revisions``: the whole point of
+        the signal is that identical revisions are wasted (field run
+        rrhb28j7n burned two revisions and a replan on one impossible
+        ``uv run mypy packages``).
+        """
+        task.last_feedback = verify_suspect_feedback(list(repeated))
+        if self._reauthor_verify(run_id, phases, task, repeated[0]):
+            return
+        if task.replans >= self.config.budgets.max_replans_per_task:
+            self._set_task_state(run_id, task, "failed")
+            return
+        task.replans += 1
+        self._discard_session(task)
+        self._set_task_state(run_id, task, "executing")
+
+    def _reauthor_verify(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord,
+        failure: VerifyFailure,
+    ) -> bool:
+        """Try to change the check instead of the work; True if it changed.
+
+        The task stays in ``verifying`` on success rather than going back
+        through BUILD. The build already passed — only the exam changed — and
+        a run's cost scales with turns, so a build turn that would find
+        nothing to do is a turn not worth spending.
+
+        ``verify_suspect`` is cleared with the command that earned it. The
+        fingerprints are left alone: they are keyed by command text, so the
+        replacement starts clean anyway, and a *different* command that
+        starts repeating is a new suspect that deserves its own escalation.
+        """
+        budget = self.config.budgets.max_verify_reauthors_per_task
+        if task.verify_reauthors >= budget:
+            return False
+        try:
+            answer = phases.reauthor_verify(
+                task,
+                suspect_command=failure.command,
+                suspect_output=failure.output,
+                builder_report=self._prior_attempt_report(run_id, task),
+            )
+        except (InvalidOutputTwice, WorkerError) as exc:
+            # A re-author that cannot answer must not take the run with it:
+            # the fallback below is exactly the behaviour that existed before
+            # this phase did.
+            log.warning(
+                "verify.reauthor_failed", run=run_id, task=task.spec.id, error=str(exc)[:300]
+            )
+            return False
+        if answer.verdict == "keep":
+            return False
+        task.verify_reauthors += 1
+        replacement = answer.command.strip() if answer.verdict == "replace" else ""
+        task.spec.verify_commands = [
+            replacement if command == failure.command else command
+            for command in task.spec.verify_commands
+            if replacement or command != failure.command
+        ]
+        task.verify_suspect = False
+        self.bus.emit(
+            HostEventTypes.VERIFY_REAUTHORED,
+            run_id,
+            task_id=task.spec.id,
+            verdict=answer.verdict,
+            command=failure.command,
+            replacement=replacement,
+            reason=answer.reason,
+            text=(
+                f"verify check {answer.verdict}d on task {task.spec.id}: "
+                f"`{failure.command}` — {answer.reason}"
+            ),
+        )
+        self.store.update_task(run_id, task)
+        return True
+
+    @staticmethod
+    def _discard_session(task: TaskRecord) -> None:
+        """Throw away the current approach so BUILD starts clean.
+
+        A *revision* continues the same approach, so resuming that session
+        is the whole point — it is what stops the next attempt re-deriving
+        what this one established. A *replan* (or a steer) is the opposite:
+        the approach itself was wrong, and a resumed session would carry the
+        discarded one forward as though it were still the intent. Clearing
+        the id here is what keeps those two cases apart.
+        """
+        task.revisions = 0
+        task.session_id = None
+
+    def _prior_attempt_report(self, run_id: str, task: TaskRecord, *, phase: str = "build") -> str:
+        """What the previous BUILD attempt on this task said it did.
+
+        Field failure (run rrhb28j7n, task t5): five executor sessions each
+        ran ``uv sync --all-packages`` and the whole lint gate from scratch
+        and each concluded "no changes needed", because a revision was told
+        only what the critic objected to and nothing about what the last
+        attempt had already established. The report is committed to
+        phase_attempts either way — this is the engine handing back work it
+        was already holding, so a revision starts from the last attempt's
+        findings instead of re-deriving them.
+
+        Read from the store rather than kept in memory so a resumed run's
+        revision gets the same context a fresh one would.
+        """
+        output = self.store.latest_phase_output(run_id, task.spec.id, phase)
+        if output is None:
+            return ""
+        report = json.loads(output).get("report")
+        return report if isinstance(report, str) else ""
+
+    def _register_revision(
+        self, run_id: str, task: TaskRecord, feedback: str, *, verify_failure: bool = False
+    ) -> None:
+        task.revisions += 1
+        task.last_feedback = feedback
+        if task.revisions <= self.config.budgets.max_revisions_per_task:
+            self._set_task_state(run_id, task, "executing")
+            return
+        if verify_failure and task.replans < self.config.budgets.max_replans_per_task:
+            # Verify commands are decomposer-authored; the builder cannot
+            # edit them, so no number of revisions inside one session can
+            # fix an approach that disagrees with where the checks look. A
+            # fresh session starts the approach over and can route the work
+            # to where the commands expect files.
+            task.replans += 1
+            self._discard_session(task)
+            task.last_feedback = (
+                "every revision failed the same verify commands; start over "
+                "with a fresh approach whose file layout and setup satisfy "
+                "the commands exactly as written:\n\n" + feedback
+            )
+            self._set_task_state(run_id, task, "executing")
+            return
+        self._set_task_state(run_id, task, "failed")
+
+    # -- interactive chat --------------------------------------------------
+
+    def _process_chat(
+        self,
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord | None,
+        *,
+        stage: str | None = None,
+    ) -> None:
+        """Drain queued user messages: one STEER session each, FIFO.
+
+        A failed steer never fails the run — the error rides on the
+        ``chat.reply`` event and the message is dropped; real infrastructure
+        breakage will surface loudly in the next phase anyway.
+
+        One lane at a time: every task lane reaches a phase boundary and
+        calls this, but the mailbox only needs draining once. The lock is
+        taken non-blocking so the lanes that lose the race carry straight on
+        into their next phase instead of queueing behind a steer session's
+        LLM round trip — the messages are still answered, by the lane that
+        holds it, and standing guidance lands before any lane's next prompt.
+        """
+        if not self._chat_lock.acquire(blocking=False):
+            return
+        try:
+            # A message addressed to a lane that will never drain it -- a
+            # task that is over, or one this run never had -- is answered
+            # here, as run-level direction, rather than swallowed.
+            self._sweep_task_chat(run_id)
+            self._drain_chat(self._chat_queue, run_id, phases, task, stage)
+        finally:
+            self._chat_lock.release()
+
+    def _process_task_chat(self, run_id: str, phases: PhaseRunner, task: TaskRecord) -> None:
+        """Drain the messages addressed to ``task`` (S-A11).
+
+        Its own lane, its own mailbox: no shared lock, because nothing else
+        may answer these. The target is honoured whatever
+        ``max_parallel_tasks`` is — the message named this task, so there is
+        no guess to make about which lane the person meant.
+        """
+        with self._task_chat_lock:
+            mailbox = self._task_chat_queues.get(task.spec.id)
+        if mailbox is None:
+            return
+        self._drain_chat(mailbox, run_id, phases, task, None)
+
+    def _sweep_task_chat(self, run_id: str) -> None:
+        """Hand back every mailbox whose task is not in flight.
+
+        The engine's own routing only ever addresses a live task, but the
+        steering API takes whatever task id a caller sends. Without this,
+        an instruction for a task that is finished, was never planned, or
+        was misspelled would wait in a mailbox no lane will ever read.
+        """
+        with self._task_chat_lock:
+            addressed = list(self._task_chat_queues)
+        if not addressed:
+            return
+        try:
+            live = {task.spec.id for task in self.store.get_tasks(run_id) if not task.terminal}
+        except LanternError:
+            return
+        for task_id in addressed:
+            if task_id not in live:
+                self._release_task_chat(task_id)
+
+    def _release_task_chat(self, task: TaskRecord | str) -> None:
+        """Hand a finished task's unanswered messages to the shared mailbox.
+
+        A message addressed to a task that ended before its lane drained it
+        must still be answered — as run-level direction, since the task it
+        named is over — rather than sitting in a mailbox nobody reads again.
+        """
+        task_id = task if isinstance(task, str) else task.spec.id
+        with self._task_chat_lock:
+            mailbox = self._task_chat_queues.pop(task_id, None)
+        if mailbox is None:
+            return
+        while True:
+            try:
+                message = mailbox.get_nowait()
+            except queue.Empty:
+                return
+            self._chat_queue.put(message._replace(task_id=None))
+
+    def _drain_chat(
+        self,
+        mailbox: queue.SimpleQueue[ChatMessage],
+        run_id: str,
+        phases: PhaseRunner,
+        task: TaskRecord | None,
+        stage: str | None,
+    ) -> None:
+        while True:
+            try:
+                message = mailbox.get_nowait()
+            except queue.Empty:
+                return
+            self.bus.emit(
+                HostEventTypes.CHAT_MESSAGE,
+                run_id,
+                message_id=message.message_id,
+                text=message.text,
+                # Only when addressed: an ordinary message's event is the
+                # one it has always been, byte for byte.
+                **self._chat_target(message),
+            )
+            with self._task_chat_lock:
+                self._steer_attempts += 1
+            started = time.time()
+            try:
+                verdict = phases.steer(
+                    message.text,
+                    tasks=self.store.get_tasks(run_id),
+                    task=task,
+                    stage=stage,
+                    binding=self._chat_binding(message),
+                )
+            except ProviderHeldError:
+                with self._task_chat_lock:
+                    self._steer_attempts -= 1
+                self.bus.emit(
+                    "chat.provider_pending",
+                    run_id,
+                    message_id=message.message_id,
+                    text=message.text,
+                    **self._chat_target(message),
+                )
+                raise
+            except WorkerError as exc:
+                log.warning(
+                    "run.steer_failed",
+                    run=run_id,
+                    message=message.message_id,
+                    attempt=self._steer_attempts,
+                    exc_info=True,
+                )
+                spend = phases.drain_spend()
+                self._record_phase(
+                    run_id,
+                    "steer",
+                    task_id=task.spec.id if task else None,
+                    attempt=self._steer_attempts,
+                    status="error",
+                    output_json=json.dumps({"message": message.text, "error": str(exc)}),
+                    started_at=started,
+                    usage=spend.usage,
+                    turns=spend.turns,
+                )
+                self.bus.emit(
+                    HostEventTypes.CHAT_REPLY,
+                    run_id,
+                    message_id=message.message_id,
+                    error=str(exc),
+                    **self._chat_target(message),
+                )
+                continue
+            action = self._apply_steer(run_id, task, verdict, phases)
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                "steer",
+                task_id=task.spec.id if task else None,
+                attempt=self._steer_attempts,
+                status=action,
+                output_json=json.dumps(
+                    {"message": message.text} | verdict.model_dump() | {"applied": action}
+                ),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            self.bus.emit(
+                HostEventTypes.CHAT_REPLY,
+                run_id,
+                message_id=message.message_id,
+                reply=verdict.reply,
+                action=action,
+                **self._chat_target(message),
+            )
+
+    def _chat_target(self, message: ChatMessage) -> dict[str, str]:
+        """The target fields a chat event carries, when it was addressed.
+
+        Empty for an untargeted message, so the events of a run nobody
+        steered by name are unchanged. The agent is stamped only when the
+        run's assignment has it: the channel credits the reply to the agent
+        its event names, and a steer may name any slug, so a name the run
+        was never given must not leave here as the reply's author. The task
+        needs no check of its own: a message for a task the run does not
+        have, or one that is over, reaches the drain with its task cleared
+        (:meth:`_release_task_chat`).
+        """
+        target: dict[str, str] = {}
+        if message.task_id is not None:
+            target["task_id"] = message.task_id
+        binding = self._chat_binding(message)
+        if binding is not None:
+            target["agent_slug"] = binding.slug
+        return target
+
+    def _chat_binding(self, message: ChatMessage) -> AgentBinding | None:
+        """The agent a message named, when the run's assignment has it: the
+        steer answers in that agent's persona and with its model. An
+        unassigned or forged slug falls back to the run's own steering
+        agent rather than inventing one."""
+        if message.agent_slug is None or self._assignment is None:
+            return None
+        return self._assignment.agents.get(message.agent_slug)
+
+    def _steer_target(self, task: TaskRecord) -> TaskRecord | None:
+        """The task a steer verdict may re-plan, or None for run-level only.
+
+        Only a lone lane offers itself. With several in flight there is no
+        "current task": the lane that wins the chat lock is whichever
+        reached a phase boundary first, so steering it would re-plan an
+        arbitrary task rather than the one the operator meant. None routes
+        the verdict through the existing ``steer_task`` -> ``steer_run``
+        downgrade in :meth:`_apply_steer`, recording the guidance for every
+        later prompt instead of gambling on a lane. Steering one task by
+        name under parallelism is what :meth:`_process_task_chat` does
+        instead (S-A11): a message that names its task waits in that task's
+        own mailbox, so the lane that answers it is the one the person
+        meant. This method still refuses to guess for a message that named
+        nothing.
+        """
+        return task if self.config.budgets.max_parallel_tasks == 1 else None
+
+    def _apply_steer(
+        self,
+        run_id: str,
+        task: TaskRecord | None,
+        verdict: SteerVerdict,
+        phases: PhaseRunner,
+    ) -> str:
+        """Apply a steer verdict's course change; returns the action actually
+        applied (``steer_task`` downgrades to ``steer_run`` when no task is
+        live to steer)."""
+        action = verdict.action
+        if action == "steer_task" and (task is None or task.terminal):
+            action = "steer_run"
+        if action == "steer_task":
+            assert task is not None
+            # User direction, not a failure: the task's build session is
+            # discarded and restarted with the guidance as feedback, and
+            # neither budget counter is spent.
+            task.last_feedback = f"user steering (must be honored): {verdict.guidance}"
+            self._discard_session(task)
+            self._set_task_state(run_id, task, "executing")
+            self.bus.emit(
+                HostEventTypes.CHAT_ACTION,
+                run_id,
+                task_id=task.spec.id,
+                action=action,
+                guidance=verdict.guidance,
+                message=(
+                    f"user steering: restarting task {task.spec.id} with guidance — "
+                    f"{verdict.guidance}"
+                ),
+            )
+        elif action == "steer_run":
+            self.store.append_run_guidance(run_id, verdict.guidance)
+            phases.add_guidance(verdict.guidance)
+            self.bus.emit(
+                HostEventTypes.CHAT_ACTION,
+                run_id,
+                action=action,
+                guidance=verdict.guidance,
+                message=f"user steering: standing guidance added — {verdict.guidance}",
+            )
+        return action
+
+    # -- bookkeeping -------------------------------------------------------
+
+    def _resource_abort_reason(self) -> str | None:
+        """Non-None when the agent sandbox's last resource sample crossed
+        an abort threshold (the worker classifies; the level rides on the
+        event). Names the resource that tripped so an OOM-bound task is not
+        diagnosed as a full disk (#253)."""
+        sample = self._last_resources.get("agent")
+        if not sample or sample.get("level") != "abort":
+            return None
+        limits = self.config.limits
+        disk = sample.get("disk_used_pct")
+        if isinstance(disk, (int, float)) and limits.disk_abort > 0 and disk >= limits.disk_abort:
+            return (
+                f"sandbox disk exhausted: {disk}% of the workspace filesystem is used "
+                f"(limits.disk_abort={limits.disk_abort}%)"
+            )
+        return (
+            f"sandbox memory exhausted: {sample.get('mem_used_pct')}% of memory is used "
+            f"(limits.mem_abort={limits.mem_abort}%)"
+        )
+
+    def _check_cancelled_and_clock(self, run_id: str, deadline: float) -> None:
+        if self._cancel_event.is_set():
+            raise RunCancelledError(
+                f"run {run_id} interrupted; resume with `lantern resume {run_id}`"
+            )
+        if self.store.get_run(run_id).state == "cancelled":
+            raise RunCancelledError(f"run {run_id} was cancelled")
+        # Waiting on GitHub is not agent work; it is not charged to the budget.
+        if self.clock() - self._waited_s > deadline:
+            self._set_run_state(run_id, "failed")
+            self.store.set_run_reason(
+                run_id, f"exceeded max_wall_clock_s={self.config.budgets.max_wall_clock_s:g}"
+            )
+            raise BudgetExceededError(
+                f"run {run_id} exceeded max_wall_clock_s={self.config.budgets.max_wall_clock_s}"
+            )
+
+    def _set_run_state(self, run_id: str, state: RunState) -> None:
+        self.store.set_run_state(run_id, state)
+        self.bus.emit(HostEventTypes.RUN_STATE, run_id, state=state)
+
+    def _set_task_state(self, run_id: str, task: TaskRecord, state: TaskState) -> None:
+        task.state = state
+        self.store.update_task(run_id, task)
+        self.bus.emit(
+            HostEventTypes.TASK_STATE,
+            run_id,
+            task_id=task.spec.id,
+            state=state,
+            revisions=task.revisions,
+            replans=task.replans,
+        )
+
+    def _emit_task_end(self, run_id: str, task: TaskRecord) -> None:
+        self.bus.emit(
+            HostEventTypes.TASK_END,
+            run_id,
+            task_id=task.spec.id,
+            title=task.spec.title,
+            state=task.state,
+        )
+
+
+def _last_line(output: str, limit: int = 300) -> str:
+    """The last non-empty line of a command's output, as a ` — …` suffix;
+    empty when there is none. A traceback ends with the exception, a tool
+    with its error line: the one line a person needs, never the wall."""
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    line = lines[-1]
+    if len(line) > limit:
+        line = line[: limit - 1] + "…"
+    return f" — {line}"
+
+
+def _plan_summary(brief: PlanBrief, answer: PlanProposal | PlanReplan) -> str:
+    """What a plan run's one task produced, as its output's summary."""
+    if isinstance(answer, PlanReplan):
+        if not answer.count:
+            return (
+                f"Re-planned the {brief.level} “{brief.title}”: its "
+                f"{brief.child_noun} already cover it, so nothing is proposed"
+            )
+        return (
+            f"Re-planned the {brief.level} “{brief.title}”: {len(answer.add)} to add, "
+            f"{len(answer.modify)} to change, {len(answer.suggest_close)} to close; the diff "
+            "waits in the plan for review"
+        )
+    count = len(answer.children)
+    if brief.generate_root and answer.root is not None:
+        return (
+            f"Generated the {brief.level} “{answer.root.title}” and {count} "
+            f"{brief.child_noun if count != 1 else brief.child_level}; "
+            "they wait in the plan for review"
+        )
+    return (
+        f"Proposed {count} {brief.child_noun if count != 1 else brief.child_level} "
+        f"for the {brief.level} “{brief.title}”; they wait in the plan for review"
+    )
+
+
+def _invalid_twice_reason(exc: InvalidOutputTwice, what: str = "proposal") -> str:
+    """One line on why the planner's answers were refused: the last
+    validation error, whitespace-folded and clipped, under a sentence a
+    person reads."""
+    detail = str(exc).split("invalid output twice:", 1)[-1]
+    folded = " ".join(detail.split())
+    if len(folded) > 400:
+        folded = folded[:399] + "…"
+    verb = "was" if what == "proposal" else "were"
+    return f"the planner's {what} {verb} invalid twice: {folded}"
+
+
+def _awaiting_reason(count: int) -> str:
+    """Why a plan run parked: how many questions wait, and where they are
+    answered."""
+    noun = "question" if count == 1 else "questions"
+    return (
+        f"waiting for a person to answer {count} clarifying {noun} — answer or skip "
+        "them in the plan, or in the run's thread"
+    )
+
+
+def run_outcome(outcome: str, config: Config | None = None) -> RunResult:
+    """Convenience one-shot API: run an outcome with default wiring."""
+    return LoopEngine(config or load_config()).start(outcome)

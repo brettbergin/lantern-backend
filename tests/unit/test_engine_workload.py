@@ -18,17 +18,17 @@ from typing import Any
 
 import pytest
 
-from sbxloop.engine.model import RESUMABLE_RUN_STATES, WORKLOAD_STAGES
-from sbxloop.engine.phases import (
+from lantern.engine.model import RESUMABLE_RUN_STATES, WORKLOAD_STAGES
+from lantern.engine.phases import (
     AGENT_NAMES,
     JUDGE_SYSTEM_MESSAGE,
     OPERATOR_SYSTEM_MESSAGE,
     ToolDigest,
 )
-from sbxloop.engine.skilltools import SKILL_TOOL_NAME
-from sbxloop.errors import WorkerError
-from sbxloop.events import HostEventTypes
-from sbxloop.sbx.naming import run_name
+from lantern.engine.skilltools import SKILL_TOOL_NAME
+from lantern.errors import WorkerError
+from lantern.events import HostEventTypes
+from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.rawdb import exec_raw
@@ -77,7 +77,7 @@ class TestWorkloadRun:
     ) -> None:
         """A recipe stages the code the run executes, then says so: without
         the mount the task is gone, not merely its artifacts."""
-        from sbxloop.errors import ProvisionError
+        from lantern.errors import ProvisionError
 
         monkeypatch.setenv("SBX_FAKE_NO_MOUNT", "1")
         workspace = harness.home.run_workspace("rinput")
@@ -625,7 +625,7 @@ class TestTaskOutputs:
 
 
 def _event(type: str, **data: Any) -> Any:
-    from sbxloop_worker.protocol import Event
+    from lantern_worker.protocol import Event
 
     return Event(ts=0.0, run_id="r1", type=type, data=data)
 
@@ -775,7 +775,7 @@ def needing(id: str, **needs: Any) -> dict[str, Any]:
 def profiled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     """Config overrides for a run under the `research` profile, with the
     credential's value in the daemon's env and a scripted service."""
-    from sbxloop_worker.serviceops import FAKE_ENV
+    from lantern_worker.serviceops import FAKE_ENV
 
     script = tmp_path / "service.json"
     script.write_text(json.dumps({"responses": [{"status": 200, "body": {"temp": 3}}]}))
@@ -810,7 +810,7 @@ class TestNeeds:
         assert grant["credentials"] == ["weather"]
 
     def test_seeded_workload_does_not_skip_need_validation(self, harness: Harness) -> None:
-        from sbxloop.engine.model import TaskSpec
+        from lantern.engine.model import TaskSpec
 
         harness.script([BUILD, PASS])
         result = harness.engine().start(
@@ -867,7 +867,7 @@ class TestNeeds:
         assert result.state == "failed"
         assert result.reason == (
             "the plan's needs were refused: task t1 needs host `other.example.org` — outside "
-            "profile 'research'; `workloads.research.egress` in sbxloop.toml would allow it"
+            "profile 'research'; `workloads.research.egress` in lantern.toml would allow it"
         )
         (refusal,) = self.refused(harness)
         assert refusal["key"] == "workloads.research.egress"
@@ -1060,7 +1060,7 @@ class TestNeeds:
         service_fs = harness.fake_sbx.sandbox_fs(run_name(harness.home, run_id, "service"))
         kinds = {
             json.loads(p.read_text())["kind"]
-            for p in (service_fs / "home/agent/.sbxloop/jobs").iterdir()
+            for p in (service_fs / "home/agent/.lantern/jobs").iterdir()
         }
         assert kinds == {"service.http"}
         assert engine.store.get_run(run_id).state == "completed"
@@ -1075,7 +1075,7 @@ class TestNeeds:
         leaves the plan and the credential on the row; a resume provisions
         the pair from the row and goes on from executing, planning nothing
         twice."""
-        from sbxloop.errors import ProvisionError
+        from lantern.errors import ProvisionError
 
         harness.script([plan(needing("t1", credentials=["weather"]))])
         harness.monkeypatch.delenv("WEATHER_API_KEY")
@@ -1108,7 +1108,7 @@ class TestNeeds:
     def test_a_repo_the_profile_allows_is_checked_out_into_the_data_dir(
         self, harness: Harness, profiled: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import hostgit
+        from lantern import hostgit
         from tests.unit.test_hostgit import make_repo
 
         upstream = make_repo(harness.tmp_path, "upstream")
@@ -1154,7 +1154,7 @@ class TestNeeds:
         self, harness: Harness, profiled: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A checkout in a data directory the agent box cannot see would
-        never be read: refused, with no key (nothing in sbxloop.toml fixes
+        never be read: refused, with no key (nothing in lantern.toml fixes
         the mount)."""
         monkeypatch.setenv("SBX_FAKE_NO_MOUNT", "1")
         harness.script([plan(needing("t1", repo="o/docs"))])
@@ -1194,7 +1194,7 @@ class TestNeeds:
     def test_a_profile_on_a_code_run_is_refused(
         self, harness: Harness, profiled: dict[str, Any]
     ) -> None:
-        from sbxloop.errors import ConfigError
+        from lantern.errors import ConfigError
 
         engine = harness.engine(**profiled)
         with pytest.raises(ConfigError, match="--kind workload"):
@@ -1204,7 +1204,7 @@ class TestNeeds:
     def test_an_unknown_profile_is_refused_before_the_run_row(
         self, harness: Harness, profiled: dict[str, Any]
     ) -> None:
-        from sbxloop.errors import ConfigError
+        from lantern.errors import ConfigError
 
         engine = harness.engine(**profiled)
         with pytest.raises(ConfigError, match="'nope' is not declared"):
@@ -1259,7 +1259,7 @@ class TestSinks:
         assert [e for e in harness.events if e.type == HostEventTypes.RUN_NEEDS_GRANTED] == []
         # #799: the chat sink stages the tasks' files on the host, the way
         # the artifact sink does, and the event carries their paths for the
-        # bridge to attach — so `sbxloop artifacts` lists them too
+        # bridge to attach — so `lantern artifacts` lists them too
         target = harness.home.runs / result.run_id / "artifacts"
         assert posted["paths"] == [str(target / "a.txt")]
         assert (target / "a.txt").read_text() == "a\n"
@@ -1294,15 +1294,15 @@ class TestSinks:
         ]
         ((title, body, labels),) = fake.issues_created
         assert title == "Digest"
-        assert labels == ["sbxloop:result"]
-        assert "sbxloop:result" in fake.labels_created
+        assert labels == ["lantern:result"]
+        assert "lantern:result" in fake.labels_created
         assert body == (
             "Digest — 2/2 task(s) passed the judge\n"
             "t1: first half\n"
             "t2: second half\n\n"
             "## t1: Task t1\n\nfirst half\n\n"
             "## t2: Task t2\n\nsecond half\n\n"
-            f"---\n*sbxloop run `{result.run_id}`*\n\n**Asked:** write the digest\n"
+            f"---\n*lantern run `{result.run_id}`*\n\n**Asked:** write the digest\n"
         )
         (posted,) = self.published(harness)
         url = f"https://github.com/{fake.repo}/issues/901"
@@ -1337,7 +1337,7 @@ class TestSinks:
         assert number == 12
         assert body.startswith("Digest — 1/1 task(s) passed the judge\n")
         assert body.endswith(
-            f"---\n*sbxloop run `{result.run_id}`*\n\n**Asked:** write the digest\n"
+            f"---\n*lantern run `{result.run_id}`*\n\n**Asked:** write the digest\n"
         )
         url = f"https://github.com/{fake.repo}/issues/12#issuecomment-1"
         (posted,) = self.published(harness)
@@ -1373,7 +1373,7 @@ class TestSinks:
         assert refusal["key"] == "github.repo"
         assert refusal["message"] == (
             "task t1 needs sink `issue` — no repository is configured to publish to; "
-            "`github.repo` in sbxloop.toml would allow it"
+            "`github.repo` in lantern.toml would allow it"
         )
         assert self.published(harness) == []
 
@@ -1406,7 +1406,7 @@ class TestSinks:
     def _upstream(self, harness: Harness, monkeypatch: pytest.MonkeyPatch) -> Path:
         """A repository the run may check out, cloned in place of a fetch
         from GitHub (the way the #758 checkout tests do)."""
-        from sbxloop import hostgit
+        from lantern import hostgit
         from tests.unit.test_hostgit import make_repo
 
         upstream = make_repo(harness.tmp_path, "upstream")
@@ -1446,21 +1446,21 @@ class TestSinks:
         assert result.state == "completed", result.reason
         assert fake.pr_created and fake.pr_create_calls == 1
         kw = fake.pr_kwargs
-        assert kw["repo"] == "o/docs" and kw["head"] == f"sbxloop/{result.run_id}"
-        assert kw["title"] == "sbxloop: Reword the greeting" and kw["draft"] is False
+        assert kw["repo"] == "o/docs" and kw["head"] == f"lantern/{result.run_id}"
+        assert kw["title"] == "lantern: Reword the greeting" and kw["draft"] is False
         assert kw["body"].startswith(
             "Reword the greeting — 1/1 task(s) passed the judge\n"
             "t1: reworded the greeting (2 files)\n\n"
             "## t1: Task t1\n\nreworded the greeting\n\n"
             "Files: `docs/hello.txt`, `docs/new.md`\n\n---\n\n"
-            f"Artifacts produced by sbxloop run `{result.run_id}`."
+            f"Artifacts produced by lantern run `{result.run_id}`."
         )
         # the checkout's diff: the edited file and the new one, nothing else
         assert sorted(f["path"] for batch in fake.blob_batches for f in batch) == [
             "hello.txt",
             "new.md",
         ]
-        assert "sbxloop:result" in fake.labels_created
+        assert "lantern:result" in fake.labels_created
         (posted,) = self.published(harness)
         url = "https://github.com/o/docs/pull/7"
         assert (posted["sink"], posted["location"], posted["tasks"]) == ("pr", url, ["t1"])
@@ -1495,7 +1495,7 @@ class TestSinks:
         )
         result = engine.start("update the docs", kind="workload")
         assert result.state == "completed", result.reason
-        assert fake.merge_requests[1]["labels"] == ["sbxloop:result"]
+        assert fake.merge_requests[1]["labels"] == ["lantern:result"]
         assert fake.issues[1]["labels"] == ["triage"]
 
     def test_the_pr_sink_needs_the_tasks_own_checkout(
@@ -1588,10 +1588,10 @@ class TestSinks:
         assert delivered["paths"] == [str(target / "out/report.csv")]
         assert posted["sink"] == "chat" and posted["tasks"] == ["t2"]
         assert posted["paths"] == [str(target / "scratch.txt")] and posted["files"] == 1
-        # `sbxloop artifacts` reads what the sinks delivered, not the data dir
+        # `lantern artifacts` reads what the sinks delivered, not the data dir
         report = [e for e in harness.events if e.type == HostEventTypes.RUN_ARTIFACTS][-1]
         assert report.data["path"] == str(target) and report.data["files"] == 2
-        from sbxloop.engine.model import artifacts_dir
+        from lantern.engine.model import artifacts_dir
 
         assert artifacts_dir(result, harness.home) == target
 
@@ -1662,7 +1662,7 @@ class TestSinks:
     def test_a_sink_that_fails_fails_the_run_named(
         self, harness: Harness, profiled: dict[str, Any]
     ) -> None:
-        from sbxloop.errors import GithubOpsError
+        from lantern.errors import GithubOpsError
 
         fake = FakeGithub()
         fake.fail_once["issue_create"] = GithubOpsError("boom (HTTP 502)", http_status=502)
@@ -1749,7 +1749,7 @@ class TestWorkloadLanguages:
         assert languages.data["source"] == "config" and languages.data["languages"] == ["dotnet"]
 
     def test_profile_languages_are_normalized_and_checked(self) -> None:
-        from sbxloop.config import Config
+        from lantern.config import Config
 
         config = Config.model_validate(
             {"workloads": [{"name": "p", "languages": ["js", "python", "javascript"]}]}

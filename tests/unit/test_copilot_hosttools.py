@@ -21,10 +21,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop_worker.backends import copilot as copilot_backend
-from sbxloop_worker.backends.copilot import CopilotBackend, _arguments_dict
-from sbxloop_worker.hosttools import HostToolTimeout
-from sbxloop_worker.protocol import Event, HostToolResponse, HostToolSpec, JobRequest
+from lantern_worker.backends import copilot as copilot_backend
+from lantern_worker.backends.copilot import CopilotBackend, _arguments_dict
+from lantern_worker.hosttools import HostToolTimeout
+from lantern_worker.protocol import Event, HostToolResponse, HostToolSpec, JobRequest
 
 
 @dataclass
@@ -69,7 +69,7 @@ def _job(**overrides: Any) -> JobRequest:
             ),
             HostToolSpec(name="list_runs", description="recent runs"),
         ],
-        "host_tools_dir": "/home/agent/.sbxloop/tools/j1",
+        "host_tools_dir": "/home/agent/.lantern/tools/j1",
     }
     base.update(overrides)
     return JobRequest.model_validate(base)
@@ -136,7 +136,7 @@ class TestHandler:
         assert isinstance(result, _StubToolResult)
         assert result.text_result_for_llm == "paused=false" and result.result_type == "success"
         (tools_dir, call, timeout_s), *_ = calls
-        assert tools_dir == Path("/home/agent/.sbxloop/tools/j1")
+        assert tools_dir == Path("/home/agent/.lantern/tools/j1")
         assert call.call_id == "c1" and call.name == "sbx_control"
         assert call.arguments == {"command": "status"} and timeout_s == 7.5
 

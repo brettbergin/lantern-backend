@@ -9,15 +9,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.backends import OPENAI, backend_for, backend_named
-from sbxloop.config import Config
-from sbxloop.engine.model import EgressSpec, TaskNeeds
-from sbxloop.errors import ProvisionError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.naming import run_name
-from sbxloop.sbx.provision import Provisioner, agent_policy_allows
-from sbxloop.sbx.secretstate import parse_secret_ls_entry, tracked_custom_secrets
-from sbxloop_worker.protocol import (
+from lantern.backends import OPENAI, backend_for, backend_named
+from lantern.config import Config
+from lantern.engine.model import EgressSpec, TaskNeeds
+from lantern.errors import ProvisionError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.naming import run_name
+from lantern.sbx.provision import Provisioner, agent_policy_allows
+from lantern.sbx.secretstate import parse_secret_ls_entry, tracked_custom_secrets
+from lantern_worker.protocol import (
     OPENAI_API_ENV,
     OPENAI_BASE_URL_ENV,
     OPENAI_KEY_NAME_ENV,
@@ -139,7 +139,7 @@ def test_repository_override_narrows_the_endpoint_not_the_credential() -> None:
 
 @pytest.mark.parametrize(
     ("value", "reason"),
-    [("not a name", "not an environment variable name"), ("SBXLOOP_KEY", "reserved")],
+    [("not a name", "not an environment variable name"), ("LANTERN_KEY", "reserved")],
 )
 def test_api_key_env_must_be_a_plain_env_name(value: str, reason: str) -> None:
     with pytest.raises(ValidationError, match=reason):
@@ -187,7 +187,7 @@ def test_a_custom_api_key_env_cannot_also_be_operator_configured(data: dict[str,
 
 
 def test_operator_env_cannot_name_the_base_url_variable() -> None:
-    with pytest.raises(ValidationError, match=f"{OPENAI_BASE_URL_ENV} is delivered by sbxloop"):
+    with pytest.raises(ValidationError, match=f"{OPENAI_BASE_URL_ENV} is delivered by lantern"):
         Config.model_validate({"sandbox": {"env": {OPENAI_BASE_URL_ENV: "http://elsewhere"}}})
 
 
@@ -195,9 +195,9 @@ def test_worker_env_names_are_not_config_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The names provisioning delivers to the worker are reserved in the
-    env config layer, like SBXLOOP_WORKER_BACKEND: a daemon whose own
+    env config layer, like LANTERN_WORKER_BACKEND: a daemon whose own
     environment carries them must not read them as (unknown) settings."""
-    from sbxloop.config import load_config
+    from lantern.config import load_config
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv(OPENAI_KEY_NAME_ENV, "OPENAI_API_KEY")
@@ -346,8 +346,8 @@ def test_each_endpoint_shape_reaches_the_allowlist_and_the_binding(
 def test_listing_parser_recognises_each_shape_as_a_host_binding(kind: str) -> None:
     _, host = SHAPES[kind]
     shown = f"[{host}]" if kind == "ipv6" else host
-    raw = f"SCOPE  TYPE  NAME  HOST\nsbxloop-r1-agent  custom  OPENAI_API_KEY  {shown}\n"
-    assert parse_secret_ls_entry(raw, "OPENAI_API_KEY", host=host) == ("sbxloop-r1-agent", [host])
+    raw = f"SCOPE  TYPE  NAME  HOST\nlantern-r1-agent  custom  OPENAI_API_KEY  {shown}\n"
+    assert parse_secret_ls_entry(raw, "OPENAI_API_KEY", host=host) == ("lantern-r1-agent", [host])
 
 
 def test_listing_parser_does_not_mistake_columns_for_hostnames() -> None:
@@ -416,7 +416,7 @@ def test_spec_routes_the_worker_to_the_endpoint_and_keeps_the_key_off_the_agent_
     provisioner = Provisioner(SbxCLI(binary="unused"), config, env={"VLLM_KEY": "key"})
     agent, github = provisioner.build_specs("r1", tmp_path)
     assert agent.persistent_env == {
-        "SBXLOOP_WORKER_BACKEND": "openai",
+        "LANTERN_WORKER_BACKEND": "openai",
         OPENAI_BASE_URL_ENV: "http://vllm:8000/v1",
         OPENAI_KEY_NAME_ENV: "VLLM_KEY",
         OPENAI_TIMEOUT_ENV: "42.5",
@@ -443,7 +443,7 @@ def test_missing_key_fails_before_provisioning_naming_the_endpoint(tmp_path: Pat
 def test_bake_installs_the_extra_named_after_the_backend(tmp_path: Path) -> None:
     """`bake` passes `[agent] backend` verbatim as the worker extra, so the
     extra must be called exactly what the backend is."""
-    from sbxloop.sbx import bake
+    from lantern.sbx import bake
 
     assert bake.bake_template.__doc__ is not None
     assert openai_config(tmp_path).agent.backend == "openai" == OPENAI.name
@@ -471,16 +471,16 @@ def test_key_and_endpoint_reach_the_worker_without_the_key_in_argv(
         assert provider is not None
         exports = provider()
         assert exports["OPENAI_API_KEY"] == token
-        assert exports["SBXLOOP_WORKER_BACKEND"] == "openai"
+        assert exports["LANTERN_WORKER_BACKEND"] == "openai"
         assert exports[OPENAI_BASE_URL_ENV] == "http://10.0.0.12:8000/v1"
     else:
         env_file = (
             fake_sbx.sandbox_fs(run_name(config.paths, "r1", "agent"))
-            / "home/agent/.sbxloop/env.sh"
+            / "home/agent/.lantern/env.sh"
         )
         content = env_file.read_text()
         assert f"OPENAI_API_KEY={token}" in content
-        assert "SBXLOOP_WORKER_BACKEND=openai" in content
+        assert "LANTERN_WORKER_BACKEND=openai" in content
         assert f"{OPENAI_BASE_URL_ENV}=http://10.0.0.12:8000/v1" in content
     assert token not in json.dumps(fake_sbx.invocations())
     assert [

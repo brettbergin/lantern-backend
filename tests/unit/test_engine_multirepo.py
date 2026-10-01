@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config, GithubConfig
-from sbxloop.errors import StateError
-from sbxloop.sbx.provision import Provisioner
+from lantern.config import Config, GithubConfig
+from lantern.errors import StateError
+from lantern.sbx.provision import Provisioner
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import GREEN, FakeGithub
 from tests.unit.test_engine import (
@@ -118,7 +118,7 @@ class TestRunRoutesToItsRepo:
         ops = {op for op, _ in fake.repo_args}
         # Delivery, PR, review, CI and merge all happened — against repo B.
         assert {"pr_create", "pr_get", "pr_checks", "pr_review_create", "pr_merge"} <= ops
-        assert fake.deleted_branches == [f"sbxloop/{result.run_id}"]
+        assert fake.deleted_branches == [f"lantern/{result.run_id}"]
 
     def test_the_runs_config_is_narrowed_and_persisted(self, harness: Harness) -> None:
         fake = RepoRecordingGithub(repo=REPO_B)

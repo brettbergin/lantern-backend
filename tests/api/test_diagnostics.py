@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop import log as logmod
-from sbxloop.api.diagnostics import CONFIGURATION_SECTIONS, redact
-from sbxloop.log import LogBuffer, LogRecordLine
+from lantern import log as logmod
+from lantern.api.diagnostics import CONFIGURATION_SECTIONS, redact
+from lantern.log import LogBuffer, LogRecordLine
 from tests.api.conftest import Api, build
 
 DIAG = frozenset({"diagnostics:read"})
@@ -26,7 +26,7 @@ def buffer(monkeypatch: pytest.MonkeyPatch) -> LogBuffer:
 
 
 def _line(i: int, text: str, level: str = "INFO") -> LogRecordLine:
-    return LogRecordLine(f"2026-01-01T00:00:{i:02d}Z", level, "sbxloop.test", text)
+    return LogRecordLine(f"2026-01-01T00:00:{i:02d}Z", level, "lantern.test", text)
 
 
 class TestLogs:
@@ -42,7 +42,7 @@ class TestLogs:
         assert body["records"][0] == {
             "timestamp": "2026-01-01T00:00:03Z",
             "level": "WARNING",
-            "logger": "sbxloop.test",
+            "logger": "lantern.test",
             "message": "line 3",
         }
         assert body["observed_at"].endswith("Z")
@@ -106,7 +106,7 @@ class TestConfiguration:
         )
         # The operator's file says something else for one key: the daemon
         # runs on what it loaded; the read says an edit is pending.
-        home_toml = api.loop.config.home / "config" / "sbxloop.toml"
+        home_toml = api.loop.config.home / "config" / "lantern.toml"
         home_toml.parent.mkdir(parents=True, exist_ok=True)
         home_toml.write_text('[daemon]\ntrigger_label = "later"\n')
         with api.client:
@@ -154,13 +154,13 @@ class TestConfiguration:
 
     def test_an_unloadable_file_leaves_provenance_unknown(self, tmp_path: Path) -> None:
         api = build(tmp_path)
-        home_toml = api.loop.config.home / "config" / "sbxloop.toml"
+        home_toml = api.loop.config.home / "config" / "lantern.toml"
         home_toml.parent.mkdir(parents=True, exist_ok=True)
         home_toml.write_text("this is not = [toml\n")
         with api.client:
             body = api.client.get("/v1/configuration", headers=api.bearer(DIAG)).json()
             entries: dict[str, Any] = {e["key"]: e for e in body["entries"]}
-            assert entries["daemon.trigger_label"]["value"] == "sbxloop:run"
+            assert entries["daemon.trigger_label"]["value"] == "lantern:run"
             assert entries["daemon.trigger_label"]["source"] is None
             assert all(not e["pending"] for e in entries.values())
         api.ctx.close()

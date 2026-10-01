@@ -14,11 +14,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from sbxloop.config import Config
-from sbxloop.daemon.controls import intake
-from sbxloop.daemon.model import WorkItem
-from sbxloop.engine.model import RunResult
-from sbxloop.events import EventBus
+from lantern.config import Config
+from lantern.daemon.controls import intake
+from lantern.daemon.model import WorkItem
+from lantern.engine.model import RunResult
+from lantern.events import EventBus
 from tests.unit.test_daemon_loop import Harness
 
 WAIT_S = 10.0

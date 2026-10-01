@@ -9,13 +9,13 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.fanout import FanoutFrontend, build_frontend
-from sbxloop.daemon.local import LocalBridge
-from sbxloop.daemon.model import DaemonNotice, RunReport, WorkItem
-from sbxloop.daemon.store import ChatThread, DaemonStore
-from sbxloop.errors import DaemonError
-from sbxloop.events import EventBus
+from lantern.config import Config
+from lantern.daemon.fanout import FanoutFrontend, build_frontend
+from lantern.daemon.local import LocalBridge
+from lantern.daemon.model import DaemonNotice, RunReport, WorkItem
+from lantern.daemon.store import ChatThread, DaemonStore
+from lantern.errors import DaemonError
+from lantern.events import EventBus
 
 
 class Recorder:

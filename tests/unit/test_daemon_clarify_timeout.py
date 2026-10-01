@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion, PendingFiling
-from sbxloop.daemon.concierge import ConciergeReply
+from lantern.daemon.chat_choices import Choice, ChoiceQuestion, PendingFiling
+from lantern.daemon.concierge import ConciergeReply
 from tests.unit.test_daemon_discord import (
     BOT_USER,
     FakeConcierge,
@@ -190,9 +190,9 @@ class TestExpiry:
 
 class TestConfigDrivesTheWait:
     def test_clarify_ttl_config_drives_button_and_sweep_alike(self, tmp_path: Path) -> None:
-        from sbxloop.config import Config
-        from sbxloop.daemon.discord import DiscordBridge
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.config import Config
+        from lantern.daemon.discord import DiscordBridge
+        from lantern.daemon.store import DaemonStore
         from tests.unit.test_daemon_discord import FakeClient, FakeLoop
 
         config = Config.model_validate(

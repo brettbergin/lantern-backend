@@ -14,14 +14,14 @@ from typing import Any
 import pytest
 from sqlalchemy import Engine, inspect
 
-import sbxloop.db.api_models
-import sbxloop.db.collaboration_models
-import sbxloop.db.daemon_models
-import sbxloop.db.engine_models
-import sbxloop.db.job_models  # noqa: F401  - registers the models on Base
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db import Base, open_engine
-from sbxloop.engine.store import StateStore
+import lantern.db.api_models
+import lantern.db.collaboration_models
+import lantern.db.daemon_models
+import lantern.db.engine_models
+import lantern.db.job_models  # noqa: F401  - registers the models on Base
+from lantern.daemon.store import DaemonStore
+from lantern.db import Base, open_engine
+from lantern.engine.store import StateStore
 
 ENGINE_TABLES = (
     "runs",

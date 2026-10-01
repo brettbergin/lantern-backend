@@ -11,8 +11,8 @@ from typing import Any
 import httpx
 import pytest
 
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES, Capability
-from sbxloop.daemon.sources import ApiSource, CompositeSource, GitHubIssueSource, ScheduleSource
+from lantern.daemon.controls.principal import ALL_CAPABILITIES, Capability
+from lantern.daemon.sources import ApiSource, CompositeSource, GitHubIssueSource, ScheduleSource
 from tests.api.conftest import Api, build
 from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue
 

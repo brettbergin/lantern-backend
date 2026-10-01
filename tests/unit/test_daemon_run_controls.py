@@ -10,18 +10,18 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.daemon.control import dispatch
-from sbxloop.daemon.controls import ControlError, ControlService, Principal
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import RunResult
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import RunCancelledError
-from sbxloop.events import EventBus
-from sbxloop.paths import SbxloopHome
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.daemon.control import dispatch
+from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import RunResult
+from lantern.engine.store import StateStore
+from lantern.errors import RunCancelledError
+from lantern.events import EventBus
+from lantern.paths import LanternHome
 from tests.unit.test_daemon_loop import Harness, RecordingFrontend, gh_item
 
 OPS = Principal.trusted("ops via test", "ctl")
@@ -96,7 +96,7 @@ class TestHoldsSurviveARestart:
         self, tmp_path: Path
     ) -> None:
         """The reconciler judges a claimed pause from the row that survived."""
-        from sbxloop.daemon.controls.operations import OperationSpec
+        from lantern.daemon.controls.operations import OperationSpec
 
         h = Harness(tmp_path)
         h.loop.pause("deploy-1")
@@ -388,7 +388,7 @@ class TestCliResume:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        home = LanternHome(tmp_path / ".lantern")
         store = StateStore(home.state_db)
         store.create_run("r_owned", "x")
         store.set_run_state("r_owned", "building")
@@ -399,16 +399,16 @@ class TestCliResume:
         dstore.close()
         result = CliRunner().invoke(app, ["resume", "r_owned", "--no-tui"])
         assert result.exit_code == 2
-        assert "sbxloop daemon ctl resume-run r_owned" in result.output
+        assert "lantern daemon ctl resume-run r_owned" in result.output
         assert "gh:issue:1" in result.output
 
     def test_a_run_no_daemon_owns_is_not_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """No daemon ledger at all (a host that only ever ran `sbxloop
+        """No daemon ledger at all (a host that only ever ran `lantern
         run`) must not stop a resume: the refusal is about ownership."""
         monkeypatch.chdir(tmp_path)
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        home = LanternHome(tmp_path / ".lantern")
         store = StateStore(home.state_db)
         store.create_run("r_mine", "x")
         store.set_run_state("r_mine", "merged")  # not resumable: fails later, past the check
@@ -478,7 +478,7 @@ class TestSteerRun:
             t.join(5)
 
     def test_the_service_records_the_instruction_and_its_fate(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.controls.steering import SteeringStore
+        from lantern.daemon.controls.steering import SteeringStore
 
         h = Harness(tmp_path)
         h.loop.recover()
@@ -504,8 +504,8 @@ class TestSteerRun:
         assert blank.value.code == "invalid_argument"
 
     def test_a_restart_judges_a_claimed_steer_from_its_record(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.controls.operations import OperationSpec
-        from sbxloop.daemon.controls.steering import SteeringStore
+        from lantern.daemon.controls.operations import OperationSpec
+        from lantern.daemon.controls.steering import SteeringStore
 
         h = Harness(tmp_path)
         store = SteeringStore(h.dstore)

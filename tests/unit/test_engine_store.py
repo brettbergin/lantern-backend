@@ -8,12 +8,12 @@ from typing import Any
 import pytest
 from sqlalchemy import event, select
 
-from sbxloop.db import begin_immediate
-from sbxloop.db.engine_models import Run
-from sbxloop.engine.model import Published, TaskOutput, TaskRecord, TaskSpec
-from sbxloop.engine.store import PostedRecord, StateStore
-from sbxloop.errors import StateError
-from sbxloop_worker.protocol import Event, Usage
+from lantern.db import begin_immediate
+from lantern.db.engine_models import Run
+from lantern.engine.model import Published, TaskOutput, TaskRecord, TaskSpec
+from lantern.engine.store import PostedRecord, StateStore
+from lantern.errors import StateError
+from lantern_worker.protocol import Event, Usage
 from tests.fakes.legacy_db import engine_db, insert_run_row
 
 
@@ -328,7 +328,7 @@ class TestPhasesAndEvents:
         so a run checkpointed by one worker version replays under another
         without migration (#403 t7)."""
         long_cmd = (
-            "cd /home/x/.local/state/sbxloop/sbxloop-work/runs/r1/workspace"
+            "cd /home/x/.local/state/lantern/lantern-work/runs/r1/workspace"
             " && uv run pytest -q " + "x" * 500
         )
         old = {"tool": "bash", "args": long_cmd, "success": True, "exit_code": 0}
@@ -553,7 +553,7 @@ class TestPipelineColumns:
             "r1",
             number=9,
             url="https://x/pull/9",
-            branch="sbxloop/r1",
+            branch="lantern/r1",
             head_sha="aaa",
             node_id="PR_node9",
         )
@@ -561,13 +561,13 @@ class TestPipelineColumns:
         assert (run.pr_number, run.pr_url, run.branch, run.head_sha, run.pr_node_id) == (
             9,
             "https://x/pull/9",
-            "sbxloop/r1",
+            "lantern/r1",
             "aaa",
             "PR_node9",
         )
         # A re-delivery moves the head; a missing node id keeps the old one.
         store.set_run_pr(
-            "r1", number=9, url="https://x/pull/9", branch="sbxloop/r1", head_sha="bbb"
+            "r1", number=9, url="https://x/pull/9", branch="lantern/r1", head_sha="bbb"
         )
         run = store.get_run("r1")
         assert run.head_sha == "bbb" and run.pr_node_id == "PR_node9"
@@ -761,7 +761,7 @@ class TestWriterSerialization:
         """Both ways into a session hold it, so every caller is serialised."""
         import inspect
 
-        from sbxloop.engine import store as store_module
+        from lantern.engine import store as store_module
 
         for name in ("_write", "_immediate", "_read"):
             body = inspect.getsource(getattr(store_module.StateStore, name))
@@ -778,7 +778,7 @@ class TestWriterSerialization:
         import inspect
         import re
 
-        from sbxloop.engine import store as store_module
+        from lantern.engine import store as store_module
 
         source = inspect.getsource(store_module)
         rogue = re.findall(r"Session\(\s*self\._engine", source)
@@ -795,7 +795,7 @@ class TestEphemeralDeltas:
         return Event(ts=1.0, run_id="r1", job_id=None, type=type_, data={"text": text})
 
     def test_delta_is_not_persisted_but_full_message_is(self, store: StateStore) -> None:
-        from sbxloop_worker.protocol import EventTypes
+        from lantern_worker.protocol import EventTypes
 
         store.create_run("r1", outcome="o")
         store.append_event(self._event(EventTypes.AGENT_MESSAGE_DELTA, "he"))
@@ -807,7 +807,7 @@ class TestEphemeralDeltas:
         assert rows[0].data == {"text": "hello"}
 
     def test_append_event_if_state_skips_deltas(self, store: StateStore) -> None:
-        from sbxloop_worker.protocol import EventTypes
+        from lantern_worker.protocol import EventTypes
 
         store.create_run("r1", outcome="o")
         assert (
@@ -824,12 +824,12 @@ class TestEphemeralDeltas:
         assert len(list(store.events("r1"))) == 1
 
     def test_engine_still_publishes_deltas_to_subscribers(self, store: StateStore) -> None:
-        from sbxloop_worker.protocol import EventTypes
+        from lantern_worker.protocol import EventTypes
 
         store.create_run("r1", outcome="o")
         seen: list[Event] = []
 
-        from sbxloop.events import EventBus
+        from lantern.events import EventBus
 
         bus = EventBus()
         bus.subscribe(lambda e: seen.append(e))  # type: ignore[arg-type]

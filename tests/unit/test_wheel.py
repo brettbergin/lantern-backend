@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import sbxloop
-from sbxloop.worker import wheel as wheel_mod
+import lantern
+from lantern.worker import wheel as wheel_mod
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def test_vendored_wheel_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     # concurrently under pytest-xdist.
     vendor = tmp_path / "_vendor"
     vendor.mkdir()
-    name = f"sbxloop_worker-{sbxloop.__version__}-py3-none-any.whl"
+    name = f"lantern_worker-{lantern.__version__}-py3-none-any.whl"
     (vendor / name).write_bytes(b"wheel")
     monkeypatch.setattr(wheel_mod, "resources", SimpleNamespace(files=lambda package: tmp_path))
     resolved = wheel_mod.resolve_worker_wheel()
@@ -41,9 +41,9 @@ def test_workspace_build_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wheel_mod, "_vendored_wheel", lambda: None)
     resolved = wheel_mod.resolve_worker_wheel()
     assert resolved is not None
-    assert resolved.name.startswith("sbxloop_worker-")
+    assert resolved.name.startswith("lantern_worker-")
     assert resolved.name.endswith(".whl")
-    assert sbxloop.__version__ in resolved.name
+    assert lantern.__version__ in resolved.name
 
 
 def test_none_when_nothing_available(monkeypatch: pytest.MonkeyPatch) -> None:

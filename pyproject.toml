@@ -6,7 +6,7 @@
 python-preference = "only-managed"
 
 [tool.uv.workspace]
-members = ["packages/sbxloop", "packages/sbxloop-worker"]
+members = ["packages/lantern", "packages/lantern-worker"]
 
 [dependency-groups]
 dev = [
@@ -26,16 +26,16 @@ dev = [
     "httpx>=0.27",
     # The remote API's extra rides the dev group so the suite, mypy and CI
     # exercise the listener; an install without it still imports and runs.
-    "sbxloop[api]",
+    "lantern-backend[api]",
 ]
 
 [tool.uv.sources]
-sbxloop = { workspace = true }
+lantern-backend = { workspace = true }
 
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-src = ["packages/sbxloop/src", "packages/sbxloop-worker/src", "tests"]
+src = ["packages/lantern/src", "packages/lantern-worker/src", "tests"]
 
 [tool.ruff.lint]
 select = [
@@ -63,7 +63,7 @@ combine-as-imports = true
 # Repository tooling reports on stdout by design.
 "scripts/**" = ["T20"]
 # The worker communicates over stdout by design.
-"packages/sbxloop-worker/src/sbxloop_worker/**" = ["T20"]
+"packages/lantern-worker/src/lantern_worker/**" = ["T20"]
 
 [tool.bandit]
 # B101: asserts here are mypy-strict type-narrowing invariants on internal
@@ -76,8 +76,8 @@ skips = ["B101", "B404"]
 [tool.mypy]
 strict = true
 python_version = "3.13"
-mypy_path = ["packages/sbxloop/src", "packages/sbxloop-worker/src"]
-files = ["packages/sbxloop/src", "packages/sbxloop-worker/src"]
+mypy_path = ["packages/lantern/src", "packages/lantern-worker/src"]
+files = ["packages/lantern/src", "packages/lantern-worker/src"]
 explicit_package_bases = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
@@ -107,7 +107,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "packages/sbxloop-worker/tests"]
+testpaths = ["tests", "packages/lantern-worker/tests"]
 markers = [
     # Auto-applied to every test on the fake sbx (root conftest.py); also set
     # by hand on real-git (lfs, submodules) and packaging tests. The commit
@@ -155,7 +155,7 @@ omit = [
     # the e2e workflow is what exercises this module end to end. Its decision
     # logic is unit-tested (backends/copilot_errors.py is not omitted, and
     # the fake-SDK tests drive the session path) but not counted here.
-    "*/sbxloop_worker/backends/copilot.py",
+    "*/lantern_worker/backends/copilot.py",
 ]
 
 [tool.coverage.report]

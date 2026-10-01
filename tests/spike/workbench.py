@@ -26,8 +26,8 @@ import shlex
 import time
 from dataclasses import dataclass, field
 
-from sbxloop.sbx.sandbox import WORK_DIR, Sandbox
-from sbxloop_worker.protocol import HostToolCall, HostToolResponse, HostToolSpec
+from lantern.sbx.sandbox import WORK_DIR, Sandbox
+from lantern_worker.protocol import HostToolCall, HostToolResponse, HostToolSpec
 
 
 @dataclass

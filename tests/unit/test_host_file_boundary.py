@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.deliver import pr_template
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.paths import SbxloopHome
+from lantern.config import Config
+from lantern.deliver import pr_template
+from lantern.engine.phases import PhaseRunner
+from lantern.paths import LanternHome
 from tests.unit.test_repocontext import GRAPH, PromptAgent
 
 
 @pytest.mark.parametrize("location", ["dedicated", "run"])
 def test_host_secret_does_not_enter_decompose_prompt(tmp_path: Path, location: str) -> None:
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     workspace = (
         home.workspace_for("customer/project")
         if location == "dedicated"
@@ -30,7 +30,7 @@ def test_host_secret_does_not_enter_decompose_prompt(tmp_path: Path, location: s
 
 
 def test_pr_template_does_not_read_host_secret(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     workspace = home.run_workspace("audit")
     (workspace / ".github").mkdir(parents=True)
     home.secrets_env.parent.mkdir(parents=True)
@@ -40,9 +40,9 @@ def test_pr_template_does_not_read_host_secret(tmp_path: Path) -> None:
 
 
 def test_regular_pr_upload_cannot_follow_a_replacement_link(tmp_path: Path) -> None:
-    from sbxloop.deliver import _blob_upload
-    from sbxloop.errors import DeliveryError
-    from sbxloop.hostgit import WorkspaceChange
+    from lantern.deliver import _blob_upload
+    from lantern.errors import DeliveryError
+    from lantern.hostgit import WorkspaceChange
 
     root = tmp_path / "workspace"
     root.mkdir()
@@ -58,8 +58,8 @@ def test_regular_pr_upload_cannot_follow_a_replacement_link(tmp_path: Path) -> N
 def test_artifact_copy_refuses_a_link_to_host_files(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
-    from sbxloop.engine.engine import LoopEngine
-    from sbxloop.engine.model import TaskOutput, TaskRecord, TaskSpec
+    from lantern.engine.engine import LoopEngine
+    from lantern.engine.model import TaskOutput, TaskRecord, TaskSpec
 
     root = tmp_path / "workspace"
     root.mkdir()

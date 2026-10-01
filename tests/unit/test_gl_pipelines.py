@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.landing import Landed, NeedsFix, UpdateState, land
-from sbxloop.errors import GithubOpsError
+from lantern.config import LandingConfig
+from lantern.engine.landing import Landed, NeedsFix, UpdateState, land
+from lantern.errors import GithubOpsError
 from tests.fakes.fake_gitlab import FakeGitlab
 
 REPO = "acme/widgets"

@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.daemon.controls.eligibility import ACTIONS, Subject, available_actions, check
-from sbxloop.daemon.controls.results import ControlError
-from sbxloop.engine.model import RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES, RunState
-from sbxloop.vcs.protocol import Capability
+from lantern.daemon.controls.eligibility import ACTIONS, Subject, available_actions, check
+from lantern.daemon.controls.results import ControlError
+from lantern.engine.model import RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES, RunState
+from lantern.vcs.protocol import Capability
 
 
 def refused(action: str, subject: Subject) -> ControlError:

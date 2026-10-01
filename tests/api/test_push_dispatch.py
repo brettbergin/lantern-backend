@@ -20,14 +20,14 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api.chronology import DAEMON_ACTOR
-from sbxloop.api.collaboration import LocalUser, _event
-from sbxloop.api.publicids import run_public_id
-from sbxloop.db.api_models import ApiEventRow, OperationRow
-from sbxloop.db.daemon_models import WorkItemRow
-from sbxloop.plans.epicrun import EpicRun, EpicRunStore
-from sbxloop.plans.model import Plan, PlanNode
-from sbxloop.plans.store import PlanStore
+from lantern.api.chronology import DAEMON_ACTOR
+from lantern.api.collaboration import LocalUser, _event
+from lantern.api.publicids import run_public_id
+from lantern.db.api_models import ApiEventRow, OperationRow
+from lantern.db.daemon_models import WorkItemRow
+from lantern.plans.epicrun import EpicRun, EpicRunStore
+from lantern.plans.model import Plan, PlanNode
+from lantern.plans.store import PlanStore
 from tests.api.conftest import Api
 from tests.api.test_push_devices import (
     TOKEN_A,

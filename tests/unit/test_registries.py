@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import USERNAME_REGISTRY_KINDS, RegistryConfig
-from sbxloop.sbx import registries
-from sbxloop.sbx.registries import (
+from lantern.config import USERNAME_REGISTRY_KINDS, RegistryConfig
+from lantern.sbx import registries
+from lantern.sbx.registries import (
     CARGO_CONFIG,
     GEMRC,
     MAVEN_SETTINGS,
@@ -224,11 +224,11 @@ class TestConfig:
             ),
             (
                 {"kind": "npm", "url": "https://reg.example.com/", "auth_env": "GH_TOKEN"},
-                "delivered by sbxloop",
+                "delivered by lantern",
             ),
             (
-                {"kind": "npm", "url": "https://reg.example.com/", "auth_env": "SBXLOOP_X"},
-                "delivered by sbxloop",
+                {"kind": "npm", "url": "https://reg.example.com/", "auth_env": "LANTERN_X"},
+                "delivered by lantern",
             ),
             ({"kind": "svn", "url": "https://reg.example.com/"}, "kind"),
         ],

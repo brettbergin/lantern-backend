@@ -16,11 +16,11 @@ from typing import Any
 import pytest
 from git import Repo
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.unit.test_daemon_loop import Harness, gh_item
 
 

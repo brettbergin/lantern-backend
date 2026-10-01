@@ -31,16 +31,16 @@ from typing import Any, BinaryIO
 import pytest
 from sqlalchemy import select
 
-from sbxloop.api.channel_artifacts import (
+from lantern.api.channel_artifacts import (
     READ_LIMIT_MAX,
     TOOL_NAME,
     channel_artifact_tools,
 )
-from sbxloop.api.channel_summary import PROMPT, ChannelSummarizer
-from sbxloop.daemon.model import WorkItem
-from sbxloop.db.collaboration_models import ChannelSummaryRow
-from sbxloop.errors import ToolRejectedError
-from sbxloop.ghids import chat_item_id
+from lantern.api.channel_summary import PROMPT, ChannelSummarizer
+from lantern.daemon.model import WorkItem
+from lantern.db.collaboration_models import ChannelSummaryRow
+from lantern.errors import ToolRejectedError
+from lantern.ghids import chat_item_id
 from tests.api.test_channel_access import _invite, _user_id
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_work_delivery import setup_work
@@ -50,7 +50,7 @@ from tests.api.test_work_delivery import setup_work
 def _directory_relative_opens(monkeypatch: pytest.MonkeyPatch) -> None:
     """Catalogued bytes on a platform without directory-relative opens.
 
-    ``sbxloop.repofiles.open_file`` refuses every read where ``os.open``
+    ``lantern.repofiles.open_file`` refuses every read where ``os.open``
     takes no ``dir_fd`` (Windows), so nothing is catalogued and nothing can
     be downloaded there. That opener's safety is
     ``tests/api/test_artifacts.py``'s subject on a platform that has it;
@@ -69,7 +69,7 @@ def _directory_relative_opens(monkeypatch: pytest.MonkeyPatch) -> None:
         with target.open("rb") as handle:
             yield handle
 
-    monkeypatch.setattr("sbxloop.repofiles.open_file", opener)
+    monkeypatch.setattr("lantern.repofiles.open_file", opener)
 
 
 def _deliver(
@@ -529,7 +529,7 @@ class TestSummaryCompaction:
         api.ctx.concierge = FakeConcierge()
         headers = bearer(register(api))
         channel = _chatter(api, headers, [f"message {index}" for index in range(4)])
-        monkeypatch.setattr("sbxloop.api.context.SUMMARY_TIMEOUT_S", 0.5, raising=False)
+        monkeypatch.setattr("lantern.api.context.SUMMARY_TIMEOUT_S", 0.5, raising=False)
 
         assert _compactions_settled(api)
         stuck = _Stuck()

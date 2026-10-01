@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
+from lantern import hostgit
 
 from .test_hostgit import git, make_repo
 
@@ -14,27 +14,27 @@ from .test_hostgit import git, make_repo
 @pytest.mark.parametrize(
     "url",
     [
-        "git@github.com:brettbergin/sbxloop.git",
-        "git@github.com:brettbergin/sbxloop",
-        "https://github.com/brettbergin/sbxloop",
-        "https://github.com/brettbergin/sbxloop.git",
-        "https://github.com/brettbergin/sbxloop/",
-        "https://github.com/brettbergin/sbxloop.git/",
-        "https://x-access-token:secret@github.com/brettbergin/sbxloop.git",
-        "git://github.com/brettbergin/sbxloop.git",
-        "ssh://git@github.com/brettbergin/sbxloop.git",
-        "https://GitHub.com/BrettBergin/SbxLoop.git",
-        "brettbergin/sbxloop",
+        "git@github.com:brettbergin/lantern-backend.git",
+        "git@github.com:brettbergin/lantern-backend",
+        "https://github.com/brettbergin/lantern-backend",
+        "https://github.com/brettbergin/lantern-backend.git",
+        "https://github.com/brettbergin/lantern-backend/",
+        "https://github.com/brettbergin/lantern-backend.git/",
+        "https://x-access-token:secret@github.com/brettbergin/lantern-backend.git",
+        "git://github.com/brettbergin/lantern-backend.git",
+        "ssh://git@github.com/brettbergin/lantern-backend.git",
+        "https://GitHub.com/BrettBergin/lantern-backend.git",
+        "brettbergin/lantern-backend",
     ],
 )
 def test_normalise_repo_url_forms(url: str) -> None:
-    assert hostgit.normalise_repo_url(url) == "brettbergin/sbxloop"
+    assert hostgit.normalise_repo_url(url) == "brettbergin/lantern-backend"
 
 
 def test_normalise_repo_url_case_insensitive() -> None:
     assert hostgit.normalise_repo_url(
-        "git@github.com:BrettBergin/SbxLoop.git"
-    ) == hostgit.normalise_repo_url("https://github.com/brettbergin/sbxloop")
+        "git@github.com:BrettBergin/lantern-backend.git"
+    ) == hostgit.normalise_repo_url("https://github.com/brettbergin/lantern-backend")
 
 
 @pytest.mark.parametrize(
@@ -70,30 +70,33 @@ def test_normalise_repo_url_rejects(url: str | None) -> None:
 
 def test_origin_matches_repo_true(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    git("remote", "add", "origin", "git@github.com:brettbergin/sbxloop.git", cwd=root)
-    assert hostgit.origin_matches_repo(root, "brettbergin/sbxloop") is True
-    assert hostgit.origin_matches_repo(root, "https://github.com/BrettBergin/sbxloop.git") is True
+    git("remote", "add", "origin", "git@github.com:brettbergin/lantern-backend.git", cwd=root)
+    assert hostgit.origin_matches_repo(root, "brettbergin/lantern-backend") is True
+    assert (
+        hostgit.origin_matches_repo(root, "https://github.com/BrettBergin/lantern-backend.git")
+        is True
+    )
 
 
 def test_origin_matches_repo_false_on_mismatch(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    git("remote", "add", "origin", "https://github.com/brettbergin/sbxloop", cwd=root)
+    git("remote", "add", "origin", "https://github.com/brettbergin/lantern-backend", cwd=root)
     assert hostgit.origin_matches_repo(root, "brettbergin/entrygraph") is False
 
 
 def test_origin_matches_repo_none_without_origin(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    assert hostgit.origin_matches_repo(root, "brettbergin/sbxloop") is None
+    assert hostgit.origin_matches_repo(root, "brettbergin/lantern-backend") is None
 
 
 def test_origin_matches_repo_none_for_non_git_path(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert hostgit.origin_matches_repo(plain, "brettbergin/sbxloop") is None
+    assert hostgit.origin_matches_repo(plain, "brettbergin/lantern-backend") is None
     assert hostgit.origin_matches_repo(tmp_path / "missing", "a/b") is None
 
 
 def test_origin_matches_repo_none_for_unparsable_expectation(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
-    git("remote", "add", "origin", "https://github.com/brettbergin/sbxloop", cwd=root)
+    git("remote", "add", "origin", "https://github.com/brettbergin/lantern-backend", cwd=root)
     assert hostgit.origin_matches_repo(root, "nonsense") is None

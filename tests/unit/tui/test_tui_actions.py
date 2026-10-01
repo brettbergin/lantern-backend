@@ -8,20 +8,20 @@ import time
 from pathlib import Path
 from typing import Any
 
-from sbxloop.config import TUI_CONTROL_CHANNEL, Config
-from sbxloop.daemon.control import CommandReply
-from sbxloop.daemon.mailbox import MailboxClient
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.ids import new_run_id
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.models import SandboxInfo
-from sbxloop.sbx.prune import SandboxVerdict
-from sbxloop.tui import actions
-from sbxloop.tui.commands import CATALOGUE
-from sbxloop.tui.data import DaemonSnapshot, probe_daemon
-from sbxloop.tui.runner import RunOutcome, sbxloop_argv
-from sbxloop.tui.system import (
+from lantern.config import TUI_CONTROL_CHANNEL, Config
+from lantern.daemon.control import CommandReply
+from lantern.daemon.mailbox import MailboxClient
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.ids import new_run_id
+from lantern.paths import LanternHome
+from lantern.sbx.models import SandboxInfo
+from lantern.sbx.prune import SandboxVerdict
+from lantern.tui import actions
+from lantern.tui.commands import CATALOGUE
+from lantern.tui.data import DaemonSnapshot, probe_daemon
+from lantern.tui.runner import RunOutcome, lantern_argv
+from lantern.tui.system import (
     LEVELS,
     journal_argv,
     level_of,
@@ -47,7 +47,7 @@ def sent(deps: actions.Deps) -> list[str]:
 
 
 def make_deps(
-    state_dir: SbxloopHome,
+    state_dir: LanternHome,
     *,
     ctl: FakeCtl | None = None,
     runner: FakeRunner | None = None,
@@ -70,7 +70,7 @@ def make_deps(
         mailbox=MailboxClient(state_dir.state_db, operator_id="brett"),
         config=config,
         home=state_dir,
-        unit="sbxloop-daemon",
+        unit="lantern-daemon",
         operator="brett",
         sbx=lambda: box,
         daemon=lambda: snapshot,
@@ -225,9 +225,9 @@ class TestRunVerbs:
         out = actions.resume_run(deps, "r_live").run()
         assert out.ok and "started pid" in out.text
         argv, cwd, log_path = runner.spawned[0]
-        assert argv == (*sbxloop_argv(), "resume", "r_live", "--no-tui", "--no-chat")
+        assert argv == (*lantern_argv(), "resume", "r_live", "--no-tui", "--no-chat")
         assert cwd == seeded.root and log_path == seeded.console / "resume-r_live.log"
-        assert runner.spawn_env[0] == {"SBXLOOP_HOME": str(seeded.root)}, "the console's store"
+        assert runner.spawn_env[0] == {"LANTERN_HOME": str(seeded.root)}, "the console's store"
         assert "resume r_live" in deps.children.alive()
         assert actions.run_text(deps, "--fix the spinner").run().ok
         assert runner.spawned[1][0][-4:] == ("--no-tui", "--no-chat", "--", "--fix the spinner")
@@ -261,13 +261,13 @@ class TestHostVerbs:
         start = actions.unit_verb(deps, "start")
         assert start.confirm == "yes"
         restart = actions.unit_verb(deps, "restart")
-        assert restart.confirm == "typed" and restart.typed == "sbxloop-daemon"
+        assert restart.confirm == "typed" and restart.typed == "lantern-daemon"
         assert restart.run().ok
         stopped = actions.unit_verb(deps, "stop").run()
         assert not stopped.ok and "Failed to stop" in stopped.text
         assert runner.calls == [
-            ("systemctl", "--user", "restart", "sbxloop-daemon"),
-            ("systemctl", "--user", "stop", "sbxloop-daemon"),
+            ("systemctl", "--user", "restart", "lantern-daemon"),
+            ("systemctl", "--user", "stop", "lantern-daemon"),
         ]
 
     def test_upgrade_runs_the_configured_command_or_says_there_is_none(self, seeded: Path) -> None:
@@ -275,13 +275,13 @@ class TestHostVerbs:
         deps = make_deps(seeded, runner=runner)
         none = actions.upgrade(deps).run()
         assert not none.ok and "upgrade_command" in none.text and runner.calls == []
-        runner.script("sh", "-lc", stdout="Installed sbxloop 9.9.9")
-        command = "~/.venv/bin/pip install -U sbxloop && systemctl --user restart sbxloop-daemon"
+        runner.script("sh", "-lc", stdout="Installed lantern 9.9.9")
+        command = "~/.venv/bin/pip install -U lantern && systemctl --user restart lantern-daemon"
         deps = make_deps(seeded, runner=runner, upgrade_command=command)
         action = actions.upgrade(deps)
         assert action.confirm == "typed" and action.typed == "upgrade"
         out = action.run()
-        assert out.ok and out.long and "Installed sbxloop 9.9.9" in out.text
+        assert out.ok and out.long and "Installed lantern 9.9.9" in out.text
         assert "restart the daemon" in out.text
         # Shell text, verbatim: `~` and `&&` are the shell's to read.
         assert runner.calls[-1] == ("sh", "-lc", command)
@@ -291,7 +291,7 @@ class TestHostVerbs:
         deps = make_deps(seeded, runner=runner, daemon=DOWN)
         assert actions.spawn_daemon(deps).run().ok
         argv, _cwd, log_path = runner.spawned[0]
-        assert argv == (*sbxloop_argv(), "daemon") and log_path == seeded.console / "daemon.log"
+        assert argv == (*lantern_argv(), "daemon") and log_path == seeded.console / "daemon.log"
         assert "daemon" in deps.children.alive()
         stop = actions.stop_spawned_daemon(deps)
         assert "interrupted" in stop.prompt and stop.run().ok
@@ -300,9 +300,9 @@ class TestHostVerbs:
 
     def test_shell_hands_the_terminal_over(self, seeded: Path) -> None:
         deps = make_deps(seeded)
-        action = actions.shell(deps, "sbxloop-r_live-agent")
+        action = actions.shell(deps, "lantern-r_live-agent")
         assert action.interactive is not None and action.mutating, "read-only gets no shell"
-        assert action.interactive[:3] == ("sbx", "exec", "sbxloop-r_live-agent")
+        assert action.interactive[:3] == ("sbx", "exec", "lantern-r_live-agent")
         assert "exec bash -l" in action.interactive[-1]
 
 
@@ -318,35 +318,35 @@ class TestSandboxVerbs:
         backdate(seeded, old, 2.0)
         sbx = RecordingSbx(
             [
-                SandboxInfo(name=f"sbxloop-{old}-agent", status="running"),
-                SandboxInfo(name=f"sbxloop-{old}-github", status="running"),
-                SandboxInfo(name="sbxloop-r_live-agent", status="running"),
+                SandboxInfo(name=f"lantern-{old}-agent", status="running"),
+                SandboxInfo(name=f"lantern-{old}-github", status="running"),
+                SandboxInfo(name="lantern-r_live-agent", status="running"),
             ]
         )
         deps = make_deps(seeded, sbx=sbx)
-        assert actions.stop_sandbox(deps, f"sbxloop-{old}-agent").run().ok
-        remove = actions.remove_one_sandbox(deps, f"sbxloop-{old}-github", "github")
-        assert remove.confirm == "typed" and remove.typed == f"sbxloop-{old}-github"
+        assert actions.stop_sandbox(deps, f"lantern-{old}-agent").run().ok
+        remove = actions.remove_one_sandbox(deps, f"lantern-{old}-github", "github")
+        assert remove.confirm == "typed" and remove.typed == f"lantern-{old}-github"
         assert remove.run().ok
-        assert ("stop", f"sbxloop-{old}-agent") in sbx.calls
-        assert ("rm", "--force", f"sbxloop-{old}-github") in sbx.calls
+        assert ("stop", f"lantern-{old}-agent") in sbx.calls
+        assert ("rm", "--force", f"lantern-{old}-github") in sbx.calls
         verdicts = [
             SandboxVerdict(
-                name=f"sbxloop-{old}-agent",
+                name=f"lantern-{old}-agent",
                 run_id=old,
                 role="agent",
                 orphan=True,
                 reason="failed 2d ago",
             ),
             SandboxVerdict(
-                name="sbxloop-r_live-agent", run_id="r_live", role="agent", reason="in flight"
+                name="lantern-r_live-agent", run_id="r_live", role="agent", reason="in flight"
             ),
         ]
         prune = actions.prune_sandboxes(deps, verdicts)
         assert prune.typed == "prune" and "1 orphaned" in prune.title
         out = prune.run()
-        assert out.ok and out.text == f"removed sbxloop-{old}-agent"
-        assert ("rm", "--force", "sbxloop-r_live-agent") not in sbx.calls
+        assert out.ok and out.text == f"removed lantern-{old}-agent"
+        assert ("rm", "--force", "lantern-r_live-agent") not in sbx.calls
 
     def test_prune_classifies_again_when_it_runs(self, seeded: Path) -> None:
         """Between the poll and the typed word the run may have resumed
@@ -358,11 +358,11 @@ class TestSandboxVerbs:
             store.set_run_state(old, "failed")
         finally:
             store.close()
-        sbx = RecordingSbx([SandboxInfo(name=f"sbxloop-{old}-agent", status="running")])
+        sbx = RecordingSbx([SandboxInfo(name=f"lantern-{old}-agent", status="running")])
         deps = make_deps(seeded, sbx=sbx)
         stale = [
             SandboxVerdict(
-                name=f"sbxloop-{old}-agent", run_id=old, role="agent", orphan=True, reason="was"
+                name=f"lantern-{old}-agent", run_id=old, role="agent", orphan=True, reason="was"
             )
         ]
         out = actions.prune_sandboxes(deps, stale).run()  # the run is active again: not orphaned
@@ -404,8 +404,8 @@ class TestReadOnlyAndPalette:
 
 class TestSystem:
     def test_unit_state_reads_systemctl_show(self) -> None:
-        argv = unit_argv("show", "sbxloop-daemon")
-        assert argv[:4] == ("systemctl", "--user", "show", "sbxloop-daemon") and "-p" in argv
+        argv = unit_argv("show", "lantern-daemon")
+        assert argv[:4] == ("systemctl", "--user", "show", "lantern-daemon") and "-p" in argv
         assert unit_argv("restart", "u") == ("systemctl", "--user", "restart", "u")
         active = unit_state(
             "u",
@@ -430,8 +430,8 @@ class TestSystem:
     def test_journal_filter_and_argv(self) -> None:
         assert journal_argv("u")[:6] == ("journalctl", "--user", "-u", "u", "-n", "200")
         assert "-f" in journal_argv("u")
-        warn = "2026-09-05T10:00:00+0000 host sbxloop[1]: 2026-09-05 10:00:00 [warning  ] x"
-        info = "2026-09-05T10:00:00+0000 host sbxloop[1]: 2026-09-05 10:00:00 [info     ] y"
+        warn = "2026-09-05T10:00:00+0000 host lantern[1]: 2026-09-05 10:00:00 [warning  ] x"
+        info = "2026-09-05T10:00:00+0000 host lantern[1]: 2026-09-05 10:00:00 [info     ] y"
         trace = '  File "x.py", line 1'
         assert level_of(warn) == "warning" and level_of(info) == "info" and level_of(trace) is None
         assert passes(warn, min_level="warning", grep="") and not passes(

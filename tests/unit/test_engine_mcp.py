@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.sbx.naming import run_name
-from sbxloop_worker.serviceops import FAKE_ENV
+from lantern.sbx.naming import run_name
+from lantern_worker.serviceops import FAKE_ENV
 from tests.conftest import FakeSbx
 from tests.unit.test_engine import HAPPY_TASK, Harness, task, taskgraph
 from tests.unit.test_mcp_mediation import SECRET, SESSION, responses
@@ -64,7 +64,7 @@ def test_builder_mcp_uses_only_service_jobs_and_does_not_grant_generic_http(
     assert all(all(t["name"] != "call_service" for t in job["host_tools"]) for job in jobs)
     service = fake_sbx.sandbox_fs(run_name(harness.home, run_id, "service"))
     service_jobs = [
-        json.loads(p.read_text()) for p in (service / "home/agent/.sbxloop/jobs").iterdir()
+        json.loads(p.read_text()) for p in (service / "home/agent/.lantern/jobs").iterdir()
     ]
     assert {job["kind"] for job in service_jobs} == {"service.mcp"}
     assert {job["params"]["action"] for job in service_jobs} == {

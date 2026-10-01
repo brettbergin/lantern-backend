@@ -1,6 +1,6 @@
 """The device registry behind push notifications (``/v1/users/me/devices``).
 
-A person registers a mobile device's push token with sbxloop; sbxloop
+A person registers a mobile device's push token with lantern; lantern
 enrolls it with the push relay, keeps the opaque handle the relay returns,
 and from then on pushes content-free pings through that handle. What the
 ping is about stays here: the device fetches it from
@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.db.api_models import ApiEventRow
+from lantern.db.api_models import ApiEventRow
 from tests.api.conftest import Api, build
 from tests.fakes.fake_relay import FakeRelay
 

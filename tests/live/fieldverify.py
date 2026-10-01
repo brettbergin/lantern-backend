@@ -76,7 +76,7 @@ SETTLING = frozenset({"checking", "unchecked", "preparing", "approvals_syncing",
 class GitlabProbe:
     def __init__(self, forge: LiveForge) -> None:
         self.forge = forge
-        self.pid = forge.get("SBXLOOP_LIVE_GITLAB_PROJECT_ID")
+        self.pid = forge.get("LANTERN_LIVE_GITLAB_PROJECT_ID")
         self.p = f"/projects/{self.pid}"
 
     def clients(self, rec: Recorder) -> dict[str, Client]:
@@ -368,7 +368,7 @@ class GitlabProbe:
         me = bot.get("/user", keep=user_keys).data
         as_dev = dev.get(f"/users/{me['id']}", keep=user_keys).data
         human = dev.get(
-            "/users", query={"username": self.forge.get("SBXLOOP_LIVE_GITLAB_REVIEWER")}
+            "/users", query={"username": self.forge.get("LANTERN_LIVE_GITLAB_REVIEWER")}
         ).data[0]
         human_full = dev.get(f"/users/{human['id']}", keep=user_keys).data
         search = dev.get("/users", query={"username": me["username"]}, keep=user_keys).data
@@ -666,7 +666,7 @@ class GiteaProbe:
     def v1(self) -> Evidence:
         ev, c = self.evidence("V1")
         dev = c["dev"]
-        number = self.forge.get("SBXLOOP_LIVE_GITEA_PULL")
+        number = self.forge.get("LANTERN_LIVE_GITEA_PULL")
         reviews = dev.get(
             f"{self.r}/pulls/{number}/reviews", keep=("id", "state", "user", "comments_count")
         ).data
@@ -701,8 +701,8 @@ class GiteaProbe:
     def v3(self) -> Evidence:
         ev, c = self.evidence("V3")
         dev = c["dev"]
-        bot = dev.get(f"/users/{self.forge.get('SBXLOOP_LIVE_GITEA_BOT')}").data
-        human = dev.get(f"/users/{self.forge.get('SBXLOOP_LIVE_GITEA_REVIEWER')}").data
+        bot = dev.get(f"/users/{self.forge.get('LANTERN_LIVE_GITEA_BOT')}").data
+        human = dev.get(f"/users/{self.forge.get('LANTERN_LIVE_GITEA_REVIEWER')}").data
         ev.exchanges[-2]["response"] = sorted(bot)
         ev.exchanges[-1]["response"] = sorted(human)
         actions = dev.get("/users/gitea-actions", check=False, keep=("message",))
@@ -954,7 +954,7 @@ class GiteaProbe:
     def v6(self) -> Evidence:
         ev, c = self.evidence("V6")
         f = self.forge
-        user = f.get("SBXLOOP_LIVE_GITEA_DEVELOPER")
+        user = f.get("LANTERN_LIVE_GITEA_DEVELOPER")
         as_token = c["dev"].get(f"/users/{user}/tokens", check=False, keep=("message",))
         basic = Client.basic(
             f.api_url, user, f.get("GITEA_DEVELOPER_PASSWORD"), "the user, basic auth"

@@ -1,7 +1,7 @@
 # Uploaded-file analyzer isolation gate
 
 Complex PDF, Office, image, archive, and executable parsers must not run in the
-credentialed sbxloop API process or in a normal agent sandbox. Their input is
+credentialed Lantern API process or in a normal agent sandbox. Their input is
 untrusted, and the agent sandbox may hold an inference credential and network
 access. This gate proves the disposable runtime boundary used by the PDF text
 analyzer. Other rich formats still require their own bounded parsers and
@@ -33,7 +33,7 @@ policy, so a successful connection alone does not establish egress.
 An uploaded PDF (identified by its `%PDF-` header, regardless of name) of at
 most 20 MB gets a durable analysis job. The host verifies its stored checksum,
 copies only that original and trusted parser code to a read-only mount, and
-starts a separate `sbxloop-analysis` shell VM with the proven profile. The
+starts a separate `lantern-analysis` shell VM with the proven profile. The
 worker has a 45-second execution deadline, 100-page limit, 10 MB content-stream
 check per page, 8,000-character page limit and 240,000-character document limit.
 The host validates its bounded JSON output before storing it in the database.
@@ -45,10 +45,10 @@ the limits report that limitation explicitly. Other file types retain generic
 byte, search and string inspection.
 
 The self-deploy workflow signs the production host into the separate
-`sbxloop-analysis` app and initializes its deny-all policy before taking a
+`lantern-analysis` app and initializes its deny-all policy before taking a
 deploy hold; it fails before upgrading if either setup step fails. Operators
-of other installations must run `sbx --app-name sbxloop-analysis login`,
-`sbx --app-name sbxloop-analysis policy init deny-all`, and
-`sbx --app-name sbxloop-analysis policy deny network '**'` once on their host.
+of other installations must run `sbx --app-name lantern-analysis login`,
+`sbx --app-name lantern-analysis policy init deny-all`, and
+`sbx --app-name lantern-analysis policy deny network '**'` once on their host.
 The CI probe does not prove that a particular production host can start this
 profile; that remains **field-unverified** until it is run there.

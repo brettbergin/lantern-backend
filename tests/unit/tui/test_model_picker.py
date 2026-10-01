@@ -8,18 +8,18 @@ from dataclasses import replace
 import pytest
 from textual.widgets import Input, OptionList, Static
 
-from sbxloop import modelcatalog
-from sbxloop.backends import backend_named
-from sbxloop.configedit.keys import describe
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.config import ConfigScreen
-from sbxloop.tui.screens.configvalue import ValueEdit, ValueScreen
-from sbxloop.tui.screens.modelvalue import ModelScreen
+from lantern import modelcatalog
+from lantern.backends import backend_named
+from lantern.configedit.keys import describe
+from lantern.paths import LanternHome
+from lantern.tui.screens.config import ConfigScreen
+from lantern.tui.screens.configvalue import ValueEdit, ValueScreen
+from lantern.tui.screens.modelvalue import ModelScreen
 from tests.unit.test_modelcatalog import row
 from tests.unit.tui.conftest import drive, make_app
 
 
-def picker(home: SbxloopHome, path="agent.models.build", value=None) -> ModelScreen:
+def picker(home: LanternHome, path="agent.models.build", value=None) -> ModelScreen:
     return ModelScreen(
         describe(path),
         value,

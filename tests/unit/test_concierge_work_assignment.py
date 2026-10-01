@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Principal
-from sbxloop.daemon.model import WorkItem
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Principal
+from lantern.daemon.model import WorkItem
 from tests.unit.test_daemon_concierge import FakeGithub, make
 
 

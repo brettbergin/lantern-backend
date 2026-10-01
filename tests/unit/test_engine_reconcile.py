@@ -14,8 +14,8 @@ from functools import partial
 
 import pytest
 
-from sbxloop.engine.landing import unreconciled_threads
-from sbxloop.engine.reconcile import (
+from lantern.engine.landing import unreconciled_threads
+from lantern.engine.reconcile import (
     BODY_COMMENT_KEY,
     ReconcileOutcome,
     body_comment,
@@ -23,10 +23,10 @@ from sbxloop.engine.reconcile import (
     reconcile_round,
     reply_body,
 )
-from sbxloop.engine.review import Reconciliation
-from sbxloop.engine.store import PostedRecord, StateStore
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import ReviewComment
+from lantern.engine.review import Reconciliation
+from lantern.engine.store import PostedRecord, StateStore
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import ReviewComment
 from tests.fakes.fake_github import FakeGithub
 
 REPO = "o/r"

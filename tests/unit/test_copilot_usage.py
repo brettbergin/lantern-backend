@@ -5,7 +5,7 @@ Copilot subscription), so the mapping lives as a pure function over
 sample-shaped objects and is tested here with stand-ins — the same pattern
 ``read_only_denial`` and ``ripgrep_page_size_plan`` follow.
 
-What this guards: sbxloop reads the prompt-cache counters off
+What this guards: lantern reads the prompt-cache counters off
 ``AssistantUsageData`` because they are genuine per-turn deltas, but does
 does not read the sample's per-turn spend attribute. That figure is a
 constant (observed 15.0 on every turn of every session in run rrhb28j7n),
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sbxloop_worker.backends.copilot import (
+from lantern_worker.backends.copilot import (
     BACKEND_NAME,
     available_tool_count,
     usage_from_sdk_sample,

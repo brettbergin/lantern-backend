@@ -1,7 +1,7 @@
 # Running the daemon as a service and upgrading it
 
-This is the generic guide: install `sbxloop daemon` under systemd, upgrade it by hand, and
-— optionally — let a GitHub Actions workflow on the host keep it current from sbxloop's
+This is the generic guide: install `lantern daemon` under systemd, upgrade it by hand, and
+— optionally — let a GitHub Actions workflow on the host keep it current from lantern's
 GitHub Releases. Nothing
 here is specific to any one host or repository. How this repository deploys its *own*
 daemon is a separate reference: [docs/self-deploy.md](self-deploy.md).
@@ -13,7 +13,7 @@ the next start, but the resume spends one of the item's resume budget and everyt
 run had done since its last task boundary. Every upgrade path below therefore takes a named
 pause hold, waits for the daemon to be idle, and only then installs and restarts.
 
-`sbxloop daemon ctl status --json` is what scripts read for that. It prints one JSON object:
+`lantern daemon ctl status --json` is what scripts read for that. It prints one JSON object:
 
 ```json
 {"current": null, "claiming": null, "holds": ["deploy-12"], "paused": true, "queued": 2, ...}
@@ -36,7 +36,7 @@ The prose `ctl status` is for people and may change; the JSON is for scripts. Ex
 this flag), `2` no daemon answered — the last one means there is nothing to drain. A
 `status` call mutates the circuit breaker, so poll no faster than every 15 s.
 
-The automated workflow runs `sbxloop doctor` before taking its hold or installing anything.
+The automated workflow runs `lantern doctor` before taking its hold or installing anything.
 An existing Docker login or host failure stops deployment with the running install intact.
 After rollback it checks the installed version, service, doctor and control response before
 reporting success; a running process alone does not establish a successful rollback.
@@ -44,37 +44,37 @@ reporting success; a running process alone does not establish a successful rollb
 ## Install
 
 [contrib/systemd/README.md](../contrib/systemd/README.md) walks through it: one
-`curl … | sh` (or `sbxloop init --systemd` from any existing install) builds the **sbxloop
-home**, `~/.sbxloop` (`SBXLOOP_HOME` moves it), and that home is what every upgrade path
+`curl … | sh` (or `lantern init --systemd` from any existing install) builds the **Lantern
+home**, `~/.lantern` (`LANTERN_HOME` moves it), and that home is what every upgrade path
 assumes:
 
 |                 |                                                                                                          |
 | --------------- | -------------------------------------------------------------------------------------------------------- |
-| Interpreter     | `~/.sbxloop/venv` — `sbxloop[discord,slack]` and `sbxloop-worker`, uv-managed CPython                    |
-| Command         | `~/.sbxloop/bin/sbxloop` — the launcher; `~/.sbxloop/bin/sbx` wraps the home's sbx                       |
-| Config, secrets | `~/.sbxloop/config/sbxloop.toml`, `config/secrets.env` (0600), `config/github-app.pem`                   |
-| State, runs     | `~/.sbxloop/state/` (the SQLite store), `~/.sbxloop/runs/<run>/`, `~/.sbxloop/workspaces/<owner>/<name>` |
-| Logs, backups   | `~/.sbxloop/logs/daemon.log`, `~/.sbxloop/backups/<stamp>/`                                              |
-| Service         | `~/.sbxloop/systemd/*.service`, enabled into `~/.config/systemd/user` by init                            |
+| Interpreter     | `~/.lantern/venv` — `lantern-backend[discord,slack]` and `lantern-worker`, uv-managed CPython            |
+| Command         | `~/.lantern/bin/lantern` — the launcher; `~/.lantern/bin/sbx` wraps the home's sbx                       |
+| Config, secrets | `~/.lantern/config/lantern.toml`, `config/secrets.env` (0600), `config/github-app.pem`                   |
+| State, runs     | `~/.lantern/state/` (the SQLite store), `~/.lantern/runs/<run>/`, `~/.lantern/workspaces/<owner>/<name>` |
+| Logs, backups   | `~/.lantern/logs/daemon.log`, `~/.lantern/backups/<stamp>/`                                              |
+| Service         | `~/.lantern/systemd/*.service`, enabled into `~/.config/systemd/user` by init                            |
 | Sandbox backend | user unit `sbx-sandboxd.service`, which the daemon unit `Requires=`                                      |
 
-There is no working directory: every `sbxloop` command answers the same from anywhere.
+There is no working directory: every `lantern` command answers the same from anywhere.
 Installing both chat extras makes `[chat] backend` a config change, not a reinstall.
 
 ## Host preparation, before the first unattended start
 
 The install above puts everything under a directory the service account owns and needs no
 root. Getting the *host* ready is a separate one-time job, and on Linux most of it is an
-administrator's. sbxloop reports each item and performs none of them — it joins no group,
+administrator's. Lantern reports each item and performs none of them — it joins no group,
 installs no package, starts no sandbox and elevates nothing:
 
 | Capability                         | Who                       | How it fails when missing                                                   |
 | ---------------------------------- | ------------------------- | --------------------------------------------------------------------------- |
 | `/dev/kvm` exists                  | administrator             | an `init` note and a `doctor` row; every sandbox boot fails later           |
 | `/dev/kvm` openable by the account | administrator             | same row, different diagnosis — the usual cause is the `kvm` group          |
-| `mkfs.ext4` (e2fsprogs)            | administrator             | `sbxloop init` refuses the sbx step by name, before downloading it          |
+| `mkfs.ext4` (e2fsprogs)            | administrator             | `lantern init` refuses the sbx step by name, before downloading it          |
 | sbx's AppArmor profile in `/etc`   | administrator             | `init` notes it and finishes; the sandbox backend will not start            |
-| a reachable `systemctl --user`     | log in as the account     | `sbxloop init --systemd` refuses rather than enabling dead units            |
+| a reachable `systemctl --user`     | log in as the account     | `lantern init --systemd` refuses rather than enabling dead units            |
 | lingering for the account          | account, or administrator | `init` reports persistence as **not confirmed**; the daemon stops at logout |
 
 Two of these decide whether a deployment is unattended at all, so they are checked before
@@ -85,7 +85,7 @@ the units are written rather than discovered at the first logout:
   container, a CI step — takes every call with a bus error, and units "enabled" into a
   manager that was never reached are not a service. `init --systemd` fails there by name;
   log in as the account on the console or over ssh, or install with `--no-systemd` and
-  start `sbxloop daemon` under whatever supervisor the host does use.
+  start `lantern daemon` under whatever supervisor the host does use.
 - **Lingering.** `loginctl enable-linger <account>` is what keeps user services running
   after logout. It can be refused outright (polkit does not always let an account enable
   its own) and it can be taken on a host where lingering still reads off, so `init` reads
@@ -94,10 +94,10 @@ the units are written rather than discovered at the first logout:
 
 ```bash
 loginctl show-user "$USER" --property=Linger    # Linger=yes, or it is not unattended
-sbxloop doctor                                  # the same, as a row, with everything else
+lantern doctor                                  # the same, as a row, with everything else
 ```
 
-`sbxloop doctor` shows the whole set on demand. The rows are diagnoses, not gates: they say
+`lantern doctor` shows the whole set on demand. The rows are diagnoses, not gates: they say
 what is wrong and who has to fix it, and the sbx rows below them are what actually fail when
 a sandbox cannot boot. Off Linux, and in a `--no-systemd` install, the rows that do not
 apply are not shown, so a supported mode is never judged against a capability it never
@@ -110,39 +110,39 @@ It speaks plain HTTP and never terminates TLS itself: put a reverse proxy in fro
 (Caddy, nginx, your ingress), let it terminate TLS and forward to loopback, and
 list the proxy's address in `[api] trusted_proxies` so the client address behind
 `X-Forwarded-For` is the one the authentication limiter keys on. Nothing else on
-the host needs to change: the listener runs inside `sbxloop daemon`, under the same
-unit, and stops with it. `sbxloop api client create` registers a client and prints
-its secret once; `sbxloop api key rotate` replaces the token signing key (restart
+the host needs to change: the listener runs inside `lantern daemon`, under the same
+unit, and stops with it. `lantern api client create` registers a client and prints
+its secret once; `lantern api key rotate` replaces the token signing key (restart
 the daemon for the listener to sign with it — tokens signed by the old key still
 verify until they expire).
 
 ## Upgrading by hand
 
-sbxloop is distributed through GitHub Releases only. Each release carries both wheels and
+Lantern is distributed through GitHub Releases only. Each release carries both wheels and
 a `release-manifest.json` with their SHA-256; every upgrade path installs those files,
-checked against that manifest, and never `sbxloop` or `sbxloop-worker` by name from a
-package index. To move a home to the newest release, `sbxloop update` does the download,
+checked against that manifest, and never `lantern` or `lantern-worker` by name from a
+package index. To move a home to the newest release, `lantern update` does the download,
 check and install in one step. For an exact version, as the service user, once the daemon
 is idle:
 
 ```bash
-sbxloop daemon ctl pause --hold upgrade
-until [ "$({ sbxloop daemon ctl status --json 2>/dev/null || echo '{}'; } | jq -r '.current // .claiming // "idle"')" = idle ]; do sleep 15; done
+lantern daemon ctl pause --hold upgrade
+until [ "$({ lantern daemon ctl status --json 2>/dev/null || echo '{}'; } | jq -r '.current // .claiming // "idle"')" = idle ]; do sleep 15; done
 
-sbxloop backup --label pre-X.Y.Z
-sbxloop init --no-sbx --version X.Y.Z   # fetch, check and install that release's wheels
-sbxloop init --systemd --no-sbx         # the new version refreshes launchers and units
-systemctl --user reset-failed sbxloop-daemon && systemctl --user restart sbxloop-daemon
+lantern backup --label pre-X.Y.Z
+lantern init --no-sbx --version X.Y.Z   # fetch, check and install that release's wheels
+lantern init --systemd --no-sbx         # the new version refreshes launchers and units
+systemctl --user reset-failed lantern-daemon && systemctl --user restart lantern-daemon
 ```
 
-`sbxloop backup` snapshots the config, secrets, units and the state database first (`backup list`,
+`lantern backup` snapshots the config, secrets, units and the state database first (`backup list`,
 `backup restore <name>`; the daily sweep keeps the newest `[daemon] backups_keep`). `init`
 refreshes the launchers and the rendered units for the new version. `--no-sbx` preserves
-the installed sandbox runtime; plain `init` would install this sbxloop release's default
+the installed sandbox runtime; plain `init` would install this Lantern release's default
 sbx version, which may be older than the one the operator installed.
 
-On a host installed under a custom `SBXLOOP_HOME`, read `~/.sbxloop` above as that root —
-`sbxloop` itself already honours the variable, so only the two explicit `~/.sbxloop/…`
+On a host installed under a custom `LANTERN_HOME`, read `~/.lantern` above as that root —
+`lantern` itself already honours the variable, so only the two explicit `~/.lantern/…`
 paths change. `reset-failed` matters: `StartLimitBurst=5` per 600 s leaves a unit that
 crash-looped in `failed`, where a plain `restart` will not revive it. The daemon comes back
 with the `upgrade` hold still standing, so release it (`ctl resume --hold upgrade`) once
@@ -150,10 +150,10 @@ the checks below pass. Pin the version
 exactly — a downgrade is the same two commands with an older `X.Y.Z`. Then check it:
 
 ```bash
-systemctl --user is-active sbxloop-daemon
-sbxloop --version
-sbxloop doctor                       # never --deep or --probe here; those boot microVMs
-sbxloop daemon ctl status --json     # exit 2 = no daemon came up
+systemctl --user is-active lantern-daemon
+lantern --version
+lantern doctor                       # never --deep or --probe here; those boot microVMs
+lantern daemon ctl status --json     # exit 2 = no daemon came up
 ```
 
 ## Upgrading automatically
@@ -178,11 +178,11 @@ schedule / workflow_dispatch → self-hosted runner on the daemon host
 
 Step by step:
 
-1. **Resolves the version** — the latest GitHub Release, as the installed sbxloop reads it
-   (`python -m sbxloop.releases latest`), or the `workflow_dispatch` input — and
+1. **Resolves the version** — the latest GitHub Release, as the installed Lantern reads it
+   (`python -m lantern.releases latest`), or the `workflow_dispatch` input — and
    **short-circuits** if the host already runs it, so the schedule costs nothing when there
    is nothing to do. It then **fetches both releases' wheels** — the target and the version
-   installed now, for a rollback — with `python -m sbxloop.releases download`, which checks
+   installed now, for a rollback — with `python -m lantern.releases download`, which checks
    each against its release manifest. A version it cannot fetch stops the job before any
    hold is taken.
 2. **Takes a hold and waits for idle**, polling `ctl status --json` every 15 s with no cap
@@ -190,13 +190,13 @@ Step by step:
    the daemon runs on as it was. A daemon that answers nothing for five minutes straight has
    nothing to drain and the job proceeds. To make a deploy go now, `ctl cancel` the run (it
    stays resumable; `cancel --retry` re-queues it fresh).
-3. **Snapshots** (`sbxloop backup`) and **upgrades** from the two fetched wheel files, then
-   re-runs `sbxloop init --systemd --no-sbx` so the launchers and units
+3. **Snapshots** (`lantern backup`) and **upgrades** from the two fetched wheel files, then
+   re-runs `lantern init --systemd --no-sbx` so the launchers and units
    match while preserving the installed sandbox runtime. Rollback also preserves sbx.
 4. **Restarts** after `systemctl --user reset-failed`. Holds are persisted, so an operator
    who paused before the deploy or *during* its wait is still paused afterwards without
    the pipeline doing anything.
-5. **Health-checks**: unit active, `--version` matches, `sbxloop doctor` exits 0, the daemon
+5. **Health-checks**: unit active, `--version` matches, `lantern doctor` exits 0, the daemon
    answers `ctl status --json`, then a 45 s settle to prove it is not crash-looping.
 6. **Rolls back** to the previously installed version's fetched wheels on any failed check,
    restarts, and
@@ -205,22 +205,22 @@ Step by step:
    whole procedure exists to avoid.
 7. **Releases its own hold** on `always()` — it survives the restart, so a job that died
    after restarting would otherwise leave the daemon paused — and **reports** with
-   `sbxloop daemon notify`, including how long it waited and whether a failure happened
+   `lantern daemon notify`, including how long it waited and whether a failure happened
    before anything was installed.
 
 ## Upgrading the sandbox runtime
 
-An sbxloop deployment or rollback leaves sbx unchanged. Upgrade that runtime separately
-with an explicit version, using `sbxloop init --sbx-version X.Y.Z` after checking
+A Lantern deployment or rollback leaves sbx unchanged. Upgrade that runtime separately
+with an explicit version, using `lantern init --sbx-version X.Y.Z` after checking
 compatibility on a CI runner. Take a named hold and drain the current run first, then stop
-`sbxloop-daemon` followed by `sbx-sandboxd` before installing. Restart the sandbox backend
-before the sbxloop daemon, check health, and release the hold you took. On a systemd host,
+`lantern-daemon` followed by `sbx-sandboxd` before installing. Restart the sandbox backend
+before the Lantern daemon, check health, and release the hold you took. On a systemd host,
 add `--systemd` to that init so the `sbx-sandboxd` unit is rendered afresh: an older unit
 runs sandboxd as `Type=simple`, and sbx 0.45's `daemon start`, which detaches on its own,
 crash-loops under it.
 
 Before the first start of the new runtime, keep a matching backup of the old binaries and
-the stopped sandbox state, configuration and credentials. `sbxloop backup` does not include
+the stopped sandbox state, configuration and credentials. `lantern backup` does not include
 sbx's state or binaries. A runtime downgrade can fail after a newer version migrates its
 database, so restoring only the old binaries is insufficient; see
 [Docker's downgrade guidance](https://docs.docker.com/ai/sandboxes/troubleshooting/#daemon-fails-to-start-after-downgrading).
@@ -248,23 +248,23 @@ written by a released version is migrated, read back, written to, and then hande
 
 Two settings, and no names in the file:
 
-- The repository variable **`SBXLOOP_DEPLOY_HOST`** is the runner label the job targets
-  (`runs-on: [self-hosted, "${{ vars.SBXLOOP_DEPLOY_HOST }}"]`) and the name the notices
+- The repository variable **`LANTERN_DEPLOY_HOST`** is the runner label the job targets
+  (`runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST }}"]`) and the name the notices
   call the host. Moving the daemon to another host is registering a runner there with that
   label — or changing the variable; the workflow file does not change.
 - The **`schedule`** is how often the host checks for a new release.
 
 ### Where the job deploys to
 
-The job's first step resolves the sbxloop home **once** and derives every path it touches
+The job's first step resolves the Lantern home **once** and derives every path it touches
 from that root — the launcher, the venv interpreter, the home's `uv` and its caches, and
-through `SBXLOOP_HOME` in the job environment, the backup, `init`, `doctor`, the health
+through `LANTERN_HOME` in the job environment, the backup, `init`, `doctor`, the health
 check and the rollback too. Nothing downstream re-derives a root, so a deploy cannot
 address one installation and health-check another. It resolves in this order:
 
-1. The repository variable **`SBXLOOP_HOME`**, if set.
-2. The runner process's own `SBXLOOP_HOME`.
-3. `${HOME}/.sbxloop` — the default `sbxloop init` builds.
+1. The repository variable **`LANTERN_HOME`**, if set.
+2. The runner process's own `LANTERN_HOME`.
+3. `${HOME}/.lantern` — the default `lantern init` builds.
 
 The resolution happens in a step rather than in a job-level `env:` because those values are
 literals: GitHub does not expand `${HOME}` there. A root that is not absolute, or that
@@ -273,23 +273,23 @@ directory to make a relative path mean anything, and every step would read it di
 A `~/`-prefixed root expands against the service user's home, the same as the loader does.
 A home whose path contains spaces is carried through as itself.
 
-So a host `sbxloop init` built with the default home needs no edits. A host installed under
-a custom `SBXLOOP_HOME` needs the job to be told, and there are two ways:
+So a host `lantern init` built with the default home needs no edits. A host installed under
+a custom `LANTERN_HOME` needs the job to be told, and there are two ways:
 
-- **The runner unit.** `sbxloop init --systemd --runner DIR` renders
-  `github-runner.service` with `Environment=SBXLOOP_HOME=<the home it just built>`, so a
+- **The runner unit.** `lantern init --systemd --runner DIR` renders
+  `github-runner.service` with `Environment=LANTERN_HOME=<the home it just built>`, so a
   runner started from that unit already hands every job the right root. This is the path to
   prefer: the home comes from the installation itself and cannot fall out of step with it.
 - **The repository variable.** Where the runner was registered some other way — GitHub's
-  `svc.sh`, a container, a shell — set the repository variable `SBXLOOP_HOME` to the same
+  `svc.sh`, a container, a shell — set the repository variable `LANTERN_HOME` to the same
   absolute path. It wins over the runner's environment, which is what makes it useful for
   correcting a runner that carries the wrong one. Leave it unset on a default install.
 
-### `sbxloop daemon notify`
+### `lantern daemon notify`
 
 Posts one message through the configured `[chat] backend`, from the host and without the
 daemon — so a script can say "rollback also failed" while the daemon is down. By default it
-reads the control channel from the home's `sbxloop.toml`; `--channel <id>` can route a
+reads the control channel from the home's `lantern.toml`; `--channel <id>` can route a
 purpose-specific notice elsewhere through the same backend. It reads the bot token from the
 environment (`DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN` or `MATTERMOST_BOT_TOKEN`, from the home's
 `secrets.env`), so the workflow never sources a secrets file or parses the config itself.
@@ -311,17 +311,17 @@ tar xzf actions-runner-linux-x64-<X>.tar.gz
   --name <host> --labels <host> --work _work --unattended --replace
 
 # render the unit for this runner directory, from anywhere — init enables it
-sbxloop init --systemd --no-sbx --runner "$HOME/actions-runner"
+lantern init --systemd --no-sbx --runner "$HOME/actions-runner"
 systemctl --user start github-runner
 ```
 
 `self-hosted`, `Linux` and `X64` are added automatically; `--labels <host>` is the one
-`SBXLOOP_DEPLOY_HOST` must match.
+`LANTERN_DEPLOY_HOST` must match.
 
 The unit is not a file to copy: the packaged template
 ([contrib/systemd/github-runner.service](../contrib/systemd/github-runner.service)) carries
 an `@RUNNER@` placeholder where the runner directory goes, and `init --systemd --runner DIR`
-is what puts the absolute path in it, writes it into `~/.sbxloop/systemd/`, enables it from
+is what puts the absolute path in it, writes it into `~/.lantern/systemd/`, enables it from
 there and turns lingering on. So the command needs no source checkout — a wheel or
 `install.sh` installation has everything — and runs from any directory, including the runner
 directory itself. `--no-sbx` leaves an already-installed sandbox runtime alone; init only
@@ -332,9 +332,9 @@ flag on the host's init line — including the one in the upgrade sequence in
 
 The runner is a *user* unit rather than GitHub's `svc.sh` system unit: a system service has
 no `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS`, so
-`systemctl --user restart sbxloop-daemon` fails there with
+`systemctl --user restart lantern-daemon` fails there with
 "Failed to connect to bus". `KillMode=process` so stopping the runner never cuts off a
-deploy mid-restart, and `Environment=SBXLOOP_HOME=` carries the home init built so every
+deploy mid-restart, and `Environment=LANTERN_HOME=` carries the home init built so every
 job on the runner deploys to this installation. Confirm with
 `gh api repos/<owner>/<repo>/actions/runners --jq '.runners[].status'`.
 
@@ -372,28 +372,28 @@ history instead.
 
 ## Multiple repositories on one host
 
-One daemon tends every repository declared in `sbxloop.toml`, so a second
+One daemon tends every repository declared in `lantern.toml`, so a second
 project does **not** need a second unit, home or control channel.
 Declare them as `[[vcs.repos]]` entries, whatever forge they live on — each
 with its own `deliver_base`, `trigger_label`, extra `labels`, `enabled`
 switch and optional `token_env` — and export any per-repo token from the
 home's `secrets.env` alongside `GH_TOKEN`. The legacy spellings, `[[github.repos]]`
 and the single `[github] repo = "owner/name"`, still load unchanged and are
-folded into the same list; `sbxloop config migrate` rewrites either in place
+folded into the same list; `lantern config migrate` rewrites either in place
 with every comment kept and the previous file backed up. A file that declares
 repositories under both spellings, a duplicated repository or a malformed
 slug fails config loading. Work items
 queued by the pre-migration single-repo daemon carry no repository. At startup
 the daemon attributes what it can from each row's issue URL; of the rest, only
 items still sitting untouched in the queue are discarded and rediscovered,
-repo-qualified, on the next poll — an issue still carrying `sbxloop:run` is
+repo-qualified, on the next poll — an issue still carrying `lantern:run` is
 simply picked up again. An item that was already **claimed** (or running) is
-not: claiming replaces `sbxloop:run` with `sbxloop:in-progress`, so discovery
+not: claiming replaces `lantern:run` with `lantern:in-progress`, so discovery
 will never see that issue again. Those items are failed with an explicit
 reason instead of being dropped, and the daemon logs
 `daemon.repoless_items_stranded` (and posts a control-channel notice) naming
 each item id and issue URL, so you can clear the in-progress label and re-add
-`sbxloop:run` by hand for anything that was in flight across the upgrade.
+`lantern:run` by hand for anything that was in flight across the upgrade.
 
 Everything under `[[vcs.repos]]` is per repository; the `[daemon]`
 guardrails — the daily run cap, the per-item attempt and resume caps, the
@@ -404,23 +404,23 @@ backed off on its own (doubling, capped at an hour) and, after
 `[daemon] repo_suspend_after` consecutive failures — or at once when GitHub
 says it is gone for this token (404/410, a permission 403) — **suspended**
 from polling, announced once in the control channel, shown in `ctl status`, the
-concierge's repository listing and `sbxloop doctor`, and resumed with
-`sbxloop daemon ctl resume-repo <owner/name>` (or a daemon restart, which
+concierge's repository listing and `lantern doctor`, and resumed with
+`lantern daemon ctl resume-repo <owner/name>` (or a daemon restart, which
 starts every repository fresh). The healthy repositories poll on as usual. That is what makes one
 unit the right shape: the host's budget is bounded in total, and a
 repository that keeps failing trips the breaker for the whole daemon. Deploy
-health checks are unaffected; `sbxloop doctor` reports one row per
+health checks are unaffected; `lantern doctor` reports one row per
 configured repository, so a broken repo is visible without masking the rest.
 
 ## When it all goes wrong
 
 If a deploy fails *and* its rollback fails, the job says `ROLLBACK ALSO FAILED — <host> needs a human`. Fix by hand: the two commands under [Upgrading by hand](#upgrading-by-hand)
-with the last good version, then `journalctl --user -u sbxloop-daemon -n 200` for why the
+with the last good version, then `journalctl --user -u lantern-daemon -n 200` for why the
 new one would not start.
 
 ## From the console
 
-`sbxloop tui` on the host does the same from its Daemon screen: the unit's
+`lantern tui` on the host does the same from its Daemon screen: the unit's
 state, start / stop / restart (typed), the journal streamed with a grep and
 a level floor, versions and the upgrade command, and a graceful `stop`
 through the daemon's own `ctl` queue. See [tui.md](tui.md#daemon-6).

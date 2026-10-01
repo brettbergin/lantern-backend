@@ -16,11 +16,11 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api.auth.keys import load_or_create
-from sbxloop.api.auth.store import ApiAuthStore
-from sbxloop.api.collaboration import CollaborationStore
-from sbxloop.api.context import ApiContext
-from sbxloop.daemon.channel_mirror import ChannelMirror
+from lantern.api.auth.keys import load_or_create
+from lantern.api.auth.store import ApiAuthStore
+from lantern.api.collaboration import CollaborationStore
+from lantern.api.context import ApiContext
+from lantern.daemon.channel_mirror import ChannelMirror
 from tests.unit import test_daemon_mattermost as mattermost_tests, test_daemon_slack as slack_tests
 from tests.unit.test_daemon_discord import (
     BOT_USER,
@@ -49,11 +49,11 @@ class ChannelConcierge:
     def submit_turn(self, text: str, **kwargs: Any) -> Any:
         from concurrent.futures import Future
 
-        from sbxloop.daemon.concierge import ConciergeReply
+        from lantern.daemon.concierge import ConciergeReply
 
         self.calls.append({"text": text, **kwargs})
         future: Future[ConciergeReply] = Future()
-        target = str(kwargs.get("session_key", ":angie")).rsplit(":", 1)[-1]
+        target = str(kwargs.get("session_key", ":lantern")).rsplit(":", 1)[-1]
         future.set_result(ConciergeReply(f"reply from {target}"))
         return future
 
@@ -596,7 +596,7 @@ def test_a_message_in_a_linked_thread_is_still_mirrored_to_the_channel_link(
 
 def test_a_linked_message_addresses_the_agents_it_mentions(linked: Any) -> None:
     # "@software-dev review this" typed on the surface reaches software-dev
-    # exactly as it would typed in Angie: the turn targets the agent, the
+    # exactly as it would typed in Lantern: the turn targets the agent, the
     # agent joins the channel, and the reply posted is the agent's own.
     linked.store.link_identity(
         linked.user.id, backend="discord", external_user_id="1", display_name="brett", now=1.0
@@ -621,7 +621,7 @@ def test_a_failed_linked_turn_keeps_the_exception_out_of_the_surface(
     linked.store.link_identity(
         linked.user.id, backend="discord", external_user_id="1", display_name="brett", now=1.0
     )
-    detail = "database is locked (/srv/sbxloop/state/state.db)"
+    detail = "database is locked (/srv/lantern/state/state.db)"
 
     def explode(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError(f"sqlite3.OperationalError: {detail}")
@@ -636,7 +636,7 @@ def test_a_failed_linked_turn_keeps_the_exception_out_of_the_surface(
 
 def test_a_refused_linked_turn_still_says_why(linked: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # A refusal the store words for people is worth repeating.
-    from sbxloop.api.collaboration import CollaborationError
+    from lantern.api.collaboration import CollaborationError
 
     linked.store.link_identity(
         linked.user.id, backend="discord", external_user_id="1", display_name="brett", now=1.0

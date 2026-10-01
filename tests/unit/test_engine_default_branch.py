@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.errors import GithubOpsError
-from sbxloop.events import Event, HostEventTypes
+from lantern import hostgit
+from lantern.engine.phases import PhaseRunner
+from lantern.errors import GithubOpsError
+from lantern.events import Event, HostEventTypes
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_engine import (
@@ -81,16 +81,16 @@ class TestDevelopRepository:
 
     def test_a_restart_compares_the_prior_branch_against_develop(self, harness: Harness) -> None:
         fake = develop_repo()
-        fake.branches.add("sbxloop/rprev0001")
+        fake.branches.add("lantern/rprev0001")
         fake.pr_created = True
         fake.pr["head"] = {"sha": "priorhead"}
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         engine = harness.pipeline(fake)
-        result = engine.start("restart me", prior_branch="sbxloop/rprev0001", prior_pr=fake.number)
+        result = engine.start("restart me", prior_branch="lantern/rprev0001", prior_pr=fake.number)
 
         assert result.state == "merged"
         compares = [p for _, p, _ in fake.raw_calls if "/compare/" in p]
-        assert compares[0] == "/repos/o/r/compare/develop...sbxloop/rprev0001"
+        assert compares[0] == "/repos/o/r/compare/develop...lantern/rprev0001"
         assert all("/compare/develop..." in p for p in compares)
 
     def test_configured_deliver_base_still_wins(self, harness: Harness) -> None:

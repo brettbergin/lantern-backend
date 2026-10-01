@@ -22,12 +22,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.concierge import Concierge
-from sbxloop.daemon.discord import DiscordBridge
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.events import EventBus
+from lantern.config import Config
+from lantern.daemon.concierge import Concierge
+from lantern.daemon.discord import DiscordBridge
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.events import EventBus
 from tests.unit.test_daemon_concierge import (
     FakeClient as ScriptedWorker,
     FakeHost,
@@ -66,7 +66,7 @@ OPEN_ENDED = "Paste the traceback you saw and I'll take a look."
 def _adapters_without_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     """The two places the bridge touches discord.py directly, stubbed so the
     whole chain runs on a host without the optional extra."""
-    from sbxloop.daemon import discord as bridge_module
+    from lantern.daemon import discord as bridge_module
 
     monkeypatch.setattr(bridge_module, "_to_embed", lambda spec: None)
     monkeypatch.setattr(bridge_module, "_allowed_mentions_none", lambda: "none")
@@ -330,7 +330,7 @@ class TestClarifyingQuestionEndToEnd:
     def test_the_timed_out_view_says_typing_still_works(
         self, tmp_path: Path, stub_components: None
     ) -> None:
-        from sbxloop.daemon.discord import TIMED_OUT_NOTE
+        from lantern.daemon.discord import TIMED_OUT_NOTE
 
         bridge, _client, _worker, control = build(tmp_path, [{"text": CLARIFY}])
         bridge.start()

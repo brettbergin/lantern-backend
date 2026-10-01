@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.db.collaboration_models import ChannelLinkRow, ChannelRow
+from lantern.db.collaboration_models import ChannelLinkRow, ChannelRow
 from tests.api.test_channel_access import _channel, _people, _user_id
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -242,7 +242,7 @@ def test_a_message_carries_its_origin(api: Any) -> None:
         f"/v1/channels/{channel_id}/turns", json={"content": "hello"}, headers=owner
     )
     assert posted.status_code == 202, posted.text
-    # A message typed in Angie has no external origin.
+    # A message typed in Lantern has no external origin.
     assert posted.json()["message"]["origin"] is None
 
 

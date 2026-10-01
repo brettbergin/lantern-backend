@@ -11,12 +11,12 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.items import SECTIONS, VERB_STATES, ItemsScreen, median, waited
-from sbxloop.tui.widgets.tables import ConsoleTable
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
+from lantern.tui.screens.items import SECTIONS, VERB_STATES, ItemsScreen, median, waited
+from lantern.tui.widgets.tables import ConsoleTable
 from tests.unit.tui.conftest import FakeCtl, drive, live_status, make_app, until
 
 DAY = 86400.0
@@ -28,20 +28,20 @@ def footer_keys(app: object) -> set[str]:
     return {binding.key for _n, binding, _e, _t in screen.active_bindings.values()}
 
 
-def queue_home(tmp_path: Path) -> SbxloopHome:
+def queue_home(tmp_path: Path) -> LanternHome:
     """A home holding one of everything the four sections are meant to
     show, plus a parked item old enough that the window has to hide it.
 
     Built bare rather than on the shared `seeded` fixture: that one brings
     its own runs and an orphan, and a count this screen is asserting on
     should be a count of what the test put there."""
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     seed_queue(home)
     return home
 
 
-def seed_queue(home: SbxloopHome) -> None:
+def seed_queue(home: LanternHome) -> None:
     now = time.time()
     store = StateStore(home.state_db)
     daemon = DaemonStore(home.state_db)
@@ -102,7 +102,7 @@ def test_the_sections_partition_the_states_and_drop_done() -> None:
     absent — a state that falls through appears on no screen at all."""
     placed = [state for section in SECTIONS for state in section.states]
     assert len(placed) == len(set(placed)), "a state landed in two sections"
-    from sbxloop.daemon.discord_format import ITEM_STATE_MARKER
+    from lantern.daemon.discord_format import ITEM_STATE_MARKER
 
     assert set(placed) | {"done"} == set(ITEM_STATE_MARKER)
     assert "done" not in placed, "done is finished work; Runs lists it"

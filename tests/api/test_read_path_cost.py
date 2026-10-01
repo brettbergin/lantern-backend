@@ -17,10 +17,10 @@ from typing import Any
 
 from sqlalchemy import event
 
-from sbxloop.api import work_delivery
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import chat_item_id
+from lantern.api import work_delivery
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.model import WorkItem
+from lantern.ghids import chat_item_id
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 

@@ -1,7 +1,7 @@
 """The backends the conformance suite runs against, one entry per kind.
 
 An entry names the kind, builds a fresh backend object that answers every
-role in :mod:`sbxloop.vcs.protocol`, and — because a scenario cannot reach
+role in :mod:`lantern.vcs.protocol`, and — because a scenario cannot reach
 into a fake's knobs without knowing the fake — a :class:`Seeds` object
 that arranges the state a scenario needs in that backend's own terms: a
 red check with a log, a base branch's rules, an existing issue. A second
@@ -20,8 +20,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple, Protocol
 
-from sbxloop.vcs.model import ChecksVerdict, FailedCheck
-from sbxloop.vcs.protocol import VcsOps
+from lantern.vcs.model import ChecksVerdict, FailedCheck
+from lantern.vcs.protocol import VcsOps
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
 from tests.live.env import LiveForge, live_forge
@@ -208,7 +208,7 @@ def _live_gitlab_forge() -> LiveForge:
 def _live_gitlab() -> VcsOps:
     """The real GitLab backend over the worker's own transport, in this
     process (``tests/live/localclient.py``), against the harness forge."""
-    from sbxloop.vcs.gitlab.ops import GitlabOps, gitlab_transport
+    from lantern.vcs.gitlab.ops import GitlabOps, gitlab_transport
     from tests.live.localclient import LocalWorkerClient
 
     forge = _live_gitlab_forge()
@@ -221,10 +221,10 @@ def _live_gitlab() -> VcsOps:
 # The branch every change scenario opens its change from; the live entry
 # cuts it fresh per backend build and the live seeds put statuses on its
 # head, the change's head.
-CHANGE_BRANCH = "sbxloop/r1"
+CHANGE_BRANCH = "lantern/r1"
 # The branch the remote-commit scenario creates and rewrites; never the
 # change branch, which the live reset already cut.
-CONTENT_BRANCH = "sbxloop/r2"
+CONTENT_BRANCH = "lantern/r2"
 
 
 def _reset_live_branch(forge: LiveForge, branch: str) -> None:
@@ -255,7 +255,7 @@ def _reset_live_branch(forge: LiveForge, branch: str) -> None:
     # died mid-way left behind (the GitLab backend commits on one first).
     dev.delete(f"{project}/repository/branches/{quote(CONTENT_BRANCH, safe='')}", check=False)
     for stale in (
-        dev.get(f"{project}/repository/branches", query={"search": "^sbxloop/pending/"}).data or []
+        dev.get(f"{project}/repository/branches", query={"search": "^lantern/pending/"}).data or []
     ):
         dev.delete(f"{project}/repository/branches/{quote(stale['name'], safe='')}", check=False)
     on_base = dev.get(f"{project}/repository/files/a.py", query={"ref": "main"}, check=False)
@@ -264,7 +264,7 @@ def _reset_live_branch(forge: LiveForge, branch: str) -> None:
         {
             "branch": branch,
             "start_branch": "main",
-            "commit_message": "sbxloop conformance: one change to review",
+            "commit_message": "lantern conformance: one change to review",
             "actions": [
                 {
                     "action": "update" if on_base.ok else "create",
@@ -276,7 +276,7 @@ def _reset_live_branch(forge: LiveForge, branch: str) -> None:
     )
     dev.post(
         f"{project}/statuses/{commit.data['id']}",
-        {"state": "success", "name": "ci", "description": "sbxloop conformance: green head"},
+        {"state": "success", "name": "ci", "description": "lantern conformance: green head"},
     )
 
 

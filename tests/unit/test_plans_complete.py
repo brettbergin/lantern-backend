@@ -17,15 +17,15 @@ from typing import Any
 
 from sqlalchemy import select
 
-from sbxloop.config import Config
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.plans.complete import Completion, summary_marker
-from sbxloop.plans.epicrun import EpicRun, EpicRunTask
-from sbxloop.plans.model import Plan, PlanNode
-from sbxloop.plans.publish import publish_level
-from sbxloop.plans.store import PlanStore
-from sbxloop.vcs.checklist import parse_checklist
+from lantern.config import Config
+from lantern.daemon.store import DaemonStore
+from lantern.db.api_models import ApiEventRow
+from lantern.plans.complete import Completion, summary_marker
+from lantern.plans.epicrun import EpicRun, EpicRunTask
+from lantern.plans.model import Plan, PlanNode
+from lantern.plans.publish import publish_level
+from lantern.plans.store import PlanStore
+from lantern.vcs.checklist import parse_checklist
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
 

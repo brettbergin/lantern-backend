@@ -7,10 +7,10 @@ of credential its github box holds, and how long that lives."""
 
 from __future__ import annotations
 
-from sbxloop.cli.doctor import RepoProbe, repo_checks, vcs_backend_checks
-from sbxloop.config import Config
-from sbxloop.vcs.github.ops import GithubOps
-from sbxloop.vcs.protocol import CAPABILITIES
+from lantern.cli.doctor import RepoProbe, repo_checks, vcs_backend_checks
+from lantern.config import Config
+from lantern.vcs.github.ops import GithubOps
+from lantern.vcs.protocol import CAPABILITIES
 
 
 def cfg(**doc: object) -> Config:

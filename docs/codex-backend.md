@@ -33,7 +33,7 @@ events the host already tails, answered only by files the host copies in.
 
 ### Governed tools
 
-The convenience SDK session interface does not expose the full sbxloop
+The convenience SDK session interface does not expose the full Lantern
 permission contract. Approval callbacks alone cover escalation requests,
 not every tool invocation. Codex hooks also have paths that continue after
 a hook error, and hosted tools do not all use the hook path. Neither is a
@@ -68,7 +68,7 @@ match, but each would widen what a re-enabled native executor could do.
 The VM remains the execution boundary. Shell commands execute inside the
 agent VM, where the only delivered credential is the inference key.
 Reviewers inspect the existing evidence and files; mechanical verification
-continues through sbxloop's separate shell-check jobs.
+continues through lantern's separate shell-check jobs.
 
 ### Authentication and session state
 
@@ -99,7 +99,7 @@ events as other backends, attributed to `codex`. Token usage is taken from
 SDK counters; no monetary estimate is invented. Tool results preserve
 success/failure and bounded output for the existing chat renderers.
 
-Steering, hold and resume retain sbxloop's existing phase/checkpoint
+Steering, hold and resume retain lantern's existing phase/checkpoint
 behavior. This change does not add mid-turn steering or a new run state
 machine. The code-run trail fixture must remain unchanged.
 

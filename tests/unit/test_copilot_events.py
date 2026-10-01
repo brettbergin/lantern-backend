@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from sbxloop_worker.backends.copilot import (
+from lantern_worker.backends.copilot import (
     TOOL_ARGS_CLIP,
     TOOL_OUTPUT_CLIP,
     TOOL_OUTPUT_HEAD_LINES,

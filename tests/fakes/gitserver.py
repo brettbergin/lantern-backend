@@ -3,7 +3,7 @@ HTTP Basic auth that accepts exactly one username/token pair.
 
 This is what "a private repository" means to a clone: every request is
 answered 401 until the client presents the credential, and a wrong one is
-401 too. Tests point :func:`sbxloop.hostgit.clone_from_remote` at
+401 too. Tests point :func:`lantern.hostgit.clone_from_remote` at
 ``server.url`` and prove the run's token — and nothing else — gets in.
 
 The same server answers the Git LFS batch API (#693) for the objects a

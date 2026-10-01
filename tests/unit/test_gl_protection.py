@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.checks import check_policy_reader
-from sbxloop.engine.landing import AwaitingReview, UpdateState, land
+from lantern.config import LandingConfig
+from lantern.engine.checks import check_policy_reader
+from lantern.engine.landing import AwaitingReview, UpdateState, land
 from tests.fakes.fake_gitlab import FakeGitlab
 
 REPO = "acme/widgets"

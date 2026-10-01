@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from sbxloop.agents.assignment import AgentAssignment, AgentBinding
-from sbxloop.agents.chronicle import RunChronicle
-from sbxloop.agents.posts import ArtifactRef, ChannelPost
-from sbxloop.config import Config
-from sbxloop.daemon.model import WorkItem
-from sbxloop.events import HostEventTypes
-from sbxloop_worker.protocol import Event, EventTypes
+from lantern.agents.assignment import AgentAssignment, AgentBinding
+from lantern.agents.chronicle import RunChronicle
+from lantern.agents.posts import ArtifactRef, ChannelPost
+from lantern.config import Config
+from lantern.daemon.model import WorkItem
+from lantern.events import HostEventTypes
+from lantern_worker.protocol import Event, EventTypes
 
 RUN = "r1"
 CHANNEL = "chn_1"

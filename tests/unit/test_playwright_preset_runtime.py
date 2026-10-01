@@ -15,14 +15,14 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.data import render_config_template
+from lantern.config import Config
+from lantern.data import render_config_template
 
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(
         os.environ.get("GITHUB_ACTIONS") != "true"
-        or os.environ.get("SBXLOOP_TEST_PLAYWRIGHT") != "1",
+        or os.environ.get("LANTERN_TEST_PLAYWRIGHT") != "1",
         reason="browser installation and execution are opt-in on CI runners only",
     ),
 ]
@@ -58,7 +58,7 @@ async def _exercise_server(command: list[str], url: str) -> None:
             {
                 "protocolVersion": "2025-11-25",
                 "capabilities": {},
-                "clientInfo": {"name": "sbxloop-preset-check", "version": "1"},
+                "clientInfo": {"name": "lantern-preset-check", "version": "1"},
             },
         )
         await send({"method": "notifications/initialized"})

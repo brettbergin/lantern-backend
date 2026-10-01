@@ -13,8 +13,8 @@ from __future__ import annotations
 import inspect
 from typing import ClassVar
 
-from sbxloop.vcs.github.ops import GithubOps
-from sbxloop.vcs.protocol import (
+from lantern.vcs.github.ops import GithubOps
+from lantern.vcs.protocol import (
     CAPABILITIES,
     ROLES,
     Capability,
@@ -80,7 +80,7 @@ class TestTheGitlabBackendAnswersEveryRole:
     GITLAB_PRIVATE: ClassVar[set[str]] = {"raw_text", "raw_pages", "user_is_bot"}
 
     def test_every_operation_belongs_to_exactly_one_role(self) -> None:
-        from sbxloop.vcs.gitlab.ops import GitlabOps
+        from lantern.vcs.gitlab.ops import GitlabOps
 
         placed = set().union(*(_role_methods(role) for role in ROLES))
         operations = _public_methods(GitlabOps) - TRANSPORT - self.GITLAB_PRIVATE

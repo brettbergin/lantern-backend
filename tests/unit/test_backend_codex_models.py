@@ -14,10 +14,10 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.backends import backend_named
-from sbxloop.cli import models
-from sbxloop.cli.app import app
-from sbxloop.errors import SbxloopError
+from lantern.backends import backend_named
+from lantern.cli import models
+from lantern.cli.app import app
+from lantern.errors import LanternError
 
 MODEL = {
     "id": "catalogue-entry-id",
@@ -71,9 +71,9 @@ def install_sdk(
     sdk_types.ModelListResponse = response_type  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "openai_codex", types.ModuleType("openai_codex"))
     monkeypatch.setitem(sys.modules, "openai_codex.types", sdk_types)
-    runtime = types.ModuleType("sbxloop_worker.backends.codex_runtime")
+    runtime = types.ModuleType("lantern_worker.backends.codex_runtime")
     runtime.authenticated_client = authenticated_client  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "sbxloop_worker.backends.codex_runtime", runtime)
+    monkeypatch.setitem(sys.modules, "lantern_worker.backends.codex_runtime", runtime)
     return seen
 
 
@@ -90,7 +90,7 @@ def test_lists_every_page_with_bounded_ephemeral_auth(monkeypatch: pytest.Monkey
 def test_missing_key_is_actionable_before_loading_the_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setitem(sys.modules, "openai_codex", None)
-    with pytest.raises(SbxloopError, match="OPENAI_API_KEY is not set"):
+    with pytest.raises(LanternError, match="OPENAI_API_KEY is not set"):
         models.fetch_codex_models()
 
 
@@ -98,27 +98,27 @@ def test_missing_host_extra_is_actionable(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setitem(sys.modules, "openai_codex", None)
     monkeypatch.setitem(sys.modules, "openai_codex.types", None)
-    with pytest.raises(SbxloopError, match=r"openai-codex.*'openai-codex==") as excinfo:
+    with pytest.raises(LanternError, match=r"openai-codex.*'openai-codex==") as excinfo:
         models.fetch_codex_models()
-    assert "sbxloop[codex]" not in str(excinfo.value)  # never our own name from an index
+    assert "lantern-backend[codex]" not in str(excinfo.value)  # never our own name from an index
 
 
 def test_duplicate_pagination_cursor_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     install_sdk(monkeypatch, [([MODEL], "same"), ([MODEL], "same")])
-    with pytest.raises(SbxloopError, match="pagination"):
+    with pytest.raises(LanternError, match="pagination"):
         models.fetch_codex_models()
 
 
 def test_model_listing_timeout_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
     install_sdk(monkeypatch, [], error=subprocess.TimeoutExpired("codex", 12))
-    with pytest.raises(SbxloopError, match="timed out after 12s"):
+    with pytest.raises(LanternError, match="timed out after 12s"):
         models.fetch_codex_models(timeout_s=12)
 
 
 def test_sdk_error_does_not_expose_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
     token = "sk-proj-" + "A1b2C3d4" * 4
     install_sdk(monkeypatch, [], error=RuntimeError(f"rejected {token}"))
-    with pytest.raises(SbxloopError, match="rejected") as error:
+    with pytest.raises(LanternError, match="rejected") as error:
         models.fetch_codex_models()
     assert token not in str(error.value)
 
@@ -139,7 +139,7 @@ def test_command_uses_codex_catalogue_for_table_and_json(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "300")
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         'model = "example-codex-model"\n[agent]\nbackend = "codex"\n'
     )
     install_sdk(monkeypatch, [([MODEL], None)])

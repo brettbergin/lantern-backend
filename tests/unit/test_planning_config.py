@@ -6,8 +6,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import LEVEL_LABELS, AgentModels, Config, PlanningConfig
-from sbxloop.vcs.github.labels import lifecycle_specs
+from lantern.config import LEVEL_LABELS, AgentModels, Config, PlanningConfig
+from lantern.vcs.github.labels import lifecycle_specs
 
 
 def _config(**repo: object) -> Config:

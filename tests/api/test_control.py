@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.model import WorkItem
-from sbxloop.engine.model import RunResult
-from sbxloop.errors import RunCancelledError
-from sbxloop.events import EventBus
-from sbxloop.vcs.protocol import Capability
-from sbxloop_worker.protocol import Event
+from lantern.config import Config
+from lantern.daemon.model import WorkItem
+from lantern.engine.model import RunResult
+from lantern.errors import RunCancelledError
+from lantern.events import EventBus
+from lantern.vcs.protocol import Capability
+from lantern_worker.protocol import Event
 from tests.api.conftest import Api, build
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_daemon_loop import PR_URL, gh_item
@@ -303,7 +303,7 @@ def gated(api: Api, *, kind: str = "merge") -> str:
 def landed(api: Api, run_id: str) -> None:
     deadline = time.time() + 10
     while time.time() < deadline:
-        threads = [t for t in threading.enumerate() if t.name == f"sbxloop-merge-{run_id}"]
+        threads = [t for t in threading.enumerate() if t.name == f"lantern-merge-{run_id}"]
         if not threads:
             return
         for thread in threads:
@@ -395,7 +395,7 @@ class TestGates:
         assert item is not None and item.state == "queued" and item.run_id == run_id
 
     def test_the_forge_must_be_able_to_act(self, api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
-        from sbxloop.vcs.github.ops import GithubOps
+        from lantern.vcs.github.ops import GithubOps
 
         gated(api)
         headers = api.bearer()
@@ -473,10 +473,10 @@ class TestOverTheSocket:
 def test_a_daemon_restart_settles_what_a_dead_run_never_answered(tmp_path: Path) -> None:
     """A steering row left `delivered` by a process that died is
     `undelivered` when the listener comes back: nothing will answer it."""
-    from sbxloop.api.app import create_app
-    from sbxloop.api.server import ApiServer
-    from sbxloop.daemon.controls.principal import Principal
-    from sbxloop.daemon.controls.steering import SteeringStore
+    from lantern.api.app import create_app
+    from lantern.api.server import ApiServer
+    from lantern.daemon.controls.principal import Principal
+    from lantern.daemon.controls.steering import SteeringStore
 
     api = build(tmp_path)
     store = SteeringStore(api.loop.dstore)

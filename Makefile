@@ -18,7 +18,7 @@ typecheck:
 	uv run mypy
 
 security:
-	uv run bandit -c pyproject.toml -r packages/sbxloop/src packages/sbxloop-worker/src
+	uv run bandit -c pyproject.toml -r packages/lantern/src packages/lantern-worker/src
 
 test:
 	uv run pytest
@@ -29,14 +29,14 @@ test-fast:
 	uv run pytest -m "not slow"
 
 test-cov:
-	uv run pytest --cov=sbxloop --cov=sbxloop_worker --cov-report=term-missing --cov-fail-under=85
+	uv run pytest --cov=lantern --cov=lantern_worker --cov-report=term-missing --cov-fail-under=85
 
 check: lint typecheck security test-cov
 
 build:
 	rm -rf dist
-	uv build --package sbxloop-worker -o dist
-	uv build --package sbxloop -o dist
+	uv build --package lantern-worker -o dist
+	uv build --package lantern-backend -o dist
 
 clean:
 	rm -rf dist .pytest_cache .mypy_cache .ruff_cache .coverage

@@ -7,10 +7,10 @@ from typing import ClassVar
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.engine.model import EgressSpec
-from sbxloop.events import Event, EventBus, HostEventTypes
-from sbxloop.policy import (
+from lantern.config import Config
+from lantern.engine.model import EgressSpec
+from lantern.events import Event, EventBus, HostEventTypes
+from lantern.policy import (
     APT_MIRROR_DOMAINS,
     BASELINE_REGISTRY_DOMAINS,
     PROMPT_ADVERTISED_DOMAINS,
@@ -22,7 +22,7 @@ from sbxloop.policy import (
     pattern_covers,
     valid_pattern,
 )
-from sbxloop.sbx.cli import SbxCLI
+from lantern.sbx.cli import SbxCLI
 from tests.conftest import FakeSbx
 
 
@@ -312,7 +312,7 @@ class TestRegistryBounds:
             Config.model_validate(self.CONFIG),
             bus,
             "r1",
-            "sbxloop-r1-agent",
+            "lantern-r1-agent",
         )
         granter.apply("t1", [("artifactory.example.com", "install deps")])
         assert fake_sbx.policies() == []
@@ -339,7 +339,7 @@ class TestEgressGranter:
         bus = EventBus()
         bus.subscribe(events.append)
         return EgressGranter(
-            SbxCLI(binary=str(fake_sbx.binary)), config, bus, "r1", "sbxloop-r1-agent"
+            SbxCLI(binary=str(fake_sbx.binary)), config, bus, "r1", "lantern-r1-agent"
         )
 
     def test_grants_in_bounds_domain_and_emits_event(self, fake_sbx: FakeSbx) -> None:
@@ -351,7 +351,7 @@ class TestEgressGranter:
             "network",
             "api.example-saas.com",
             "--sandbox",
-            "sbxloop-r1-agent",
+            "lantern-r1-agent",
         ] in fake_sbx.policies()
         (event,) = [e for e in events if e.type == HostEventTypes.POLICY_ALLOW]
         assert event.data["domain"] == "api.example-saas.com"
@@ -363,7 +363,7 @@ class TestEgressGranter:
         events: list[Event] = []
         granter = self.make_granter(fake_sbx, events, policy={"allow": ["*"]})
         granter.apply("t1", [("*", "follow links across the web")])
-        assert fake_sbx.policies() == [["allow", "network", "**", "--sandbox", "sbxloop-r1-agent"]]
+        assert fake_sbx.policies() == [["allow", "network", "**", "--sandbox", "lantern-r1-agent"]]
         (event,) = [e for e in events if e.type == HostEventTypes.POLICY_ALLOW]
         assert event.data["domain"] == "*"
 
@@ -402,7 +402,7 @@ class TestEgressGranter:
             "network",
             domain,
             "--sandbox",
-            "sbxloop-r1-agent",
+            "lantern-r1-agent",
         ] in fake_sbx.policies()
         (event,) = [e for e in events if e.type == HostEventTypes.POLICY_ALLOW]
         assert event.data["domain"] == domain

@@ -50,15 +50,15 @@ DEVELOPER_ACCESS = 30
 
 MINT_ROOT_TOKEN = """
 user = User.find_by_username('root')
-user.personal_access_tokens.active.where(name: 'sbxloop-live-admin').each(&:revoke!)
+user.personal_access_tokens.active.where(name: 'lantern-live-admin').each(&:revoke!)
 result = PersonalAccessTokens::CreateService.new(
   current_user: user, target_user: user,
   organization_id: user.namespace.organization_id,
-  params: { name: 'sbxloop-live-admin', scopes: %w[api sudo read_user],
+  params: { name: 'lantern-live-admin', scopes: %w[api sudo read_user],
             expires_at: 60.days.from_now.to_date }
 ).execute
 raise result.message.to_s unless result.success?
-puts "SBXLOOP_TOKEN=#{result.payload[:personal_access_token].token}"
+puts "LANTERN_TOKEN=#{result.payload[:personal_access_token].token}"
 """
 
 
@@ -97,7 +97,7 @@ def mint_root_token() -> str:
         check=False,
         timeout=600,
     )
-    match = re.search(r"^SBXLOOP_TOKEN=(\S+)$", result.stdout, re.MULTILINE)
+    match = re.search(r"^LANTERN_TOKEN=(\S+)$", result.stdout, re.MULTILINE)
     if result.returncode != 0 or not match:
         raise RuntimeError(f"gitlab-rails runner did not mint a token: {result.stderr[-600:]}")
     return match.group(1)
@@ -132,7 +132,7 @@ def ensure_user_token(admin: Client, state: dict[str, str], user_id: int, key: s
         return token
     created = admin.post(
         f"/users/{user_id}/personal_access_tokens",
-        {"name": "sbxloop-live", "scopes": ["api"], "expires_at": expiry()},
+        {"name": "lantern-live", "scopes": ["api"], "expires_at": expiry()},
     ).data
     return str(created["token"])
 
@@ -327,15 +327,15 @@ def main() -> int:
     write_env_file(
         LIVE_ENV,
         {
-            "SBXLOOP_LIVE_CA_FILE": str(LIVE_ENV.parent / "certs" / "ca.crt"),
-            "SBXLOOP_LIVE_GITLAB_URL": API,
-            "SBXLOOP_LIVE_GITLAB_VERSION": f"{version['version']} ({version.get('revision', '')})",
-            "SBXLOOP_LIVE_GITLAB_REPO": SLUG,
-            "SBXLOOP_LIVE_GITLAB_PROJECT_ID": str(seeded["project_id"]),
-            "SBXLOOP_LIVE_GITLAB_MR": str(seeded["iid"]),
-            "SBXLOOP_LIVE_GITLAB_DEVELOPER": DEVELOPER,
-            "SBXLOOP_LIVE_GITLAB_REVIEWER": REVIEWER,
-            "SBXLOOP_LIVE_GITLAB_BOT": seeded["bot_username"],
+            "LANTERN_LIVE_CA_FILE": str(LIVE_ENV.parent / "certs" / "ca.crt"),
+            "LANTERN_LIVE_GITLAB_URL": API,
+            "LANTERN_LIVE_GITLAB_VERSION": f"{version['version']} ({version.get('revision', '')})",
+            "LANTERN_LIVE_GITLAB_REPO": SLUG,
+            "LANTERN_LIVE_GITLAB_PROJECT_ID": str(seeded["project_id"]),
+            "LANTERN_LIVE_GITLAB_MR": str(seeded["iid"]),
+            "LANTERN_LIVE_GITLAB_DEVELOPER": DEVELOPER,
+            "LANTERN_LIVE_GITLAB_REVIEWER": REVIEWER,
+            "LANTERN_LIVE_GITLAB_BOT": seeded["bot_username"],
             "GITLAB_DEVELOPER_PASSWORD": seeded["developer_password"],
             "GITLAB_REVIEWER_PASSWORD": seeded["reviewer_password"],
             "GITLAB_ADMIN_TOKEN": admin_token,
@@ -345,7 +345,7 @@ def main() -> int:
         },
     )
     print(f"gitlab {version['version']} at {WEB}")
-    print(f"  api root        SBXLOOP_LIVE_GITLAB_URL = {API}")
+    print(f"  api root        LANTERN_LIVE_GITLAB_URL = {API}")
     print(f"  repository      {SLUG} (id {seeded['project_id']}), merge request !{seeded['iid']}")
     print("  administrator   root              token in GITLAB_ADMIN_TOKEN")
     print(f"  developer       {DEVELOPER}         token in GITLAB_TOKEN (Developer)")

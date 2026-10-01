@@ -1,4 +1,4 @@
-"""Packaging integration: the built sbxloop wheel embeds the worker wheel."""
+"""Packaging integration: the built lantern wheel embeds the worker wheel."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-import sbxloop
+import lantern
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -22,7 +22,7 @@ def test_built_wheel_embeds_worker_wheel(tmp_path: Path) -> None:
     # Build in a private copy of the workspace, version pinned to the
     # host's. Building the live repo in place rewrites both packages'
     # hatch-vcs _version.py files and deletes/rebuilds the wheels in
-    # src/sbxloop/_vendor/ mid-test — shared state that every other xdist
+    # src/lantern/_vendor/ mid-test — shared state that every other xdist
     # worker imports (worker subprocesses) and resolves
     # (resolve_worker_wheel) concurrently. _vendor is excluded from the
     # copy so the hook's build-the-worker path is always exercised.
@@ -31,28 +31,28 @@ def test_built_wheel_embeds_worker_wheel(tmp_path: Path) -> None:
     for name in ("pyproject.toml", "uv.lock"):
         shutil.copy2(REPO_ROOT / name, workspace / name)
     ignore = shutil.ignore_patterns("__pycache__", ".*", "dist", "_vendor")
-    for package in ("sbxloop", "sbxloop-worker"):
+    for package in ("lantern", "lantern-worker"):
         shutil.copytree(
             REPO_ROOT / "packages" / package, workspace / "packages" / package, ignore=ignore
         )
     out_dir = tmp_path / "dist"
-    env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": sbxloop.__version__}
+    env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": lantern.__version__}
     subprocess.run(
-        ["uv", "build", "--package", "sbxloop", "-o", str(out_dir)],
+        ["uv", "build", "--package", "lantern-backend", "-o", str(out_dir)],
         cwd=workspace,
         check=True,
         capture_output=True,
         timeout=300,
         env=env,
     )
-    wheels = list(out_dir.glob("sbxloop-*.whl"))
+    wheels = list(out_dir.glob("lantern_backend-*.whl"))
     assert len(wheels) == 1
     with zipfile.ZipFile(wheels[0]) as zf:
         names = zf.namelist()
-    expected = f"sbxloop/_vendor/sbxloop_worker-{sbxloop.__version__}-py3-none-any.whl"
+    expected = f"lantern/_vendor/lantern_worker-{lantern.__version__}-py3-none-any.whl"
     assert expected in names
     subprocess.run(
-        ["uv", "build", "--package", "sbxloop-worker", "--wheel", "-o", str(out_dir)],
+        ["uv", "build", "--package", "lantern-worker", "--wheel", "-o", str(out_dir)],
         cwd=workspace,
         check=True,
         capture_output=True,
@@ -69,7 +69,7 @@ def test_built_wheel_embeds_worker_wheel(tmp_path: Path) -> None:
             "python",
             str(REPO_ROOT / "scripts/smoke_wheels.py"),
             str(out_dir),
-            sbxloop.__version__,
+            lantern.__version__,
         ],
         cwd=REPO_ROOT,
         check=True,

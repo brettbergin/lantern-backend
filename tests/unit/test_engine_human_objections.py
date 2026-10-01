@@ -15,17 +15,17 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.engine.landing import HumanObjection
-from sbxloop.engine.reconcile import (
+from lantern.engine.landing import HumanObjection
+from lantern.engine.reconcile import (
     ack_body,
     ack_marker,
     acknowledge_human_threads,
     marker,
     reconcile_human,
 )
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import ReviewComment, ReviewThread, ThreadComment
+from lantern.engine.store import StateStore
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import ReviewComment, ReviewThread, ThreadComment
 from tests.fakes.fake_github import FakeGithub
 
 REPO = "o/r"
@@ -198,7 +198,7 @@ class TestAcknowledgeHumanThreads:
     thread, never double-post — the loop never waits on a human it never
     asked."""
 
-    LOGIN = "sbxloop-bot"
+    LOGIN = "lantern-bot"
 
     def ack(self, gh: FakeGithub, threads: list[ReviewThread]) -> int:
         return acknowledge_human_threads(
@@ -258,9 +258,9 @@ class TestAcknowledgeHumanThreads:
         failure r9t8hnv33: it replied "noted — this comment did not arrive
         with a changes-requested review" to its own findings)."""
         gh = FakeGithub()
-        own = ack_thread(("sbxloop", "[minor] naming"))
+        own = ack_thread(("lantern", "[minor] naming"))
         replied = acknowledge_human_threads(
-            gh, REPO, PR, run_id=RUN, login="sbxloop[bot]", threads=[own]
+            gh, REPO, PR, run_id=RUN, login="lantern[bot]", threads=[own]
         )
         assert replied == 0
         assert gh.replies == []

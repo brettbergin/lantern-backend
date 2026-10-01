@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 from git import Repo
 
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.conftest import FakeSbx
 from tests.unit.test_provision import TOKENS
 
@@ -33,7 +33,7 @@ def _checkout(path: Path, origin: str) -> Path:
 
 
 def _provisioner(fake_sbx: FakeSbx, config: Config) -> Provisioner:
-    from sbxloop.sbx.cli import SbxCLI
+    from lantern.sbx.cli import SbxCLI
 
     return Provisioner(SbxCLI(binary=str(fake_sbx.binary)), config, env=TOKENS)
 
@@ -78,9 +78,9 @@ def test_origin_mismatch_is_refused(fake_sbx: FakeSbx, tmp_path: Path) -> None:
 def test_legacy_workspace_not_used_for_another_repo(
     fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The exact field shape: legacy [sandbox] workspace = a sbxloop
+    """The exact field shape: legacy [sandbox] workspace = a lantern
     checkout, two enabled repos, a run for the other one."""
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     config = _config(
         tmp_path,
         [{"repo": "o/one"}, {"repo": "o/two"}],
@@ -88,7 +88,7 @@ def test_legacy_workspace_not_used_for_another_repo(
     )
     provisioner = _provisioner(fake_sbx, config)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     def boom(url: str, target: Path, branch: str, **kwargs: object) -> str:
         raise ProvisionError(f"cloning {url} failed: repository not found")
@@ -96,7 +96,7 @@ def test_legacy_workspace_not_used_for_another_repo(
     monkeypatch.setattr(hostgit, "clone_from_remote", boom)
     with pytest.raises(ProvisionError) as excinfo:
         provisioner._resolve_workspace("r1", "o/two")
-    # The legacy sbxloop checkout is never the source; the run fails instead.
+    # The legacy lantern checkout is never the source; the run fails instead.
     assert "o/two" in str(excinfo.value)
     assert str(legacy) not in str(excinfo.value)
     # ...and nothing was cloned into the run dir.
@@ -108,14 +108,14 @@ def test_no_workspace_no_credential_fails_explicitly(
 ) -> None:
     """A host with no GitHub credential at all can still clone a public
     remote, and a private one fails naming that as the reason."""
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     config = _config(
         tmp_path,
         [{"repo": "o/one", "workspace": str(legacy)}, {"repo": "o/private"}],
     )
     provisioner = Provisioner(SbxCLI(binary=str(fake_sbx.binary)), config, env={})
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     seen: dict[str, object] = {}
 
@@ -139,7 +139,7 @@ def test_remote_clone_carries_the_runs_token(
     """#683: the clone authenticates with the same credential the github
     sandbox delivers with — daemon-wide GH_TOKEN, or the entry's own
     token_env — and the clone event says so."""
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     upstream = _checkout(tmp_path / "upstream", "o/private")
     config = _config(
         tmp_path,
@@ -152,7 +152,7 @@ def test_remote_clone_carries_the_runs_token(
     env = {**TOKENS, "OTHER_TOKEN": "github_pat_other"}
     provisioner = Provisioner(SbxCLI(binary=str(fake_sbx.binary)), config, env=env)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     seen: list[str | None] = []
 
@@ -176,11 +176,11 @@ def test_remote_clone_carries_the_runs_token(
 def test_remote_clone_failure_with_a_token_names_the_permission(
     fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     config = _config(tmp_path, [{"repo": "o/one", "workspace": str(legacy)}, {"repo": "o/private"}])
     provisioner = _provisioner(fake_sbx, config)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     def boom(url: str, target: Path, branch: str, **kwargs: object) -> str:
         raise ProvisionError(f"cloning {url} failed: Authentication failed")
@@ -200,7 +200,7 @@ def test_remote_clone_with_a_misconfigured_credential_fails_before_cloning(
     """A per-repo token_env that is unset is a misconfiguration, not "no
     credential": the run fails naming it rather than cloning unauthenticated
     and reporting a confusing remote error."""
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     config = _config(
         tmp_path,
         [
@@ -210,7 +210,7 @@ def test_remote_clone_with_a_misconfigured_credential_fails_before_cloning(
     )
     provisioner = _provisioner(fake_sbx, config)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     def never(url: str, target: Path, branch: str, **kwargs: object) -> str:
         raise AssertionError("clone must not be attempted")
@@ -223,7 +223,7 @@ def test_remote_clone_with_a_misconfigured_credential_fails_before_cloning(
 def test_no_workspace_public_repo_clones_from_remote(
     fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     upstream = _checkout(tmp_path / "upstream", "o/public")
     config = _config(
         tmp_path,
@@ -231,7 +231,7 @@ def test_no_workspace_public_repo_clones_from_remote(
     )
     provisioner = _provisioner(fake_sbx, config)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     seen: dict[str, object] = {}
 
@@ -260,7 +260,7 @@ def test_remote_clone_follows_api_url_and_clone_filter(
 ) -> None:
     """The clone URL derives from [github] api_url (#623) and the partial
     clone filter from [sandbox] clone_filter (#632)."""
-    legacy = _checkout(tmp_path / "sbxloop", "o/one")
+    legacy = _checkout(tmp_path / "lantern", "o/one")
     upstream = _checkout(tmp_path / "upstream", "o/public")
     config = Config.model_validate(
         {
@@ -274,7 +274,7 @@ def test_remote_clone_follows_api_url_and_clone_filter(
     )
     provisioner = _provisioner(fake_sbx, config)
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     seen: dict[str, object] = {}
 
@@ -320,7 +320,7 @@ def _checkout_with_url(path: Path, url: str) -> Path:
     "url",
     [
         "https://gitea.example.com/team/group/proj.git",  # nested path
-        "sbxloop-host:tree",  # ssh alias
+        "lantern-host:tree",  # ssh alias
         "/srv/mirrors/o-one",  # local path remote
         "",  # no origin remote at all
     ],
@@ -344,7 +344,7 @@ def test_unresolvable_origin_fails_closed_when_multi_repo(
 def test_unresolvable_origin_allowed_for_single_repo(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     """Single-repo deployments are unchanged: there is no other tree to
     confuse the run with, so an unrecognisable origin still works."""
-    tree = _checkout_with_url(tmp_path / "tree", "sbxloop-host:tree")
+    tree = _checkout_with_url(tmp_path / "tree", "lantern-host:tree")
     config = _config(tmp_path, [{"repo": "o/a", "workspace": str(tree)}])
     provisioner = _provisioner(fake_sbx, config)
     ws = provisioner._resolve_workspace("r1", "o/a")
@@ -363,7 +363,7 @@ def test_narrowed_config_still_refuses_other_repos_tree(
     )
     assert narrowed.workspace_for_repo("o/b") is None
 
-    from sbxloop import hostgit
+    from lantern import hostgit
 
     def boom(url: str, target: Path, branch: str, **kwargs: object) -> str:
         raise ProvisionError(f"cloning {url} failed: repository not found")

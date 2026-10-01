@@ -16,15 +16,15 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.daemon.controls.principal import Principal
-from sbxloop.daemon.controls.results import ControlError
-from sbxloop.daemon.controls.steering import SteeringStore
-from sbxloop.daemon.loop import RunHandle
-from sbxloop.daemon.model import RunReport, WorkItem
-from sbxloop.engine.model import RunResult
-from sbxloop.errors import RunCancelledError
-from sbxloop.events import EventBus
+from lantern.config import Config
+from lantern.daemon.controls.principal import Principal
+from lantern.daemon.controls.results import ControlError
+from lantern.daemon.controls.steering import SteeringStore
+from lantern.daemon.loop import RunHandle
+from lantern.daemon.model import RunReport, WorkItem
+from lantern.engine.model import RunResult
+from lantern.errors import RunCancelledError
+from lantern.events import EventBus
 from tests.unit.test_daemon_loop import Harness, gh_item
 
 WAIT_S = 10.0

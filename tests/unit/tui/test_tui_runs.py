@@ -6,12 +6,12 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.runs import COLUMNS, RunsScreen, fit, took
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop.tui.widgets.tables import ConsoleTable
-from sbxloop_worker.protocol import Usage
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
+from lantern.tui.screens.runs import COLUMNS, RunsScreen, fit, took
+from lantern.tui.widgets.panel import TextPanel
+from lantern.tui.widgets.tables import ConsoleTable
+from lantern_worker.protocol import Usage
 from tests.fakes.rawdb import exec_raw
 from tests.unit.tui.conftest import FakeCtl, drive, live_status, make_app, until
 
@@ -46,7 +46,7 @@ def test_columns_drop_by_priority_never_overflow() -> None:
     assert "repo" not in narrow and "item" not in narrow
 
 
-def seed(home: SbxloopHome) -> None:
+def seed(home: LanternHome) -> None:
     """A run that started first but was touched last — the case the old
     ordering buried."""
     now = time.time()
@@ -122,10 +122,10 @@ def test_runs_are_ordered_by_the_clock_the_column_shows(tmp_path: Path) -> None:
     """The list was newest-*started* first while the last column showed
     when each run was last *touched*, so a run that began on Tuesday and
     merged this morning sat far down a list saying "2m ago"."""
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     seed(home)
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 
@@ -145,10 +145,10 @@ def test_runs_are_ordered_by_the_clock_the_column_shows(tmp_path: Path) -> None:
 
 
 def test_the_live_run_is_pinned_above_the_rest(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     seed(home)
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 
@@ -168,10 +168,10 @@ def test_the_live_run_is_pinned_above_the_rest(tmp_path: Path) -> None:
 def test_a_long_reason_cannot_eat_the_table(tmp_path: Path) -> None:
     """A 400-character failure reason sized the state column and pushed
     eight others off the screen. It lives under the table now, in full."""
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     seed(home)
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 
@@ -202,10 +202,10 @@ def test_a_long_reason_cannot_eat_the_table(tmp_path: Path) -> None:
 
 
 def test_a_run_shows_what_it_cost(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     seed(home)
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 
@@ -225,12 +225,12 @@ def test_a_run_shows_what_it_cost(tmp_path: Path) -> None:
 
 def test_p_needs_a_pull_request(tmp_path: Path) -> None:
     """`p` on a run with no PR says so rather than doing nothing."""
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     store = StateStore(home.state_db)
     store.create_run("r_nopr", "no pull request here")
     store.close()
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.daemon.store import DaemonStore
 
     DaemonStore(home.state_db).close()
 

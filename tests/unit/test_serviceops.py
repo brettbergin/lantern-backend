@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop_worker.secrets import REDACTED
-from sbxloop_worker.serviceops import (
+from lantern_worker.secrets import REDACTED
+from lantern_worker.serviceops import (
     BODY_MAX_CHARS,
     CATALOGUE_ENV,
     FAKE_ENV,
@@ -117,7 +117,7 @@ class TestRequest:
         )
         headers = transport.requests[0][2]
         assert headers["Authorization"] == f"Bearer {VALUE}"
-        assert headers["User-Agent"] == "sbxloop-worker"
+        assert headers["User-Agent"] == "lantern-worker"
         assert "Accept" in headers
 
     def test_bare_scheme_uses_the_value_alone(self) -> None:

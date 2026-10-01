@@ -16,7 +16,7 @@ the builder. The questions the spike answers:
 
 Fake-sbx wall times are NOT microVM wall times; the transferable numbers are
 the per-call *sbx invocation count* and the worker's 250ms response-poll
-floor (``sbxloop_worker.hosttools.POLL_INTERVAL_S``).
+floor (``lantern_worker.hosttools.POLL_INTERVAL_S``).
 """
 
 from __future__ import annotations
@@ -28,12 +28,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
-from sbxloop.sbx.sandbox import WORK_DIR, Sandbox
-from sbxloop.worker.client import WorkerClient
-from sbxloop_worker.protocol import JobRequest
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.sbx.sandbox import WORK_DIR, Sandbox
+from lantern.worker.client import WorkerClient
+from lantern_worker.protocol import JobRequest
 from tests.conftest import FakeSbx
 from tests.spike.workbench import WorkbenchTools
 
@@ -43,7 +43,7 @@ WORKBENCH = "spike-workbench"
 
 @pytest.fixture(autouse=True)
 def echo_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SBXLOOP_WORKER_BACKEND", "echo")
+    monkeypatch.setenv("LANTERN_WORKER_BACKEND", "echo")
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def script_session(
     # next to the script, so reusing a path would read a stale cursor.
     script = tmp_path / f"{name}.json"
     script.write_text(json.dumps([{"text": text, "host_tool_calls": calls}]))
-    monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(script))
+    monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(script))
 
 
 def brain_client(brain: Sandbox, **kwargs: object) -> WorkerClient:
@@ -188,7 +188,7 @@ class TestTopology:
             tmp_path,
             monkeypatch,
             [
-                {"name": "wb_read", "arguments": {"path": "../../.sbxloop/env.sh"}},
+                {"name": "wb_read", "arguments": {"path": "../../.lantern/env.sh"}},
                 {"name": "wb_read", "arguments": {"path": "/etc/passwd"}},
                 {
                     "name": "wb_write",

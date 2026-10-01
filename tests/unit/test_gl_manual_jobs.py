@@ -2,9 +2,9 @@
 
 import pytest
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.landing import Landed, UpdateState, land
-from sbxloop.vcs.gitlab.records import check_run_record, fold_statuses
+from lantern.config import LandingConfig
+from lantern.engine.landing import Landed, UpdateState, land
+from lantern.vcs.gitlab.records import check_run_record, fold_statuses
 from tests.fakes.fake_gitlab import FakeGitlab
 
 

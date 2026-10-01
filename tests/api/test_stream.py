@@ -19,11 +19,11 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from sbxloop.api.app import create_app
-from sbxloop.api.auth.deps import resolve_token
-from sbxloop.api.routes import events as events_route
-from sbxloop.api.routes.events import sse_frames
-from sbxloop.api.server import ApiServer
+from lantern.api.app import create_app
+from lantern.api.auth.deps import resolve_token
+from lantern.api.routes import events as events_route
+from lantern.api.routes.events import sse_frames
+from lantern.api.server import ApiServer
 from tests.api.conftest import Api, build
 
 

@@ -10,13 +10,13 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.github import DaemonGithub, sandbox_name_for
-from sbxloop.errors import DaemonError, GithubOpsError
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
-from sbxloop.vcs.backends import (
+from lantern.config import Config
+from lantern.daemon.github import DaemonGithub, sandbox_name_for
+from lantern.errors import DaemonError, GithubOpsError
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.vcs.backends import (
     BackendNotImplemented,
     backend_for,
     capabilities_for,
@@ -25,9 +25,9 @@ from sbxloop.vcs.backends import (
     unimplemented_operations,
     unimplemented_roles,
 )
-from sbxloop.vcs.github.ops import GithubOps
-from sbxloop.vcs.gitlab.ops import GitlabOps
-from sbxloop.vcs.protocol import Capability
+from lantern.vcs.github.ops import GithubOps
+from lantern.vcs.gitlab.ops import GitlabOps
+from lantern.vcs.protocol import Capability
 from tests.conftest import FakeSbx
 from tests.unit.test_gh_ops import StubWorkerClient
 
@@ -71,7 +71,7 @@ class TestTheDaemonsBox:
     def test_old_same_home_name_is_removed_before_new_provision(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx.naming import legacy_daemon_vcs_name
+        from lantern.sbx.naming import legacy_daemon_vcs_name
 
         box = self._switched_box(fake_sbx, tmp_path, monkeypatch, "github")
         old = legacy_daemon_vcs_name(box.config.paths)
@@ -140,7 +140,7 @@ class TestTheDaemonsBox:
         box = self._switched_box(fake_sbx, tmp_path, monkeypatch, configured)
         old = sandbox_name_for(box.config.paths, previous)  # type: ignore[arg-type]
         # A later generation of the old box goes too; another home's box stays.
-        for name in (old, f"{old}-g2", "sbxloop-daemon-gitlab-0badf00d"):
+        for name in (old, f"{old}-g2", "lantern-daemon-gitlab-0badf00d"):
             box.sbx.create(SandboxSpec(name=name, role="github", workspace=tmp_path))
 
         box.ops()
@@ -148,7 +148,7 @@ class TestTheDaemonsBox:
         listed = {info.name for info in box.sbx.ls()}
         assert box.name in listed
         assert old not in listed and f"{old}-g2" not in listed
-        assert "sbxloop-daemon-gitlab-0badf00d" in listed
+        assert "lantern-daemon-gitlab-0badf00d" in listed
 
     def test_a_wedged_previous_forge_box_does_not_keep_the_new_forge_down(
         self,
@@ -166,7 +166,7 @@ class TestTheDaemonsBox:
         box.sbx.create(SandboxSpec(name=old, role="github", workspace=tmp_path))
         fake_sbx.fail_next(f"rm --force {old}", stderr="ERROR: context deadline exceeded")
 
-        with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+        with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
             box.ops()
 
         assert box.name in {info.name for info in box.sbx.ls()}
@@ -197,7 +197,7 @@ class TestTheDaemonsBox:
         fake_sbx.script("create", returncode=1, stderr="ERROR: failed to run sandbox container")
 
         with (
-            caplog.at_level(logging.ERROR, logger="sbxloop.daemon.github"),
+            caplog.at_level(logging.ERROR, logger="lantern.daemon.github"),
             pytest.raises(DaemonError, match="cannot provision the daemon GitLab sandbox"),
         ):
             box.ops()
@@ -227,7 +227,7 @@ class TestTheDaemonsBox:
         )
 
         with (
-            caplog.at_level(logging.ERROR, logger="sbxloop.daemon.github"),
+            caplog.at_level(logging.ERROR, logger="lantern.daemon.github"),
             pytest.raises(DaemonError, match="not authenticated to Docker"),
         ):
             box.ops()

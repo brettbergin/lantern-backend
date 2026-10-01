@@ -1,5 +1,8 @@
 # Spike: native agent-session execution backend (issue #46)
 
+> **Renamed.** sbxloop is now Lantern and Angie is the Lantern web app. This record
+> keeps the names it was written with.
+
 Status: **feasibility report — no implementation commitment yet.**
 Desk research done 2026-07-24 against the `docker/docs` source tree and
 `docker/sbx-releases` (sbx 0.37.0). Field verification: run

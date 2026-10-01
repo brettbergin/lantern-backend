@@ -14,13 +14,13 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.harness import ROLE_BY_PHASE, Role
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.engine.skilltools import SKILL_TOOL_NAME, answer_skill_call, skill_tool_spec
-from sbxloop.skills import Skill, load_skills, skill_body, skills_for
-from sbxloop_worker.protocol import HostToolCall, JobRequest, JobResult
+from lantern.config import Config
+from lantern.engine.harness import ROLE_BY_PHASE, Role
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import PhaseRunner
+from lantern.engine.skilltools import SKILL_TOOL_NAME, answer_skill_call, skill_tool_spec
+from lantern.skills import Skill, load_skills, skill_body, skills_for
+from lantern_worker.protocol import HostToolCall, JobRequest, JobResult
 
 ROLES: tuple[Role, ...] = ("planner", "builder", "critic", "operator", "concierge")
 
@@ -54,7 +54,7 @@ class TestTheTree:
     def test_the_concierge_has_the_operator_skill(self) -> None:
         """It is the one aimed at a human asking how to run the loop, and
         the concierge is the only session that talks to one."""
-        assert "operate-sbxloop" in {s.name for s in skills_for("concierge")}
+        assert "operate-lantern" in {s.name for s in skills_for("concierge")}
 
     def test_a_critic_is_not_offered_the_delivery_procedure(self) -> None:
         """A read-only critic reading about how to commit and open a pull
@@ -94,11 +94,11 @@ class TestTheHostTool:
 
     def test_a_skill_for_another_role_is_refused_not_returned(self) -> None:
         call = HostToolCall(
-            call_id="c1", name=SKILL_TOOL_NAME, arguments={"name": "operate-sbxloop"}
+            call_id="c1", name=SKILL_TOOL_NAME, arguments={"name": "operate-lantern"}
         )
         response = answer_skill_call(call, "builder")
         assert not response.ok
-        assert "operate-sbxloop" in (response.error or "")
+        assert "operate-lantern" in (response.error or "")
 
     @pytest.mark.parametrize("arguments", [{}, {"name": ""}, {"name": "nope"}, {"name": 7}])
     def test_every_call_is_answered_never_raised(self, arguments: dict[str, Any]) -> None:

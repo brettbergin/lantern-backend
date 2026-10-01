@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.data import render_config_template
-from sbxloop.sbx.provision import CONCIERGE_MCP_ROLES, agent_policy_allows
-from sbxloop_worker.mcp import server_configs
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.data import render_config_template
+from lantern.sbx.provision import CONCIERGE_MCP_ROLES, agent_policy_allows
+from lantern_worker.mcp import server_configs
 
 
 def test_init_can_generate_a_self_contained_playwright_setup(
@@ -21,7 +21,7 @@ def test_init_can_generate_a_self_contained_playwright_setup(
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["init", "--project", "--preset", "playwright"])
     assert result.exit_code == 0, result.output
-    written = (tmp_path / "sbxloop.toml").read_text()
+    written = (tmp_path / "lantern.toml").read_text()
     assert written == render_config_template("playwright")
     config = Config.model_validate(tomllib.loads(written))
     assert config.agent.backend == "copilot"

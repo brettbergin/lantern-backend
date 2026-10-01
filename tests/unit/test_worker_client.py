@@ -1,6 +1,6 @@
 """WorkerClient transport tests: the REAL worker process through the fake sbx.
 
-sys.executable (the test venv python, which has sbxloop_worker importable) is
+sys.executable (the test venv python, which has lantern_worker importable) is
 used as the in-sandbox interpreter; the fake sbx rewrites the /home/agent
 job/event/result paths into the fake sandbox filesystem, so these tests
 exercise the genuine end-to-end submit path: write job -> exec worker ->
@@ -17,20 +17,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop import toolchains
-from sbxloop.errors import WorkerError, WorkerTimeoutError
-from sbxloop.events import Event, EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
-from sbxloop.sbx.sandbox import Sandbox
-from sbxloop.worker.client import WorkerClient, _PollDrain
-from sbxloop_worker.protocol import EventTypes, JobRequest
+from lantern import toolchains
+from lantern.errors import WorkerError, WorkerTimeoutError
+from lantern.events import Event, EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.sbx.sandbox import Sandbox
+from lantern.worker.client import WorkerClient, _PollDrain
+from lantern_worker.protocol import EventTypes, JobRequest
 from tests.conftest import FakeSbx
 
 
 @pytest.fixture(autouse=True)
 def echo_backend(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SBXLOOP_WORKER_BACKEND", "echo")
+    monkeypatch.setenv("LANTERN_WORKER_BACKEND", "echo")
 
 
 @pytest.fixture
@@ -92,7 +92,7 @@ def script_toolchain_probe_batch(
     """Script the prebaked path's batched toolchain probe (#615) to name
     ``missing``. Unscripted it runs every selected probe on the host."""
     fake_sbx.script(
-        "exec boxa sh -c : sbxloop-toolchain-probe",
+        "exec boxa sh -c : lantern-toolchain-probe",
         returncode=returncode,
         stdout="".join(f"{name}\n" for name in missing or []),
         stderr=stderr,
@@ -123,7 +123,7 @@ class TestAptContention:
     ) -> None:
         sleeps: list[float] = []
         monkeypatch.setattr(
-            "sbxloop.worker.client.time",
+            "lantern.worker.client.time",
             SimpleNamespace(monotonic=time.monotonic, sleep=sleeps.append),
         )
         fake_sbx.script("exec boxa python3 -m venv", returncode=1, stderr="no ensurepip", once=True)
@@ -163,7 +163,7 @@ class TestAptContention:
     ) -> None:
         sleeps: list[float] = []
         monkeypatch.setattr(
-            "sbxloop.worker.client.time",
+            "lantern.worker.client.time",
             SimpleNamespace(monotonic=time.monotonic, sleep=sleeps.append),
         )
         workspace = Path(__file__).parents[1] / "fixtures" / "ecosystems" / "node-npm"
@@ -216,7 +216,7 @@ class TestAptContention:
         hint: str,
     ) -> None:
         monkeypatch.setattr(
-            "sbxloop.worker.client.time",
+            "lantern.worker.client.time",
             SimpleNamespace(monotonic=time.monotonic, sleep=lambda _: None),
         )
         node = toolchains.resolve(["javascript"])[0]
@@ -240,7 +240,7 @@ class TestAptContention:
     ) -> None:
         sleeps: list[float] = []
         monkeypatch.setattr(
-            "sbxloop.worker.client.time",
+            "lantern.worker.client.time",
             SimpleNamespace(monotonic=time.monotonic, sleep=sleeps.append),
         )
         fake_sbx.script(
@@ -272,9 +272,9 @@ class TestStreamTransport:
 
         # durable artifacts exist inside the sandbox fs
         fs = fake_sbx.sandbox_fs("boxa")
-        assert (fs / "home/agent/.sbxloop/jobs/j1.json").is_file()
-        assert (fs / "home/agent/.sbxloop/results/j1.json").is_file()
-        assert (fs / "home/agent/.sbxloop/events/j1.jsonl").is_file()
+        assert (fs / "home/agent/.lantern/jobs/j1.json").is_file()
+        assert (fs / "home/agent/.lantern/results/j1.json").is_file()
+        assert (fs / "home/agent/.lantern/events/j1.jsonl").is_file()
 
     def test_submit_agent_name_stamps_agent_events(self, sandbox: Sandbox) -> None:
         """submit(agent=...) attributes that job's agent.* events to the
@@ -341,13 +341,13 @@ class TestStreamTransport:
         script.write_text(json.dumps([{"text": "slow", "sleep_s": 30}]))
         import os
 
-        os.environ["SBXLOOP_ECHO_SCRIPT"] = str(script)
+        os.environ["LANTERN_ECHO_SCRIPT"] = str(script)
         try:
             client = make_client(sandbox, EventBus(), grace_s=1.0)
             with pytest.raises(WorkerTimeoutError, match="exceeded"):
                 client.submit(agent_job(timeout_s=0.2))
         finally:
-            del os.environ["SBXLOOP_ECHO_SCRIPT"]
+            del os.environ["LANTERN_ECHO_SCRIPT"]
         kills = [c for c in fake_sbx.invocations("exec") if "pkill" in c]
         assert kills, "expected a pkill inside the sandbox"
         assert any("j1" in arg for c in kills for arg in c)
@@ -357,7 +357,7 @@ class TestStreamTransport:
     ) -> None:
         """The fake's pkill must emulate the microVM boundary. Job ids repeat
         across tests ("j1" everywhere), so a host-wide
-        ``pkill -f sbxloop_worker.*j1`` from one test's timeout kill would
+        ``pkill -f lantern_worker.*j1`` from one test's timeout kill would
         TERM other xdist workers' live worker processes mid-test."""
         import subprocess
         import time
@@ -368,7 +368,7 @@ class TestStreamTransport:
                 sys.executable,
                 "-c",
                 "import time; time.sleep(60)",
-                "sbxloop_worker-decoy",
+                "lantern_worker-decoy",
                 "--job",
                 "j1.json",
             ]
@@ -377,7 +377,7 @@ class TestStreamTransport:
         script.write_text(json.dumps([{"text": "slow", "sleep_s": 30}]))
         import os
 
-        os.environ["SBXLOOP_ECHO_SCRIPT"] = str(script)
+        os.environ["LANTERN_ECHO_SCRIPT"] = str(script)
         try:
             client = make_client(sandbox, EventBus(), grace_s=1.0)
             with pytest.raises(WorkerTimeoutError, match="exceeded"):
@@ -385,7 +385,7 @@ class TestStreamTransport:
             time.sleep(0.5)  # let a stray SIGTERM (the bug) be delivered
             assert decoy.poll() is None, "pkill escaped the sandbox and killed a foreign process"
         finally:
-            del os.environ["SBXLOOP_ECHO_SCRIPT"]
+            del os.environ["LANTERN_ECHO_SCRIPT"]
             decoy.kill()
             decoy.wait()
 
@@ -402,11 +402,11 @@ class TestStreamTransport:
             [
                 "sh",
                 "-c",
-                "cp /home/agent/.sbxloop/results/j1.json /home/agent/.sbxloop/results/jX.json",
+                "cp /home/agent/.lantern/results/j1.json /home/agent/.lantern/results/jX.json",
             ]
         )
         with pytest.raises(WorkerError, match="mismatch"):
-            client._fetch_result(agent_job(job_id="jX"), "/home/agent/.sbxloop/results/jX.json")
+            client._fetch_result(agent_job(job_id="jX"), "/home/agent/.lantern/results/jX.json")
 
 
 class TestPollTransport:
@@ -445,7 +445,7 @@ class TestPollTransport:
         script.write_text(json.dumps([{"text": "slow", "sleep_s": 30}]))
         import os
 
-        os.environ["SBXLOOP_ECHO_SCRIPT"] = str(script)
+        os.environ["LANTERN_ECHO_SCRIPT"] = str(script)
         try:
             client = make_client(
                 sandbox, EventBus(), transport="poll", poll_interval=0.1, grace_s=0.5
@@ -453,14 +453,14 @@ class TestPollTransport:
             with pytest.raises(WorkerTimeoutError):
                 client.submit(agent_job(timeout_s=0.2))
         finally:
-            del os.environ["SBXLOOP_ECHO_SCRIPT"]
+            del os.environ["LANTERN_ECHO_SCRIPT"]
 
 
 class TestPollDrain:
     """Byte-level poll-chunk semantics, driven by writing the events file
     directly in the fake sandbox fs between drain() calls (issue #65)."""
 
-    EVENTS_PATH = "/home/agent/.sbxloop/events/jd.jsonl"
+    EVENTS_PATH = "/home/agent/.lantern/events/jd.jsonl"
 
     def make_drain(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, bus: EventBus
@@ -554,21 +554,21 @@ class TestInstall:
     def test_install_flow_with_wheel(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
-        wheel = tmp_path / f"sbxloop_worker-{sbxloop.__version__}-py3-none-any.whl"
+        wheel = tmp_path / f"lantern_worker-{lantern.__version__}-py3-none-any.whl"
         wheel.write_bytes(b"fake wheel bytes")
         client = make_client(sandbox, EventBus())
         # Scripted execs: venv creation, pip install, and import check all
         # succeed; the import check must print the lockstep version.
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         client.install(wheel=wheel, extras="copilot")
 
@@ -583,25 +583,25 @@ class TestInstall:
     def test_install_without_a_local_wheel_never_fetches_the_worker_by_name(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.worker import client as client_mod
+        from lantern.worker import client as client_mod
 
         # No local wheel: the worker comes only from this host's release
-        # wheel, so this refuses rather than `pip install sbxloop-worker==X`.
+        # wheel, so this refuses rather than `pip install lantern-worker==X`.
         monkeypatch.setattr(client_mod, "resolve_worker_wheel", lambda: None)
         client = make_client(sandbox, EventBus())
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         with pytest.raises(WorkerError, match="GitHub Release"):
             client.install(wheel=None, extras="")
 
         pip_calls = [c for c in fake_sbx.invocations("exec") if any("pip" in a for a in c)]
-        assert not any("sbxloop-worker==" in a for c in pip_calls for a in c)
+        assert not any("lantern-worker==" in a for c in pip_calls for a in c)
 
     def test_install_version_mismatch(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         client = make_client(sandbox, EventBus())
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/python -c", stdout="9.9.9\n")
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/python -c", stdout="9.9.9\n")
         with pytest.raises(WorkerError, match="does not match host"):
             client.install(wheel=None, extras="")
 
@@ -652,7 +652,7 @@ class TestInstallFallbacks:
     def test_venv_failure_self_heals_via_apt(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
@@ -666,23 +666,23 @@ class TestInstallFallbacks:
         )
         fake_sbx.script("exec boxa sh -c sudo -n apt-get", returncode=0, once=True)
         fake_sbx.script("exec boxa python3 -m venv", returncode=0, once=True)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         client.install(wheel=wheel)
-        assert client.python == "/home/agent/.sbxloop/venv/bin/python"
+        assert client.python == "/home/agent/.lantern/venv/bin/python"
         apt_calls = [c for c in fake_sbx.invocations("exec") if any("apt-get" in a for a in c)]
         assert apt_calls, "expected an apt-get self-heal attempt"
 
     def test_ensure_dev_tools_installs_apt_packages_up_front(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
@@ -696,13 +696,13 @@ class TestInstallFallbacks:
         script_search_fallback_probe(fake_sbx)
         fake_sbx.script("exec boxa sh -c sudo -n apt-get", returncode=0)
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         client.install(wheel=wheel, ensure_dev_tools=True)
         execs = fake_sbx.invocations("exec")
@@ -719,7 +719,7 @@ class TestInstallFallbacks:
     ) -> None:
         # A template that already has ensurepip+pip must not touch apt (or
         # the network) at all — the ensure is a genuine no-op.
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
@@ -728,13 +728,13 @@ class TestInstallFallbacks:
         script_toolchain_probe(fake_sbx, "python", returncode=0)
         script_search_fallback_probe(fake_sbx)
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         client.install(wheel=wheel, ensure_dev_tools=True)
         execs = fake_sbx.invocations("exec")
@@ -747,7 +747,7 @@ class TestInstallFallbacks:
         tmp_path: Path,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
@@ -761,13 +761,13 @@ class TestInstallFallbacks:
         script_search_fallback_probe(fake_sbx)
         fake_sbx.script("exec boxa sh -c sudo -n apt-get", returncode=100, stderr="apt exploded")
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         with caplog.at_level("WARNING"):
             client.install(wheel=wheel, ensure_dev_tools=True)
@@ -992,20 +992,20 @@ class TestInstallFallbacks:
         assert node_idx[0] < tsc_idx[0], "the node runtime must install before tsc"
 
     def _script_happy_install(self, fake_sbx: FakeSbx) -> None:
-        import sbxloop
+        import lantern
 
         # First matching script wins, so a test that pins these probes
         # earlier keeps its answer; these are the defaults for the rest.
         script_toolchain_probe(fake_sbx, "python", returncode=0)
         script_git_probe(fake_sbx, returncode=0)
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
 
     def test_search_fallback_installs_ripgrep_on_non_4k_guest(
@@ -1058,19 +1058,19 @@ class TestInstallFallbacks:
     def test_install_without_flag_skips_dev_tools(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
         client = make_client(sandbox, EventBus())
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
         )
         client.install(wheel=wheel)
         execs = fake_sbx.invocations("exec")
@@ -1079,7 +1079,7 @@ class TestInstallFallbacks:
     def test_user_site_fallback_when_venv_impossible(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
@@ -1098,7 +1098,7 @@ class TestInstallFallbacks:
             stderr="error: externally-managed-environment",
             once=True,
         )
-        fake_sbx.script("exec boxa python3 -c", stdout=f"{sbxloop.__version__}\n")
+        fake_sbx.script("exec boxa python3 -c", stdout=f"{lantern.__version__}\n")
         client.install(wheel=wheel)
         assert client.python == "python3"
         pip_calls = [c for c in fake_sbx.invocations("exec") if any("pip" in a for a in c)]
@@ -1133,8 +1133,8 @@ class TestRealPipInstall:
         would have caught the renamed-wheel bug ('Invalid wheel filename'):
         pip validates the staged FILENAME itself, so nothing short of
         actually running pip exercises that contract."""
-        import sbxloop
-        from sbxloop.worker import wheel as wheel_mod
+        import lantern
+        from lantern.worker import wheel as wheel_mod
 
         # another test file may have poisoned the build cache with None
         wheel_mod._workspace_build.cache_clear()
@@ -1147,31 +1147,31 @@ class TestRealPipInstall:
         # only needed by __main__) - which is exactly the class of breakage
         # the smoke check exists to catch at install time.
         client.install(wheel=wheel, extras="")
-        assert client.python == "/home/agent/.sbxloop/venv/bin/python"
+        assert client.python == "/home/agent/.lantern/venv/bin/python"
         # the worker is genuinely importable from the sandbox venv
         result = sandbox.exec(
             [
-                "/home/agent/.sbxloop/venv/bin/python",
+                "/home/agent/.lantern/venv/bin/python",
                 "-c",
-                "import sbxloop_worker; print(sbxloop_worker.__version__)",
+                "import lantern_worker; print(lantern_worker.__version__)",
             ]
         )
         assert result.ok
-        assert result.stdout.strip() == sbxloop.__version__
+        assert result.stdout.strip() == lantern.__version__
 
 
 def script_ladder_success(fake_sbx: FakeSbx) -> None:
     """Script the full install ladder to succeed (venv, pip, checks)."""
-    import sbxloop
+    import lantern
 
     fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-    fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+    fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
     fake_sbx.script(
-        "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-        stdout=f"{sbxloop.__version__}\n",
+        "exec boxa /home/agent/.lantern/venv/bin/python -c",
+        stdout=f"{lantern.__version__}\n",
     )
     fake_sbx.script(
-        "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker", returncode=64
+        "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker", returncode=64
     )
 
 
@@ -1187,17 +1187,17 @@ class TestPrebakedTemplate:
         version: str | None = None,
         languages: list[str] | None = None,
     ) -> None:
-        import sbxloop
+        import lantern
 
         manifest: dict[str, object] = {
-            "worker_version": version or sbxloop.__version__,
+            "worker_version": version or lantern.__version__,
             "python": python,
             "runtime_cached": True,
             "baked_at": 0.0,
         }
         if languages is not None:
             manifest["languages"] = languages
-        sandbox.write_text("/home/agent/.sbxloop/bake.json", json.dumps(manifest))
+        sandbox.write_text("/home/agent/.lantern/bake.json", json.dumps(manifest))
 
     def test_verified_prebaked_skips_ladder(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         """The REAL probe chain: manifest read, import/version check, and
@@ -1232,7 +1232,7 @@ class TestPrebakedTemplate:
             extras="copilot", ensure_dev_tools=True, expect_prebaked=True, languages=["go"]
         )
         (probe,) = [
-            c[-1] for c in fake_sbx.invocations("exec") if "sbxloop-toolchain-probe" in c[-1]
+            c[-1] for c in fake_sbx.invocations("exec") if "lantern-toolchain-probe" in c[-1]
         ]
         assert f"( {toolchains.GIT.probe} ) >/dev/null 2>&1 || printf '%s\\n' git" in probe
         assert f"( {toolchains.GO.probe} ) >/dev/null 2>&1 || printf '%s\\n' go" in probe
@@ -1244,7 +1244,7 @@ class TestPrebakedTemplate:
         shell where nothing resolves except the shell itself."""
         client = make_client(sandbox, EventBus())
         present = toolchains.Toolchain(name="sh", wanted="sh", probe="command -v sh >/dev/null")
-        absent = toolchains.Toolchain(name="nope", wanted="nope", probe="command -v sbxloop-nope")
+        absent = toolchains.Toolchain(name="nope", wanted="nope", probe="command -v lantern-nope")
         assert client.missing_toolchains([present, absent]) == [absent]
         assert client.missing_toolchains([]) == []
 
@@ -1368,14 +1368,14 @@ class TestPrebakedTemplate:
             client.install(wheel=wheel, expect_prebaked=True)
         assert not client.prebaked
         assert any("worker.prebake_stale_template" in r.getMessage() for r in caplog.records)
-        assert any("sbxloop bake" in r.getMessage() for r in caplog.records)
+        assert any("lantern bake" in r.getMessage() for r in caplog.records)
 
     def test_corrupt_manifest_falls_back(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
         wheel = tmp_path / "w.whl"
         wheel.write_bytes(b"x")
-        sandbox.write_text("/home/agent/.sbxloop/bake.json", "not json{")
+        sandbox.write_text("/home/agent/.lantern/bake.json", "not json{")
         script_ladder_success(fake_sbx)
         client = make_client(sandbox, EventBus())
         client.install(wheel=wheel, expect_prebaked=True)
@@ -1401,7 +1401,7 @@ class TestPrebakedTemplate:
 
         The probes run inside one in-sandbox script, so the smoke failure is
         staged with a half-broken interpreter: ``-c`` (the import check)
-        delegates to the real python, ``-m sbxloop_worker`` (the entrypoint
+        delegates to the real python, ``-m lantern_worker`` (the entrypoint
         smoke) exits 1.
         """
         wheel = tmp_path / "w.whl"
@@ -1409,7 +1409,7 @@ class TestPrebakedTemplate:
         broken = tmp_path / "half-broken-python"
         broken.write_text(
             '#!/bin/sh\ncase "$*" in\n'
-            "  -m\\ sbxloop_worker*) exit 1;;\n"
+            "  -m\\ lantern_worker*) exit 1;;\n"
             f'  *) exec "{sys.executable}" "$@";;\n'
             "esac\n"
         )
@@ -1457,7 +1457,7 @@ class TestNoResultDiagnostics:
         last events ride along in the error."""
         # a fake partial events file left behind by a dying worker
         partial = Event.now("worker.start", "r1", job_id="j1").to_json_line()
-        sandbox.write_text("/home/agent/.sbxloop/events/j1.jsonl", partial + "\n")
+        sandbox.write_text("/home/agent/.lantern/events/j1.jsonl", partial + "\n")
         client = make_client(sandbox, EventBus(), python="false")  # rc=1, no output
         with pytest.raises(WorkerError) as excinfo:
             client.submit(agent_job())
@@ -1470,19 +1470,19 @@ class TestEntrypointSmoke:
     def test_smoke_failure_fails_install_with_output(
         self, sandbox: Sandbox, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        import sbxloop
+        import lantern
 
-        wheel = tmp_path / f"sbxloop_worker-{sbxloop.__version__}-py3-none-any.whl"
+        wheel = tmp_path / f"lantern_worker-{lantern.__version__}-py3-none-any.whl"
         wheel.write_bytes(b"x")
         client = make_client(sandbox, EventBus())
         fake_sbx.script("exec boxa python3 -m venv", returncode=0)
-        fake_sbx.script("exec boxa /home/agent/.sbxloop/venv/bin/pip", returncode=0)
+        fake_sbx.script("exec boxa /home/agent/.lantern/venv/bin/pip", returncode=0)
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -c",
-            stdout=f"{sbxloop.__version__}\n",
+            "exec boxa /home/agent/.lantern/venv/bin/python -c",
+            stdout=f"{lantern.__version__}\n",
         )
         fake_sbx.script(
-            "exec boxa /home/agent/.sbxloop/venv/bin/python -m sbxloop_worker",
+            "exec boxa /home/agent/.lantern/venv/bin/python -m lantern_worker",
             returncode=1,
             stderr="Traceback: entrypoint exploded under sbx exec",
         )
@@ -1499,7 +1499,7 @@ class TestLoginShellWrapping:
         worker_execs = [
             c
             for c in fake_sbx.invocations("exec")
-            if any("sbxloop_worker" in a for a in c) and "pkill" not in c
+            if any("lantern_worker" in a for a in c) and "pkill" not in c
         ]
         assert worker_execs, "no worker exec recorded"
         head = worker_execs[0][:4]
@@ -1537,12 +1537,12 @@ class TestWorkerCwd:
         scripted 'files' writes propagate to the host through the mount."""
         script = tmp_path / "script.json"
         script.write_text(
-            json.dumps([{"text": "done", "files": {"out/hello.txt": "hello sbxloop"}}])
+            json.dumps([{"text": "done", "files": {"out/hello.txt": "hello lantern"}}])
         )
-        monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(script))
+        monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(script))
         result = make_client(sandbox, EventBus()).submit(agent_job(job_id="j10", cwd="/workspace"))
         assert result.status == "ok"
-        assert (tmp_path / "out/hello.txt").read_text() == "hello sbxloop"
+        assert (tmp_path / "out/hello.txt").read_text() == "hello lantern"
 
     def test_missing_cwd_fails_job_cleanly(self, sandbox: Sandbox) -> None:
         job = JobRequest(
@@ -1579,7 +1579,7 @@ class TestResourceTelemetry:
         """End-to-end: limits ride the worker argv, the worker emits a
         baseline sample classified against them, and the host stamps the
         sandbox role onto the republished event."""
-        from sbxloop.config import Limits
+        from lantern.config import Limits
 
         bus = EventBus()
         seen: list[Event] = []
@@ -1611,15 +1611,15 @@ class TestHostTools:
     def _script(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, calls: list[dict]) -> None:
         script = tmp_path / "script.json"
         script.write_text(json.dumps([{"text": "asked", "host_tool_calls": calls}]))
-        monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(script))
+        monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(script))
 
     @pytest.mark.parametrize("transport", ["stream", "poll"])
     def test_rate_query_round_trip_preserves_waiting_session(
         self, sandbox, fake_sbx, tmp_path, monkeypatch, transport
     ):
-        from sbxloop.config import Config
-        from sbxloop.daemon.agentbox import DaemonAgent
-        from sbxloop_worker.protocol import HostToolResponse, HostToolSpec
+        from lantern.config import Config
+        from lantern.daemon.agentbox import DaemonAgent
+        from lantern_worker.protocol import HostToolResponse, HostToolSpec
 
         self._script(
             tmp_path,
@@ -1673,7 +1673,7 @@ class TestHostTools:
         assert len({event.job_id for event in starts}) == 2
 
     def _job(self, **overrides: object) -> JobRequest:
-        from sbxloop_worker.protocol import HostToolSpec
+        from lantern_worker.protocol import HostToolSpec
 
         return agent_job(
             host_tools=[HostToolSpec(name="answer", description="the host answers")],
@@ -1689,7 +1689,7 @@ class TestHostTools:
     ) -> None:
         import threading
 
-        from sbxloop_worker.protocol import HostToolCall, HostToolResponse
+        from lantern_worker.protocol import HostToolCall, HostToolResponse
 
         self._script(tmp_path, monkeypatch, [{"name": "answer", "arguments": {"n": 41}}])
         bus = EventBus()
@@ -1714,16 +1714,16 @@ class TestHostTools:
         assert requests[0].data["agent"] == "concierge"
         assert responses and responses[0].data["ok"] is True
         # The handler ran on the broker's pool, never on the submit thread.
-        assert threads and all(t.startswith("sbxloop-hosttool") for t in threads)
+        assert threads and all(t.startswith("lantern-hosttool") for t in threads)
         # host_tools_dir was filled in per job; the broker is gone once submit returns,
         # and its close() removed the job's tools directory from the sandbox.
         assert client._brokers == {}
-        assert not (fake_sbx.sandbox_fs("boxa") / "home/agent/.sbxloop/tools/j1").exists()
+        assert not (fake_sbx.sandbox_fs("boxa") / "home/agent/.lantern/tools/j1").exists()
 
     def test_poll_round_trip(
         self, sandbox: Sandbox, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop_worker.protocol import HostToolCall, HostToolResponse
+        from lantern_worker.protocol import HostToolCall, HostToolResponse
 
         self._script(tmp_path, monkeypatch, [{"name": "answer", "arguments": {}}])
 
@@ -1781,11 +1781,11 @@ class TestStdinEnvDelivery:
             job_id=job_id,
             run_id="r1",
             kind="shell.check",
-            argv=["sh", "-c", "printenv SBXLOOP_DELIVERED"],
+            argv=["sh", "-c", "printenv LANTERN_DELIVERED"],
         )
 
     def _provider(self) -> dict[str, str]:
-        return {"SBXLOOP_DELIVERED": self.SECRET}
+        return {"LANTERN_DELIVERED": self.SECRET}
 
     def _assert_delivered(self, sandbox: Sandbox, fake_sbx: FakeSbx, **kwargs: object) -> None:
         result = make_client(sandbox, EventBus(), job_env=self._provider, **kwargs).submit(
@@ -1797,7 +1797,7 @@ class TestStdinEnvDelivery:
         assert self.SECRET in result.output_text
         # never at rest in the sandbox filesystem
         fs = fake_sbx.sandbox_fs("boxa")
-        env_file = fs / "home/agent/.sbxloop/env.sh"
+        env_file = fs / "home/agent/.lantern/env.sh"
         assert not env_file.exists()
         # never on any argv (the value travels only over stdin)
         for call in fake_sbx.invocations():
@@ -1821,7 +1821,7 @@ class TestStdinEnvDelivery:
         """The login shell evals the delivered exports AFTER its profile ran,
         so a profile-stamped stale value (sbx sentinel included) loses."""
         monkeypatch.setenv("SBX_FAKE_EXEC_STDIN", "1")
-        monkeypatch.setenv("SBX_FAKE_PROFILE", "export SBXLOOP_DELIVERED=sbx-cs-stale-sentinel")
+        monkeypatch.setenv("SBX_FAKE_PROFILE", "export LANTERN_DELIVERED=sbx-cs-stale-sentinel")
         self._assert_delivered(sandbox, fake_sbx)
 
     def test_no_provider_keeps_launch_unchanged(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
@@ -1829,15 +1829,15 @@ class TestStdinEnvDelivery:
         worker_execs = [
             c
             for c in fake_sbx.invocations("exec")
-            if any("sbxloop_worker" in a for a in c) and "pkill" not in c
+            if any("lantern_worker" in a for a in c) and "pkill" not in c
         ]
         assert worker_execs and worker_execs[0][2:4] == ["sh", "-lc"]
-        assert all("SBXLOOP_JOB_ENV" not in a for call in worker_execs for a in call)
+        assert all("LANTERN_JOB_ENV" not in a for call in worker_execs for a in call)
 
     def test_empty_provider_means_no_delivery(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         make_client(sandbox, EventBus(), job_env=dict).submit(agent_job())
         assert all(
-            "SBXLOOP_JOB_ENV" not in a for call in fake_sbx.invocations("exec") for a in call
+            "LANTERN_JOB_ENV" not in a for call in fake_sbx.invocations("exec") for a in call
         )
 
     def test_provider_is_called_fresh_per_job(
@@ -1850,7 +1850,7 @@ class TestStdinEnvDelivery:
 
         def provider() -> dict[str, str]:
             calls.append(1)
-            return {"SBXLOOP_DELIVERED": f"value-{len(calls)}"}
+            return {"LANTERN_DELIVERED": f"value-{len(calls)}"}
 
         client = make_client(sandbox, EventBus(), job_env=provider)
         client.submit(self._job("j-env1"))
@@ -1899,7 +1899,7 @@ class TestBackendReady:
 
     def test_ready_when_the_probe_exits_zero(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         client = make_client(sandbox, EventBus())
-        fake_sbx.script(f"exec boxa {sys.executable} -c import sys; from sbxloop_worker.backends")
+        fake_sbx.script(f"exec boxa {sys.executable} -c import sys; from lantern_worker.backends")
         assert client.backend_ready("copilot") is True
 
     def test_not_ready_when_the_backend_cannot_run(
@@ -1907,9 +1907,9 @@ class TestBackendReady:
     ) -> None:
         client = make_client(sandbox, EventBus())
         fake_sbx.script(
-            f"exec boxa {sys.executable} -c import sys; from sbxloop_worker.backends",
+            f"exec boxa {sys.executable} -c import sys; from lantern_worker.backends",
             returncode=1,
-            stderr="claude-agent-sdk is not installed; install sbxloop-worker[claude]",
+            stderr="claude-agent-sdk is not installed; install lantern-worker[claude]",
         )
         assert client.backend_ready("claude") is False
 
@@ -1920,12 +1920,12 @@ class TestBackendReady:
         the worker's own ensure_available decides, so there is no host-side
         copy of what each backend needs."""
         client = make_client(sandbox, EventBus())
-        fake_sbx.script(f"exec boxa {sys.executable} -c import sys; from sbxloop_worker.backends")
+        fake_sbx.script(f"exec boxa {sys.executable} -c import sys; from lantern_worker.backends")
         client.backend_ready("claude")
         probe = [
             call
             for call in fake_sbx.invocations("exec")
-            if "sbxloop_worker.backends" in " ".join(call)
+            if "lantern_worker.backends" in " ".join(call)
         ][-1]
         assert probe[-1] == "claude"
         assert "ensure_available" in " ".join(probe)
@@ -1935,7 +1935,7 @@ class TestBackendReady:
         job is to decide reuse, and an unreachable box is not reusable."""
         client = make_client(sandbox, EventBus())
         fake_sbx.script(
-            f"exec boxa {sys.executable} -c import sys; from sbxloop_worker.backends",
+            f"exec boxa {sys.executable} -c import sys; from lantern_worker.backends",
             returncode=1,
             stderr="Error: sandbox not found",
         )
@@ -1965,7 +1965,7 @@ class TestAptPackages:
         assert not [j for j in joined if "apt-get" in j]
         assert client.apt_installed == []
         probe = [j for j in joined if 'for p in "$@"' in j]
-        assert probe and probe[0].endswith("sbxloop-apt-probe libpq-dev ffmpeg")
+        assert probe and probe[0].endswith("lantern-apt-probe libpq-dev ffmpeg")
 
     def test_missing_packages_install_in_one_call(
         self, sandbox: Sandbox, fake_sbx: FakeSbx
@@ -2007,13 +2007,13 @@ class TestAptPackages:
     def test_prebaked_path_ensures_them_too(self, sandbox: Sandbox, fake_sbx: FakeSbx) -> None:
         """A template baked without the list (or a per-repo list the bake
         never saw) is topped up on the fast path as well."""
-        import sbxloop
+        import lantern
 
         sandbox.write_text(
-            "/home/agent/.sbxloop/bake.json",
+            "/home/agent/.lantern/bake.json",
             json.dumps(
                 {
-                    "worker_version": sbxloop.__version__,
+                    "worker_version": lantern.__version__,
                     "python": sys.executable,
                     "runtime_cached": True,
                     "baked_at": 0.0,
@@ -2084,9 +2084,9 @@ class TestSetupCommands:
         launch = [c for c in fake_sbx.invocations("exec") if "sh -lc" in " ".join(c)]
         assert len(launch) == 1
         script = " ".join(launch[0])
-        assert "[ -f /home/agent/.sbxloop/env.sh ] && . /home/agent/.sbxloop/env.sh;" in script
+        assert "[ -f /home/agent/.lantern/env.sh ] && . /home/agent/.lantern/env.sh;" in script
         assert f"cd {tmp_path} &&" in script
-        assert "SBXLOOP_JOB_ENV" not in script
+        assert "LANTERN_JOB_ENV" not in script
 
     def test_stdin_delivery_reaches_the_command_and_is_scrubbed_from_the_tail(
         self,
@@ -2113,7 +2113,7 @@ class TestSetupCommands:
         (setup,) = [e for e in seen if e.type == "sandbox.setup"]
         assert setup.data["rc"] == 0
         assert setup.data["tail"] == "npm token=*** env=test"
-        launch = [c for c in fake_sbx.invocations("exec") if "SBXLOOP_JOB_ENV" in " ".join(c)]
+        launch = [c for c in fake_sbx.invocations("exec") if "LANTERN_JOB_ENV" in " ".join(c)]
         assert len(launch) == 1
         assert token not in " ".join(launch[0])
 

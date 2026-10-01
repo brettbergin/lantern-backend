@@ -4,12 +4,12 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.agentbox import DaemonAgent
-from sbxloop.errors import WorkerError, WorkerTimeoutError
-from sbxloop.events import EventBus
-from sbxloop_worker.protocol import JobResult
-from sbxloop_worker.rate_limits import RateLimitReport
+from lantern.config import Config
+from lantern.daemon.agentbox import DaemonAgent
+from lantern.errors import WorkerError, WorkerTimeoutError
+from lantern.events import EventBus
+from lantern_worker.protocol import JobResult
+from lantern_worker.rate_limits import RateLimitReport
 
 
 @pytest.mark.parametrize("backend", ["copilot", "claude", "codex"])
@@ -17,7 +17,7 @@ from sbxloop_worker.rate_limits import RateLimitReport
     "outcome", ["success", "worker_error", "timeout", "invalid", "wrong_backend"]
 )
 def test_query_uses_separate_client_in_same_agent_sandbox(tmp_path, monkeypatch, backend, outcome):
-    from sbxloop.daemon import agentbox
+    from lantern.daemon import agentbox
 
     config = Config.model_validate({"home": str(tmp_path), "agent": {"backend": backend}})
     agent = DaemonAgent(config, object(), EventBus(), worker_python="python")

@@ -1,4 +1,4 @@
-"""`sbxloop doctor`, `sbxloop list-models` and the model catalog against
+"""`lantern doctor`, `lantern list-models` and the model catalog against
 a configured endpoint: the listing, its absence, an unreachable endpoint,
 and a catalog whose endpoint no longer matches the config."""
 
@@ -12,14 +12,14 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop import modelcatalog
-from sbxloop.backends import backend_named
-from sbxloop.cli import doctor, models
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.errors import SbxloopError
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
+from lantern import modelcatalog
+from lantern.backends import backend_named
+from lantern.cli import doctor, models
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.errors import LanternError
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
 from tests.conftest import FakeSbx
 
 runner = CliRunner()
@@ -56,10 +56,10 @@ def http_error(code: int) -> urllib.error.HTTPError:
 def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "300")
-    monkeypatch.setenv("SBXLOOP_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path / "home"))
     for name in ("COPILOT_GITHUB_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VLLM_KEY"):
         monkeypatch.delenv(name, raising=False)
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         'model = "served-model"\n[agent]\nbackend = "openai"\n'
         '[agent.openai]\nbase_url = "https://models.example.com/v1"\napi_key_env = "VLLM_KEY"\n'
     )
@@ -84,7 +84,7 @@ def test_listing_is_requested_with_the_configured_key(monkeypatch: pytest.Monkey
 
 def test_missing_key_names_the_configured_variable_and_endpoint() -> None:
     config = openai_config(api_key_env="VLLM_KEY")
-    with pytest.raises(SbxloopError, match=r"VLLM_KEY is not set.*models\.example\.com"):
+    with pytest.raises(LanternError, match=r"VLLM_KEY is not set.*models\.example\.com"):
         models.fetch_openai_models(config, env={}, open_url=opener(b"{}", []))
 
 
@@ -97,7 +97,7 @@ def test_404_is_no_listing_not_a_failure() -> None:
 
 def test_refused_key_names_the_variable_never_the_value() -> None:
     with pytest.raises(
-        SbxloopError, match="HTTP 401 — the key in OPENAI_API_KEY was refused"
+        LanternError, match="HTTP 401 — the key in OPENAI_API_KEY was refused"
     ) as err:
         models.fetch_openai_models(
             openai_config(),
@@ -109,7 +109,7 @@ def test_refused_key_names_the_variable_never_the_value() -> None:
 
 def test_unreachable_endpoint_is_named() -> None:
     refused = urllib.error.URLError("[Errno 111] Connection refused")
-    with pytest.raises(SbxloopError, match=r"models\.example\.com.*Connection refused"):
+    with pytest.raises(LanternError, match=r"models\.example\.com.*Connection refused"):
         models.fetch_openai_models(
             openai_config(), env={"OPENAI_API_KEY": "k"}, open_url=opener(refused, [])
         )
@@ -117,7 +117,7 @@ def test_unreachable_endpoint_is_named() -> None:
 
 @pytest.mark.parametrize("body", [b"<html>", b"[]", b'{"data": "no"}'])
 def test_a_reply_that_is_not_a_listing_is_an_error(body: bytes) -> None:
-    with pytest.raises(SbxloopError, match=r"not (JSON|a model list)"):
+    with pytest.raises(LanternError, match=r"not (JSON|a model list)"):
         models.fetch_openai_models(
             openai_config(), env={"OPENAI_API_KEY": "k"}, open_url=opener(body, [])
         )
@@ -132,7 +132,7 @@ def test_row_is_id_and_name_only() -> None:
 
 
 def test_fetch_backend_rows_needs_the_config_for_openai() -> None:
-    with pytest.raises(SbxloopError, match="configured endpoint"):
+    with pytest.raises(LanternError, match="configured endpoint"):
         models.fetch_backend_rows(backend_named("openai"))
 
 
@@ -150,7 +150,7 @@ def test_command_lists_the_endpoints_models(workdir: Path, monkeypatch: pytest.M
     for column in ("billing", "context", "reasoning", "created"):
         assert column not in result.output
     catalog = modelcatalog.load_catalog(
-        SbxloopHome(workdir / "home"),
+        LanternHome(workdir / "home"),
         backend_named("openai"),
         endpoint="https://models.example.com/v1",
     )
@@ -195,7 +195,7 @@ def test_command_without_the_key_exits_2(workdir: Path, monkeypatch: pytest.Monk
 
 
 def test_catalog_is_keyed_by_endpoint(tmp_path: Path) -> None:
-    home, backend = SbxloopHome(tmp_path), backend_named("openai")
+    home, backend = LanternHome(tmp_path), backend_named("openai")
     row = models.openai_model_row({"id": "served-model"})
     catalog = modelcatalog.save_catalog(home, backend, [row], endpoint="https://a.example/v1")
     assert modelcatalog.load_catalog(home, backend, endpoint="https://a.example/v1") == catalog
@@ -208,7 +208,7 @@ def test_catalog_is_keyed_by_endpoint(tmp_path: Path) -> None:
 
 
 def test_vendor_catalogs_carry_no_endpoint(tmp_path: Path) -> None:
-    home, backend = SbxloopHome(tmp_path), backend_named("codex")
+    home, backend = LanternHome(tmp_path), backend_named("codex")
     row = models.openai_model_row({"id": "m"})
     catalog = modelcatalog.save_catalog(home, backend, [row])
     assert catalog.endpoint is None
@@ -253,7 +253,7 @@ def test_refresh_after_provision_refetches_when_the_endpoint_changes(
     assert thread is not None
     thread.join(5)
     assert calls == ["https://a.example/v1", "https://b.example/v1"]
-    home = SbxloopHome(tmp_path)
+    home = LanternHome(tmp_path)
     assert (
         modelcatalog.load_catalog(home, backend_named("openai"), endpoint="https://a.example/v1")
         is None
@@ -318,7 +318,7 @@ def test_doctor_reports_an_unreachable_endpoint_from_the_host(
 def test_doctor_checks_each_repositorys_endpoint_host(
     workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    (workdir / "sbxloop.toml").write_text(
+    (workdir / "lantern.toml").write_text(
         '[agent]\nbackend = "openai"\n[agent.openai]\nbase_url = "https://models.example.com/v1"\n'
         '[[github.repos]]\nrepo = "o/private"\n'
         '[github.repos.openai]\nbase_url = "https://private.example.com:8443/v1"\n'

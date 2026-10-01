@@ -2,7 +2,7 @@
 
 from typing import Any, get_args
 
-from sbxloop.engine.harness import Role
+from lantern.engine.harness import Role
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 

@@ -2,8 +2,8 @@
 
 What the credential in the github-ops sandbox must be allowed to do, and
 the feature that first needs each permission. This is the table
-`sbxloop doctor` checks a repository's token against (#696); it lives in
-code as `sbxloop.vcs.github.permissions.NEEDS`, and the README and `.env.example`
+`lantern doctor` checks a repository's token against (#696); it lives in
+code as `lantern.vcs.github.permissions.NEEDS`, and the README and `.env.example`
 point here rather than restating it.
 
 | Permission    | Level | Classic PAT scope | Needed for                                                                                                                                                                                                                                      |
@@ -20,7 +20,7 @@ point here rather than restating it.
 
 ## Creating the credential
 
-- **Fine-grained PAT** — repository access: the repositories sbxloop works
+- **Fine-grained PAT** — repository access: the repositories Lantern works
   on; repository permissions as in the table (Metadata is granted
   implicitly). Export it as `GH_TOKEN`.
 - **GitHub App** — the same repository permissions on the App, installed
@@ -34,7 +34,7 @@ reaches GitHub's REST API.
 
 ## What doctor checks
 
-`sbxloop doctor --probe` boots one github-ops sandbox per credential and
+`lantern doctor --probe` boots one github-ops sandbox per credential and
 judges the token from whichever source describes it:
 
 - a **GitHub App** installation token's mint carries the installation's
