@@ -93,7 +93,7 @@ Issues = "https://github.com/brettbergin/lantern-backend/issues"
 lantern-worker = { workspace = true }
 
 [build-system]
-requires = ["hatchling>=1.32.3", "hatch-vcs"]
+requires = ["hatchling>=1.32.4", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 # Both workspace packages version from the same repo-root git tag, keeping the
