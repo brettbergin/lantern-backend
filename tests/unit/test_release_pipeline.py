@@ -685,3 +685,20 @@ def test_workflow_receipts_and_mutations_use_the_frozen_result():
     helper = steps["Load the trusted workflow helper"]
     assert helper["env"]["WORKFLOW_SHA"] == "${{ github.workflow_sha }}"
     assert "head_sha" not in helper["run"]
+
+
+def test_releases_before_the_rename_keep_their_file_names() -> None:
+    # v2.1.37 was the last sbxloop release; the next release checks it under
+    # the names it was published with, not Lantern's.
+    assert pipeline.distribution_names("2.1.37") == [
+        "sbxloop-2.1.37-py3-none-any.whl",
+        "sbxloop-2.1.37.tar.gz",
+        "sbxloop_worker-2.1.37-py3-none-any.whl",
+        "sbxloop_worker-2.1.37.tar.gz",
+    ]
+    assert pipeline.distribution_names("2.1.38") == [
+        "lantern_backend-2.1.38-py3-none-any.whl",
+        "lantern_backend-2.1.38.tar.gz",
+        "lantern_worker-2.1.38-py3-none-any.whl",
+        "lantern_worker-2.1.38.tar.gz",
+    ]
