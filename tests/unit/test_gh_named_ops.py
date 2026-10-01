@@ -13,9 +13,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import MalformedResponse, PaginationError
-from sbxloop.vcs.github.permissions import READ_PROBES
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import MalformedResponse, PaginationError
+from lantern.vcs.github.permissions import READ_PROBES
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.github_errors import github_error
 
@@ -42,7 +42,7 @@ class TestIdentity:
 
     def test_authenticated_user_is_the_credential(self) -> None:
         fake = FakeGithub()
-        assert fake.authenticated_user() == {"login": "sbxloop-bot", "type": "User"}
+        assert fake.authenticated_user() == {"login": "lantern-bot", "type": "User"}
         assert calls(fake) == [("GET", "/user", None)]
 
     def test_an_installation_token_gets_its_403(self) -> None:
@@ -77,9 +77,9 @@ class TestRepositories:
 
     def test_compare_lookup_answers_the_merge_base(self) -> None:
         fake = FakeGithub()
-        data = fake.compare_lookup(REPO, "main", "sbxloop/r1")
+        data = fake.compare_lookup(REPO, "main", "lantern/r1")
         assert data == {"merge_base_commit": {"sha": "base123"}}
-        assert calls(fake) == [("GET", "/repos/o/r/compare/main...sbxloop/r1", None)]
+        assert calls(fake) == [("GET", "/repos/o/r/compare/main...lantern/r1", None)]
 
     def test_compare_lookup_answers_a_404_as_none(self) -> None:
         fake = FakeGithub()
@@ -109,7 +109,7 @@ class TestIssues:
     def test_issue_comments_and_events_walk_pages(self) -> None:
         fake = FakeGithub()
         fake.issue_comments_posted = ["one", "two"]
-        fake.issue_events_payload = [{"event": "labeled", "label": {"name": "sbxloop:run"}}]
+        fake.issue_events_payload = [{"event": "labeled", "label": {"name": "lantern:run"}}]
         assert [c["body"] for c in fake.issue_comments(REPO, 4)] == ["one", "two"]
         assert fake.issue_events(REPO, 4)[0]["event"] == "labeled"
         assert calls(fake) == [
@@ -125,7 +125,7 @@ class TestIssues:
             fake.issues_list(
                 REPO,
                 state="all",
-                labels=["sbxloop:follow-up"],
+                labels=["lantern:follow-up"],
                 per_page=5,
                 page=2,
                 sort="updated",
@@ -138,7 +138,7 @@ class TestIssues:
             (
                 "GET",
                 "/repos/o/r/issues?state=all&per_page=5&sort=updated&direction=desc"
-                "&labels=sbxloop%3Afollow-up&page=2",
+                "&labels=lantern%3Afollow-up&page=2",
                 None,
             ),
         ]
@@ -177,14 +177,14 @@ class TestIssues:
 
     def test_label_writes(self) -> None:
         fake = FakeGithub()
-        fake.existing_issues = [{"number": 4, "labels": [{"name": "sbxloop:run"}]}]
-        fake.issue_labels_add(REPO, 4, ["sbxloop:in-progress", "team"])
-        fake.issue_label_remove(REPO, "4", "sbxloop:run")
-        assert fake.labels_removed == [(4, "sbxloop:run")]
+        fake.existing_issues = [{"number": 4, "labels": [{"name": "lantern:run"}]}]
+        fake.issue_labels_add(REPO, 4, ["lantern:in-progress", "team"])
+        fake.issue_label_remove(REPO, "4", "lantern:run")
+        assert fake.labels_removed == [(4, "lantern:run")]
         assert fake.existing_issues[0]["labels"] == []
         assert calls(fake) == [
-            ("POST", "/repos/o/r/issues/4/labels", {"labels": ["sbxloop:in-progress", "team"]}),
-            ("DELETE", "/repos/o/r/issues/4/labels/sbxloop%3Arun", None),
+            ("POST", "/repos/o/r/issues/4/labels", {"labels": ["lantern:in-progress", "team"]}),
+            ("DELETE", "/repos/o/r/issues/4/labels/lantern%3Arun", None),
         ]
 
     def test_removing_an_absent_label_is_not_a_failed_job(self) -> None:
@@ -198,7 +198,7 @@ class TestIssues:
                 return super().raw(method, path, body)
 
         fake = Gone()
-        fake.issue_label_remove(REPO, 4, "sbxloop:run")  # no raise
+        fake.issue_label_remove(REPO, 4, "lantern:run")  # no raise
         assert fake.failed_jobs == []
 
     def test_issue_close_and_comment_delete(self) -> None:
@@ -220,11 +220,11 @@ class TestIssues:
 class TestPullRequests:
     def test_pr_list_open_by_head(self) -> None:
         fake = FakeGithub()
-        assert fake.pr_list_open(REPO, head="sbxloop/r1") == []
+        assert fake.pr_list_open(REPO, head="lantern/r1") == []
         fake.pr_created = True
-        (pull,) = fake.pr_list_open(REPO, head="sbxloop/r1")
+        (pull,) = fake.pr_list_open(REPO, head="lantern/r1")
         assert pull["number"] == 7
-        assert calls(fake) == [("GET", "/repos/o/r/pulls?state=open&head=o:sbxloop/r1", None)] * 2
+        assert calls(fake) == [("GET", "/repos/o/r/pulls?state=open&head=o:lantern/r1", None)] * 2
 
     def test_pr_list_open_reads_a_non_list_as_none_open(self) -> None:
         assert Malformed().pr_list_open(REPO, head="x") == []
@@ -266,8 +266,8 @@ class TestGitData:
         assert fake.commit_get(REPO, "base123")["tree"]["sha"] == "basetree"
         tree = fake.tree_create(REPO, base_tree="basetree", entries=[{"path": "a", "sha": "b1"}])
         commit = fake.commit_create(REPO, message="m", tree=tree["sha"], parents=["base123"])
-        fake.ref_create(REPO, "refs/heads/sbxloop/r1", commit["sha"])
-        fake.ref_force_update(REPO, "sbxloop/r1", "commit2")
+        fake.ref_create(REPO, "refs/heads/lantern/r1", commit["sha"])
+        fake.ref_force_update(REPO, "lantern/r1", "commit2")
         assert calls(fake) == [
             ("GET", "/repos/o/r/git/commits/base123", None),
             (
@@ -280,16 +280,16 @@ class TestGitData:
                 "/repos/o/r/git/commits",
                 {"message": "m", "tree": "tree456", "parents": ["base123"]},
             ),
-            ("POST", "/repos/o/r/git/refs", {"ref": "refs/heads/sbxloop/r1", "sha": "commit1"}),
-            ("PATCH", "/repos/o/r/git/refs/heads/sbxloop/r1", {"sha": "commit2", "force": True}),
+            ("POST", "/repos/o/r/git/refs", {"ref": "refs/heads/lantern/r1", "sha": "commit1"}),
+            ("PATCH", "/repos/o/r/git/refs/heads/lantern/r1", {"sha": "commit2", "force": True}),
         ]
         assert fake.head_sha == "commit2"
 
     def test_a_ref_that_exists_is_githubs_422(self) -> None:
         fake = FakeGithub()
-        fake.branches.add("sbxloop/r1")
+        fake.branches.add("lantern/r1")
         with pytest.raises(GithubOpsError) as info:
-            fake.ref_create(REPO, "refs/heads/sbxloop/r1", "c")
+            fake.ref_create(REPO, "refs/heads/lantern/r1", "c")
         assert info.value.http_status == 422
 
     def test_contents_put(self) -> None:

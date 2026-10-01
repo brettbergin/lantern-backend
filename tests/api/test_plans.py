@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Capability
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.plans.model import PlanNode
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Capability
+from lantern.db.api_models import ApiEventRow
+from lantern.plans.model import PlanNode
 from tests.api.conftest import Api, build
 
 READ: frozenset[Capability] = frozenset({"runs:read"})
@@ -298,7 +298,7 @@ class TestStates:
     def test_a_published_node_is_edited_on_the_forge_and_its_plan_is_archived(
         self, api: Api
     ) -> None:
-        from sbxloop.plans.model import ForgeRef
+        from lantern.plans.model import ForgeRef
 
         headers = api.bearer(DRAFT)
         plan = _create(api, headers)
@@ -532,7 +532,7 @@ class TestBreakdown:
         assert refused.status_code == 422 and "no children" in refused.json()["detail"]
 
     def test_a_published_node_with_children_on_the_forge_is_re_planned(self, api: Api) -> None:
-        from sbxloop.plans.model import ForgeRef
+        from lantern.plans.model import ForgeRef
 
         headers = api.bearer(DRAFT)
         plan = _create(api, headers, level="epic", title="An epic")
@@ -553,7 +553,7 @@ class TestBreakdown:
         assert accepted.json()["item"]["title"] == "Re-plan the tasks of “An epic”"
 
     def test_a_published_node_whose_children_are_drafts_is_broken_down(self, api: Api) -> None:
-        from sbxloop.plans.model import ForgeRef
+        from lantern.plans.model import ForgeRef
 
         headers = api.bearer(DRAFT)
         plan = _create(api, headers, level="epic", title="An epic")
@@ -571,7 +571,7 @@ class TestBreakdown:
         assert accepted.json()["item"]["title"] == "Propose the tasks of “An epic”"
 
     def test_planning_switched_off_for_the_repository_refuses(self, api: Api) -> None:
-        from sbxloop.config import PlanningConfig
+        from lantern.config import PlanningConfig
 
         headers = api.bearer(DRAFT)
         plan = _create(api, headers)
@@ -583,7 +583,7 @@ class TestBreakdown:
         assert "planning is off" in refused.json()["detail"]
 
     def test_a_full_level_and_a_stale_revision_are_refused(self, api: Api) -> None:
-        from sbxloop.config import PlanningConfig
+        from lantern.config import PlanningConfig
         from tests.api.test_plans_publish import _create as generated_plan
 
         headers = api.bearer(DRAFT)
@@ -633,7 +633,7 @@ class TestAnswers:
         """A plan whose breakdown is parked on two questions, as the daemon
         leaves it: the item waiting, its run pinned, the questions on the
         node. The plan as read, the item id and the run id."""
-        from sbxloop.engine.planning import PlanQuestion
+        from lantern.engine.planning import PlanQuestion
 
         headers = api.bearer(DRAFT)
         plan = _create(api, headers, level="epic", title="Export reports")

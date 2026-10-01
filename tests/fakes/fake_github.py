@@ -1,4 +1,4 @@
-"""A scripted stand-in for :class:`sbxloop.vcs.github.ops.GithubOps`.
+"""A scripted stand-in for :class:`lantern.vcs.github.ops.GithubOps`.
 
 The engine's ``github_ops`` seam accepts a factory returning any GithubOps;
 this one answers every call the pipeline makes from in-memory state and
@@ -50,8 +50,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import (
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import (
     ChecksVerdict,
     FailedCheck,
     GithubOps,
@@ -122,7 +122,7 @@ class FakeGithub(GithubOps):
         # reviews it, so the PR's author is the loop's own login and GitHub
         # refuses REQUEST_CHANGES/APPROVE (#513). The default keeps a
         # distinct author so the review-feature path stays exercised.
-        self.user_login = "sbxloop-bot"
+        self.user_login = "lantern-bot"
         # What `GET /user` says the credential is (#622): "User" for a PAT,
         # "Bot" for a GitHub App; None leaves the field out, as an older
         # fake did, and the loop's kind is then unknown.
@@ -563,7 +563,7 @@ class FakeGithub(GithubOps):
         return exc
 
     def token_scopes(self) -> tuple[str, ...] | None:
-        # Only `sbxloop doctor` asks (#696); the fake's credential is a
+        # Only `lantern doctor` asks (#696); the fake's credential is a
         # fine-grained one with nothing to report.
         return None
 
@@ -669,17 +669,17 @@ class FakeGithub(GithubOps):
             branch = ref.removeprefix("heads/")
             if self.empty_repo:
                 raise self._failed_op("raw.api", method, path, github_error("empty_repo_ref_409"))
-            # A delivery branch (``sbxloop/<run>``) exists only once delivery
+            # A delivery branch (``lantern/<run>``) exists only once delivery
             # created it, and then sits at the PR head; anything else is a
             # base branch that is simply there unless said otherwise.
             gone = branch in self.missing_refs or (
-                branch.startswith("sbxloop/") and branch not in self.branches
+                branch.startswith("lantern/") and branch not in self.branches
             )
             if gone:
                 raise self._failed_op("raw.api", method, path, github_error("ref_missing_404"))
             if branch in self.malformed_refs:
                 return {"ref": f"refs/{ref}", "object": {}}
-            sha = self.head_sha if branch.startswith("sbxloop/") else "base123"
+            sha = self.head_sha if branch.startswith("lantern/") else "base123"
             return {"ref": f"refs/{ref}", "object": {"sha": sha, "type": "commit"}}
         if method == "GET" and "/git/commits/" in path:
             return {"tree": {"sha": "basetree"}}
@@ -982,8 +982,8 @@ class FakeGithub(GithubOps):
 
     # -- what a person does on the forge (#2342) ---------------------------------
     #
-    # None of these is an operation sbxloop asks for, so none is ledgered:
-    # a test asserting "sbxloop wrote nothing" still sees an empty ledger.
+    # None of these is an operation lantern asks for, so none is ledgered:
+    # a test asserting "lantern wrote nothing" still sees an empty ledger.
 
     def person_files(
         self,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sbxloop.daemon.chat_routing import (
+from lantern.daemon.chat_routing import (
     SLACK_MENTION_RE,
     Route,
     route_message,
@@ -159,7 +159,7 @@ class TestSlackDialect:
             **facts,
         ) == Route("concierge", "what's running?")
         assert route_message(
-            content="<@UBOT|sbxloop> focus on tests",
+            content="<@UBOT|lantern> focus on tests",
             channel_id="1724968573.123456",
             mentioned_ids={"UBOT"},
             is_run_thread=True,
@@ -183,7 +183,7 @@ class TestSlackDialect:
 
     def test_strip_mentions_slack(self) -> None:
         assert (
-            strip_mentions("<@UBOT|sbxloop> hi <@UOTHER>", "UBOT", mention_re=SLACK_MENTION_RE)
+            strip_mentions("<@UBOT|lantern> hi <@UOTHER>", "UBOT", mention_re=SLACK_MENTION_RE)
             == "hi <@UOTHER>"
         )
         assert strip_mentions("<@U1> <@U2>", None, mention_re=SLACK_MENTION_RE) == ""

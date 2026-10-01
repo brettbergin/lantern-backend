@@ -1,6 +1,6 @@
 """``[vcs]``: which forge the repositories live on (#1009, #1013).
 
-The section is the one config key an operator sets to point sbxloop at a
+The section is the one config key an operator sets to point lantern at a
 forge. It has to fail closed on a kind nobody implements by name, fold
 its API root into the GitHub section every consumer reads, resolve per
 repository, and read an unnamed ``[github]`` as the GitHub backend with
@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import (
+from lantern.config import (
     DEFAULT_CONFIG_LOCKED,
     FORGE_TOKEN_ENVS,
     VCS_KINDS,
     Config,
     load_config,
 )
-from sbxloop.errors import ConfigError
+from lantern.errors import ConfigError
 
 
 def cfg(**doc: object) -> Config:
@@ -156,7 +156,7 @@ class TestLoaderNotice:
     def test_an_unnamed_github_section_is_read_as_the_github_backend_once(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[github]\nrepo = "o/r"\n')
+        (tmp_path / "lantern.toml").write_text('[github]\nrepo = "o/r"\n')
         with caplog.at_level(logging.INFO):
             config = load_config(tmp_path, env={"HOME": str(tmp_path)})
         assert config.vcs.kind == "github"
@@ -167,13 +167,13 @@ class TestLoaderNotice:
     def test_a_named_forge_needs_no_notice(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[vcs]\nkind = "github"\n[github]\nrepo = "o/r"\n')
+        (tmp_path / "lantern.toml").write_text('[vcs]\nkind = "github"\n[github]\nrepo = "o/r"\n')
         with caplog.at_level(logging.INFO):
             load_config(tmp_path, env={"HOME": str(tmp_path)})
         assert not [r for r in caplog.records if "config.vcs_defaulted" in r.getMessage()]
 
     def test_an_unknown_kind_in_a_file_is_a_config_error(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[vcs]\nkind = "svn"\n')
+        (tmp_path / "lantern.toml").write_text('[vcs]\nkind = "svn"\n')
         with pytest.raises(ConfigError, match="github, gitlab, gitea"):
             load_config(tmp_path, env={"HOME": str(tmp_path)})
 

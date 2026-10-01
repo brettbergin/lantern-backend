@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.engine.followups import followup_key, followup_marker
-from sbxloop.engine.issue_lookup import MAX_LOOKUPS, IssueLookup, LookupUnavailable
-from sbxloop.engine.review import Followup, ReviewRound, ReviewVerdict, render_review_history
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import GithubOpsError
-from sbxloop_worker.protocol import HostToolCall
+from lantern.engine.engine import LoopEngine
+from lantern.engine.followups import followup_key, followup_marker
+from lantern.engine.issue_lookup import MAX_LOOKUPS, IssueLookup, LookupUnavailable
+from lantern.engine.review import Followup, ReviewRound, ReviewVerdict, render_review_history
+from lantern.engine.store import StateStore
+from lantern.errors import GithubOpsError
+from lantern_worker.protocol import HostToolCall
 from tests.fakes.fake_github import FakeGithub
 
 
@@ -113,7 +113,7 @@ def test_issue_evidence_accepts_each_forges_issue_path(scheme):
     """The URL an issue lives at is the forge's to spell (#1017): GitHub
     and Gitea serve ``/<repo>/issues/<n>``, GitLab ``/<repo>/-/issues/<n>``;
     a path from another repository, or not an issue at all, is refused."""
-    from sbxloop.engine.issue_lookup import issue_evidence
+    from lantern.engine.issue_lookup import issue_evidence
 
     on_gitlab = existing(html_url=f"{scheme}://gitlab.example.com/o/r/-/issues/12")
     assert issue_evidence(on_gitlab, "o/r").number == 12

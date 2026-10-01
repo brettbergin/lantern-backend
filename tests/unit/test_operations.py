@@ -11,11 +11,11 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.control import ControlClient, ControlServer, dispatch
-from sbxloop.daemon.controls import ControlError, ControlService, Principal
-from sbxloop.daemon.controls.generation import GENERATION_KEY
-from sbxloop.daemon.controls.operations import (
+from lantern.config import Config
+from lantern.daemon.control import ControlClient, ControlServer, dispatch
+from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.controls.generation import GENERATION_KEY
+from lantern.daemon.controls.operations import (
     IdempotencyConflict,
     OperationReplay,
     OperationRunner,
@@ -23,12 +23,12 @@ from sbxloop.daemon.controls.operations import (
     OperationStore,
     reconcile_operations,
 )
-from sbxloop.daemon.controls.results import PauseOutcome
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import RunResult
-from sbxloop.events import EventBus
-from sbxloop.paths import SbxloopHome
+from lantern.daemon.controls.results import PauseOutcome
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import RunResult
+from lantern.events import EventBus
+from lantern.paths import LanternHome
 from tests.unit.test_daemon_discord import FakeLoop
 from tests.unit.test_daemon_loop import Harness, gh_item
 
@@ -50,7 +50,7 @@ class RecordingLoop(FakeLoop):
 
 @pytest.fixture
 def floop(tmp_path: Path) -> RecordingLoop:
-    return RecordingLoop(DaemonStore(SbxloopHome(tmp_path).state_db))
+    return RecordingLoop(DaemonStore(LanternHome(tmp_path).state_db))
 
 
 def spec(**overrides: Any) -> OperationSpec:
@@ -211,7 +211,7 @@ class TestRunner:
 
 class TestEverySurfaceRecords:
     def test_ctl_pause_leaves_one_record_attributed_to_ctl(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        home = LanternHome(tmp_path / ".lantern")
         floop = RecordingLoop(DaemonStore(home.state_db))
         server = ControlServer(floop, home, poll_s=0.02)
         server.start()
@@ -267,7 +267,7 @@ class TestCancelRecord:
             started.set()
             release.wait(5)
             if honour:
-                from sbxloop.errors import RunCancelledError
+                from lantern.errors import RunCancelledError
 
                 h.store.create_run(run_id, "outcome")
                 h.store.set_run_state(run_id, "building")

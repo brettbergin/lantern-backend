@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from sbxloop.agents.memory import (
+from lantern.agents.memory import (
     AgentMemoryError,
     Memory,
     MemoryRevisionConflict,
@@ -25,10 +25,10 @@ from sbxloop.agents.memory import (
     NoWorkspaceVisibility,
     WorkspaceChannelVisibility,
 )
-from sbxloop.config import Config, MemoryConfig
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.db.collaboration_models import AgentMemoryRow, ChannelMemberRow, ChannelRow
+from lantern.config import Config, MemoryConfig
+from lantern.daemon.store import DaemonStore
+from lantern.db.api_models import ApiEventRow
+from lantern.db.collaboration_models import AgentMemoryRow, ChannelMemberRow, ChannelRow
 
 USER = "user:usr_owner"
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Fail on sbxloop self-references in user-facing surfaces.
+"""Fail on lantern self-references in user-facing surfaces.
 
 The audit behind this gate found the same drift over and over: a bare `#N`
-from sbxloop's own issue tracker in an error message, a personal path in a
-shipped file, an sbxloop incident quoted into a prompt. Each one reads as
+from lantern's own issue tracker in an error message, a personal path in a
+shipped file, a lantern incident quoted into a prompt. Each one reads as
 noise — or as a reference into the *user's* repository, which has its own
-#N namespace — to anyone who is not developing sbxloop. Nothing mechanical
+#N namespace — to anyone who is not developing lantern. Nothing mechanical
 stopped it, so this does.
 
 Surfaces and rules:
@@ -17,8 +17,8 @@ Surfaces and rules:
     packages;
   * console text — every string literal (docstrings excluded) in the CLI
     package and the conformance table doctor renders;
-  * the files ``sbxloop init`` writes — both templates and the presets;
-- sbxloop source paths (``packages/sbxloop``, ``src/sbxloop``) in prompt
+  * the files ``lantern init`` writes — both templates and the presets;
+- lantern source paths (``packages/lantern``, ``src/lantern``) in prompt
   bodies;
 - personal and host identifiers (the maintainer's login outside the
   canonical repository URL, the deploy host, its user and home) anywhere
@@ -47,17 +47,17 @@ from git import Repo
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWLIST = ROOT / "scripts" / "self-references.allow"
-SRC = ROOT / "packages" / "sbxloop" / "src" / "sbxloop"
-WORKER_SRC = ROOT / "packages" / "sbxloop-worker" / "src" / "sbxloop_worker"
+SRC = ROOT / "packages" / "lantern" / "src" / "lantern"
+WORKER_SRC = ROOT / "packages" / "lantern-worker" / "src" / "lantern_worker"
 
 # `#` + digits that is neither a URL fragment/path (`/#12`) nor part of a
 # word (`x#1`), nor a hex colour (`#0e8a16`, which is also `#0`… + letters).
 BARE_ISSUE = re.compile(r"(?<![\w/&])#(\d+)(?![\w-])")
-SOURCE_PATH = re.compile(r"packages/sbxloop|src/sbxloop\b")
+SOURCE_PATH = re.compile(r"packages/lantern|src/lantern\b")
 # The maintainer's login is fine inside the project's own URL; anywhere else
 # it is a host detail leaking. `bergco` catches the deploy host's domain.
 PERSONAL = re.compile(
-    r"brettbergin(?!/(?:sbxloop|lantern-backend)\b)|/home/bergs|\bbergs\b|bergco|project-mountain-dew"
+    r"brettbergin(?!/lantern-backend\b)|/home/bergs|\bbergs\b|bergco|project-mountain-dew"
 )
 
 PROMPTS = SRC / "engine" / "prompts"
@@ -66,7 +66,7 @@ PROMPTS = SRC / "engine" / "prompts"
 # `#12` reads as an issue in THEIR tracker.
 SKILLS = SRC / "skills"
 TEMPLATES = [
-    SRC / "data" / "sbxloop.toml.example",
+    SRC / "data" / "lantern.toml.example",
     *(SRC / "data" / "presets").glob("*.toml"),
     ROOT / ".env.example",
 ]
@@ -77,7 +77,7 @@ CONSOLE_MODULES = [
 ]
 
 # Where personal identifiers are allowed to live: operator-facing material
-# about sbxloop's own deployment, package metadata, and test fixtures.
+# about lantern's own deployment, package metadata, and test fixtures.
 PERSONAL_EXCLUDED_DIRS = {"contrib", "docs", ".github", "tests", ".git", "__pycache__", "_vendor"}
 PERSONAL_EXCLUDED_FILES = {"pyproject.toml", "uv.lock", "CHANGELOG.md", "RELEASING.md"}
 PERSONAL_SKIP_SUFFIXES = {".pyc", ".whl", ".png", ".gif", ".lock"}
@@ -119,14 +119,14 @@ def check_prompt_bodies() -> list[Finding]:
         for offset, line in enumerate(body.splitlines()):
             for match in SOURCE_PATH.finditer(line):
                 found.append(
-                    Finding(path, body_start + 1 + offset, "sbxloop path in prompt", match.group(0))
+                    Finding(path, body_start + 1 + offset, "lantern path in prompt", match.group(0))
                 )
     return found
 
 
 def check_templates() -> list[Finding]:
-    """Everything `sbxloop init` writes into the user's project, comments
-    included — a comment in their sbxloop.toml is theirs to read."""
+    """Everything `lantern init` writes into the user's project, comments
+    included — a comment in their lantern.toml is theirs to read."""
     found: list[Finding] = []
     for path in TEMPLATES:
         found += _bare_issue_findings(
@@ -177,7 +177,7 @@ def check_exception_messages() -> list[Finding]:
 
 def check_console_text() -> list[Finding]:
     """Every non-docstring string literal in the CLI package and the
-    conformance table: what `sbxloop` prints or `doctor` renders."""
+    conformance table: what `lantern` prints or `doctor` renders."""
     found: list[Finding] = []
     for path in sorted(set(CONSOLE_MODULES)):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

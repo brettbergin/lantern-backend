@@ -15,10 +15,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from sbxloop.config import Config, ScheduleConfig
-from sbxloop.daemon.control import dispatch
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.schedule import (
+from lantern.config import Config, ScheduleConfig
+from lantern.daemon.control import dispatch
+from lantern.daemon.model import WorkItem
+from lantern.daemon.schedule import (
     Cadence,
     CronSpec,
     ScheduleRow,
@@ -26,8 +26,8 @@ from sbxloop.daemon.schedule import (
     format_every,
     parse_every,
 )
-from sbxloop.daemon.sources import ChatSource, CompositeSource, ScheduleSource
-from sbxloop.ghids import (
+from lantern.daemon.sources import ChatSource, CompositeSource, ScheduleSource
+from lantern.ghids import (
     is_local_id,
     is_schedule_id,
     parse_schedule_id,
@@ -465,7 +465,7 @@ class TestStoredSchedules:
         assert row["source"] == "config" and row["created_by"] is None
         assert row["ask"] == "Summarise the hour" and row["next_due"] == T0 + HOUR
         (note,) = kinds(h, "daemon.schedules_imported")
-        assert note.startswith("📅 schedules: imported hourly from sbxloop.toml")
+        assert note.startswith("📅 schedules: imported hourly from lantern.toml")
         assert "remove the `[[schedules]]` entries" in note
         # A restart with the entry still in the file: the stored one wins,
         # the note says so, nothing is duplicated and the grid is kept.

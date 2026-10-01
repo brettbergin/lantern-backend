@@ -12,7 +12,7 @@ from typing import BinaryIO
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
-from sbxloop.api.pdf_analysis import PdfAnalysisRunner
+from lantern.api.pdf_analysis import PdfAnalysisRunner
 
 
 def _write_fixture(path: Path) -> None:
@@ -47,7 +47,7 @@ class Files:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="sbxloop-pdf-probe-") as root:
+    with tempfile.TemporaryDirectory(prefix="lantern-pdf-probe-") as root:
         path = Path(root) / "fixture.pdf"
         _write_fixture(path)
         data = path.read_bytes()

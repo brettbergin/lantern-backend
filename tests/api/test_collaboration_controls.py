@@ -4,7 +4,7 @@ import time
 from concurrent.futures import Future
 from typing import Any
 
-from sbxloop.daemon.concierge import ConciergeReply
+from lantern.daemon.concierge import ConciergeReply
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 

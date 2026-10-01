@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.sbx.registries import fetch_plan
-from sbxloop_worker.protocol import JobRequest
-from sbxloop_worker.registryops import CATALOGUE_ENV, execute_fetch
-from sbxloop_worker.runner import JobRunner
-from sbxloop_worker.serviceops import FAKE_ENV
+from lantern.sbx.registries import fetch_plan
+from lantern_worker.protocol import JobRequest
+from lantern_worker.registryops import CATALOGUE_ENV, execute_fetch
+from lantern_worker.runner import JobRunner
+from lantern_worker.serviceops import FAKE_ENV
 
 DUMMY = "TEST_ONLY_REGISTRY_SECRET_97b3"
 

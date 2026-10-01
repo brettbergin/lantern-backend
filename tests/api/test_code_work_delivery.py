@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api.collaboration import CollaborationStore
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import issue_item_id
+from lantern.api.collaboration import CollaborationStore
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.model import WorkItem
+from lantern.ghids import issue_item_id
 from tests.api.test_collaboration import bearer, register
 from tests.api.test_collaboration_recovery import settled
 
@@ -93,7 +93,7 @@ def test_code_origin_survives_dispatch_and_store_reopen_without_cross_channel_le
     assert api.ctx.project_work() == []
 
 
-def test_code_runner_result_is_credited_to_angie(api: Any) -> None:
+def test_code_runner_result_is_credited_to_lantern(api: Any) -> None:
     # A code turn names no participant; its pending and final work still have an author.
     api.ctx.concierge = CodeConcierge()
     headers = bearer(register(api))

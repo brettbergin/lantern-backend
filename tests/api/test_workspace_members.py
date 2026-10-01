@@ -19,12 +19,12 @@ import pytest
 from fastapi.routing import APIRoute
 from sqlalchemy import select
 
-import sbxloop.api.collaboration as collaboration_module
-from sbxloop.api.collaboration import CollaborationError, Member
-from sbxloop.api.routes.workspace import router as workspace_router
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES, ROLE_CAPABILITIES
-from sbxloop.db.api_models import ApiEventRow, ClientRow, RefreshTokenRow
-from sbxloop.db.collaboration_models import WorkspaceInviteRow, WorkspaceMemberRow
+import lantern.api.collaboration as collaboration_module
+from lantern.api.collaboration import CollaborationError, Member
+from lantern.api.routes.workspace import router as workspace_router
+from lantern.daemon.controls.principal import ALL_CAPABILITIES, ROLE_CAPABILITIES
+from lantern.db.api_models import ApiEventRow, ClientRow, RefreshTokenRow
+from lantern.db.collaboration_models import WorkspaceInviteRow, WorkspaceMemberRow
 
 OWNER = {
     "email": "owner@example.test",
@@ -289,7 +289,7 @@ def test_role_capabilities_follow_the_documented_mapping() -> None:
 
 # -- the member, invite and directory routes ----------------------------------------
 #
-# Contract (plan S-P5, consumed by Angie's members page): any member reads the
+# Contract (plan S-P5, consumed by Lantern's members page): any member reads the
 # directory; admins and owners manage members and invites; only an owner
 # grants, removes or acts on the owner role; nobody deactivates or removes
 # themselves; the workspace keeps an owner; a plain API client counts as an

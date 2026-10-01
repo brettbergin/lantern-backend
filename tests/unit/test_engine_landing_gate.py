@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.landing import (
+from lantern.config import LandingConfig
+from lantern.engine.landing import (
     ACK_CAP,
     UNKNOWN_IDENTITY,
     Blocked,
@@ -29,13 +29,13 @@ from sbxloop.engine.landing import (
     resolve_login,
     unreconciled_threads,
 )
-from sbxloop.engine.reconcile import acknowledge_human_threads
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import PaginationError, ReviewThread, ThreadComment, identities_match
+from lantern.engine.reconcile import acknowledge_human_threads
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import PaginationError, ReviewThread, ThreadComment, identities_match
 from tests.fakes.fake_github import FakeGithub, human_review
 
 REPO = "o/r"
-LOGIN = "sbxloop-bot"
+LOGIN = "lantern-bot"
 HUMAN = "brettbergin"
 
 
@@ -558,7 +558,7 @@ class TestIdentitiesMatch:
     the suffix fold; the kind, when both sides know it, tells them apart."""
 
     def test_same_login_and_kind(self) -> None:
-        assert identities_match(("sbxloop", True), ("sbxloop[bot]", True))
+        assert identities_match(("lantern", True), ("lantern[bot]", True))
         assert identities_match(("Alice", False), ("alice", False))
 
     def test_a_human_and_an_app_of_the_same_name_never_match(self) -> None:
@@ -575,13 +575,13 @@ class TestIdentitiesMatch:
         assert not identities_match(("", True), ("", True))
 
     def test_a_same_named_human_thread_is_not_the_apps(self) -> None:
-        """The acceptance case: the loop is the App ``sbxloop[bot]``; a
-        person whose login is ``sbxloop`` opens a thread — it is theirs."""
-        human = thread(comments=(("sbxloop", "why this?"),))
-        loop_open, human_open = unreconciled_threads([human], login="sbxloop[bot]", is_bot=True)
+        """The acceptance case: the loop is the App ``lantern[bot]``; a
+        person whose login is ``lantern`` opens a thread — it is theirs."""
+        human = thread(comments=(("lantern", "why this?"),))
+        loop_open, human_open = unreconciled_threads([human], login="lantern[bot]", is_bot=True)
         assert (loop_open, human_open) == ([], ["a.py:12"]), "a person's thread, unanswered"
-        own = thread(comments=(("sbxloop", "[minor] x"),), bot=True)
-        loop_open, human_open = unreconciled_threads([own], login="sbxloop[bot]", is_bot=True)
+        own = thread(comments=(("lantern", "[minor] x"),), bot=True)
+        loop_open, human_open = unreconciled_threads([own], login="lantern[bot]", is_bot=True)
         assert (loop_open, human_open) == (["a.py:12"], []), "the App's own, unresolved"
 
 
@@ -589,7 +589,7 @@ class TestMarkedReplies:
     """#618: a marker counts only in the loop's own reply; a person quoting
     it back does not make the thread answered."""
 
-    MARKER = "<!-- sbxloop:reconciled run=r1 -->"
+    MARKER = "<!-- lantern:reconciled run=r1 -->"
 
     def test_a_loop_reply_with_the_marker_counts(self) -> None:
         t = thread(comments=(("alice", "why?"), (LOGIN, f"**addressed**: done\n\n{self.MARKER}")))
@@ -612,32 +612,32 @@ class TestMarkedReplies:
 
 
 class TestBotSuffixIdentity:
-    """REST attributes the App as ``sbxloop[bot]``; GraphQL reports the
-    same actor as bare ``sbxloop``. Field failure r9t8hnv33 / ry2t99za6 /
+    """REST attributes the App as ``lantern[bot]``; GraphQL reports the
+    same actor as bare ``lantern``. Field failure r9t8hnv33 / ry2t99za6 /
     ra2k5bv6z: with the resolved login carrying the suffix and the threads
     read via GraphQL, every loop thread classified as a human's, the loop
     ack-replied to its own findings, and reconciled PRs ended blocked on
     "human review threads have no reply"."""
 
     def test_logins_match_folds_the_suffix_and_case(self) -> None:
-        from sbxloop.vcs.github.ops import logins_match
+        from lantern.vcs.github.ops import logins_match
 
-        assert logins_match("sbxloop[bot]", "sbxloop")
-        assert logins_match("sbxloop", "sbxloop[bot]")
-        assert logins_match("SBXLoop[bot]", "sbxloop")
-        assert not logins_match("sbxloop", "other")
+        assert logins_match("lantern[bot]", "lantern")
+        assert logins_match("lantern", "lantern[bot]")
+        assert logins_match("LANTERN[bot]", "lantern")
+        assert not logins_match("lantern", "other")
         assert not logins_match("", "")
-        assert not logins_match("sbxloop", "")
+        assert not logins_match("lantern", "")
 
     def test_a_loop_thread_under_the_rest_login_is_loop_authored(self) -> None:
         replied = thread(
-            comments=(("sbxloop", "[minor] leaks"), ("sbxloop", "**noted, not blocking**"))
+            comments=(("lantern", "[minor] leaks"), ("lantern", "**noted, not blocking**"))
         )
-        assert unreconciled_threads([replied], login="sbxloop[bot]") == ([], [])
+        assert unreconciled_threads([replied], login="lantern[bot]") == ([], [])
 
     def test_has_reply_from_crosses_the_suffix(self) -> None:
-        answered = thread(comments=(("alice", "why?"), ("sbxloop", "**addressed**: done")))
-        assert answered.has_reply_from("sbxloop[bot]")
+        answered = thread(comments=(("alice", "why?"), ("lantern", "**addressed**: done")))
+        assert answered.has_reply_from("lantern[bot]")
 
     def test_the_pr_604_shape_merges_and_acks_nothing(self) -> None:
         """The exact field shape: the loop's own resolved finding threads
@@ -648,22 +648,22 @@ class TestBotSuffixIdentity:
         fake.threads = [
             thread(
                 resolved=True,
-                comments=(("sbxloop", "[minor] x"), ("sbxloop", "**noted, not blocking**")),
+                comments=(("lantern", "[minor] x"), ("lantern", "**noted, not blocking**")),
             ),
             thread(
                 thread_id="PRRT_2",
                 path="b.py",
                 line=4,
                 resolved=True,
-                comments=(("sbxloop", "[nit] y"), ("sbxloop", "**noted, not blocking**")),
+                comments=(("lantern", "[nit] y"), ("lantern", "**noted, not blocking**")),
             ),
         ]
 
         def ack(threads: Any) -> int:
             return acknowledge_human_threads(
-                fake, REPO, fake.number, run_id="rfix12345", login="sbxloop[bot]", threads=threads
+                fake, REPO, fake.number, run_id="rfix12345", login="lantern[bot]", threads=threads
             )
 
-        outcome = run_land(fake, login="sbxloop[bot]", ack=ack)
+        outcome = run_land(fake, login="lantern[bot]", ack=ack)
         assert isinstance(outcome, Landed)
         assert fake.replies == [], "no ack lands on the loop's own threads"

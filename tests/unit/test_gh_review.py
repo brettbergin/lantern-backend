@@ -10,7 +10,7 @@ Pure over fixture payloads — no transport, no sandbox.
 
 from __future__ import annotations
 
-from sbxloop.vcs.github.ops import (
+from lantern.vcs.github.ops import (
     ChecksVerdict,
     ReviewComment,
     SubmittedReview,

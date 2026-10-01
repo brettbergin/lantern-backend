@@ -1,7 +1,7 @@
 """Multi-repo end to end: config -> discovery -> dispatch -> report.
 
 The other multi-repo suites each test one seam. This one wires the *real*
-pieces together — a parsed ``sbxloop.toml``, :func:`build_github_source`
+pieces together — a parsed ``lantern.toml``, :func:`build_github_source`
 over fake GitHub ops, and a real :class:`DaemonLoop` — and checks that an
 issue labelled in repository B produces a run configured for B and reports
 back to B, while a single-repo config walks exactly the same path with the
@@ -17,20 +17,20 @@ from typing import Any, cast
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.model import RunReport, WorkItem
-from sbxloop.daemon.sources import GitHubLabels, build_github_source
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import RunResult
-from sbxloop.engine.store import StateStore
-from sbxloop.events import EventBus
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.model import RunReport, WorkItem
+from lantern.daemon.sources import GitHubLabels, build_github_source
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import RunResult
+from lantern.engine.store import StateStore
+from lantern.events import EventBus
 
 from .test_daemon_loop import PR_URL, RecordingFrontend
 from .test_daemon_sources import RecordingOps, issue
 from .test_daemon_sources_multirepo import RouterOps
 
-LABELS = GitHubLabels("sbxloop:run", "sbxloop:in-progress", "sbxloop:failed")
+LABELS = GitHubLabels("lantern:run", "lantern:in-progress", "lantern:failed")
 
 MULTI_TOML = """
 [github]
@@ -52,7 +52,7 @@ deliver_base = "main"
 
 
 def _config(tmp_path: Path, template: str) -> Config:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text(template)
     return Config.model_validate(
         {**tomllib.loads(path.read_text()), "home": (tmp_path / "state").as_posix()}
@@ -73,7 +73,7 @@ class RecordingRunner:
         self.seen.append((item, cfg))
         self.store.create_run(run_id, item.title)
         self.store.set_run_pr(
-            run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+            run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
         )
         self.store.set_run_state(run_id, "merged")
         return RunResult(run_id=run_id, state="merged", pr_number=9, pr_url=PR_URL)
@@ -105,8 +105,8 @@ class Wiring:
 def _router() -> RouterOps:
     return RouterOps(
         {
-            "o/a": RecordingOps({"4": issue(4, "sbxloop:run"), "5": issue(5, "other")}),
-            "o/b": RecordingOps({"7": issue(7, "sbxloop:run")}),
+            "o/a": RecordingOps({"4": issue(4, "lantern:run"), "5": issue(5, "other")}),
+            "o/b": RecordingOps({"7": issue(7, "lantern:run")}),
         }
     )
 

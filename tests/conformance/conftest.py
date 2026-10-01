@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from sbxloop.errors import RoleNotImplemented
-from sbxloop.vcs.protocol import VcsOps
+from lantern.errors import RoleNotImplemented
+from lantern.vcs.protocol import VcsOps
 from tests.conformance.backends import BACKENDS, Backend, Seeds, registered
 from tests.conformance.gate import check_needs
 

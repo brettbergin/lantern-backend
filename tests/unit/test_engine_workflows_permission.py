@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.errors import DeliveryPermissionError, GithubOpsError
-from sbxloop.events import HostEventTypes
+from lantern.engine.engine import LoopEngine
+from lantern.errors import DeliveryPermissionError, GithubOpsError
+from lantern.events import HostEventTypes
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_engine import FILES_BUILD, REVIEW_OK, Harness, task, taskgraph
@@ -48,7 +48,7 @@ class TestRefusedDeliveryBlocksTheRun:
             seen["kwargs"] = kwargs
             raise REFUSAL
 
-        monkeypatch.setattr("sbxloop.engine.engine.deliver_workspace", refuse)
+        monkeypatch.setattr("lantern.engine.engine.deliver_workspace", refuse)
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("ship a workflow")
 

@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx import conformance
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.conformance import (
+from lantern.paths import LanternHome
+from lantern.sbx import conformance
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.conformance import (
     CATALOG,
     PROBE_API_HOST_UNREACHABLE,
     PROBE_CP_DIR_SEMANTICS,
@@ -28,7 +28,7 @@ from sbxloop.sbx.conformance import (
     run_conformance,
     save_verdicts,
 )
-from sbxloop.sbx.secretstate import parsed_scope
+from lantern.sbx.secretstate import parsed_scope
 from tests.conftest import FakeSbx
 
 FAKE_VERSION = "0.38.0"
@@ -60,7 +60,7 @@ class TestCatalog:
 
 class TestDeepRun:
     def test_deep_run_matches_expected_verdicts(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         report = run_conformance(make_cli(fake_sbx), state, deep=True)
         assert report.version == FAKE_VERSION
         outcomes = by_id(report)
@@ -79,14 +79,14 @@ class TestDeepRun:
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
         cli = make_cli(fake_sbx)
-        run_conformance(cli, SbxloopHome(tmp_path / "state"), deep=True)
+        run_conformance(cli, LanternHome(tmp_path / "state"), deep=True)
         assert cli.ls() == []
         secrets_state = fake_sbx.state / "secrets-state.json"
         state = json.loads(secrets_state.read_text())
         assert state["custom"] == {}
 
     def test_deep_run_writes_version_keyed_cache(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         run_conformance(make_cli(fake_sbx), state, deep=True)
         cached = load_verdicts(state, FAKE_VERSION)
         assert set(cached) == {probe.id for probe in CATALOG}
@@ -98,7 +98,7 @@ class TestDeepRun:
 
     def test_probe_error_does_not_abort_suite(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
         fake_sbx.script("ls", returncode=1, stderr="daemon unreachable")
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=True)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=True)
         outcomes = by_id(report)
         assert outcomes[PROBE_LS_COLUMNS].is_error
         assert "daemon unreachable" in outcomes[PROBE_LS_COLUMNS].detail
@@ -110,7 +110,7 @@ class TestDeepRun:
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("SBX_FAKE_NO_MOUNT", "1")
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=True)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=True)
         outcome = by_id(report)[PROBE_WORKSPACE_MOUNT]
         assert outcome.verdict == "not-found"
         # flipped verdict vs what the codebase depends on -> loud drift
@@ -125,7 +125,7 @@ class TestApiHostProbe:
     def test_the_fake_answers_unreachable_and_denied(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=True)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=True)
         outcome = by_id(report)[PROBE_API_HOST_UNREACHABLE]
         assert outcome.verdict == "unreachable" and outcome.drifts == []
         assert "policy denies 127.0.0.1, host.docker.internal, 10.0.2.2" in outcome.detail
@@ -150,7 +150,7 @@ class TestApiHostProbe:
         verdict: str,
     ) -> None:
         monkeypatch.setenv("SBX_FAKE_API_REACH", answer)
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=True)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=True)
         outcome = by_id(report)[PROBE_API_HOST_UNREACHABLE]
         assert outcome.verdict == verdict
         assert bool(outcome.drifts) == (verdict != "unreachable")
@@ -159,7 +159,7 @@ class TestApiHostProbe:
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("SBX_FAKE_HOST_ALIAS_ALLOWED", "1")
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=True)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=True)
         outcome = by_id(report)[PROBE_API_HOST_UNREACHABLE]
         assert outcome.verdict == "policy-allows"
         assert "host.docker.internal" in outcome.detail
@@ -168,8 +168,8 @@ class TestApiHostProbe:
     def test_the_configured_bind_address_is_probed_and_policy_checked(
         self, fake_sbx: FakeSbx
     ) -> None:
-        from sbxloop.sbx.conformance import ProbeContext, _probe_api_host_unreachable
-        from sbxloop.sbx.models import ExecResult
+        from lantern.sbx.conformance import ProbeContext, _probe_api_host_unreachable
+        from lantern.sbx.models import ExecResult
 
         seen: list[list[str]] = []
 
@@ -266,7 +266,7 @@ class TestApiProbeScript:
         import subprocess  # nosec B404 - runs this test's own interpreter
         import sys
 
-        from sbxloop.sbx.conformance import _API_PROBE_SCRIPT
+        from lantern.sbx.conformance import _API_PROBE_SCRIPT
 
         env = {
             k: v
@@ -298,7 +298,7 @@ class TestApiProbeScript:
             listener.close()
 
     def test_the_api_answering_its_liveness_route_is_reachable(self) -> None:
-        from sbxloop.api.models import Health
+        from lantern.api.models import Health
 
         listener = _Http(200, Health().model_dump_json().encode())
         try:
@@ -308,7 +308,7 @@ class TestApiProbeScript:
         assert line.startswith("reachable") and "127.0.0.1" in line
 
     def test_extra_health_fields_do_not_hide_a_reachable_api(self) -> None:
-        from sbxloop.api.models import Health
+        from lantern.api.models import Health
 
         payload = json.loads(Health().model_dump_json())
         payload["version"] = "1.2"
@@ -332,7 +332,7 @@ class TestPageSizeProbe:
             self.rg_rc = rg_rc
 
         def exec(self, argv: list[str], **_: object) -> object:
-            from sbxloop.sbx.models import ExecResult
+            from lantern.sbx.models import ExecResult
 
             if argv[0] == "getconf":
                 return ExecResult(
@@ -347,7 +347,7 @@ class TestPageSizeProbe:
             )
 
     def _run(self, sandbox: object) -> tuple[str, str]:
-        from sbxloop.sbx.conformance import ProbeContext, _probe_page_size
+        from lantern.sbx.conformance import ProbeContext, _probe_page_size
 
         ctx = ProbeContext(cli=None, sandbox=sandbox)  # type: ignore[arg-type]
         return _probe_page_size(ctx)
@@ -382,7 +382,7 @@ class TestPythonVersionProbe:
             self.out, self.rc, self.err = out, rc, err
 
         def exec(self, argv: list[str], **_: object) -> object:
-            from sbxloop.sbx.models import ExecResult
+            from lantern.sbx.models import ExecResult
 
             assert argv == ["python3", "--version"]
             return ExecResult(
@@ -390,13 +390,13 @@ class TestPythonVersionProbe:
             )
 
     def _run(self, sandbox: object) -> tuple[str, str]:
-        from sbxloop.sbx.conformance import ProbeContext, _probe_python_version
+        from lantern.sbx.conformance import ProbeContext, _probe_python_version
 
         ctx = ProbeContext(cli=None, sandbox=sandbox)  # type: ignore[arg-type]
         return _probe_python_version(ctx)
 
     def test_at_or_above_the_pin(self) -> None:
-        from sbxloop.toolchains import PYTHON_SERIES
+        from lantern.toolchains import PYTHON_SERIES
 
         verdict, detail = self._run(self._StubSandbox(f"Python {PYTHON_SERIES}.1\n"))
         assert verdict == "meets-pin"
@@ -413,7 +413,7 @@ class TestPythonVersionProbe:
         # A template that already ships uv + python3.13 passes the toolchain
         # probe and skips the install, so the versioned interpreter need not
         # be uv-managed; the row reports compatibility, not provenance.
-        from sbxloop.toolchains import PYTHON_SERIES
+        from lantern.toolchains import PYTHON_SERIES
 
         for out in (f"Python {PYTHON_SERIES}.1\n", "Python 3.99.0\n", "Python 3.12.3\n"):
             _, detail = self._run(self._StubSandbox(out))
@@ -432,7 +432,7 @@ class TestPythonVersionProbe:
     def test_catalog_row_is_informational(self) -> None:
         # Both answers are handled by the toolchain ensure; the row informs,
         # it never alarms as drift.
-        from sbxloop.sbx.conformance import PROBE_PYTHON_VERSION
+        from lantern.sbx.conformance import PROBE_PYTHON_VERSION
 
         probe = next(p for p in CATALOG if p.id == PROBE_PYTHON_VERSION)
         assert probe.tier == "sandbox"
@@ -441,7 +441,7 @@ class TestPythonVersionProbe:
 
 class TestShallowRun:
     def test_sandbox_probes_unprobed_without_cache(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=False)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=False)
         outcomes = by_id(report)
         assert outcomes[PROBE_LS_COLUMNS].verdict == "expected-columns"
         assert outcomes[PROBE_SECRET_ENV_VISIBILITY].source == "unprobed"
@@ -456,7 +456,7 @@ class TestShallowRun:
         assert make_cli(fake_sbx).ls() == []
 
     def test_sandbox_probes_served_from_cache(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         cli = make_cli(fake_sbx)
         run_conformance(cli, state, deep=True)
         report = run_conformance(cli, state, deep=False)
@@ -468,7 +468,7 @@ class TestShallowRun:
     def test_field_recorded_verdicts_render_as_field(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         record_field_verdict(
             state, FAKE_VERSION, PROBE_SECRET_ENV_VISIBILITY, "invisible-under-exec"
         )
@@ -482,7 +482,7 @@ class TestSecretValueStdinProbe:
     an sbx upgrade makes stdin passing possible."""
 
     def test_argv_only_against_fake(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=False)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=False)
         outcome = by_id(report)[PROBE_SECRET_VALUE_STDIN]
         assert outcome.verdict == "argv-only"
         assert outcome.drifts == []
@@ -492,7 +492,7 @@ class TestSecretValueStdinProbe:
             "secret set-custom --help",
             stdout="Flags:\n      --value-stdin   Read the secret value from stdin\n",
         )
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=False)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=False)
         outcome = by_id(report)[PROBE_SECRET_VALUE_STDIN]
         assert outcome.verdict == "stdin-available"
         assert outcome.drifts
@@ -503,7 +503,7 @@ class TestSecretValueStdinProbe:
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
         fake_sbx.script("secret set-custom --help", returncode=2, stderr="unknown flag: --help\n")
-        report = run_conformance(make_cli(fake_sbx), SbxloopHome(tmp_path / "state"), deep=False)
+        report = run_conformance(make_cli(fake_sbx), LanternHome(tmp_path / "state"), deep=False)
         outcome = by_id(report)[PROBE_SECRET_VALUE_STDIN]
         assert outcome.verdict == "help-drifted"
         assert outcome.drifts  # flipped vs expected -> loud
@@ -518,7 +518,7 @@ class TestDrift:
         )
 
     def test_cross_version_flip_is_drift(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         self.seed_old_version(state, PROBE_SECRET_ENV_VISIBILITY, "visible-under-exec")
         report = run_conformance(make_cli(fake_sbx), state, deep=True)
         outcome = by_id(report)[PROBE_SECRET_ENV_VISIBILITY]
@@ -529,7 +529,7 @@ class TestDrift:
     def test_expected_mismatch_names_dependent_behavior(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         # seed the CURRENT version's cache with a flipped verdict; a shallow
         # run must still alarm on the cached value. Any probe carrying an
         # `expected` will do — secret-env-visibility deliberately carries None
@@ -547,7 +547,7 @@ class TestDrift:
     def test_same_verdict_across_versions_is_not_drift(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         self.seed_old_version(state, PROBE_SECRET_ENV_VISIBILITY, "invisible-under-exec")
         report = run_conformance(make_cli(fake_sbx), state, deep=True)
         assert report.drifted == []
@@ -558,7 +558,7 @@ class TestDrift:
         # The first deep run under the new version reports the flip; once
         # this version has recorded the new verdict, re-running doctor must
         # not fail on the same, already-reported change forever.
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         self.seed_old_version(state, PROBE_SECRET_ENV_VISIBILITY, "visible-under-exec")
         first = run_conformance(make_cli(fake_sbx), state, deep=True)
         assert by_id(first)[PROBE_SECRET_ENV_VISIBILITY].drifts
@@ -574,7 +574,7 @@ class TestDrift:
         # connections its policy drops holds a "reachable" nothing reached.
         # That record answers a different question, so the fixed probe's
         # "unreachable" is not a change in sbx.
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         path = cache_path(state, "0.34.0")
         path.parent.mkdir(parents=True, exist_ok=True)
         legacy = {"verdict": "reachable", "detail": "connected to the API", "checked_at": 1.0}
@@ -589,7 +589,7 @@ class TestDrift:
     def test_a_flip_under_the_same_probe_revision_still_alarms(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         revision = by_id_catalog()[PROBE_API_HOST_UNREACHABLE].revision
         save_verdicts(
             state,
@@ -611,14 +611,14 @@ def by_id_catalog() -> dict[str, conformance.Probe]:
 
 class TestCache:
     def test_save_merges_instead_of_replacing(self, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         save_verdicts(state, "0.35.0", {"a": ProbeRecord(verdict="x", checked_at=1.0)})
         save_verdicts(state, "0.35.0", {"b": ProbeRecord(verdict="y", checked_at=2.0)})
         cached = load_verdicts(state, "0.35.0")
         assert set(cached) == {"a", "b"}
 
     def test_versions_get_distinct_files(self, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         save_verdicts(state, "0.35.0", {"a": ProbeRecord(verdict="x", checked_at=1.0)})
         save_verdicts(state, "0.36.0", {"a": ProbeRecord(verdict="y", checked_at=2.0)})
         assert cache_path(state, "0.35.0") != cache_path(state, "0.36.0")
@@ -626,7 +626,7 @@ class TestCache:
         assert load_verdicts(state, "0.36.0")["a"].verdict == "y"
 
     def test_corrupt_cache_treated_as_empty(self, tmp_path: Path) -> None:
-        state = SbxloopHome(tmp_path / "state")
+        state = LanternHome(tmp_path / "state")
         path = cache_path(state, "0.35.0")
         path.parent.mkdir(parents=True)
         path.write_text("{not json")
@@ -635,7 +635,7 @@ class TestCache:
     def test_record_field_verdict_swallows_unwritable_dir(self, tmp_path: Path) -> None:
         blocker = tmp_path / "state"
         blocker.write_text("a file where the state dir should be")
-        record_field_verdict(SbxloopHome(blocker), "0.35.0", "a", "x")  # must not raise
+        record_field_verdict(LanternHome(blocker), "0.35.0", "a", "x")  # must not raise
 
 
 class TestExecStdinEnvProbe:
@@ -647,7 +647,7 @@ class TestExecStdinEnvProbe:
             self.echo_env, self.rc, self.noise = echo_env, rc, noise
 
         def exec(self, argv: list[str], *, stdin: str = "", **_: object) -> object:
-            from sbxloop.sbx.models import ExecResult
+            from lantern.sbx.models import ExecResult
 
             # A forwarding sbx delivers the payload; the marker comes back,
             # possibly wrapped in login-profile chatter (self.noise).
@@ -658,7 +658,7 @@ class TestExecStdinEnvProbe:
             return ExecResult(argv=argv, returncode=self.rc, stdout=out, stderr="", duration_s=0.0)
 
     def _run(self, sandbox: object) -> tuple[str, str]:
-        from sbxloop.sbx.conformance import ProbeContext, _probe_exec_stdin_env
+        from lantern.sbx.conformance import ProbeContext, _probe_exec_stdin_env
 
         ctx = ProbeContext(cli=None, sandbox=sandbox)  # type: ignore[arg-type]
         return _probe_exec_stdin_env(ctx)

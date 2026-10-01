@@ -1,4 +1,4 @@
-"""``sbxloop init --migrate``: a pre-home installation found, snapshotted,
+"""``lantern init --migrate``: a pre-home installation found, snapshotted,
 carried and (with --purge) removed — through fakes, no systemd, no net."""
 
 from __future__ import annotations
@@ -11,18 +11,18 @@ from typing import Any
 
 import pytest
 
-from sbxloop.backup import list_backups
-from sbxloop.config import load_config
-from sbxloop.engine.store import StateStore
-from sbxloop.homeinit import HomeInit, InitOptions
-from sbxloop.homemigrate import (
+from lantern.backup import list_backups
+from lantern.config import load_config
+from lantern.engine.store import StateStore
+from lantern.homeinit import HomeInit, InitOptions
+from lantern.homemigrate import (
     HomeMigration,
     MigrateError,
     MigrateOptions,
     discover,
     migrate_options_for,
 )
-from sbxloop.paths import SbxloopHome
+from lantern.paths import LanternHome
 from tests.fakes.fake_host import fake_prep
 from tests.unit.test_homeinit import FakeFetch, FakeRun
 
@@ -30,7 +30,7 @@ from tests.unit.test_homeinit import FakeFetch, FakeRun
 class SystemdRun(FakeRun):
     """The init fake plus `systemctl is-active`."""
 
-    def __init__(self, home: SbxloopHome, *, active: bool) -> None:
+    def __init__(self, home: LanternHome, *, active: bool) -> None:
         super().__init__(home)
         self.active = active
 
@@ -59,27 +59,27 @@ def git_checkout(path: Path, origin: str) -> Path:
 def legacy_host(tmp_path: Path, *, active: bool = True) -> dict[str, Any]:
     """The field host before the home: everything the old rules scattered."""
     user_home = tmp_path
-    config_dir = user_home / ".config" / "sbxloop"
+    config_dir = user_home / ".config" / "lantern"
     config_dir.mkdir(parents=True)
     (config_dir / "secrets.env").write_text(
         "GH_TOKEN=old\nGITHUB_APP_PRIVATE_KEY_PATH=" + str(config_dir / "github-app.pem") + "\n"
     )
     (config_dir / "github-app.pem").write_text("PEM\n")
     (config_dir / "env.sh").write_text("set -a; . secrets.env\n")
-    work = user_home / "sbxloop-work"
+    work = user_home / "lantern-work"
     work.mkdir()
     checkout = git_checkout(work / "mountain-dew", "https://github.com/acme/mountain-dew.git")
-    (work / "sbxloop.toml").write_text(
+    (work / "lantern.toml").write_text(
         'state_dir = "~/elsewhere"\nmodel = "claude-sonnet-5"\n\n[sandbox]\nworkspace = "'
         + str(checkout)
         + '"\n\n[daemon]\nstate_dir = "'
-        + str(user_home / ".local" / "state" / "sbxloop" / "sbxloop-work")
+        + str(user_home / ".local" / "state" / "lantern" / "lantern-work")
         + '"\npoll_interval_s = 60.0\n'
     )
-    (work / "sbxloop.toml.bak").write_text("old\n")
+    (work / "lantern.toml.bak").write_text("old\n")
     (work / "workload-profile.toml").write_text("orphan\n")
     (work / "entrygraph").mkdir()  # another clone, not ours to touch
-    live = user_home / ".local" / "state" / "sbxloop" / "sbxloop-work"
+    live = user_home / ".local" / "state" / "lantern" / "lantern-work"
     live.mkdir(parents=True)
     store = StateStore(live / "state.db")
     store.create_run("rlive0001", "the queue")
@@ -87,25 +87,25 @@ def legacy_host(tmp_path: Path, *, active: bool = True) -> dict[str, Any]:
     (live / "runs" / "rlive0001" / "workspace").mkdir(parents=True)
     # The flat layout at the home's own path — not the initialised home the
     # autouse fixture lays out, which a host from before the home never had.
-    stray = SbxloopHome(user_home / ".sbxloop")
+    stray = LanternHome(user_home / ".lantern")
     shutil.rmtree(stray.root, ignore_errors=True)
     stray.root.mkdir()
     sqlite3.connect(stray.root / "state.db").execute("CREATE TABLE t (x)").connection.close()
     (stray.root / "conformance").mkdir()
     (stray.root / "conformance" / "sbx-0.38.0.json").write_text("{}")
     (stray.root / "runs" / "rold00001" / "workspace").mkdir(parents=True)
-    (user_home / ".sbxloop-venv" / "bin").mkdir(parents=True)
+    (user_home / ".lantern-venv" / "bin").mkdir(parents=True)
     (user_home / ".local" / "bin").mkdir(parents=True)
-    (user_home / ".local" / "bin" / "sbxloop").write_text(
-        '. "$HOME/.config/sbxloop/env.sh"\nexec venv\n'
+    (user_home / ".local" / "bin" / "lantern").write_text(
+        '. "$HOME/.config/lantern/env.sh"\nexec venv\n'
     )
     (user_home / ".local" / "bin" / "sbx").write_text(
-        '. "$HOME/.config/sbxloop/env.sh"\nexec /usr/local/bin/sbx\n'
+        '. "$HOME/.config/lantern/env.sh"\nexec /usr/local/bin/sbx\n'
     )
     units = user_home / ".config" / "systemd" / "user"
     units.mkdir(parents=True)
-    (units / "sbxloop-daemon.service").write_text(
-        "[Service]\nWorkingDirectory=%h/sbxloop-work\nExecStart=%h/.local/bin/sbxloop daemon\n"
+    (units / "lantern-daemon.service").write_text(
+        "[Service]\nWorkingDirectory=%h/lantern-work\nExecStart=%h/.local/bin/lantern daemon\n"
     )
     (units / "sbx-sandboxd.service").write_text(
         "[Service]\nExecStart=%h/.local/bin/sbx daemon start\n"
@@ -142,7 +142,7 @@ def make_migration(tmp_path: Path, host: dict[str, Any], **opts: Any) -> HomeMig
         fetch=FakeFetch(),
         system="Linux",
         machine="x86_64",
-        sys_prefix=tmp_path / ".sbxloop-venv",
+        sys_prefix=tmp_path / ".lantern-venv",
         user_units=host["units"],
         # A prepared Linux host: a migration is about what moves, and the
         # runner's own kvm device, PATH and session are none of its business.
@@ -158,29 +158,29 @@ class TestDiscover:
             host["home"], host["env"], cwd=tmp_path, run=host["run"], user_units=host["units"]
         )
         assert legacy.runner_dir == host["work"]
-        assert legacy.config_toml == host["work"] / "sbxloop.toml"
+        assert legacy.config_toml == host["work"] / "lantern.toml"
         assert legacy.secrets == host["config_dir"] / "secrets.env"
         assert legacy.pem == host["config_dir"] / "github-app.pem"
         assert legacy.env_sh == host["config_dir"] / "env.sh"
         assert legacy.live_state_db == host["live"] / "state.db"
         assert host["home"].root / "state.db" in legacy.state_db_candidates
-        assert legacy.venv == tmp_path / ".sbxloop-venv"
-        assert {p.name for p in legacy.launchers} == {"sbxloop", "sbx"}
+        assert legacy.venv == tmp_path / ".lantern-venv"
+        assert {p.name for p in legacy.launchers} == {"lantern", "sbx"}
         assert {p.name for p in legacy.unit_files} == {
-            "sbxloop-daemon.service",
+            "lantern-daemon.service",
             "sbx-sandboxd.service",
         }
         assert legacy.actions_runner == tmp_path / "actions-runner"
         assert legacy.daemon_active is True
         assert {p.name for p in legacy.runner_dir_files} == {
-            "sbxloop.toml",
-            "sbxloop.toml.bak",
+            "lantern.toml",
+            "lantern.toml.bak",
             "workload-profile.toml",
         }
         assert any("runner directory" in line for line in legacy.summary())
 
     def test_clean_host_finds_nothing(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        home = LanternHome(tmp_path / ".lantern")
         legacy = discover(
             home,
             {"HOME": str(tmp_path)},
@@ -195,18 +195,18 @@ class TestDiscover:
 class TestMigrate:
     def test_carries_the_daemon_and_removes_nothing_without_purge(self, tmp_path: Path) -> None:
         host = legacy_host(tmp_path)
-        home: SbxloopHome = host["home"]
+        home: LanternHome = host["home"]
         report = make_migration(tmp_path, host).execute()
         run: SystemdRun = host["run"]
         # stopped first, restarted last
-        assert ["systemctl", "--user", "stop", "sbxloop-daemon.service"] in run.calls
-        assert run.calls[-1] == ["systemctl", "--user", "start", "sbxloop-daemon.service"]
+        assert ["systemctl", "--user", "stop", "lantern-daemon.service"] in run.calls
+        assert run.calls[-1] == ["systemctl", "--user", "start", "lantern-daemon.service"]
         assert report.restarted
         # the backup holds every legacy file and every database
         assert report.backup is not None
         legacy_files = sorted(p.name for p in (report.backup.path / "legacy").iterdir())
         assert any("secrets.env" in n for n in legacy_files)
-        assert any("sbxloop-daemon.service" in n for n in legacy_files)
+        assert any("lantern-daemon.service" in n for n in legacy_files)
         assert sum(n.endswith("state.db") for n in legacy_files) == 2  # live + the stray flat one
         # the live queue is now the home's
         assert StateStore(home.state_db).list_runs()[0].run_id == "rlive0001"
@@ -227,11 +227,11 @@ class TestMigrate:
         assert home.initialised and home.launcher.exists()
         assert home.unit("github-runner.service").exists()
         assert (
-            home.backups / "units" / "sbxloop-daemon.service"
+            home.backups / "units" / "lantern-daemon.service"
         ).exists()  # the old unit file, aside
         # nothing purged: the leftovers are listed
-        assert tmp_path.joinpath(".sbxloop-venv").exists()
-        assert str(tmp_path / ".sbxloop-venv") in report.left
+        assert tmp_path.joinpath(".lantern-venv").exists()
+        assert str(tmp_path / ".lantern-venv") in report.left
         assert str(host["config_dir"]) in report.left
         # the carried config loads under the new rules
         config = load_config(cwd=tmp_path / "somewhere", env=host["env"])
@@ -242,11 +242,11 @@ class TestMigrate:
         host = legacy_host(tmp_path, active=False)
         report = make_migration(tmp_path, host, purge=True).execute()
         assert not report.restarted
-        assert not (tmp_path / ".sbxloop-venv").exists()
-        assert not (tmp_path / ".local" / "bin" / "sbxloop").exists()
+        assert not (tmp_path / ".lantern-venv").exists()
+        assert not (tmp_path / ".local" / "bin" / "lantern").exists()
         assert not host["config_dir"].exists()
-        assert not (tmp_path / ".local" / "state" / "sbxloop").exists()
-        assert not (host["work"] / "sbxloop.toml").exists()
+        assert not (tmp_path / ".local" / "state" / "lantern").exists()
+        assert not (host["work"] / "lantern.toml").exists()
         assert not (host["work"] / "workload-profile.toml").exists()
         assert (host["work"] / "entrygraph").exists()  # not ours
         assert any("still holds entrygraph" in n for n in report.notes)
@@ -261,7 +261,7 @@ class TestMigrate:
 
     def test_ambiguous_state_db_needs_from(self, tmp_path: Path) -> None:
         host = legacy_host(tmp_path, active=False)
-        (host["units"] / "sbxloop-daemon.service").unlink()  # no unit → no runner dir → ambiguous
+        (host["units"] / "lantern-daemon.service").unlink()  # no unit → no runner dir → ambiguous
         with pytest.raises(MigrateError, match="--from"):
             make_migration(tmp_path, host).execute()
         report = make_migration(tmp_path, host, state_db=host["live"] / "state.db").execute()
@@ -270,7 +270,7 @@ class TestMigrate:
 
     def test_existing_home_config_is_kept(self, tmp_path: Path) -> None:
         host = legacy_host(tmp_path, active=False)
-        home: SbxloopHome = host["home"]
+        home: LanternHome = host["home"]
         home.config.mkdir(parents=True)
         home.config_toml.write_text('model = "already"\n')
         report = make_migration(tmp_path, host).execute()

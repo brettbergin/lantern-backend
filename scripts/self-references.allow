@@ -5,7 +5,7 @@
 #
 # The concierge prompt's worked examples use small issue/PR numbers as
 # placeholders for the operator's own repository ("Reply on #12 that …",
-# "How is PR #41 doing?"); they are not references into sbxloop's tracker.
-packages/sbxloop/src/sbxloop/engine/prompts/concierge.md #12
-packages/sbxloop/src/sbxloop/engine/prompts/concierge.md #7
-packages/sbxloop/src/sbxloop/engine/prompts/concierge.md #41
+# "How is PR #41 doing?"); they are not references into lantern's tracker.
+packages/lantern/src/lantern/engine/prompts/concierge.md #12
+packages/lantern/src/lantern/engine/prompts/concierge.md #7
+packages/lantern/src/lantern/engine/prompts/concierge.md #41

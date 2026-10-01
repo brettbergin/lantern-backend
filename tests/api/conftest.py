@@ -17,13 +17,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from sbxloop.api.app import create_app
-from sbxloop.api.auth.keys import SigningKeys, load_or_create
-from sbxloop.api.auth.store import ApiAuthStore, Client
-from sbxloop.api.context import ApiContext
-from sbxloop.api.frontend import ApiFrontend
-from sbxloop.config import Config
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES, Capability
+from lantern.api.app import create_app
+from lantern.api.auth.keys import SigningKeys, load_or_create
+from lantern.api.auth.store import ApiAuthStore, Client
+from lantern.api.context import ApiContext
+from lantern.api.frontend import ApiFrontend
+from lantern.config import Config
+from lantern.daemon.controls.principal import ALL_CAPABILITIES, Capability
 from tests.unit.test_daemon_loop import Harness
 
 

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from sbxloop.daemon.discord_format import EmbedSpec, status_embed
-from sbxloop.daemon.slack_format import (
+from lantern.daemon.discord_format import EmbedSpec, status_embed
+from lantern.daemon.slack_format import (
     EMOJI_NAMES,
     embed_attachment,
     escape,
@@ -59,7 +59,7 @@ class TestEmbedAttachment:
             url="https://x/4",
             color=0x2ECC71,
             fields=(("state", "✅ merged", True), ("tasks", "2/2", True)),
-            footer="sbxloop 1.0",
+            footer="lantern 1.0",
         )
         att = embed_attachment(spec)
         assert att["color"] == "#2ECC71"
@@ -103,7 +103,7 @@ class TestEmbedAttachment:
                 }
             )
         )
-        assert att["blocks"][0]["text"]["text"].startswith("*sbxloop daemon*")
+        assert att["blocks"][0]["text"]["text"].startswith("*lantern daemon*")
 
 
 def test_permalink_and_reaction_names() -> None:

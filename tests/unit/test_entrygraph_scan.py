@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.data import entrygraph_scan as scan
+from lantern.data import entrygraph_scan as scan
 
 
 def fails(argv: list[str], *, match: str) -> None:

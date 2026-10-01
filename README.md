@@ -1,8 +1,8 @@
-# sbxloop
+# Lantern
 
 <p>
-  <a href="https://github.com/brettbergin/sbxloop/actions/workflows/ci.yml"><img src="https://github.com/brettbergin/sbxloop/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/brettbergin/sbxloop/releases/latest"><img src="https://img.shields.io/github/v/release/brettbergin/sbxloop" alt="Latest release" /></a>
+  <a href="https://github.com/brettbergin/lantern-backend/actions/workflows/ci.yml"><img src="https://github.com/brettbergin/lantern-backend/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/brettbergin/lantern-backend/releases/latest"><img src="https://img.shields.io/github/v/release/brettbergin/lantern-backend" alt="Latest release" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
 </p>
 
@@ -17,10 +17,10 @@
 | Chat & Notifications                | <a href="https://discordpy.readthedocs.io/"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&amp;logoColor=white" alt="Discord" /></a> <a href="https://github.com/slackapi/python-slack-sdk"><img src="https://img.shields.io/badge/Slack-4A154B?logo=slack&amp;logoColor=white" alt="Slack" /></a> <a href="https://developers.mattermost.com/integrate/reference/"><img src="https://img.shields.io/badge/Mattermost-0058CC?logo=mattermost&amp;logoColor=white" alt="Mattermost" /></a>                                                                                                                                                                                                                                                                 |
 | Toolchain & Automation              | <a href="https://docs.astral.sh/uv/"><img src="https://img.shields.io/badge/uv-DE5FE9?logo=uv&amp;logoColor=white" alt="uv" /></a> <a href=".github/workflows/ci.yml"><img src="https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&amp;logoColor=white" alt="GitHub Actions" /></a>                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
-**Give sbxloop the work and ditch the steering wheel.**
+**Give Lantern the work and ditch the steering wheel.**
 
 Built on [Docker Sandboxes (`sbx`)](https://docs.docker.com/ai/sandboxes/),
-sbxloop automates generic agent workloads you define as well as software development
+Lantern automates generic agent workloads you define as well as software development
 from chat, issues, or your terminal—planning, coding, testing, and handling
 feedback through to merge. For general [agentic workloads](docs/architecture.md#workloads),
 it researches, writes reports, or generates files. Watch, steer, or stop it anytime.
@@ -28,7 +28,7 @@ it researches, writes reports, or generates files. Watch, steer, or stop it anyt
 Out-of-scope findings are checked against existing issues; tracked problems
 link to their issue, while uncertain findings remain as PR notes.
 
-Docker's `sbx` CLI provides the sandbox runtime. sbxloop provisions sandboxes,
+Docker's `sbx` CLI provides the sandbox runtime. Lantern provisions sandboxes,
 coordinates agents and GitHub operations, and cleans up when done.
 
 Built to free you from relaying messages between agent, terminal, and pull
@@ -43,7 +43,7 @@ same environment a repository token means a malicious instruction or script
 could turn a coding task into a stolen credential. A sandbox limits where
 code runs; a secret inside it is still a secret that code can read.
 
-**sbxloop keeps the GitHub token out of the coding agent's sandbox.** The
+**Lantern keeps the GitHub token out of the coding agent's sandbox.** The
 agent runs in one sandbox and edits files; a separate sandbox holds the token
 and performs GitHub operations. The host mediates between them—the agent
 cannot access the credential sandbox or run arbitrary commands there.
@@ -59,13 +59,13 @@ use the same supervised loop and publish the result without a code merge.
 ## Get started
 
 You'll need a host that supports [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)
-and GitHub Copilot access, an Anthropic API key, or an OpenAI API key. sbxloop requires
+and GitHub Copilot access, an Anthropic API key, or an OpenAI API key. Lantern requires
 Python 3.13 or newer; the installer sets up Python and the sandbox CLI for you.
 
 The host needs curl, tar, git, and e2fsprogs; the installer checks for git and reports any missing dependencies.
 
-**Installing and preparing the host are two different jobs.** Everything sbxloop installs
-lands under `~/.sbxloop`, a directory your account already owns; nothing in the install
+**Installing and preparing the host are two different jobs.** Everything Lantern installs
+lands under `~/.lantern`, a directory your account already owns; nothing in the install
 needs root. Preparing the host is separate, one-time, and partly an administrator's:
 
 | One-time host preparation (Linux)   | Who                      | Why                                                            |
@@ -77,36 +77,36 @@ needs root. Preparing the host is separate, one-time, and partly an administrato
 | `loginctl enable-linger $USER`      | you, or an administrator | only for an unattended daemon: user services stop at logout    |
 
 The installer reports each of these and changes none of them — it joins no group, installs
-no package, and elevates nothing. `sbxloop doctor` shows the same rows at any time, and
-`sbxloop init` refuses by name the one step that cannot work without them. On macOS none of
+no package, and elevates nothing. `lantern doctor` shows the same rows at any time, and
+`lantern init` refuses by name the one step that cannot work without them. On macOS none of
 them apply: the platform brings its own virtualisation, and an interactive install needs no
-service manager at all (`sbxloop init --no-systemd`).
+service manager at all (`lantern init --no-systemd`).
 
 ### Install and initialize
 
 On macOS or Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/brettbergin/sbxloop/main/scripts/install.sh | sh
-export PATH="$HOME/.sbxloop/bin:$PATH"
+curl -fsSL https://raw.githubusercontent.com/brettbergin/lantern-backend/main/scripts/install.sh | sh
+export PATH="$HOME/.lantern/bin:$PATH"
 ```
 
-sbxloop installs from its [GitHub Releases](https://github.com/brettbergin/sbxloop/releases)
+Lantern installs from its [GitHub Releases](https://github.com/brettbergin/lantern-backend/releases)
 only — the release's wheels, checked against its SHA-256 manifest — never by
-name from a package index. `SBXLOOP_VERSION=X.Y.Z` pins a release.
+name from a package index. `LANTERN_VERSION=X.Y.Z` pins a release.
 
 On native Windows 11 x64, install Git and uv, enable Windows Hypervisor
-Platform, then bootstrap `sbxloop init --no-systemd` from the latest
+Platform, then bootstrap `lantern init --no-systemd` from the latest
 release's wheels with `uvx`, as the
 [platform guide](docs/user-guide.md#platform-support) shows; it also
 explains the Docker MSI, the home launcher and current limits. WSL2 with
 Docker Desktop integration remains another installation path.
 
-`sbxloop init` creates the home directory, installs the runtime, and writes
+`lantern init` creates the home directory, installs the runtime, and writes
 your starter configuration and secrets file:
 
 ```bash
-sbxloop init
+lantern init
 ```
 
 The installer above already runs this step. If you installed with pip, run
@@ -115,21 +115,21 @@ For an older installation, read the [home migration notes](CHANGELOG.md#10-cutov
 
 ### Configure your agent
 
-Everything lives under `~/.sbxloop` by default. Set `SBXLOOP_HOME` before
+Everything lives under `~/.lantern` by default. Set `LANTERN_HOME` before
 initializing if you want it somewhere else. The two files you'll edit are:
 
 ```text
-~/.sbxloop/config/
-  sbxloop.toml   # Models, repositories, budgets, and other settings
+~/.lantern/config/
+  lantern.toml   # Models, repositories, budgets, and other settings
   secrets.env    # Credentials, kept outside your checkout
 ```
 
-The generated `sbxloop.toml` includes commented settings and their defaults.
+The generated `lantern.toml` includes commented settings and their defaults.
 The interactive setup assistant asks for an agent backend, a chat backend and
 a VCS, then writes their settings and credentials to the right files:
 
 ```bash
-sbxloop setup
+lantern setup
 ```
 
 It hides secret input, validates the complete configuration before saving it,
@@ -142,7 +142,7 @@ in `secrets.env`:
 COPILOT_GITHUB_TOKEN=your_copilot_token
 ```
 
-Prefer Claude? Set the agent section in `sbxloop.toml`:
+Prefer Claude? Set the agent section in `lantern.toml`:
 
 ```toml
 [agent]
@@ -171,10 +171,10 @@ backend catalog; successful provisioning and `list-models` refresh that cache.
 See [Agent models](docs/user-guide.md#agent-models).
 
 The home config holds your operator settings. For a project's build and
-check settings, `sbxloop init --project` creates a `sbxloop.toml` in the
+check settings, `lantern init --project` creates a `lantern.toml` in the
 current directory. Tracked project config cannot change your credentials,
 network policy, or merge approvals. Environment overrides take precedence;
-`sbxloop config show` prints the resolved settings and where they came from.
+`lantern config show` prints the resolved settings and where they came from.
 
 ### Run your first task
 
@@ -183,13 +183,13 @@ Log in to Docker Sandboxes, initialize its network policy, and check your setup:
 ```bash
 sbx login
 sbx policy init balanced
-sbxloop doctor
+lantern doctor
 ```
 
 From the checkout you want to work on:
 
 ```bash
-sbxloop run "Add tests for the retry logic and fix any bugs they uncover"
+lantern run "Add tests for the retry logic and fix any bugs they uncover"
 ```
 
 A live dashboard shows the work as it happens. Without a configured GitHub
@@ -212,7 +212,7 @@ by setting `GITHUB_APP_ID`, `GITHUB_APP_INSTALLATION_ID`, and
 Name the target repository for one run:
 
 ```bash
-sbxloop run "Add tests for the retry logic" --repo your-org/your-repo
+lantern run "Add tests for the retry logic" --repo your-org/your-repo
 ```
 
 **This can merge the PR automatically** once checks and repository rules allow it.
@@ -220,7 +220,7 @@ For approval in chat before merging, configure
 [`[landing] merge_gate = "chat"`](docs/user-guide.md#github-integration)
 with a chat bridge.
 
-To save the repository for future runs, set it in your home `sbxloop.toml`:
+To save the repository for future runs, set it in your home `lantern.toml`:
 
 ```toml
 [github]
@@ -238,14 +238,14 @@ If a run stops, a checkpoint gives you somewhere to resume.
 
 | Command                        | Use it to                             |
 | ------------------------------ | ------------------------------------- |
-| `sbxloop status`               | See what's running and what finished. |
-| `sbxloop logs RUN`             | Read a run's full history.            |
-| `sbxloop cancel RUN`           | Stop a run.                           |
-| `sbxloop resume RUN`           | Continue from a saved checkpoint.     |
-| `sbxloop artifacts RUN --tree` | Find the files it produced.           |
-| `sbxloop doctor`               | Diagnose setup problems.              |
+| `lantern status`               | See what's running and what finished. |
+| `lantern logs RUN`             | Read a run's full history.            |
+| `lantern cancel RUN`           | Stop a run.                           |
+| `lantern resume RUN`           | Continue from a saved checkpoint.     |
+| `lantern artifacts RUN --tree` | Find the files it produced.           |
+| `lantern doctor`               | Diagnose setup problems.              |
 
-For ongoing work, run `sbxloop daemon` with configured repositories and a
+For ongoing work, run `lantern daemon` with configured repositories and a
 [Discord or Slack bridge](docs/user-guide.md#the-daemon-an-always-on-outer-loop).
 It picks up labeled issues and lets you follow and steer runs from chat.
 
@@ -254,7 +254,7 @@ same daemon serves REST, server-sent events and a WebSocket, so a client with
 a scoped token can admit work, follow a run, steer it, approve a held merge
 and fetch its artifacts without a shell on the host.
 
-Prefer the terminal? Run `sbxloop tui` on the daemon host. The
+Prefer the terminal? Run `lantern tui` on the daemon host. The
 [TUI](docs/tui.md) puts the queue, live runs, logs, and chat in one place,
 so you can steer work and approve held merges without switching to Discord
 or Slack. It uses the same home and configuration as the daemon — and edits
@@ -264,15 +264,15 @@ written back with its comments intact.
 ## Run as a service on Debian
 
 Once Docker Sandboxes is working on your Debian host and the setup above
-passes `sbxloop doctor`, you can leave the daemon running under systemd.
-Log in as the account that owns your sbxloop home and create the user services:
+passes `lantern doctor`, you can leave the daemon running under systemd.
+Log in as the account that owns your Lantern home and create the user services:
 
 ```bash
-sbxloop init --systemd
+lantern init --systemd
 ```
 
-This writes `sbxloop-daemon.service` and `sbx-sandboxd.service` under
-`~/.sbxloop/systemd/` and enables them through `systemctl --user`.
+This writes `lantern-daemon.service` and `sbx-sandboxd.service` under
+`~/.lantern/systemd/` and enables them through `systemctl --user`.
 It preserves your configuration and does not start the services yet.
 The shell installer already performs this step; rerunning it is safe.
 
@@ -284,13 +284,13 @@ reports a permission error for that step, enable it with:
 sudo loginctl enable-linger "$USER"
 ```
 
-With your repositories and credentials configured in `~/.sbxloop/config/`,
+With your repositories and credentials configured in `~/.lantern/config/`,
 start the daemon and check its logs:
 
 ```bash
-systemctl --user start sbxloop-daemon
-systemctl --user status sbxloop-daemon
-journalctl --user -u sbxloop-daemon -f
+systemctl --user start lantern-daemon
+systemctl --user status lantern-daemon
+journalctl --user -u lantern-daemon -f
 ```
 
 The sandbox backend starts first automatically. Run these `systemctl --user`
@@ -302,7 +302,7 @@ to let active work finish before restarting.
 
 When you need to adjust models, budgets, or network access, the
 [configuration reference](docs/user-guide.md#configuration) and
-[example config](packages/sbxloop/src/sbxloop/data/sbxloop.toml.example)
+[example config](packages/lantern/src/lantern/data/lantern.toml.example)
 cover the options.
 
 If your tests need services that only CI provides, see
@@ -340,7 +340,7 @@ make check
 make build
 ```
 
-The [host orchestrator](packages/sbxloop) and [sandbox worker](packages/sbxloop-worker)
+The [host orchestrator](packages/lantern) and [sandbox worker](packages/lantern-worker)
 ship together. Local tests use a fake sandbox CLI; you don't need Docker
 Sandboxes to contribute. Real sandbox tests run on CI runners.
 

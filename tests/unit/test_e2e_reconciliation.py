@@ -8,7 +8,7 @@ would see the effect of:
 - round 1 posts one finding anchored to a line (it opens its own inline
   thread) and one with no line (it can only go in the review body);
 - the fix round re-delivers and answers both in its report, in the
-  ``addressed:`` / ``refuted:`` form :func:`sbxloop.engine.review.fix_brief`
+  ``addressed:`` / ``refuted:`` form :func:`lantern.engine.review.fix_brief`
   asks for;
 - before round 2 runs, the loop replies in the inline finding's own thread
   and resolves it, and reports the body-only one in a single
@@ -28,11 +28,11 @@ from typing import Any
 
 import pytest
 
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.engine.landing import unreconciled_threads
-from sbxloop.engine.model import RunResult
-from sbxloop.engine.store import StateStore
-from sbxloop.events import HostEventTypes
+from lantern.engine.engine import LoopEngine
+from lantern.engine.landing import unreconciled_threads
+from lantern.engine.model import RunResult
+from lantern.engine.store import StateStore
+from lantern.events import HostEventTypes
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_engine import FILES_BUILD, Harness, task, taskgraph
@@ -95,7 +95,7 @@ ROUND_2 = review_round(
     ],
 )
 
-RUN_ID_MARKER = "sbxloop:reconciled"
+RUN_ID_MARKER = "lantern:reconciled"
 
 
 class TestTwoRoundRunIsReconciledOnThePr:
@@ -169,7 +169,7 @@ class TestTwoRoundRunIsReconciledOnThePr:
         confirmation = thread.comments[-1].body
         assert confirmation.startswith("**confirmed fixed** (review round 2)")
         assert "greets with hello now" in confirmation
-        assert f"sbxloop:confirmed run={result.run_id} round=2" in confirmation
+        assert f"lantern:confirmed run={result.run_id} round=2" in confirmation
 
         # ... and round 2's own body restates neither finding, and posts no
         # inline comment of its own.
@@ -376,7 +376,7 @@ class TestHumanCommentThreadDoesNotStrandTheRun:
 
     @pytest.fixture
     def run(self, harness: Harness) -> tuple[Harness, FakeGithub, RunResult]:
-        from sbxloop.vcs.github.ops import ReviewThread, ThreadComment
+        from lantern.vcs.github.ops import ReviewThread, ThreadComment
 
         fake = FakeGithub()
         fake.threads = [

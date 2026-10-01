@@ -4,7 +4,7 @@ granted when they registered.
 A member's API client stores its capabilities, written at registration and
 rewritten on a role change. When a release adds a capability to a role
 (``plans:create`` and ``plans:publish`` did), every member who registered
-before it kept the old set: an owner signed in to Angie was refused a plan
+before it kept the old set: an owner signed in to Lantern was refused a plan
 with "lacks plans:create". The API now brings every active member's client
 up to its role's set when it starts, and tokens minted from it afterwards
 carry the new capability.
@@ -15,9 +15,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sbxloop.api.collaboration import _capabilities_json
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES
-from sbxloop.db.api_models import ClientRow
+from lantern.api.collaboration import _capabilities_json
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES
+from lantern.db.api_models import ClientRow
 from tests.api.conftest import Api
 
 OWNER = {

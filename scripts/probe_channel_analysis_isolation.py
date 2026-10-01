@@ -30,7 +30,7 @@ def main() -> None:
         _fail("a host-only sibling path is visible inside the analyzer sandbox")
 
     for name in (
-        "SBXLOOP_ANALYSIS_HOST_SENTINEL",
+        "LANTERN_ANALYSIS_HOST_SENTINEL",
         "DOCKERHUB_TOKEN",
         "GH_TOKEN",
         "GITHUB_TOKEN",

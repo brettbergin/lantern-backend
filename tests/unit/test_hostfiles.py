@@ -1,5 +1,5 @@
 """Private files under the platform's own access control
-(:mod:`sbxloop.hostfiles`).
+(:mod:`lantern.hostfiles`).
 
 The Windows branch is driven through the ``runner`` seam on every host, so
 the POSIX shards cover it; the rows marked ``windows_host`` assert the facts
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.hostfiles import (
+from lantern.hostfiles import (
     PRIVATE_FILE_MODE,
     PrivacyError,
     create_private,
@@ -186,7 +186,7 @@ class TestTimezoneDatabase:
         import tomllib
 
         root = Path(__file__).resolve().parents[2]
-        text = (root / "packages" / "sbxloop" / "pyproject.toml").read_bytes()
+        text = (root / "packages" / "lantern" / "pyproject.toml").read_bytes()
         deps = tomllib.loads(text.decode())["project"]["dependencies"]
         (tz,) = [d for d in deps if d.split(";")[0].strip() == "tzdata"]
         assert "sys_platform" in tz and "win32" in tz

@@ -16,11 +16,11 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.api.routes.meta import FEATURES
-from sbxloop.backends import backend_for
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.errors import ToolRejectedError
-from sbxloop.modelcatalog import catalog_endpoint
+from lantern.api.routes.meta import FEATURES
+from lantern.backends import backend_for
+from lantern.db.api_models import ApiEventRow
+from lantern.errors import ToolRejectedError
+from lantern.modelcatalog import catalog_endpoint
 from tests.api.conftest import build
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -147,7 +147,7 @@ def test_built_in_agents_describe_themselves_and_stay_read_only(api: Any) -> Non
     assert planner["avatar"] == "P"
     assert planner["roles"] == ["planner"]
     assert planner["enabled"] is True
-    assert api.client.get("/v1/agents/concierge", headers=headers).json()["aliases"] == ["angie"]
+    assert api.client.get("/v1/agents/concierge", headers=headers).json()["aliases"] == ["lantern"]
 
     patched = api.client.patch(
         "/v1/agents/planner",
@@ -162,7 +162,7 @@ def test_built_in_agents_describe_themselves_and_stay_read_only(api: Any) -> Non
     assert api.client.get("/v1/agents/planner", headers=headers).json() == planner
 
 
-def test_agents_from_sbxloop_toml_are_read_only(tmp_path: Path) -> None:
+def test_agents_from_lantern_toml_are_read_only(tmp_path: Path) -> None:
     built = build(tmp_path, config={"agents": [{"slug": "ranger", "name": "Ranger"}]})
     with built.client:
         headers = bearer(register(built))
@@ -186,8 +186,8 @@ def test_agents_from_sbxloop_toml_are_read_only(tmp_path: Path) -> None:
     "body",
     [
         {"slug": "planner", "name": "My planner"},
-        {"slug": "angie", "name": "Not Angie"},
-        {"slug": "helper", "name": "Helper", "aliases": ["angie"]},
+        {"slug": "lantern", "name": "Not Lantern"},
+        {"slug": "helper", "name": "Helper", "aliases": ["lantern"]},
         {"slug": "helper", "name": "Helper", "aliases": ["builder"]},
     ],
 )
@@ -627,7 +627,7 @@ def test_a_custom_agent_answers_a_mention_in_its_own_persona(api: Any) -> None:
     assert call["allow_actions"] is True
     assert call["persona"].startswith(
         "\n\n## Collaboration role\n\n"
-        "You are sbxloop's **Scout**, responding in Angie as `@scout`. "
+        "You are lantern's **Scout**, responding in Lantern as `@scout`. "
         "Gather the facts first and cite where each came from. "
     )
     messages = api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()
@@ -752,7 +752,7 @@ def test_agent_and_team_slugs_do_not_collide(api: Any) -> None:
     assert renamed_alias.status_code == 409
     assert renamed_alias.json()["code"] == "slug_taken"
 
-    for slug in ("scout", "finder", "planner", "angie"):
+    for slug in ("scout", "finder", "planner", "lantern"):
         refused = api.client.post(
             "/v1/teams", headers=headers, json={"name": "Clash", "slug": slug}
         )

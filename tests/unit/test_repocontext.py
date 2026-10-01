@@ -15,17 +15,17 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.engine.repocontext import (
+from lantern.config import Config
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import PhaseRunner
+from lantern.engine.repocontext import (
     CONVENTION_FILES,
     HEADING,
     RepoContext,
     read_repo_context,
     repo_conventions,
 )
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern_worker.protocol import JobRequest, JobResult
 
 RULE = "Run `make lint` before committing; never touch `generated/`."
 

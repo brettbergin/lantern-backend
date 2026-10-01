@@ -1,0 +1,135 @@
+[project]
+name = "lantern-backend"
+dynamic = ["version"]  # derived from git tags by hatch-vcs (see [tool.hatch.version])
+description = "Agentic loop orchestration on Docker Sandboxes (sbx) with isolated credential domains"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [{ name = "Brett Bergin" }]
+keywords = ["agents", "sandbox", "docker", "copilot", "orchestration"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Typing :: Typed",
+]
+dependencies = [
+    "pydantic>=2.7",
+    "python-dotenv>=1.2.3",
+    # The Connections API probes providers with httpx and is imported at daemon startup.
+    "httpx>=0.27",
+    "typer>=0.27.2",
+    "rich>=13.7",
+    # Unpinned here because the version is dynamic; the build hook
+    # (hatch_build.py) adds the exact lockstep pin `lantern-worker==X.Y.Z`
+    # to the wheel metadata at build time.
+    "lantern-worker",
+    "gitpython>=3.1.62",
+    "structlog>=24.1",
+    # Optional host error reporting is dormant until the operator supplies a DSN.
+    "sentry-sdk>=2.69.1,<3",
+    # `.rubocop.yml` / other YAML project files the verify lint reads (#628).
+    "pyyaml>=6.0",
+    # `requires-python` is a PEP 440 specifier; the toolchain series a run
+    # provisions is chosen against it (#627).
+    "packaging>=26.3",
+    "textual>=8.2",
+    # The overview's distributions and trends (`tui/widgets/chart.py`).
+    # Bands cover every "what share" question and cover it better; these
+    # are the plots that need a scale. Pure Python, no transitive deps.
+    "textual-plotext>=1.0.1",
+    # Round-trip TOML for the console's config editor: setting one key must
+    # keep every comment and every other line of the operator's file
+    # (`configedit/toml.py`); `tomllib` reads but cannot write.
+    "tomlkit>=0.13",
+    # The data layer. One WAL-mode SQLite file holds every table; SQLAlchemy
+    # owns the mapping and Alembic owns the upgrade path, applied on open so
+    # an unattended daemon still migrates itself (#539).
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    # `zoneinfo` reads the *system* tz database, and Windows ships none, so
+    # `ZoneInfo("UTC")` raises there. `daemon.run_cap_timezone` defaults to
+    # "UTC" and is validated on every `load_config()`, so without this every
+    # command on a native Windows host — `doctor` and `config` included —
+    # fails with "must be a valid IANA timezone, got 'UTC'". The marker keeps
+    # it off the hosts that already have a database of their own.
+    "tzdata; sys_platform == 'win32'",
+    "pypdf==6.19.0",
+]
+
+[project.optional-dependencies]
+# Host-side SDK access for `lantern list-models` (agent sessions get the SDK
+# inside the sandbox via lantern-worker[copilot]; runs never need this extra).
+copilot = ["github-copilot-sdk>=1.0.13"]
+# Host-side model listing; agent sessions install the worker's matching extra.
+codex = ["openai-codex==0.147.0"]
+# `lantern daemon`'s chat bridge (chronology + steering), one extra per
+# backend; the daemon runs without either when no [chat] backend is set.
+discord = ["discord.py>=2.3"]
+# Socket Mode needs aiohttp, which slack_sdk leaves optional.
+slack = ["slack-sdk>=3.44.1", "aiohttp>=3.9"]
+# Mattermost's API is plain REST plus a websocket, so the bridge speaks it
+# directly (see daemon/mattermost.py) rather than through a driver.
+mattermost = ["aiohttp>=3.9"]
+api = [
+    "fastapi>=0.115",
+    "pyjwt[crypto]>=2.9",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+lantern = "lantern.cli.app:main"
+
+[project.urls]
+Homepage = "https://github.com/brettbergin/lantern-backend"
+Repository = "https://github.com/brettbergin/lantern-backend"
+Issues = "https://github.com/brettbergin/lantern-backend/issues"
+
+[tool.uv.sources]
+lantern-worker = { workspace = true }
+
+[build-system]
+requires = ["hatchling>=1.32.3", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+# Both workspace packages version from the same repo-root git tag, keeping the
+# lockstep invariant by construction. `fallback_root` lets a wheel built from
+# an extracted sdist (no git) pick the version up from the sdist's PKG-INFO.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../..", fallback_root = ".", local_scheme = "no-local-version", fallback_version = "0.0.0" }
+
+# Write the resolved version into the package so `lantern.__version__` and
+# `lantern --version` report it at runtime.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/lantern/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lantern"]
+artifacts = [
+  "src/lantern/_vendor/*.whl",
+  "src/lantern/data/*.example",
+  "src/lantern/data/presets/*.toml",
+  "src/lantern/data/home/*",
+  # Alembic reads this template off disk when a developer writes a revision;
+  # hatch ships the .py files on its own but not a .mako.
+  "src/lantern/db/migrations/script.py.mako",
+]
+
+[tool.hatch.build.targets.sdist]
+artifacts = [
+  "src/lantern/_vendor/*.whl",
+  "src/lantern/data/*.example",
+  "src/lantern/data/presets/*.toml",
+  "src/lantern/data/home/*",
+  # Alembic reads this template off disk when a developer writes a revision;
+  # hatch ships the .py files on its own but not a .mako.
+  "src/lantern/db/migrations/script.py.mako",
+]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"

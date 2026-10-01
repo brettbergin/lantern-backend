@@ -15,15 +15,15 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.model import RunReport, WorkItem
-from sbxloop.daemon.sources import CLAIM_MARKER, GitHubIssueSource
-from sbxloop.daemon.store import DaemonStore, PriorAttempt
-from sbxloop.engine.model import RunResult
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import RunCancelledError
-from sbxloop.events import EventBus, HostEventTypes
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.model import RunReport, WorkItem
+from lantern.daemon.sources import CLAIM_MARKER, GitHubIssueSource
+from lantern.daemon.store import DaemonStore, PriorAttempt
+from lantern.engine.model import RunResult
+from lantern.engine.store import StateStore
+from lantern.errors import RunCancelledError
+from lantern.events import EventBus, HostEventTypes
 from tests.unit.test_daemon_loop import (
     PR_URL,
     Clock,
@@ -55,7 +55,7 @@ class FakeEngineRunner:
             bus.emit(HostEventTypes.RUN_STATE, run_id, state=state)
             if state == "delivering":
                 self.store.set_run_pr(
-                    run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+                    run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
                 )
                 bus.emit(HostEventTypes.RUN_DELIVER, run_id, repo="o/r", pr=9, url=PR_URL)
             if state == "reviewing":
@@ -230,7 +230,7 @@ class RestartHarness:
         )
         self.store = StateStore(self.config.paths.state_db)
         self.dstore = DaemonStore(self.config.paths.state_db)
-        self.ops = IssueOps({"12": issue(12, "sbxloop:run")})
+        self.ops = IssueOps({"12": issue(12, "lantern:run")})
         self.source = GitHubIssueSource(
             lambda: self.ops,  # type: ignore[arg-type,return-value]
             "o/r",
@@ -267,7 +267,7 @@ class RestartHarness:
         prior = self.dstore.prior_attempt(item.item_id)
         self.dispatches.append((run_id, prior))
         self.store.create_run(run_id, item.title)
-        branch = (prior.branch if prior else None) or f"sbxloop/{run_id}"
+        branch = (prior.branch if prior else None) or f"lantern/{run_id}"
         number = (prior.pr_number if prior else None) or 9
         self.store.set_run_pr(
             run_id, number=number, url=PR_URL, branch=branch, head_sha=f"sha-{run_id}"
@@ -347,7 +347,7 @@ def _first_attempt(h: RestartHarness, ending: str) -> tuple[str, str]:
     item = h.dstore.get("gh:issue:12")
     assert item is not None and item.state == ending, item
     run_id = h.dispatches[0][0]
-    return run_id, f"sbxloop/{run_id}"
+    return run_id, f"lantern/{run_id}"
 
 
 @pytest.mark.parametrize("ending", ["cancelled", "failed", "blocked"])
@@ -396,9 +396,9 @@ def test_readding_the_label_restarts_the_item_and_keeps_its_pushed_work(
     # naming the restart and the work it continues.
     claims = h.claims()
     assert len(claims) == 2
-    assert "Restarted by re-adding `sbxloop:run`" in claims[1]
+    assert "Restarted by re-adding `lantern:run`" in claims[1]
     assert f"branch `{branch}`" in claims[1] and "PR #9" in claims[1]
-    assert "sbxloop daemon claimed this issue" in claims[1]
+    assert "lantern daemon claimed this issue" in claims[1]
     # …and the labels moved: the trigger was consumed by the claim and the
     # previous attempt's terminal label (if any) was cleared for it.
     assert LABELS.trigger not in h.labels_now
@@ -407,7 +407,7 @@ def test_readding_the_label_restarts_the_item_and_keeps_its_pushed_work(
     # as the way back in, and the daemon's own comments say re-adding the
     # label is what restarts it.
     assert not any(c.strip().startswith("!sbx retry") for c in h.comments)
-    settle = [c for c in h.comments if "sbxloop:run" in c and CLAIM_MARKER not in c]
+    settle = [c for c in h.comments if "lantern:run" in c and CLAIM_MARKER not in c]
     assert settle, "the finished attempt should have said how to restart it"
     assert all("an unchanged issue is deduplicated" not in c for c in settle)
     assert h.dstore.get("gh:issue:12").state == "done"  # type: ignore[union-attr]

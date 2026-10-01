@@ -4,7 +4,7 @@ run-name: ${{ inputs.automatic && 'Automatic release' || 'Manual release' }}
 # release-wakeup.yml coalesces pushes and reconciliation into automatic requests.
 # Each batch waits three quiet minutes, at most thirty, then freezes one SHA.
 # Releases are GitHub Releases only: nothing here publishes to a package index.
-# sbxloop and sbxloop-worker are installed from these release wheels, checked
+# lantern and lantern-worker are installed from these release wheels, checked
 # against release-manifest.json, never by name from an index.
 on:
   workflow_dispatch:
@@ -144,18 +144,18 @@ jobs:
       - name: Build both distributions once
         if: steps.staged.outputs.reused != 'true'
         run: |
-          uv build --package sbxloop-worker -o dist
-          uv build --package sbxloop -o dist
+          uv build --package lantern-worker -o dist
+          uv build --package lantern-backend -o dist
       - name: Assert the matching worker wheel is vendored
         run: |
-          unzip -l "dist/sbxloop-${VERSION}-py3-none-any.whl" \
-            | grep -F "sbxloop/_vendor/sbxloop_worker-${VERSION}-py3-none-any.whl"
+          unzip -l "dist/lantern_backend-${VERSION}-py3-none-any.whl" \
+            | grep -F "lantern/_vendor/lantern_worker-${VERSION}-py3-none-any.whl"
       - name: Smoke the final wheels in a clean environment
         run: python3 "${RUNNER_TEMP}/release-plan/smoke_wheels.py" dist "${VERSION}"
       - name: Stage original files on the draft release
         run: python3 "${RUNNER_TEMP}/release-plan/release_pipeline.py" stage
       # Only smoked, staged files get here: publishing makes the draft the
-      # release that deploys, `sbxloop update` and the installer fetch.
+      # release that deploys, `lantern update` and the installer fetch.
       - name: Publish the completed GitHub Release
         id: publish
         run: python3 "${RUNNER_TEMP}/release-plan/release_pipeline.py" publish

@@ -5,14 +5,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sbxloop.configedit import ConfigEditor, Row
-from sbxloop.daemon import configview
-from sbxloop.daemon.configpolicy import never_from_chat
-from sbxloop.paths import SbxloopHome
+from lantern.configedit import ConfigEditor, Row
+from lantern.daemon import configview
+from lantern.daemon.configpolicy import never_from_chat
+from lantern.paths import LanternHome
 
 
 def _rows(tmp_path: Path, text: str) -> list[Row]:
-    home = SbxloopHome(tmp_path / ".sbxloop")
+    home = LanternHome(tmp_path / ".lantern")
     home.ensure_tree()
     home.config_toml.write_text(text)
     return ConfigEditor(home, {"HOME": str(tmp_path)}).resolved()

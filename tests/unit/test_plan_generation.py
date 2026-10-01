@@ -19,19 +19,19 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.daemon.controls.intake import PlanAdmission, plan_item
-from sbxloop.daemon.controls.results import ControlError
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.sources import ApiSource, CompositeSource
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.engine.store import StateStore
-from sbxloop.ghids import api_item_id
-from sbxloop.plans.service import PlanService
-from sbxloop.plans.store import PlanStore
-from sbxloop.sbx.cli import SbxCLI
+from lantern import hostgit
+from lantern.config import Config
+from lantern.daemon.controls.intake import PlanAdmission, plan_item
+from lantern.daemon.controls.results import ControlError
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.sources import ApiSource, CompositeSource
+from lantern.daemon.store import DaemonStore
+from lantern.db.api_models import ApiEventRow
+from lantern.engine.store import StateStore
+from lantern.ghids import api_item_id
+from lantern.plans.service import PlanService
+from lantern.plans.store import PlanStore
+from lantern.sbx.cli import SbxCLI
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.gitrepo import make_repo
@@ -274,7 +274,7 @@ def _park(world: World, *questions: dict[str, Any]) -> str:
 
 
 def test_questions_park_the_run_until_they_are_answered(harness: Harness) -> None:
-    from sbxloop.engine.planning import PlanAnswer
+    from lantern.engine.planning import PlanAnswer
 
     world = World(harness, keep_sandboxes=True)
     item_id = _park(world, FORMATS, READERS)
@@ -389,7 +389,7 @@ def test_the_repositorys_question_cap_is_the_planners(harness: Harness) -> None:
 
 
 def test_a_restart_while_waiting_keeps_the_wait_and_takes_the_answer(harness: Harness) -> None:
-    from sbxloop.engine.planning import PlanAnswer
+    from lantern.engine.planning import PlanAnswer
 
     world = World(harness)
     item_id = _park(world)
@@ -428,8 +428,8 @@ def test_a_park_the_daemon_died_before_settling_is_settled_at_recovery(harness: 
 
 
 def test_abandoning_a_waiting_run_withdraws_its_questions(harness: Harness) -> None:
-    from sbxloop.engine.planning import PlanAnswer
-    from sbxloop.plans.service import PlanRefusal
+    from lantern.engine.planning import PlanAnswer
+    from lantern.plans.service import PlanRefusal
 
     world = World(harness)
     item_id = _park(world)
@@ -450,8 +450,8 @@ def test_abandoning_a_waiting_run_withdraws_its_questions(harness: Harness) -> N
 
 
 def test_answers_are_held_to_the_questions(harness: Harness) -> None:
-    from sbxloop.engine.planning import PlanAnswer
-    from sbxloop.plans.service import PlanRefusal
+    from lantern.engine.planning import PlanAnswer
+    from lantern.plans.service import PlanRefusal
 
     world = World(harness)
     _park(world, FORMATS, question("strict", "Pick one", "a", "b", free=False))

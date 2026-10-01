@@ -1,7 +1,7 @@
 name: E2E (real sbx)
 
 # Manually dispatched: installs real Docker Sandboxes on the runner and runs
-# sbxloop against it. Requires repository secrets:
+# lantern against it. Requires repository secrets:
 #   DOCKERHUB_USERNAME / DOCKERHUB_TOKEN  - for `sbx login`
 # and, to run the full smoke loop (skipped when absent):
 #   E2E_COPILOT_GITHUB_TOKEN  - fine-grained PAT w/ "Copilot Requests"
@@ -12,14 +12,14 @@ on:
     inputs:
       smoke_outcome:
         description: Outcome for the smoke run
-        default: "Create a file named hello.txt containing exactly 'hello sbxloop'"
+        default: "Create a file named hello.txt containing exactly 'hello lantern'"
         required: false
 
 env:
   SBX_INSTALL_DIR: /home/runner/.docker/sbx
-  # The home defaults to ~/.sbxloop; the steps below read the run's
+  # The home defaults to ~/.lantern; the steps below read the run's
   # state.db / runs/ from the checkout, so pin state to the workspace.
-  SBXLOOP_HOME: ${{ github.workspace }}/.sbxloop
+  LANTERN_HOME: ${{ github.workspace }}/.lantern
 
 jobs:
   e2e:
@@ -59,19 +59,19 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           echo -n "" | gnome-keyring-daemon --unlock --components=secrets || true
-          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name sbxloop-e2e login --username "$DOCKERHUB_USERNAME" --password-stdin
-          sbx --app-name sbxloop-e2e version
+          printf '%s' "$DOCKERHUB_TOKEN" | sbx --app-name lantern-e2e login --username "$DOCKERHUB_USERNAME" --password-stdin
+          sbx --app-name lantern-e2e version
 
       - name: sbx policy init balanced
-        run: sbx --app-name sbxloop-e2e policy init balanced
+        run: sbx --app-name lantern-e2e policy init balanced
 
-      - name: sbxloop doctor
+      - name: lantern doctor
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
           COPILOT_GITHUB_TOKEN: ${{ secrets.E2E_COPILOT_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
         # Doctor exits 1 when tokens are missing; report but don't hide it.
-        run: uv run sbxloop doctor || echo "::warning::doctor reported failures (expected when e2e token secrets are not configured)"
+        run: uv run lantern doctor || echo "::warning::doctor reported failures (expected when e2e token secrets are not configured)"
 
       # The full sbx conformance suite against the real sbx binary: every
       # field-learned assumption (secret visibility under exec, cp dir
@@ -84,22 +84,22 @@ jobs:
       - name: sbx conformance suite (doctor --deep)
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
           COPILOT_GITHUB_TOKEN: ${{ secrets.E2E_COPILOT_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
-        run: uv run sbxloop doctor --deep --fail-on-drift
+        run: uv run lantern doctor --deep --fail-on-drift
 
       - name: Smoke run
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
           COPILOT_GITHUB_TOKEN: ${{ secrets.E2E_COPILOT_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
-          SBXLOOP_BUDGETS__MAX_TASKS: "3"
-          SBXLOOP_BUDGETS__MAX_WALL_CLOCK_S: "1800"
+          LANTERN_BUDGETS__MAX_TASKS: "3"
+          LANTERN_BUDGETS__MAX_WALL_CLOCK_S: "1800"
         run: |
-          uv run sbxloop run "${{ inputs.smoke_outcome }}" --no-tui
-          uv run sbxloop status
+          uv run lantern run "${{ inputs.smoke_outcome }}" --no-tui
+          uv run lantern status
 
       # First real-sbx confirmation of workspace mount/harvest mode: the file
       # the agent writes must land on the HOST and be discoverable. Also the
@@ -110,14 +110,14 @@ jobs:
       - name: Assert artifacts landed on the host
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
         run: |
           set -euo pipefail
-          run_id=$(basename "$(ls -dt .sbxloop/runs/* | head -1)")
-          uv run sbxloop artifacts "$run_id" --tree
-          artifacts_dir=$(uv run sbxloop artifacts "$run_id" --path)
+          run_id=$(basename "$(ls -dt .lantern/runs/* | head -1)")
+          uv run lantern artifacts "$run_id" --tree
+          artifacts_dir=$(uv run lantern artifacts "$run_id" --path)
           test -f "$artifacts_dir/hello.txt"
-          grep -q "hello sbxloop" "$artifacts_dir/hello.txt"
+          grep -q "hello lantern" "$artifacts_dir/hello.txt"
 
       # First real-sbx confirmation of a `workload` run (#754): the operator
       # persona plans and executes in its own data directory, the judge
@@ -130,15 +130,15 @@ jobs:
       - name: Workload run
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
           COPILOT_GITHUB_TOKEN: ${{ secrets.E2E_COPILOT_GITHUB_TOKEN }}
-          SBXLOOP_BUDGETS__MAX_TASKS: "3"
-          SBXLOOP_BUDGETS__MAX_WALL_CLOCK_S: "1800"
+          LANTERN_BUDGETS__MAX_TASKS: "3"
+          LANTERN_BUDGETS__MAX_WALL_CLOCK_S: "1800"
         run: |
           set -euo pipefail
           # The profile lives in a config file the earlier steps did not
           # need; removed again below so the delivery smoke sees none.
-          cat > sbxloop.toml <<'TOML'
+          cat > lantern.toml <<'TOML'
           [[workloads]]
           name = "e2e"
           description = "read one public page, write one file, report"
@@ -149,20 +149,20 @@ jobs:
           [workload]
           default = "e2e"
           TOML
-          uv run sbxloop run --kind workload --no-tui \
-            "Write a file named brief.md in your data directory containing the heading '# sbxloop e2e' and one sentence naming today's date. Report the file as your output."
-          uv run sbxloop status
+          uv run lantern run --kind workload --no-tui \
+            "Write a file named brief.md in your data directory containing the heading '# lantern e2e' and one sentence naming today's date. Report the file as your output."
+          uv run lantern status
 
       - name: Assert the workload completed and its artifact landed
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
         run: |
           set -euo pipefail
           uv run --no-project python - <<'EOF'
           import json, sqlite3, sys
 
-          db = sqlite3.connect(".sbxloop/state/state.db")
+          db = sqlite3.connect(".lantern/state/state.db")
           db.row_factory = sqlite3.Row
           run = db.execute(
               "SELECT run_id, kind, state, published FROM runs ORDER BY created_at DESC LIMIT 1"
@@ -184,11 +184,11 @@ jobs:
           print(f"workload {run['run_id']} completed; judged {len(events)} task(s); published {sinks}")
           print(run["run_id"])
           EOF
-          run_id=$(basename "$(ls -dt .sbxloop/runs/* | head -1)")
-          uv run sbxloop artifacts "$run_id" --tree
-          test -f ".sbxloop/runs/$run_id/artifacts/brief.md"
-          grep -q "# sbxloop e2e" ".sbxloop/runs/$run_id/artifacts/brief.md"
-          rm -f sbxloop.toml
+          run_id=$(basename "$(ls -dt .lantern/runs/* | head -1)")
+          uv run lantern artifacts "$run_id" --tree
+          test -f ".lantern/runs/$run_id/artifacts/brief.md"
+          grep -q "# lantern e2e" ".lantern/runs/$run_id/artifacts/brief.md"
+          rm -f lantern.toml
 
       # Multi-file delivery smoke (#66): a 50-file workspace must deliver as
       # O(1) batched blob jobs, visibly (gh.op_progress) and under a time
@@ -197,16 +197,16 @@ jobs:
       - name: Multi-file delivery smoke
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' && vars.E2E_DELIVER_REPO != '' }}
         env:
-          SBXLOOP_APP_NAME: sbxloop-e2e
+          LANTERN_APP_NAME: lantern-e2e
           COPILOT_GITHUB_TOKEN: ${{ secrets.E2E_COPILOT_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.E2E_GH_TOKEN }}
-          SBXLOOP_BUDGETS__MAX_TASKS: "3"
-          SBXLOOP_BUDGETS__MAX_WALL_CLOCK_S: "1800"
-          SBXLOOP_GITHUB__REPO: ${{ vars.E2E_DELIVER_REPO }}
-          SBXLOOP_GITHUB__DELIVER: "true"
-          SBXLOOP_GITHUB__DELIVER_DRAFT: "true"
+          LANTERN_BUDGETS__MAX_TASKS: "3"
+          LANTERN_BUDGETS__MAX_WALL_CLOCK_S: "1800"
+          LANTERN_GITHUB__REPO: ${{ vars.E2E_DELIVER_REPO }}
+          LANTERN_GITHUB__DELIVER: "true"
+          LANTERN_GITHUB__DELIVER_DRAFT: "true"
         run: |
-          uv run sbxloop run "Create exactly 50 files named artifact_00.txt through artifact_49.txt, each containing its own filename, using a shell loop" --no-tui
+          uv run lantern run "Create exactly 50 files named artifact_00.txt through artifact_49.txt, each containing its own filename, using a shell loop" --no-tui
 
       - name: Assert batched delivery opened a PR within budget
         if: ${{ vars.E2E_SMOKE_ENABLED == 'true' && vars.E2E_DELIVER_REPO != '' }}
@@ -215,7 +215,7 @@ jobs:
           uv run --no-project python - <<'EOF'
           import json, sqlite3, sys
 
-          db = sqlite3.connect(".sbxloop/state/state.db")
+          db = sqlite3.connect(".lantern/state/state.db")
           db.row_factory = sqlite3.Row
           run_id = db.execute(
               "SELECT run_id FROM runs ORDER BY created_at DESC LIMIT 1"
@@ -256,7 +256,7 @@ jobs:
           uv run --no-project python - <<'EOF'
           import json, sqlite3, pathlib
 
-          path = pathlib.Path(".sbxloop/state/state.db")
+          path = pathlib.Path(".lantern/state/state.db")
           captured = []
           if path.exists():
               db = sqlite3.connect(path)
@@ -281,5 +281,5 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          uv run sbxloop sandbox rm --all || true
-          sbx --app-name sbxloop-e2e logout --yes || true
+          uv run lantern sandbox rm --all || true
+          sbx --app-name lantern-e2e logout --yes || true

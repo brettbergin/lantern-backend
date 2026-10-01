@@ -5,15 +5,15 @@ from __future__ import annotations
 import random
 import time
 
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
-from sbxloop_worker.protocol import Usage
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
+from lantern_worker.protocol import Usage
 from tests.fakes.rawdb import exec_raw
 
 DAY = 86400.0
 
 
-def seed_many(home: SbxloopHome, *, count: int = 40, seed: int = 7) -> None:
+def seed_many(home: LanternHome, *, count: int = 40, seed: int = 7) -> None:
     """`count` runs spread over the window, costs drawn from a spread wide
     enough that a histogram has something to show."""
     rng = random.Random(seed)

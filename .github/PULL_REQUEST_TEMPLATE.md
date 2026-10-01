@@ -35,7 +35,7 @@ failed before the change and passes after it.
 ## What this change owes
 
 - [ ] **Config key** — the model, the example config
-  (`packages/sbxloop/src/sbxloop/data/sbxloop.toml.example`), the knob table
+  (`packages/lantern/src/lantern/data/lantern.toml.example`), the knob table
   in `docs/user-guide.md`, and `tests/unit/test_examples.py`; a per-repo
   override wherever `RepoConfig` already narrows
 - [ ] **Toolchain or gate detection** — a fixture under

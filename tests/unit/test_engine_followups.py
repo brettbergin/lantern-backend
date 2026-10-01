@@ -11,8 +11,8 @@ from urllib.parse import quote
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.engine.followups import (
+from lantern.engine.engine import LoopEngine
+from lantern.engine.followups import (
     checklist_comment,
     collect_followups,
     followup_key,
@@ -20,9 +20,9 @@ from sbxloop.engine.followups import (
     issue_body,
     marker_key,
 )
-from sbxloop.engine.review import Followup, ReviewFinding, ReviewRound, ReviewVerdict, review_body
-from sbxloop.errors import GithubOpsError
-from sbxloop.events import HostEventTypes
+from lantern.engine.review import Followup, ReviewFinding, ReviewRound, ReviewVerdict, review_body
+from lantern.errors import GithubOpsError
+from lantern.events import HostEventTypes
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.followups import with_lookups
@@ -219,7 +219,7 @@ class TestRendering:
         listed = checklist_comment(cands, run_id="r1")
         assert 'Not filed as issues (`[landing] followups = "comment"`)' in listed
         assert "- [ ] **A** — a\n- [ ] **B**" in listed
-        assert listed.endswith("<!-- sbxloop-followups run=r1 -->")
+        assert listed.endswith("<!-- lantern-followups run=r1 -->")
         downgraded = checklist_comment(cands, run_id="r1", reason="Issues are disabled here")
         assert "Not filed as issues (Issues are disabled here)" in downgraded
 
@@ -258,10 +258,10 @@ class TestEnsureLabel:
     def test_existing_label_is_silent_success_without_a_post(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        ops = FakeOps(get={"name": "sbxloop follow-up"})
+        ops = FakeOps(get={"name": "lantern follow-up"})
         with caplog.at_level(logging.DEBUG):
-            LoopEngine._ensure_label(ops, "o/r", "sbxloop follow-up")  # type: ignore[arg-type]
-        assert ops.calls == [("LOOKUP", "/repos/o/r/labels/sbxloop%20follow-up")]
+            LoopEngine._ensure_label(ops, "o/r", "lantern follow-up")  # type: ignore[arg-type]
+        assert ops.calls == [("LOOKUP", "/repos/o/r/labels/lantern%20follow-up")]
         assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
 
     def test_missing_label_is_created(self) -> None:
@@ -360,13 +360,13 @@ class TestFilingWithExistingLabels:
         self, harness: Harness, caplog: pytest.LogCaptureFixture
     ) -> None:
         fake = FakeGithub()
-        fake.labels_existing.add("sbxloop:follow-up")
+        fake.labels_existing.add("lantern:follow-up")
         with caplog.at_level(logging.DEBUG):
             result = self._run(harness, fake)
         assert result.state == "merged"
         assert len(fake.issues_created) == 3
         for _, _, labels in fake.issues_created:
-            assert labels == ["sbxloop:follow-up"]
+            assert labels == ["lantern:follow-up"]
         assert self._label_posts(fake) == []
         # Not merely "nothing raised": the run's chronology carries no
         # failed worker job either (#559).
@@ -379,19 +379,19 @@ class TestFilingWithExistingLabels:
         fake = FakeGithub()
         result = self._run(harness, fake)
         assert result.state == "merged"
-        assert fake.labels_created == ["sbxloop:follow-up"]
+        assert fake.labels_created == ["lantern:follow-up"]
         assert len(self._label_posts(fake)) == 1
         # The lookup missed, but a resolved miss is data: no failed job.
         assert fake.failed_jobs == []
         assert len(fake.issues_created) == 3
         for _, _, labels in fake.issues_created:
-            assert labels == ["sbxloop:follow-up"]
+            assert labels == ["lantern:follow-up"]
 
     def test_a_race_between_the_check_and_the_create_is_not_an_error(
         self, harness: Harness, caplog: pytest.LogCaptureFixture
     ) -> None:
         fake = RaceyLabelGithub()
-        fake.labels_existing.add("sbxloop:follow-up")
+        fake.labels_existing.add("lantern:follow-up")
         with caplog.at_level(logging.DEBUG):
             result = self._run(harness, fake)
         assert result.state == "merged"
@@ -492,10 +492,10 @@ class TestIssuesDisabled:
         fake = FakeGithub()
         harness.script(followup_script())
         engine = harness.pipeline(fake)
-        engine.trigger_label = "sbxloop:run"
+        engine.trigger_label = "lantern:run"
         assert engine.start("ship hello").state == "merged"
         for _, body, _ in fake.issues_created:
-            assert "add the `sbxloop:run` label if you want it run" in body
+            assert "add the `lantern:run` label if you want it run" in body
 
     def test_a_cli_run_omits_the_trigger_instruction(self, harness: Harness) -> None:
         fake = FakeGithub()

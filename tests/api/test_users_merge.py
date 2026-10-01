@@ -3,7 +3,7 @@
 A provider that sends no verified email cannot be linked to the local
 account that already exists, so the first sign-in through it provisions a
 second account for the same person. ``CollaborationStore.merge_users`` (and
-``sbxloop users merge`` over it) folds that account into the one it should
+``lantern users merge`` over it) folds that account into the one it should
 have been: everything it made moves, its provider identity signs in as the
 target from then on, and it keeps no way in.
 """
@@ -19,12 +19,12 @@ import pytest
 from sqlalchemy import func, select
 from typer.testing import CliRunner
 
-from sbxloop.api.auth import oidc
-from sbxloop.api.collaboration import CollaborationError, CollaborationStore
-from sbxloop.cli.app import app
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.db.collaboration_models import (
+from lantern.api.auth import oidc
+from lantern.api.collaboration import CollaborationError, CollaborationStore
+from lantern.cli.app import app
+from lantern.daemon.store import DaemonStore
+from lantern.db.api_models import ApiEventRow
+from lantern.db.collaboration_models import (
     AgentMemoryRow,
     ChannelMemberRow,
     ChannelRow,
@@ -36,7 +36,7 @@ from sbxloop.db.collaboration_models import (
     WorkflowRow,
     WorkspaceMemberRow,
 )
-from sbxloop.paths import SbxloopHome
+from lantern.paths import LanternHome
 from tests.api.conftest import Api
 from tests.api.test_auth_oidc import ISSUER, SECRET, FakeIdP, _me, _serve, _sign_in
 
@@ -53,7 +53,7 @@ def idp(monkeypatch: pytest.MonkeyPatch) -> FakeIdP:
 
     fake = FakeIdP(clock=Clock())
     monkeypatch.setattr(oidc, "http_request", fake)
-    monkeypatch.setenv("SBXLOOP_OIDC_CLIENT_SECRET", SECRET)
+    monkeypatch.setenv("LANTERN_OIDC_CLIENT_SECRET", SECRET)
     return fake
 
 
@@ -118,7 +118,7 @@ def _furnish(api: Api, source_id: str, target_id: str) -> dict[str, str]:
         session.add(
             AgentMemoryRow(
                 id="mem_merge_test",
-                agent_slug="angie",
+                agent_slug="lantern",
                 kind="fact",
                 content="prefers short answers",
                 author=f"user:{source_id}",
@@ -521,13 +521,13 @@ runner = CliRunner()
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SbxloopHome:
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LanternHome:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "200")
-    return SbxloopHome(tmp_path / ".sbxloop")
+    return LanternHome(tmp_path / ".lantern")
 
 
-def _seed(home: SbxloopHome) -> tuple[str, str]:
+def _seed(home: LanternHome) -> tuple[str, str]:
     dstore = DaemonStore(home.state_db)
     try:
         store = CollaborationStore(dstore)
@@ -557,7 +557,7 @@ def _seed(home: SbxloopHome) -> tuple[str, str]:
         dstore.close()
 
 
-def _source_state(home: SbxloopHome, source_id: str) -> tuple[int, str | None]:
+def _source_state(home: LanternHome, source_id: str) -> tuple[int, str | None]:
     dstore = DaemonStore(home.state_db)
     try:
         with dstore.read() as session:
@@ -568,7 +568,7 @@ def _source_state(home: SbxloopHome, source_id: str) -> tuple[int, str | None]:
         dstore.close()
 
 
-def test_the_command_without_yes_only_prints_what_would_move(home: SbxloopHome) -> None:
+def test_the_command_without_yes_only_prints_what_would_move(home: LanternHome) -> None:
     source_id, _target_id = _seed(home)
 
     result = runner.invoke(app, ["users", "merge", "--from", "bergs2", "--into", "bergs"])
@@ -580,7 +580,7 @@ def test_the_command_without_yes_only_prints_what_would_move(home: SbxloopHome) 
     assert _source_state(home, source_id) == (1, "bergs")
 
 
-def test_the_command_with_yes_merges_by_username_or_id(home: SbxloopHome) -> None:
+def test_the_command_with_yes_merges_by_username_or_id(home: LanternHome) -> None:
     source_id, target_id = _seed(home)
 
     result = runner.invoke(app, ["users", "merge", "--from", source_id, "--into", "bergs", "--yes"])
@@ -596,14 +596,14 @@ def test_the_command_with_yes_merges_by_username_or_id(home: SbxloopHome) -> Non
         dstore.close()
 
 
-def test_the_command_refuses_an_unknown_user(home: SbxloopHome) -> None:
+def test_the_command_refuses_an_unknown_user(home: LanternHome) -> None:
     _seed(home)
     result = runner.invoke(app, ["users", "merge", "--from", "nobody", "--into", "bergs"])
     assert result.exit_code == 2
     assert "nobody" in result.output
 
 
-def test_the_command_refuses_a_target_that_left_the_workspace(home: SbxloopHome) -> None:
+def test_the_command_refuses_a_target_that_left_the_workspace(home: LanternHome) -> None:
     source_id, target_id = _seed(home)
     dstore = DaemonStore(home.state_db)
     try:
@@ -629,7 +629,7 @@ def test_the_command_refuses_a_target_that_left_the_workspace(home: SbxloopHome)
     assert _source_state(home, source_id) == (0, None)
 
 
-def test_the_command_records_the_operator_on_the_event(home: SbxloopHome) -> None:
+def test_the_command_records_the_operator_on_the_event(home: LanternHome) -> None:
     source_id, _target_id = _seed(home)
 
     result = runner.invoke(app, ["users", "merge", "--from", source_id, "--into", "bergs", "--yes"])

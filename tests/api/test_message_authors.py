@@ -12,8 +12,8 @@ from typing import Any
 
 from sqlalchemy import select
 
-from sbxloop.api.collaboration import Author, LocalUser
-from sbxloop.db.api_models import ApiEventRow
+from lantern.api.collaboration import Author, LocalUser
+from lantern.db.api_models import ApiEventRow
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 
@@ -55,7 +55,7 @@ def accept(api: Any, user: LocalUser, channel_id: str, targets: tuple[str, ...] 
 def test_creating_a_channel_makes_the_creator_its_owner_member(api: Any) -> None:
     register(api)
     user = owner(api)
-    from sbxloop.db.collaboration_models import ChannelMemberRow
+    from lantern.db.collaboration_models import ChannelMemberRow
 
     channel = api.ctx.collaboration.create_channel(user.id, "Plans", 5.0)
     assert channel.visibility == "private"
@@ -92,9 +92,9 @@ def test_every_write_path_records_its_author(api: Any) -> None:
     planner = store.append_reply(
         turn.id, content="plan", agent_slug="planner", now=3.0, participant_index=0
     )
-    angie = store.append_reply(turn.id, content="hi", agent_slug=None, now=3.0)
+    lantern = store.append_reply(turn.id, content="hi", agent_slug=None, now=3.0)
     assert planner.author == Author("agent", "planner")
-    assert angie.author == Author("agent", "concierge")
+    assert lantern.author == Author("agent", "concierge")
 
     turn2, _ = accept(api, user, channel.id, ("planner",))
     store.start_turn(turn2.id, 4.0)
@@ -129,7 +129,7 @@ def test_every_write_path_records_its_author(api: Any) -> None:
 
     # The reader derives an author for a row with none, so check the stored
     # columns themselves: every insert path must write them.
-    from sbxloop.db.collaboration_models import MessageRow, TurnRow
+    from lantern.db.collaboration_models import MessageRow, TurnRow
 
     with api.harness.dstore.read() as session:
         stored = sorted(
@@ -195,7 +195,7 @@ def test_messages_serialize_their_author_with_a_display_name(api: Any) -> None:
     accepted = api.client.post(
         f"/v1/channels/{channel}/turns",
         headers=headers,
-        json={"content": "@planner and angie, please look", "target_slugs": ["concierge"]},
+        json={"content": "@planner and lantern, please look", "target_slugs": ["concierge"]},
     )
     assert accepted.status_code == 202, accepted.text
     body = accepted.json()
@@ -214,7 +214,7 @@ def test_messages_serialize_their_author_with_a_display_name(api: Any) -> None:
     authors = [m["author"] for m in messages]
     assert authors == [
         {"kind": "human", "id": user.id, "display_name": "Local Owner"},
-        {"kind": "agent", "id": "concierge", "display_name": "Angie"},
+        {"kind": "agent", "id": "concierge", "display_name": "Lantern"},
         {"kind": "agent", "id": "planner", "display_name": "Planner"},
     ]
     for message in messages:
@@ -257,7 +257,7 @@ def test_rows_an_older_release_wrote_without_an_author_still_read_with_one(api: 
     """A rolled-back release writes no author; the reader applies the backfill rules."""
     from sqlalchemy import update
 
-    from sbxloop.db.collaboration_models import MessageRow, TurnRow
+    from lantern.db.collaboration_models import MessageRow, TurnRow
 
     register(api)
     user = owner(api)

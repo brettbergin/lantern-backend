@@ -23,14 +23,14 @@ from typing import Any
 
 import pytest
 
-from sbxloop.agents.assignment import AgentAssignment, AgentBinding
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Principal
-from sbxloop.daemon.controls.results import CancelOutcome, ControlError
-from sbxloop.engine.engine import ChatMessage, LoopEngine
-from sbxloop.engine.model import SteerVerdict, TaskSpec
-from sbxloop.engine.phases import PhaseSpend
-from sbxloop.events import HostEventTypes
-from sbxloop_worker.protocol import Event
+from lantern.agents.assignment import AgentAssignment, AgentBinding
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Principal
+from lantern.daemon.controls.results import CancelOutcome, ControlError
+from lantern.engine.engine import ChatMessage, LoopEngine
+from lantern.engine.model import SteerVerdict, TaskSpec
+from lantern.engine.phases import PhaseSpend
+from lantern.events import HostEventTypes
+from lantern_worker.protocol import Event
 from tests.conftest import FakeSbx
 from tests.unit.test_engine import Harness
 
@@ -172,7 +172,7 @@ class TestTargetedMailbox:
         engine, run_id, tasks = engine_with_tasks(harness, "t1", "t2")
         _, t2 = tasks
         engine._assignment = AgentAssignment(
-            lead="angie",
+            lead="lantern",
             roles={"builder": "scout"},
             agents={"scout": binding("scout", "builder")},
             tasks={"t2": "scout"},
@@ -228,7 +228,7 @@ class TestTargetedMailbox:
         engine, run_id, tasks = engine_with_tasks(harness, "t1", "t2")
         _, t2 = tasks
         engine._assignment = AgentAssignment(
-            lead="angie",
+            lead="lantern",
             roles={"builder": "scout"},
             agents={"scout": binding("scout", "builder")},
             tasks={"t2": "scout"},
@@ -275,7 +275,7 @@ ROLE_OF = {"scout": "builder", "critic": "critic"}
 
 def assignment_json(tasks: dict[str, str], agents: tuple[str, ...] = ("scout", "critic")) -> str:
     return AgentAssignment(
-        lead="angie",
+        lead="lantern",
         roles={ROLE_OF[slug]: slug for slug in agents},
         agents={slug: binding(slug, ROLE_OF[slug]) for slug in agents},
         tasks=tasks,
@@ -400,7 +400,7 @@ MEMBER = Principal(
 
 
 def test_the_steering_request_accepts_a_task_and_an_agent() -> None:
-    from sbxloop.api.models import SteerRequest
+    from lantern.api.models import SteerRequest
 
     plain = SteerRequest(text="do it")
     assert (plain.task_id, plain.agent_slug) == (None, None)
@@ -413,7 +413,7 @@ class TestStopFromChat:
     from a message that merely sounds urgent."""
 
     def test_the_stop_words_are_recognised(self) -> None:
-        from sbxloop.daemon.controls.steering import stop_command
+        from lantern.daemon.controls.steering import stop_command
 
         assert stop_command("/stop", None) == "channel"
         assert stop_command("  /CANCEL  ", None) == "channel"
@@ -421,7 +421,7 @@ class TestStopFromChat:
         assert stop_command("@scout  STOP", "scout") == "agent"
 
     def test_anything_else_is_not_a_stop(self) -> None:
-        from sbxloop.daemon.controls.steering import stop_command
+        from lantern.daemon.controls.steering import stop_command
 
         # A mention of the word, not the command.
         assert stop_command("@scout stop using that library", "scout") is None

@@ -5,7 +5,7 @@ is in flight, and a direction pinned to a state that has since moved."""
 
 from __future__ import annotations
 
-from sbxloop_worker.protocol import Event
+from lantern_worker.protocol import Event
 from tests.api.conformance.conftest import Client, fake_source, register, tick
 from tests.api.test_control import in_flight
 from tests.unit.test_daemon_loop import gh_item

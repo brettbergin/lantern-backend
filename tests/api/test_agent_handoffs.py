@@ -10,12 +10,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop import telemetry
-from sbxloop.api.collaboration import CollaborationError
-from sbxloop.api.context import _visible_agent_reply
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.errors import ToolRejectedError
-from sbxloop.log import configure_logging
+from lantern import telemetry
+from lantern.api.collaboration import CollaborationError
+from lantern.api.context import _visible_agent_reply
+from lantern.daemon.concierge import ConciergeReply
+from lantern.errors import ToolRejectedError
+from lantern.log import configure_logging
 from tests.api.conftest import build
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_controls import Blocking
@@ -170,14 +170,14 @@ def test_handoff_work_product_is_visible_and_reaches_the_peer(api: Any, tmp_path
 
 def test_visible_reply_does_not_repeat_a_reformatted_work_product() -> None:
     artifact = (
-        "## Angie Release Checklist\n"
+        "## Lantern Release Checklist\n"
         "- [ ] Verify the intended version is running.\n"
         "- [ ] Exercise one canary workload from intake through publication.\n"
         "- [ ] Confirm the rollback trigger and responsible owner."
     )
     reply = (
         "Here is the completed checklist.\n\n"
-        "## Angie Release Checklist\n"
+        "## Lantern Release Checklist\n"
         "- Verify the intended version is running.\n"
         "- Exercise one canary workload from intake through publication.\n"
         "- Confirm the rollback trigger and responsible owner.\n\n"
@@ -206,7 +206,7 @@ def handoff_diagnostics(
     ("agent", "message", "reason"),
     [
         ("planner", "Review my own plan", "Address a different agent."),
-        ("unknown", "Review this plan", "Choose a native sbxloop agent."),
+        ("unknown", "Review this plan", "Choose a native lantern agent."),
         ("critic", " ", "Provide a message of 1 to 4000 characters."),
         (42, "Review this plan", "An agent slug and message are required."),
         ("critic", None, "An agent slug and message are required."),
@@ -573,7 +573,7 @@ def test_a_handoff_from_an_agent_that_may_start_work_keeps_every_peer_guarded(ap
     """A handoff never grants a peer more starting power than the agent that
     handed off had. An agent whose starts answer to its ``can_start``
     guardrails is never offered the concierge's unguarded start tools, so
-    the peers it hands off to (a built-in, and through it Angie) are not
+    the peers it hands off to (a built-in, and through it Lantern) are not
     offered them either; the peers are still not demoted to read-only. A
     handoff from an agent that declares no ``can_start`` is unchanged."""
     concierge = WorkHandoffConcierge(("planner", "concierge"))

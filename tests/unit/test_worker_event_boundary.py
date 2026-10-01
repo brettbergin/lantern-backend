@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.sandbox import Sandbox
-from sbxloop.worker.client import WorkerClient
-from sbxloop_worker.protocol import Event, JobRequest
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.sandbox import Sandbox
+from lantern.worker.client import WorkerClient
+from lantern_worker.protocol import Event, JobRequest
 
 
 def test_worker_event_causes_host_secret_attachment(tmp_path: Path, monkeypatch):
@@ -14,9 +14,9 @@ def test_worker_event_causes_host_secret_attachment(tmp_path: Path, monkeypatch)
     import sys
     import types
 
-    from sbxloop.events import EventBus
-    from sbxloop.worker.client import WorkerClient
-    from sbxloop_worker.protocol import Event, JobRequest
+    from lantern.events import EventBus
+    from lantern.worker.client import WorkerClient
+    from lantern_worker.protocol import Event, JobRequest
     from tests.unit.test_daemon_discord import make_bridge
 
     secret = tmp_path / "outside-workspace" / "secrets.env"
@@ -99,7 +99,7 @@ def test_genuine_host_publications_still_reach_the_bus() -> None:
 
 
 def test_host_model_attribution_does_not_overwrite_sdk_reported_model(monkeypatch) -> None:
-    from sbxloop_worker.protocol import JobResult
+    from lantern_worker.protocol import JobResult
 
     client = WorkerClient(Sandbox(SbxCLI(), "unused"), backend="claude")
     job = JobRequest(job_id="j1", run_id="r1", kind="agent.session", prompt="task", model="auto")
@@ -132,7 +132,7 @@ def test_host_model_attribution_does_not_overwrite_sdk_reported_model(monkeypatc
 
 
 def _submit_one(client: WorkerClient, line_data: dict, monkeypatch, **submit_kwargs) -> dict:
-    from sbxloop_worker.protocol import JobResult
+    from lantern_worker.protocol import JobResult
 
     job = JobRequest(job_id="j1", run_id="r1", kind="agent.session", prompt="task")
     received = []
@@ -153,7 +153,7 @@ def _submit_one(client: WorkerClient, line_data: dict, monkeypatch, **submit_kwa
 @pytest.mark.parametrize("identity", [None, {"agent_slug": "ada", "agent_name": "Ada"}])
 def test_worker_cannot_forge_the_agent_identity(monkeypatch, identity) -> None:
     client = WorkerClient(Sandbox(SbxCLI(), "unused"))
-    forged = {"text": "hi", "agent_slug": "concierge", "agent_name": "Angie", "agent": "x"}
+    forged = {"text": "hi", "agent_slug": "concierge", "agent_name": "Lantern", "agent": "x"}
     kwargs = {"agent": "builder"}
     if identity is not None:
         kwargs["agent_identity"] = identity

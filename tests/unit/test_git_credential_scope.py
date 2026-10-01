@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import gitcredentials, hostgit
-from sbxloop.errors import ProvisionError
+from lantern import gitcredentials, hostgit
+from lantern.errors import ProvisionError
 from tests.fakes.gitserver import PrivateGitServer, bare_from
 from tests.unit.test_hostgit import git, make_repo
 

@@ -1,22 +1,22 @@
 #!/bin/sh
-# sbxloop bootstrap: one command from a bare host to an initialised home.
+# lantern bootstrap: one command from a bare host to an initialised home.
 #
-#   curl -fsSL https://raw.githubusercontent.com/brettbergin/sbxloop/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/brettbergin/lantern-backend/main/scripts/install.sh | sh
 #
-# Puts everything under $SBXLOOP_HOME (~/.sbxloop): uv in bin/, a uv-managed
-# CPython under python/, the venv with sbxloop and its worker, then hands
-# over to `sbxloop init --systemd`, which lays out the rest (launchers, sbx,
+# Puts everything under $LANTERN_HOME (~/.lantern): uv in bin/, a uv-managed
+# CPython under python/, the venv with lantern and its worker, then hands
+# over to `lantern init --systemd`, which lays out the rest (launchers, sbx,
 # config, units). Re-running is safe; every step is idempotent.
 #
-# sbxloop and its worker come from the GitHub Release's own wheel files,
+# lantern and its worker come from the GitHub Release's own wheel files,
 # each checked against the release's SHA-256 manifest — never by name from
 # a package index. Their third-party dependencies resolve from PyPI.
 #
-#   SBXLOOP_HOME=/srv/loop      install somewhere else
-#   SBXLOOP_VERSION=1.2.3       pin the release (default: the latest GitHub Release)
-#   SBXLOOP_INIT_ARGS="--no-systemd --sbx-version 0.38.0"   extra init flags
+#   LANTERN_HOME=/srv/loop      install somewhere else
+#   LANTERN_VERSION=1.2.3       pin the release (default: the latest GitHub Release)
+#   LANTERN_INIT_ARGS="--no-systemd --sbx-version 0.38.0"   extra init flags
 #
-# Installing needs no root: everything lands under $SBXLOOP_HOME, which this
+# Installing needs no root: everything lands under $LANTERN_HOME, which this
 # account owns. Preparing the *host* is a separate, one-time job, and parts of
 # it are an administrator's.
 #
@@ -29,13 +29,13 @@
 # Nothing here installs a package, joins a group, or elevates a privilege.
 set -eu
 
-SBXLOOP_HOME="${SBXLOOP_HOME:-$HOME/.sbxloop}"
-SBXLOOP_VERSION="${SBXLOOP_VERSION:-}"
+LANTERN_HOME="${LANTERN_HOME:-$HOME/.lantern}"
+LANTERN_VERSION="${LANTERN_VERSION:-}"
 PYTHON_SERIES="3.13"
 EXTRAS="discord,slack"
-REPOSITORY="brettbergin/sbxloop"
+REPOSITORY="brettbergin/lantern-backend"
 
-say() { printf '%s\n' "sbxloop install: $*"; }
+say() { printf '%s\n' "lantern install: $*"; }
 
 for tool in curl tar; do
   command -v "$tool" >/dev/null 2>&1 || { say "$tool is required"; exit 2; }
@@ -50,7 +50,7 @@ else
 fi
 
 # Git is a *host* prerequisite, separate from the git the sandbox carries:
-# importing sbxloop pulls in GitPython, which resolves the git executable at
+# importing lantern pulls in GitPython, which resolves the git executable at
 # import time, so a host without one fails only after this script has
 # downloaded an interpreter and every package — and fails with an ImportError
 # rather than something an operator can act on. Check it here, before the
@@ -69,7 +69,7 @@ if ! command -v "$git_exe" >/dev/null 2>&1; then
   if [ -n "${GIT_PYTHON_GIT_EXECUTABLE:-}" ]; then
     say "GIT_PYTHON_GIT_EXECUTABLE=$git_exe is not an executable; point it at a git binary or unset it to use the one on PATH"
   else
-    say "git is required on this host, and sbxloop cannot start without it; $(git_advice)"
+    say "git is required on this host, and lantern cannot start without it; $(git_advice)"
   fi
   exit 2
 fi
@@ -82,7 +82,7 @@ fi
 # which this script itself needs, so a host without them cannot be installed
 # on — these are the *sandbox backend's* prerequisites, and the remedies are an
 # administrator's. Installing without them is still useful: the home lands,
-# `sbxloop doctor` diagnoses the host, and `sbxloop init` refuses by name the
+# `lantern doctor` diagnoses the host, and `lantern init` refuses by name the
 # one step that cannot work (the sbx install without mkfs.ext4). So they are
 # said here, early, and left to the operator to get done.
 #
@@ -92,7 +92,7 @@ fi
 # probed by opening it, not by reading a group list — a group added in this
 # shell is not in this process's credentials until the next login, so
 # membership proves nothing about right now.
-warn() { printf '%s\n' "sbxloop install: host preparation needed: $*" >&2; }
+warn() { printf '%s\n' "lantern install: host preparation needed: $*" >&2; }
 
 if [ "$(uname -s 2>/dev/null || echo unknown)" = Linux ]; then
   if [ ! -e /dev/kvm ]; then
@@ -101,7 +101,7 @@ if [ "$(uname -s 2>/dev/null || echo unknown)" = Linux ]; then
     warn "/dev/kvm exists but this account cannot open it for reading and writing; an administrator grants access — Docker's Linux setup documents adding the account to the 'kvm' group — and a group added now takes effect at your next login"
   fi
   # Debian and its derivatives keep /usr/sbin off a non-root PATH, which is
-  # where mkfs.ext4 lives; sbxloop adds it back when it runs Docker's
+  # where mkfs.ext4 lives; lantern adds it back when it runs Docker's
   # installer, so this looks in the same places rather than faulting a host
   # that is in fact ready.
   if ! (PATH="/usr/sbin:/sbin:$PATH"; command -v mkfs.ext4 >/dev/null 2>&1); then
@@ -109,26 +109,26 @@ if [ "$(uname -s 2>/dev/null || echo unknown)" = Linux ]; then
   fi
 fi
 
-mkdir -p "$SBXLOOP_HOME/bin" "$SBXLOOP_HOME/cache/uv" "$SBXLOOP_HOME/python" "$SBXLOOP_HOME/tmp"
-export UV_INSTALL_DIR="$SBXLOOP_HOME/bin"
+mkdir -p "$LANTERN_HOME/bin" "$LANTERN_HOME/cache/uv" "$LANTERN_HOME/python" "$LANTERN_HOME/tmp"
+export UV_INSTALL_DIR="$LANTERN_HOME/bin"
 export UV_NO_MODIFY_PATH=1
-export UV_CACHE_DIR="$SBXLOOP_HOME/cache/uv"
-export UV_PYTHON_INSTALL_DIR="$SBXLOOP_HOME/python"
-export TMPDIR="$SBXLOOP_HOME/tmp"
+export UV_CACHE_DIR="$LANTERN_HOME/cache/uv"
+export UV_PYTHON_INSTALL_DIR="$LANTERN_HOME/python"
+export TMPDIR="$LANTERN_HOME/tmp"
 
-uv="$SBXLOOP_HOME/bin/uv"
+uv="$LANTERN_HOME/bin/uv"
 if [ ! -x "$uv" ]; then
-  say "installing uv into $SBXLOOP_HOME/bin"
+  say "installing uv into $LANTERN_HOME/bin"
   curl -LsSf https://astral.sh/uv/install.sh | sh
   [ -x "$uv" ] || { say "uv did not land at $uv"; exit 1; }
 fi
 
-say "installing CPython $PYTHON_SERIES under $SBXLOOP_HOME/python"
+say "installing CPython $PYTHON_SERIES under $LANTERN_HOME/python"
 "$uv" python install "$PYTHON_SERIES"
 
-if [ ! -x "$SBXLOOP_HOME/venv/bin/python" ]; then
-  say "creating $SBXLOOP_HOME/venv"
-  "$uv" venv --python "$PYTHON_SERIES" "$SBXLOOP_HOME/venv"
+if [ ! -x "$LANTERN_HOME/venv/bin/python" ]; then
+  say "creating $LANTERN_HOME/venv"
+  "$uv" venv --python "$PYTHON_SERIES" "$LANTERN_HOME/venv"
 fi
 
 # The value of a top-level "key": "string" pair in a JSON document, by plain
@@ -142,8 +142,8 @@ json_string() {
 }
 
 api="https://api.github.com/repos/$REPOSITORY/releases"
-if [ -n "$SBXLOOP_VERSION" ]; then
-  release_url="$api/tags/v${SBXLOOP_VERSION#v}"
+if [ -n "$LANTERN_VERSION" ]; then
+  release_url="$api/tags/v${LANTERN_VERSION#v}"
 else
   release_url="$api/latest"
 fi
@@ -157,7 +157,7 @@ case "$release" in
 esac
 case "$release" in
   *'"prerelease": false'* | *'"prerelease":false'*) ;;
-  *) say "$release_url is a prerelease; pin a stable SBXLOOP_VERSION"; exit 1 ;;
+  *) say "$release_url is a prerelease; pin a stable LANTERN_VERSION"; exit 1 ;;
 esac
 tag="$(json_string "$release" tag_name)" || { say "$release_url names no tag"; exit 1; }
 version="${tag#v}"
@@ -165,12 +165,12 @@ case "$version" in
   "" | *[!0-9.]* | .* | *. | *..*) say "release tag '$tag' is not a vX.Y.Z version"; exit 1 ;;
 esac
 
-wheels="$SBXLOOP_HOME/tmp/release-v$version"
+wheels="$LANTERN_HOME/tmp/release-v$version"
 rm -rf "$wheels"
 mkdir -p "$wheels"
-host_wheel="sbxloop-$version-py3-none-any.whl"
-worker_wheel="sbxloop_worker-$version-py3-none-any.whl"
-say "downloading sbxloop $version from GitHub Releases"
+host_wheel="lantern_backend-$version-py3-none-any.whl"
+worker_wheel="lantern_worker-$version-py3-none-any.whl"
+say "downloading lantern $version from GitHub Releases"
 download="https://github.com/$REPOSITORY/releases/download/$tag"
 manifest="$(curl -fsSL "$download/release-manifest.json")" || {
   say "could not download release-manifest.json for $tag"
@@ -199,11 +199,11 @@ for name in "$worker_wheel" "$host_wheel"; do
   }
 done
 
-say "installing sbxloop $version"
-"$uv" pip install --upgrade --python "$SBXLOOP_HOME/venv/bin/python" \
+say "installing lantern $version"
+"$uv" pip install --upgrade --python "$LANTERN_HOME/venv/bin/python" \
   "$wheels/$worker_wheel" "$wheels/$host_wheel[$EXTRAS]"
 rm -rf "$wheels"
 
 say "laying out the home"
 # shellcheck disable=SC2086
-exec "$SBXLOOP_HOME/venv/bin/sbxloop" init --systemd ${SBXLOOP_INIT_ARGS:-} "$@"
+exec "$LANTERN_HOME/venv/bin/lantern" init --systemd ${LANTERN_INIT_ARGS:-} "$@"

@@ -11,12 +11,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.github import DaemonGithub
-from sbxloop.errors import DaemonError, SbxNotFoundError
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
+from lantern.config import Config
+from lantern.daemon.github import DaemonGithub
+from lantern.errors import DaemonError, SbxNotFoundError
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
 from tests.conftest import FakeSbx
 
 AUTH_ERROR = (
@@ -118,7 +118,7 @@ def test_close_takes_a_box_already_gone_as_removed(
     github.ops()
     github.sbx.rm(github.name)  # out from under the daemon
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.close()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -183,7 +183,7 @@ def test_close_keeps_reporting_a_not_found_the_inventory_does_not_confirm(
     if inventory == "cannot be read":
         fake_sbx.fail_next("ls", stderr=AUTH_ERROR)
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.close()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -212,7 +212,7 @@ def test_a_box_the_backend_cannot_remove_is_left_behind_and_the_daemon_moves_on(
     fake_sbx.script(f"rm --force {base}-g", passthrough=True)
     fake_sbx.script(f"rm --force {base}", returncode=1, stderr="ERROR: context deadline exceeded")
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.ops()
 
     assert github.name == f"{base}-g1"
@@ -240,7 +240,7 @@ def test_a_create_the_backend_refuses_is_retried_under_the_next_generation(
     base = github.name
     fake_sbx.fail_next(f"create --name={base}", stderr="ERROR: failed to run sandbox container")
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.ops()
 
     assert github.name == f"{base}-g1"
@@ -280,7 +280,7 @@ def test_a_close_that_cannot_remove_the_box_starts_a_new_generation_next_time(
     base = github.name
     fake_sbx.script(f"rm --force {base}", returncode=1, stderr="ERROR: context deadline exceeded")
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.close()
         github.ops()
 
@@ -299,14 +299,14 @@ def test_a_stale_box_still_being_reaped_is_slow_not_wedged(
     settle wait ran out. That is a slow teardown, not a box the backend cannot
     remove: it is a warning, the name is not retired, nothing is created over
     the box still listed, and the next cleanup retries the removal."""
-    monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
-    monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+    monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
     github = make_github(fake_sbx, tmp_path, monkeypatch)
     base = github.name
     github.sbx.create(SandboxSpec(name=base, role="github", workspace=tmp_path))
     fake_sbx.linger_removals(10_000)
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.ops()
 
     assert not any("github_sandbox.wedged" in r.getMessage() for r in caplog.records)
@@ -338,14 +338,14 @@ def test_a_close_whose_teardown_is_still_settling_does_not_retire_the_name(
     """A dropped box whose removal outlasts the settle wait is reported as a
     warning, not as a wedged box, and the next provision retries it under the
     same name."""
-    monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_POLL_S", 0.01)
-    monkeypatch.setattr("sbxloop.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_POLL_S", 0.01)
+    monkeypatch.setattr("lantern.sbx.cli.RM_SETTLE_TIMEOUT_S", 0.05)
     github = make_github(fake_sbx, tmp_path, monkeypatch)
     github.ops()
     base = github.name
     fake_sbx.linger_removals(10_000)
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.daemon.github"):
+    with caplog.at_level(logging.INFO, logger="lantern.daemon.github"):
         github.close()
 
     assert not any("github_sandbox.wedged" in r.getMessage() for r in caplog.records)

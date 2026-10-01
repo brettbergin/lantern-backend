@@ -12,10 +12,10 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.sbx.provision import CONCIERGE_MCP_ROLES, agent_policy_allows
-from sbxloop_worker.mcp import expand_refs, server_configs
-from sbxloop_worker.protocol import JobRequest, McpServerSpec
+from lantern.config import Config
+from lantern.sbx.provision import CONCIERGE_MCP_ROLES, agent_policy_allows
+from lantern_worker.mcp import expand_refs, server_configs
+from lantern_worker.protocol import JobRequest, McpServerSpec
 
 STDIO = {
     "name": "weather",
@@ -67,7 +67,7 @@ class TestConfigValidation:
         impossible because those names are reserved for every
         `[[credentials]]` entry — asserted here because the MCP path is a
         new way to reach them."""
-        with pytest.raises(ValidationError, match="delivered by sbxloop itself"):
+        with pytest.raises(ValidationError, match="delivered by lantern itself"):
             config_with(
                 mcp=[{**HTTP, "credential": "weather"}],
                 credentials=[{**CREDENTIAL, "env": "ANTHROPIC_API_KEY"}],
@@ -214,7 +214,7 @@ class TestBackendDialects:
     )
 
     def test_claude_spells_stdio_stdio(self) -> None:
-        from sbxloop_worker.backends.claude import MCP_STDIO_TYPE
+        from lantern_worker.backends.claude import MCP_STDIO_TYPE
 
         configs = server_configs(
             [self.SPEC], stdio_type=MCP_STDIO_TYPE, environ={"WEATHER_API_KEY": "k"}
@@ -229,7 +229,7 @@ class TestBackendDialects:
         }
 
     def test_copilot_spells_stdio_local(self) -> None:
-        from sbxloop_worker.backends.copilot import MCP_STDIO_TYPE
+        from lantern_worker.backends.copilot import MCP_STDIO_TYPE
 
         configs = server_configs(
             [self.SPEC], stdio_type=MCP_STDIO_TYPE, environ={"WEATHER_API_KEY": "k"}

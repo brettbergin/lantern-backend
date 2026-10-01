@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 
 import pytest
 
-from sbxloop.vcs.protocol import CAPABILITIES, Capability
+from lantern.vcs.protocol import CAPABILITIES, Capability
 
 
 def check_needs(kind: str, report: Mapping[str, Capability], needs: Iterable[str]) -> None:

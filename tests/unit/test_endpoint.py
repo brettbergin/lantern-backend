@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.endpoint import host_kind, parse_endpoint
+from lantern.endpoint import host_kind, parse_endpoint
 
 
 @pytest.mark.parametrize(

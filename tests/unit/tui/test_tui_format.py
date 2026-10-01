@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import time
 
-from sbxloop.daemon.discord_format import EmbedSpec
-from sbxloop.tui.format import (
+from lantern.daemon.discord_format import EmbedSpec
+from lantern.tui.format import (
     SPEND_NOT_REPORTED,
     age,
     card,
@@ -42,7 +42,7 @@ def test_card_renders_fields_and_colour() -> None:
         description="**Add retries**",
         color=0x2ECC71,
         fields=(("State", "merged", True), ("PR", "[#3](https://x/pull/3)", True)),
-        footer="sbxloop · host",
+        footer="lantern · host",
     )
     panel = card(spec)
     assert panel.border_style == "green"
@@ -51,7 +51,7 @@ def test_card_renders_fields_and_colour() -> None:
     console = Console(record=True, width=80)
     console.print(panel)
     text = console.export_text()
-    assert "State" in text and "merged" in text and "PR" in text and "sbxloop · host" in text
+    assert "State" in text and "merged" in text and "PR" in text and "lantern · host" in text
 
 
 def test_age_duration_tokens_and_labels() -> None:

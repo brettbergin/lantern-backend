@@ -11,15 +11,15 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api.channel_file_tools import (
+from lantern.api.channel_file_tools import (
     read_channel_input,
     read_pdf_channel_input,
     search_channel_input,
     strings_channel_input,
 )
-from sbxloop.backup import create_backup
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.errors import ToolRejectedError
+from lantern.backup import create_backup
+from lantern.daemon.concierge import ConciergeReply
+from lantern.errors import ToolRejectedError
 
 
 def _owner(api: Any) -> tuple[dict[str, str], str]:
@@ -190,8 +190,8 @@ def test_upload_replay_conflict_size_and_channel_scope(api: Any) -> None:
 
 
 def test_stream_limit_counts_actual_bytes(api: Any, monkeypatch: Any) -> None:
-    from sbxloop.api import channel_files as service
-    from sbxloop.api.routes import channel_files as route
+    from lantern.api import channel_files as service
+    from lantern.api.routes import channel_files as route
 
     headers, channel = _owner(api)
     file_id = _reserve(api, headers, channel, "tiny.bin", 3)
@@ -379,7 +379,7 @@ def test_search_channel_input_is_bounded_and_snapshot_scoped(api: Any) -> None:
         ).status_code
         == 202
     )
-    from sbxloop.errors import ToolRejectedError
+    from lantern.errors import ToolRejectedError
 
     with pytest.raises(ToolRejectedError, match="unavailable"):
         search_channel_input(api.ctx, turn_id, {"file_id": later, "query": "test"})
@@ -470,7 +470,7 @@ def test_strings_channel_input_discovers_inert_binary_indicators(api: Any) -> No
             "value"
         ].encode("ascii")
 
-    from sbxloop.errors import ToolRejectedError
+    from lantern.errors import ToolRejectedError
 
     assert api.client.delete(f"/v1/channels/{channel}", headers=headers).status_code == 204
     with pytest.raises(ToolRejectedError, match="unavailable"):

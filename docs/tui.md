@@ -1,6 +1,6 @@
-# The operator console: `sbxloop tui`
+# The operator console: `lantern tui`
 
-`sbxloop tui` is a terminal console run **on the daemon host**. It gives an
+`lantern tui` is a terminal console run **on the daemon host**. It gives an
 operator everything the CLI and journald give, in one place, live — and the
 same experience a Discord or Slack channel gets: the run headline and thread,
 the status line and tool digest edited in place, steering, the concierge,
@@ -10,22 +10,22 @@ host are trusted completely; the console has no authority model of its own.
 ## What it reads and how it drives the daemon
 
 - **State.** The daemon's `state.db`, through
-  `sbxloop.daemon.mailbox.MailboxClient`: a read-only SQLite handle (no
+  `lantern.daemon.mailbox.MailboxClient`: a read-only SQLite handle (no
   schema statement ever runs from the console, so it never migrates a store
   under a running daemon). Runs, tasks, phase attempts, the event tail by
   `seq`, work items, merge gates, review holds, the breaker and the local
   bridge's mailbox all come from there.
 - **Control.** The `ctl` file queue under the home's `state/daemon/ctl/` —
-  `sbxloop.daemon.control.ControlClient`, the same dispatcher `sbxloop daemon ctl` and chat's `!sbx` use, so the console cannot drift from them.
+  `lantern.daemon.control.ControlClient`, the same dispatcher `lantern daemon ctl` and chat's `!sbx` use, so the console cannot drift from them.
   `status` is asked every few seconds; a `None` answer is "daemon down",
   a `stale` one is "daemon starting".
-- **Chat.** The daemon's local chat bridge (`sbxloop.daemon.local`): a
+- **Chat.** The daemon's local chat bridge (`lantern.daemon.local`): a
   third `ChatBridge` whose transport is the `daemon_local_messages` table.
   Every message the bridge would post becomes a row; what the operator types
   is a row the bridge claims. See *Chat* below.
 
-The console reads the same home as the daemon (`~/.sbxloop`, or
-`SBXLOOP_HOME`), so it needs no flag to find the state. `--run RUN`
+The console reads the same home as the daemon (`~/.lantern`, or
+`LANTERN_HOME`), so it needs no flag to find the state. `--run RUN`
 opens that run's screen at once; `--read-only` removes every action.
 
 ## Layout and navigation
@@ -33,7 +33,7 @@ opens that run's screen at once; `--read-only` removes every action.
 ```
 ┌─────────────┬──────────────────────────────────────────────────────────────┐
 │             │ ● running  r7ab3kq2m · Add retries   queue 2   runs 4/12 UTC  │
-│ 1 Overview  │ sbxloop 1.5.2   bridge ✓   up since 2d ago   ctl 12 ms        │
+│ 1 Overview  │ lantern 1.5.2   bridge ✓   up since 2d ago   ctl 12 ms        │
 │ 2 Runs      ├──────────────────────────────────────────────────────────────┤
 │ 3 Queue   2 │                                                              │
 │ 4 Chat      │                     <active screen>                          │
@@ -53,7 +53,7 @@ is the same verb as pressing its key. It is the console's map; the footer
 keeps its row for the verbs of whichever screen is up. Below 90 columns the
 rail hides itself and the keys still reach everything.
 
-`sbxloop.tui.widgets.navrail.NAV` is the single source of the console's
+`lantern.tui.widgets.navrail.NAV` is the single source of the console's
 shape — the rail renders it and the app builds its bindings from it, so a
 screen cannot be reachable by key and missing from the map.
 
@@ -85,7 +85,7 @@ returns.
 | `Enter`                 | Runs, Queue, Overview lists | open the run                                                       |
 | `Enter`                 | Config, Resolved tab        | edit that setting (`e` too); `a` adds one by dotted path           |
 | `f`                     | a run                       | toggle following the event tail                                    |
-| `v`                     | a run                       | Thread tab as the `sbxloop run` transcript or as dense lines       |
+| `v`                     | a run                       | Thread tab as the `lantern run` transcript or as dense lines       |
 
 ### Overview
 
@@ -148,11 +148,11 @@ A **cancelled** run is a decision, not an outcome: it is counted and
 reported but kept out of the success rate's denominator.
 
 Every share, trend and ranking on Overview is a plot
-(`sbxloop.tui.widgets.chart`, over `textual-plotext`). Their axes are ruled
+(`lantern.tui.widgets.chart`, over `textual-plotext`). Their axes are ruled
 in whole runs and read in the same `1h 20m` units as the rest of the
 screen, and they follow the console's theme.
 
-`sbxloop.tui.widgets.band` drew all of these as one-row bars until it was
+`lantern.tui.widgets.band` drew all of these as one-row bars until it was
 used in anger: a band paints with *background* colour and no glyph, so a
 single row is a thin stripe that is easy to miss on a low-contrast
 terminal, and it carries no scale — a full bar and a stub tell you the
@@ -167,7 +167,7 @@ plotext silently paints every series the same blue. Convert it with
 `chart.rgb` first; `tests/unit/tui/test_tui_charts.py` asserts on the
 painted output rather than on the argument for exactly this reason.
 
-The numbers are `sbxloop.tui.analytics`, folded from
+The numbers are `lantern.tui.analytics`, folded from
 `StateStore.runs_between` / `phases_between` in one grouped pass each and
 recomputed on a slow timer of its own — nothing in a week-long window
 changes between console ticks. An empty window says so rather than drawing
@@ -196,7 +196,7 @@ pull request (on a host with no browser the outcome carries the URL).
 
 A run has six tabs:
 
-- **Thread** — the run's transcript: the same renderers `sbxloop run --tui` uses (agent messages as Markdown panels, tool calls as lines,
+- **Thread** — the run's transcript: the same renderers `lantern run --tui` uses (agent messages as Markdown panels, tool calls as lines,
   failed calls with their excerpt), tailed from the persisted events.
 - **Tasks** — the roster with state, revisions/replans, the verify-suspect
   flag and the last feedback.
@@ -208,7 +208,7 @@ A run has six tabs:
   review hold, and the newest of each landing event (`review.verdict`,
   `ci.status`, `land.*`, `run.gated`, `run.blocked`, …).
 - **Artifacts** — the run's artifact directory as a tree.
-- **Events** — the dense one-line form `sbxloop logs` prints, following the
+- **Events** — the dense one-line form `lantern logs` prints, following the
   tail; `/` narrows to a type prefix.
 
 ### Queue
@@ -278,7 +278,7 @@ The routing rules are the bridge's, not the console's:
 
 | you type                                                                        | the daemon reads it as                                                     |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `!sbx status` (any `!sbx` verb)                                                 | a command — the same dispatcher `sbxloop daemon ctl` uses                  |
+| `!sbx status` (any `!sbx` verb)                                                 | a command — the same dispatcher `lantern daemon ctl` uses                  |
 | `@sbx …`, or anything with the address gesture on (`ctrl+t`, sticky per screen) | in the control channel a **concierge** turn; in a run's thread a **steer** |
 | `r`, then text                                                                  | a reply to the bot's latest row — addressed by definition                  |
 | plain text                                                                      | left alone, as on Discord: people talking among themselves                 |
@@ -317,10 +317,10 @@ concierge):
   `upgrade`.
 
 What the daemon executes travels over the `ctl` queue, attributed as
-`<operator> via sbxloop tui` (the issue reads "cancelled by brett via
-sbxloop tui"). The item verbs have the CLI's row-only twin when no daemon
+`<operator> via lantern tui` (the issue reads "cancelled by brett via
+Lantern tui"). The item verbs have the CLI's row-only twin when no daemon
 is running: the store row changes, and the next daemon start reports it to
-the source and closes the dead run — the same note `sbxloop daemon retry`
+the source and closes the dead run — the same note `lantern daemon retry`
 prints. While the daemon is *starting* they wait.
 
 ### A run's verbs
@@ -328,12 +328,12 @@ prints. While the daemon is *starting* they wait.
 | situation                       | offered                                                  | mechanism                                                                                      |
 | ------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | the daemon's current run        | `c` cancel · `C` cancel and retry                        | `ctl cancel [--retry]`: settled on the item, the issue told                                    |
-| any other in-flight run         | `c` cancel                                               | the `sbxloop cancel` store write: cancelled at its next phase boundary                         |
+| any other in-flight run         | `c` cancel                                               | the `lantern cancel` store write: cancelled at its next phase boundary                         |
 | a run pinned to an item         | `R` retry · `u` requeue · `A` abandon · `w` check review | `ctl retry / requeue / abandon / resume <item>` when live; the row-only twin when down         |
 | a gated run                     | `m` approve merge                                        | `ctl merge <item>`; the Thread tab's **Approve merge** button is the chat twin                 |
 | a held workload result          | `m` release                                              | `ctl release <item>`; the Thread tab's **Release result** button is the chat twin              |
 | a run that exhausted its rounds | `+` grant rounds                                         | `ctl grant-rounds <run> <n>`: more fix rounds, resumed now                                     |
-| an unfinished run with no item  | `R` resume here                                          | a detached `sbxloop resume RUN --no-tui --no-chat` in its own session, log under the state dir |
+| an unfinished run with no item  | `R` resume here                                          | a detached `lantern resume RUN --no-tui --no-chat` in its own session, log under the state dir |
 | any run                         | `s` / `S` shell                                          | `sbx exec` into the agent / github sandbox with the terminal handed over                       |
 
 A run is never resumed *inside* the console: that would tie it to the
@@ -345,13 +345,13 @@ On the Queue screen `n` asks for an outcome and posts it to the control
 channel addressed to the concierge, which files the issue with the trigger
 label; the daemon claims it like any labeled issue. That is the daemon's
 way to a run — a human asks, the daemon never files work for itself. `N`
-instead starts a detached `sbxloop run "…" --no-tui --no-chat` on this
+instead starts a detached `lantern run "…" --no-tui --no-chat` on this
 host, outside the daemon.
 
 ### Sandboxes (`5`)
 
-`sbx ls`, every `sbxloop-*` sandbox classified against this store the way
-`sbxloop sandbox prune` classifies it (role, run, run state, age, verdict;
+`sbx ls`, every `lantern-*` sandbox classified against this store the way
+`lantern sandbox prune` classifies it (role, run, run state, age, verdict;
 the daemon's own github-ops and concierge boxes as role `daemon`, never
 pruned), and the run directories the daemon's daily sweep would remove, as
 a dry run with sizes. `s` opens a shell in the selected sandbox (the
@@ -369,9 +369,9 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
 
 ```
 ┌ process ─────────────────────────────┐┌ versions ─────────────────────────┐
-│ unit     active (running) · pid 4242 ││ sbxloop   1.4.2 installed · 1.4.5 │
+│ unit     active (running) · pid 4242 ││ lantern   1.4.2 installed · 1.4.5 │
 │ daemon   pid 4242 · up 2d · 1.4.2    ││ released · BEHIND by 3 releases   │
-│ current  r7ab3kq2m — Add retries     ││ sbxloop-worker 1.4.2 …            │
+│ current  r7ab3kq2m — Add retries     ││ lantern-worker 1.4.2 …            │
 │ holds    none · breaker closed       ││ sbx CLI   0.38.1                  │
 │ cap      4/12 runs today (UTC)       ││ checked 12m ago                   │
 └──────────────────────────────────────┘└───────────────────────────────────┘
@@ -379,13 +379,13 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
 │ o/r         ok                       ││ ⏸ gh:issue:39 ready to merge · 2h │
 │ o/other     suspended  token expired ││ 👀 gh:issue:37 awaiting_review    │
 └──────────────────────────────────────┘└───────────────────────────────────┘
-┌ journalctl --user -u sbxloop-daemon · level ≥ info · grep '' · follow on ─┐
+┌ journalctl --user -u lantern-daemon · level ≥ info · grep '' · follow on ─┐
 │ 2026-09-05T14:01:58+0000 … [info     ] daemon.tick queued=2 …              │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **The unit.** `systemctl --user show` on `[tui] daemon_unit` (default
-  `sbxloop-daemon`, the name `contrib/systemd/` ships; `--unit` overrides)
+  `lantern-daemon`, the name `contrib/systemd/` ships; `--unit` overrides)
   every 15 s. `S` starts it, `T` stops it and `B` restarts it (typed unit
   name: the run in flight is interrupted, resumable by design). A host
   without systemd, or without a user bus in this session (a bare ssh
@@ -397,7 +397,7 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
   `c`/`C` cancel the current run (and retry), `g` asks for a graceful stop
   (typed `stop`: claim nothing new, finish the run, exit — under systemd
   the unit restarts it; `T` stops it for good).
-- **No unit? Spawn one.** `D` starts `sbxloop daemon` from the console in
+- **No unit? Spawn one.** `D` starts `lantern daemon` from the console in
   its own session, reading this directory's config, its output in
   `<state dir>/console/daemon.log` (which the journal pane then tails).
   It outlives the console, on the console's state dir. `e` stops it
@@ -424,21 +424,21 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
 Three tabs, and every change made from the first of them one key at a
 time. **There is no text editor here.** Handing the operator a file and
 leaving them to find the line is what this screen replaced; for a change
-no key describes, edit `~/.sbxloop/config/sbxloop.toml` on the host.
+no key describes, edit `~/.lantern/config/lantern.toml` on the host.
 
-**Which file an edit lands in:** the home's `config/sbxloop.toml` — what
-`sbxloop init` writes, what a deploy preserves and what `sbxloop backup`
+**Which file an edit lands in:** the home's `config/lantern.toml` — what
+`lantern init` writes, what a deploy preserves and what `lantern backup`
 snapshots. Its path is the first line of the Resolved tab. The loader
 reads it out of the home whatever directory anything was started in, so
 the console writes the same file the daemon reads no matter where either
-was launched. A `sbxloop.toml` in a working directory is *project* config
+was launched. A `lantern.toml` in a working directory is *project* config
 a repository carries; the console shows it as a layer but never writes to
 it. If one is sitting in the home itself the loader applies it **over** the
 operator config — the screen names it so the split is visible, and per-key
 edits say when that file still wins.
 
 - **Resolved** — every setting as one addressable key with its value and
-  the layer that set it (home config, `pyproject.toml`, `sbxloop.toml`,
+  the layer that set it (home config, `pyproject.toml`, `lantern.toml`,
   env, default); `/` filters keys, values and sources, matching what is on
   screen. Values read the way they are written rather than the way Python
   prints them: `60` not `60.0`, `claude` not `'claude'`, `true` not `True`,
@@ -467,10 +467,10 @@ edits say when that file still wins.
   written at that path and nowhere else, **every comment in the file
   kept**. The whole result then goes through the real loader, and only a
   file it accepts is saved: the write is atomic, the previous file is kept
-  beside it as `sbxloop.toml.bak-<stamp>`, and a restart of the unit is
+  beside it as `lantern.toml.bak-<stamp>`, and a restart of the unit is
   offered, since the daemon reads its configuration only at start. A file
   the loader refuses is never written. The dialog is the confirmation, so
-  nothing else is asked. A key the environment or a `sbxloop.toml` in the
+  nothing else is asked. A key the environment or a `lantern.toml` in the
   home also sets is still written and the verdict says so, naming the layer
   that wins and the value the loop actually sees. `--read-only` refuses
   every edit.
@@ -480,31 +480,31 @@ edits say when that file still wins.
   same dialog. An index one past the end appends an entry; an index beyond
   that is refused by name.
 
-- **Policy** — the effective per-phase egress policy `sbxloop config policy`
-  prints, from the same fold (`sbxloop.cli.policyview.policy_view`).
+- **Policy** — the effective per-phase egress policy `lantern config policy`
+  prints, from the same fold (`lantern.cli.policyview.policy_view`).
 
-- **Repos** — the configured repositories as `sbxloop config repos` lists
+- **Repos** — the configured repositories as `lantern config repos` lists
   them. `Enter` on a repository narrows the Resolved view to that entry's
   keys.
 
 ### Doctor (`8`) and secrets
 
-`d` runs what `sbxloop doctor` runs — the host checks and the cheap sbx
+`d` runs what `lantern doctor` runs — the host checks and the cheap sbx
 conformance probes — in the background with its progress line, and shows
 the two tables with the verdict (ready / not ready, warnings, drift) and
 the age of the check. `D` runs the live probes (boots a scratch sandbox)
 and `p` asks GitHub about each configured repository from a github-ops
-sandbox; both ask first. The data is `sbxloop.cli.doctor.doctor_report`,
+sandbox; both ask first. The data is `lantern.cli.doctor.doctor_report`,
 the same the CLI renders.
 
 `S` opens the **secret registrations**: the tracked custom secrets as
-`sbxloop secrets list` judges them (expected, actual, status, note). `x`
+`lantern secrets list` judges them (expected, actual, status, note). `x`
 cleans the stale ones — a dry run first, then typed `clean` — and `X`
-every sbxloop-owned one; `K` rotates the agent credential's registration
+every lantern-owned one; `K` rotates the agent credential's registration
 from a hidden prompt (typed `rotate`): the sbx registration is replaced
 with a global one on the canonical host, live sandboxes that may still
 hold the old token are named, and the sandbox-booting visibility check
-stays with `sbxloop secrets rotate --verify`. The token is never an
+stays with `lantern secrets rotate --verify`. The token is never an
 argument and never logged.
 
 ### The command palette
@@ -516,13 +516,13 @@ live on their rows.
 
 ## Configuration
 
-`[tui]` in `sbxloop.toml` — always on, nothing to enable:
+`[tui]` in `lantern.toml` — always on, nothing to enable:
 
 | key              | default          | what                                                                                                         |
 | ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------ |
 | `operator_id`    | `""`             | who the console speaks as; empty means the login name                                                        |
 | `emoji`          | `true`           | glyph markers (false: ASCII)                                                                                 |
-| `daemon_unit`    | `sbxloop-daemon` | the systemd `--user` unit the console tails and restarts                                                     |
+| `daemon_unit`    | `lantern-daemon` | the systemd `--user` unit the console tails and restarts                                                     |
 | `refresh_s`      | `0.5`            | how often a live screen re-reads the store                                                                   |
 | `retention_days` | `14`             | how long the daemon keeps the console's mailbox rows (`0` keeps them; an open gate's prompt is never pruned) |
 

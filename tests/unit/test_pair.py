@@ -14,24 +14,24 @@ from pathlib import Path
 
 import pytest
 
-import sbxloop.sbx.pair as pair_mod
-from sbxloop.config import Config
-from sbxloop.errors import SbxNotFoundError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
-from sbxloop.sbx.pair import CleanupRegistry, SandboxPair, cleanup_registry
-from sbxloop.sbx.sandbox import Sandbox
+import lantern.sbx.pair as pair_mod
+from lantern.config import Config
+from lantern.errors import SbxNotFoundError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.sbx.pair import CleanupRegistry, SandboxPair, cleanup_registry
+from lantern.sbx.sandbox import Sandbox
 from tests.conftest import FakeSbx
 
 
 def make_pair(fake_sbx: FakeSbx, tmp_path: Path, *, keep: bool = False) -> SandboxPair:
     cli = SbxCLI(binary=str(fake_sbx.binary))
-    cli.create(SandboxSpec(name="sbxloop-r1-agent", role="agent", workspace=tmp_path))
-    cli.create(SandboxSpec(name="sbxloop-r1-github", role="github", workspace=tmp_path))
+    cli.create(SandboxSpec(name="lantern-r1-agent", role="agent", workspace=tmp_path))
+    cli.create(SandboxSpec(name="lantern-r1-github", role="github", workspace=tmp_path))
     return SandboxPair(
         "r1",
-        agent=Sandbox(cli, "sbxloop-r1-agent"),
-        github=Sandbox(cli, "sbxloop-r1-github"),
+        agent=Sandbox(cli, "lantern-r1-agent"),
+        github=Sandbox(cli, "lantern-r1-github"),
         keep=keep,
         config=Config(),
     )
@@ -43,36 +43,36 @@ def gone(fake_sbx: FakeSbx, name: str) -> bool:
 
 def test_context_exit_cleans_up(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     with make_pair(fake_sbx, tmp_path) as pair:
-        assert not gone(fake_sbx, "sbxloop-r1-agent")
-    assert gone(fake_sbx, "sbxloop-r1-agent")
-    assert gone(fake_sbx, "sbxloop-r1-github")
+        assert not gone(fake_sbx, "lantern-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-github")
     assert pair not in cleanup_registry._pairs
 
 
 def test_cleanup_on_exception(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="boom"), make_pair(fake_sbx, tmp_path):
         raise RuntimeError("boom")
-    assert gone(fake_sbx, "sbxloop-r1-agent")
-    assert gone(fake_sbx, "sbxloop-r1-github")
+    assert gone(fake_sbx, "lantern-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-github")
 
 
 def test_keep_skips_cleanup(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     with make_pair(fake_sbx, tmp_path, keep=True) as pair:
         pass
-    assert not gone(fake_sbx, "sbxloop-r1-agent")
-    assert not gone(fake_sbx, "sbxloop-r1-github")
+    assert not gone(fake_sbx, "lantern-r1-agent")
+    assert not gone(fake_sbx, "lantern-r1-github")
     assert pair not in cleanup_registry._pairs
     pair.cleanup()  # explicit cleanup still works afterwards
-    assert gone(fake_sbx, "sbxloop-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-agent")
 
 
 def test_cleanup_is_idempotent_and_best_effort(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     pair = make_pair(fake_sbx, tmp_path)
     # stop fails for the agent sandbox; rm should still run for both
-    fake_sbx.fail_next("stop sbxloop-r1-agent", returncode=1, stderr="flake")
+    fake_sbx.fail_next("stop lantern-r1-agent", returncode=1, stderr="flake")
     pair.cleanup()
-    assert gone(fake_sbx, "sbxloop-r1-agent")
-    assert gone(fake_sbx, "sbxloop-r1-github")
+    assert gone(fake_sbx, "lantern-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-github")
     pair.cleanup()  # second call is a no-op, not an error
 
 
@@ -100,7 +100,7 @@ def test_cleanup_takes_a_sandbox_gone_during_remove_as_removed(
 
     monkeypatch.setattr(pair.github, "rm", vanish_during_remove)
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.sbx.pair"):
+    with caplog.at_level(logging.INFO, logger="lantern.sbx.pair"):
         pair.cleanup()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -137,7 +137,7 @@ def test_cleanup_keeps_reporting_a_not_found_the_inventory_does_not_confirm(
 
         monkeypatch.setattr(pair.github, "rm", fail_inventory_after_remove)
 
-    with caplog.at_level(logging.INFO, logger="sbxloop.sbx.pair"):
+    with caplog.at_level(logging.INFO, logger="lantern.sbx.pair"):
         pair.cleanup()
 
     messages = [record.getMessage() for record in caplog.records]
@@ -156,7 +156,7 @@ def test_registry_cleanup_all(fake_sbx: FakeSbx, tmp_path: Path) -> None:
     pair = make_pair(fake_sbx, tmp_path)
     cleanup_registry.register(pair)
     cleanup_registry.cleanup_all()
-    assert gone(fake_sbx, "sbxloop-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-agent")
     assert pair not in cleanup_registry._pairs
 
 
@@ -166,8 +166,8 @@ def test_cleanup_all_leaves_kept_pairs_alive(fake_sbx: FakeSbx, tmp_path: Path) 
     pair = make_pair(fake_sbx, tmp_path, keep=True)
     cleanup_registry.register(pair)
     cleanup_registry.cleanup_all()
-    assert not gone(fake_sbx, "sbxloop-r1-agent")
-    assert not gone(fake_sbx, "sbxloop-r1-github")
+    assert not gone(fake_sbx, "lantern-r1-agent")
+    assert not gone(fake_sbx, "lantern-r1-github")
     assert pair not in cleanup_registry._pairs
 
 
@@ -177,7 +177,7 @@ def test_signal_handler_cleans_and_reraises(fake_sbx: FakeSbx, tmp_path: Path) -
     cleanup_registry._previous[signal.SIGINT] = None
     with pytest.raises(KeyboardInterrupt):
         cleanup_registry._handle_signal(signal.SIGINT, None)
-    assert gone(fake_sbx, "sbxloop-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-agent")
 
 
 def test_signal_handler_quiesces_before_cleanup(fake_sbx: FakeSbx, tmp_path: Path) -> None:
@@ -191,7 +191,7 @@ def test_signal_handler_quiesces_before_cleanup(fake_sbx: FakeSbx, tmp_path: Pat
 
     def quiesce() -> None:
         order.append("quiesce")
-        assert not gone(fake_sbx, "sbxloop-r1-agent")  # sandboxes still alive
+        assert not gone(fake_sbx, "lantern-r1-agent")  # sandboxes still alive
         raise RuntimeError("quiesce hiccup")  # contained, never blocks cleanup
 
     cleanup_registry.set_quiesce(quiesce)
@@ -201,7 +201,7 @@ def test_signal_handler_quiesces_before_cleanup(fake_sbx: FakeSbx, tmp_path: Pat
     finally:
         cleanup_registry.set_quiesce(None)
     assert order == ["quiesce"]
-    assert gone(fake_sbx, "sbxloop-r1-agent")
+    assert gone(fake_sbx, "lantern-r1-agent")
 
 
 def test_signal_handler_sigterm_exits(fake_sbx: FakeSbx, tmp_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_signal_handler_sigterm_exits(fake_sbx: FakeSbx, tmp_path: Path) -> None
     with pytest.raises(SystemExit) as excinfo:
         cleanup_registry._handle_signal(signal.SIGTERM, None)
     assert excinfo.value.code == 128 + signal.SIGTERM
-    assert gone(fake_sbx, "sbxloop-r1-github")
+    assert gone(fake_sbx, "lantern-r1-github")
 
 
 class TestHandlerInstallation:
@@ -306,18 +306,18 @@ def test_tui_run_sigterm_removes_both_sandboxes(fake_sbx: FakeSbx, tmp_path: Pat
         {
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
             "SBX_FAKE_PROFILE": f'export PATH="{bin_dir}:$PATH"\n',
-            "SBXLOOP_WORKER_BACKEND": "echo",
-            "SBXLOOP_ECHO_SCRIPT": str(script),
+            "LANTERN_WORKER_BACKEND": "echo",
+            "LANTERN_ECHO_SCRIPT": str(script),
             "COPILOT_GITHUB_TOKEN": "tok",
             "GH_TOKEN": "tok",
-            "SBXLOOP_WORKER_PYTHON": sys.executable,
-            "SBXLOOP_INSTALL_WORKERS": "false",
-            "SBXLOOP_GITHUB__REPO": "owner/repo",  # so the pair has both roles
-            "SBXLOOP_HOME": str(workdir / ".sbxloop"),
+            "LANTERN_WORKER_PYTHON": sys.executable,
+            "LANTERN_INSTALL_WORKERS": "false",
+            "LANTERN_GITHUB__REPO": "owner/repo",  # so the pair has both roles
+            "LANTERN_HOME": str(workdir / ".lantern"),
         }
     )
     log_path = workdir / "run.log"
-    code = "from sbxloop.cli.app import app; app(['run', 'sleep forever'])"
+    code = "from lantern.cli.app import app; app(['run', 'sleep forever'])"
     with log_path.open("wb") as log:
         proc = subprocess.Popen(
             [sys.executable, "-c", code],
@@ -329,7 +329,7 @@ def test_tui_run_sigterm_removes_both_sandboxes(fake_sbx: FakeSbx, tmp_path: Pat
     try:
         # wait until the run is inside `with pair:` (state moves past
         # provisioning), i.e. registered for cleanup with both sandboxes up
-        db = workdir / ".sbxloop" / "state" / "state.db"
+        db = workdir / ".lantern" / "state" / "state.db"
         deadline = time.monotonic() + 90
         state = None
         while time.monotonic() < deadline:

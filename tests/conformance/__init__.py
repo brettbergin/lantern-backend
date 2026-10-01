@@ -2,8 +2,8 @@
 
 One set of scenarios, run against every registered backend's fake
 (:mod:`tests.conformance.backends`), each driving only the role protocols in
-:mod:`sbxloop.vcs.protocol` and asserting only on the shared types in
-:mod:`sbxloop.vcs.model`. A scenario declares the capabilities it relies on
+:mod:`lantern.vcs.protocol` and asserting only on the shared types in
+:mod:`lantern.vcs.model`. A scenario declares the capabilities it relies on
 with ``@pytest.mark.needs(...)``: a backend that reports one ``UNSUPPORTED``
 skips the scenario with the capability named, and one that reports
 ``UNKNOWN`` fails it — an absent feature is a design input, an unreadable

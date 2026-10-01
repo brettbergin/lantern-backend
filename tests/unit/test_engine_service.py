@@ -19,15 +19,15 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.service import ServiceOps
-from sbxloop.engine.skilltools import SKILL_TOOL_NAME
-from sbxloop.errors import ConfigError, ProvisionError, ServiceOpsError
-from sbxloop.events import EventBus, HostEventTypes
-from sbxloop.sbx.naming import run_name
-from sbxloop.worker.hosttools import HostToolCall
-from sbxloop_worker.protocol import EventTypes
-from sbxloop_worker.serviceops import CATALOGUE_ENV, FAKE_ENV
+from lantern.config import Config
+from lantern.engine.service import ServiceOps
+from lantern.engine.skilltools import SKILL_TOOL_NAME
+from lantern.errors import ConfigError, ProvisionError, ServiceOpsError
+from lantern.events import EventBus, HostEventTypes
+from lantern.sbx.naming import run_name
+from lantern.worker.hosttools import HostToolCall
+from lantern_worker.protocol import EventTypes
+from lantern_worker.serviceops import CATALOGUE_ENV, FAKE_ENV
 from tests.conftest import FakeSbx
 from tests.unit.test_engine import HAPPY_TASK, Harness, task, taskgraph
 from tests.unit.test_hostgit import git, make_repo
@@ -161,7 +161,7 @@ class TestCredentialedRun:
         # The service sandbox itself only ever saw the fixed op.
         fs = harness.fake_sbx.sandbox_fs(run_name(harness.home, run_id, "service"))
         kinds = {
-            json.loads(p.read_text())["kind"] for p in (fs / "home/agent/.sbxloop/jobs").iterdir()
+            json.loads(p.read_text())["kind"] for p in (fs / "home/agent/.lantern/jobs").iterdir()
         }
         assert kinds == {"service.http"}
 
@@ -417,20 +417,20 @@ class TestCredentialedRegistryRun:
         assert Path(calls[0]["cwd"]).resolve() == clone.resolve()
         service_fs = harness.fake_sbx.sandbox_fs(run_name(harness.home, run_id, "service"))
         service_jobs = [
-            json.loads(p.read_text()) for p in (service_fs / "home/agent/.sbxloop/jobs").iterdir()
+            json.loads(p.read_text()) for p in (service_fs / "home/agent/.lantern/jobs").iterdir()
         ]
         assert [j["kind"] for j in service_jobs] == ["service.fetch"]
         assert all(j.get("argv") is None and j.get("cwd") is None for j in service_jobs)
         assert not (service_fs / "home/agent/.npmrc").exists()
-        assert not (service_fs / "home/agent/.sbxloop/deps").exists()
-        assert not list((service_fs / "home/agent/.sbxloop/results").glob("*.artifact"))
+        assert not (service_fs / "home/agent/.lantern/deps").exists()
+        assert not list((service_fs / "home/agent/.lantern/results").glob("*.artifact"))
         agent_fs = harness.fake_sbx.sandbox_fs(run_name(harness.home, run_id, "agent"))
         (copied,) = list((agent_fs / "tmp").rglob("left-pad.tgz"))
         assert copied.read_bytes() == artifact
         (request,) = requests_sent(fake_service)
         assert request["headers"]["Authorization"] == f"Bearer {NPM_SECRET}"
         agent_home = agent_fs / "home/agent"
-        agent_sh = (agent_home / ".sbxloop/env.sh").read_text()
+        agent_sh = (agent_home / ".lantern/env.sh").read_text()
         assert "export npm_config_offline=true\n" in agent_sh
         assert "NPM_TOKEN" not in agent_sh
         assert not (agent_home / ".npmrc").exists()
@@ -454,8 +454,8 @@ class TestCredentialedRegistryRun:
         assert fetches[-1].data["exit_code"] == 0
         for event in harness.events:
             assert NPM_SECRET not in json.dumps(event.data, default=str), event.type
-        assert (clone / ".sbxloop/deps").is_dir()
-        assert ".sbxloop/" in (clone / ".git/info/exclude").read_text()
+        assert (clone / ".lantern/deps").is_dir()
+        assert ".lantern/" in (clone / ".git/info/exclude").read_text()
 
     def test_catalogue_query_does_not_run_a_package_manager(
         self, harness: Harness, fake_npm: Path
@@ -623,8 +623,8 @@ def _session_jobs(harness: Harness, *, assigned: bool) -> list[dict[str, Any]]:
     """The run's agent-session job requests, minus per-run identifiers."""
     import re
 
-    from sbxloop.agents.assignment import plan_assignment
-    from sbxloop.agents.registry import ConfigAgentRegistry
+    from lantern.agents.assignment import plan_assignment
+    from lantern.agents.registry import ConfigAgentRegistry
 
     harness.script([taskgraph(task("t1")), build_with_call(CALL), *HAPPY_TASK[1:]])
     engine = harness.engine(credentials=[WEATHER], keep_sandboxes=True)

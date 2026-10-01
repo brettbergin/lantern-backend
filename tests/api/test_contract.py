@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from sbxloop.api.server import ApiServer
+from lantern.api.server import ApiServer
 from tests.api.conftest import Api, build
 
 
@@ -19,7 +19,7 @@ class TestProblems:
         response = api.client.post("/v1/auth/token", json={"grant_type": "magic"})
         assert response.status_code == 422
         body = response.json()
-        assert body["type"] == "urn:sbxloop:problem:invalid_request"
+        assert body["type"] == "urn:lantern:problem:invalid_request"
         assert body["title"] == "Unprocessable Content" and body["instance"] == "/v1/auth/token"
         assert body["errors"][0]["loc"] == ["body", "grant_type"]
         assert body["request_id"].startswith("req_")
@@ -96,7 +96,7 @@ class TestListenerThread:
     ) -> None:
         api = build(tmp_path)
         before = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
-        from sbxloop.api.app import create_app
+        from lantern.api.app import create_app
 
         # Port 0 is the kernel's "any free port": not an operator setting,
         # so the config refuses it and the test bypasses validation.

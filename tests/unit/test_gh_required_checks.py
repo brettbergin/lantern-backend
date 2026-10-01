@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.vcs.github.ops import (
+from lantern.vcs.github.ops import (
     GithubOps,
     PaginationError,
     fold_required_contexts,
@@ -89,7 +89,7 @@ class TestPrRequiredChecks:
         assert ops.pr_required_checks(REPO, PR) == ()
 
     def test_graphql_errors_are_raised_not_read_as_empty(self) -> None:
-        from sbxloop.errors import GithubOpsError
+        from lantern.errors import GithubOpsError
 
         ops = RawOps({("POST", "/graphql"): {"errors": [{"type": "FORBIDDEN"}]}})
         with pytest.raises(GithubOpsError, match="statusCheckRollup failed"):

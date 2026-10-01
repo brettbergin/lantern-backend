@@ -9,8 +9,8 @@ from typing import get_args
 
 import pytest
 
-from sbxloop.chatservices import CHAT_SERVICES, service_named
-from sbxloop.config import (
+from lantern.chatservices import CHAT_SERVICES, service_named
+from lantern.config import (
     CHAT_BACKENDS,
     ChatBackend,
     ChatBridgeConfig,
@@ -19,7 +19,7 @@ from sbxloop.config import (
     SlackConfig,
     load_config,
 )
-from sbxloop.errors import ConfigError
+from lantern.errors import ConfigError
 
 
 class TestBackendSelection:
@@ -52,24 +52,24 @@ class TestBackendSelection:
         assert config.chat_settings is config.slack
 
     def test_both_sections_without_a_choice_is_an_error(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[discord]\nchannel_id = 42\n[slack]\nchannel_id = "C0123ABCDEF"\n'
         )
         with pytest.raises(ConfigError, match=r"both \[discord\] and \[slack\].*\[chat\] backend"):
             load_config(cwd=tmp_path, env={})
 
     def test_named_backend_without_its_section_is_an_error(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[chat]\nbackend = "slack"\n')
+        (tmp_path / "lantern.toml").write_text('[chat]\nbackend = "slack"\n')
         with pytest.raises(ConfigError, match=r"backend = \"slack\" but \[slack\] channel_id"):
             load_config(cwd=tmp_path, env={})
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             '[chat]\nbackend = "discord"\n[slack]\nchannel_id = "C0123ABCDEF"\n'
         )
         with pytest.raises(ConfigError, match=r"\[discord\] channel_id is not set"):
             load_config(cwd=tmp_path, env={})
 
     def test_unknown_backend_is_an_error(self, tmp_path: Path) -> None:
-        (tmp_path / "sbxloop.toml").write_text('[chat]\nbackend = "irc"\n')
+        (tmp_path / "lantern.toml").write_text('[chat]\nbackend = "irc"\n')
         with pytest.raises(ConfigError, match="backend"):
             load_config(cwd=tmp_path, env={})
 
@@ -77,10 +77,10 @@ class TestBackendSelection:
         config = load_config(
             cwd=tmp_path,
             env={
-                "SBXLOOP_CHAT__BACKEND": "slack",
-                "SBXLOOP_SLACK__CHANNEL_ID": "C0123ABCDEF",
-                "SBXLOOP_SLACK__CHRONOLOGY_LEVEL": "quiet",
-                "SBXLOOP_DISCORD__CHANNEL_ID": "42",
+                "LANTERN_CHAT__BACKEND": "slack",
+                "LANTERN_SLACK__CHANNEL_ID": "C0123ABCDEF",
+                "LANTERN_SLACK__CHRONOLOGY_LEVEL": "quiet",
+                "LANTERN_DISCORD__CHANNEL_ID": "42",
             },
         )
         assert config.chat_backend == "slack"
@@ -115,7 +115,7 @@ class TestSlackSection:
 
     def test_channel_id_must_be_an_id_not_a_name(self) -> None:
         with pytest.raises(ValueError, match="channel's id"):
-            SlackConfig(channel_id="#sbxloop")
+            SlackConfig(channel_id="#lantern")
         with pytest.raises(ValueError, match="channel's id"):
             SlackConfig(channel_id="general")
         # a user id or a DM is well-formed but not a channel
@@ -157,27 +157,27 @@ class TestServiceDescriptors:
             service_named("irc")
 
     def test_missing_extra_detail_names_the_sdk_and_its_packages(self) -> None:
-        # The third-party packages themselves, never `sbxloop[extra]`: that
+        # The third-party packages themselves, never `lantern-backend[extra]`: that
         # would send pip to a package index for our own name.
         discord = service_named("discord").missing_extra_detail
         assert discord.startswith("discord.py missing (install 'discord")
-        assert discord.endswith("into the venv sbxloop runs from)")
+        assert discord.endswith("into the venv lantern runs from)")
         slack = service_named("slack").missing_extra_detail
         assert slack.startswith("slack_sdk missing (install ")
         assert "'slack-sdk>=" in slack and "'aiohttp>=" in slack
         for service in CHAT_SERVICES:
-            assert "sbxloop[" not in service.missing_extra_detail
+            assert "lantern-backend[" not in service.missing_extra_detail
 
 
 class TestExtraInstallHint:
     def test_names_the_extras_packages_from_the_installed_metadata(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import releases
+        from lantern import releases
 
         requires = [
             "pydantic>=2.7",
-            "sbxloop-worker==1.2.3",
+            "lantern-worker==1.2.3",
             "discord-py>=2.3; extra == 'discord'",
             'aiohttp>=3.9; extra == "slack"',
             "slack-sdk>=3.44.1; extra == 'slack'",
@@ -185,7 +185,7 @@ class TestExtraInstallHint:
         ]
         monkeypatch.setattr(releases.metadata, "requires", lambda _name: requires)
         assert releases.extra_install_hint("slack", "slack-sdk") == (
-            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv sbxloop runs from"
+            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv lantern runs from"
         )
         assert "discord-py>=2.3" in releases.extra_install_hint("discord", "discord.py")
 
@@ -194,12 +194,12 @@ class TestExtraInstallHint:
     ) -> None:
         from importlib import metadata
 
-        from sbxloop import releases
+        from lantern import releases
 
         def missing(_name: str) -> list[str]:
             raise metadata.PackageNotFoundError
 
         monkeypatch.setattr(releases.metadata, "requires", missing)
         assert releases.extra_install_hint("discord", "discord.py") == (
-            "install 'discord.py' into the venv sbxloop runs from"
+            "install 'discord.py' into the venv lantern runs from"
         )

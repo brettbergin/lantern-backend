@@ -26,13 +26,13 @@ import threading
 from pathlib import Path
 from typing import Any, cast
 
-from sbxloop.config import Config
-from sbxloop.daemon import control
-from sbxloop.daemon.loop import DaemonLoop, RunHandle
-from sbxloop.daemon.model import WorkItem
-from sbxloop.engine.model import TERMINAL_RUN_STATES, RunResult
-from sbxloop.errors import RunCancelledError
-from sbxloop.events import Event, EventBus
+from lantern.config import Config
+from lantern.daemon import control
+from lantern.daemon.loop import DaemonLoop, RunHandle
+from lantern.daemon.model import WorkItem
+from lantern.engine.model import TERMINAL_RUN_STATES, RunResult
+from lantern.errors import RunCancelledError
+from lantern.events import Event, EventBus
 from tests.unit.test_daemon_loop import Harness, gh_item
 
 

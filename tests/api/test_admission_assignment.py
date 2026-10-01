@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sbxloop.agents.definition import AgentSpec
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import api_item_id
+from lantern.agents.definition import AgentSpec
+from lantern.daemon.model import WorkItem
+from lantern.ghids import api_item_id
 from tests.api.conftest import build
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -306,7 +306,7 @@ def test_a_channel_with_no_turn_says_why_the_work_was_not_delivered(
             channel_id=channel,
         )
         api.harness.dstore.upsert_new(item, api.clock())
-        with caplog.at_level(logging.INFO, logger="sbxloop.api.work_delivery"):
+        with caplog.at_level(logging.INFO, logger="lantern.api.work_delivery"):
             assert api.client.get(f"/v1/channels/{channel}/work", headers=headers).json() == []
         logged = [
             record.getMessage()

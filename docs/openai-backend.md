@@ -20,7 +20,7 @@ runtime or Node dependency is part of this backend.
 1. Make a backend's credential host and egress a question of config rather
    than a constant on the descriptor, so every host-side consumer — the
    agent sandbox's allowlist, the sbx custom-secret binding, doctor's rows,
-   `sbxloop secrets` — asks with a loaded config in hand.
+   `lantern secrets` — asks with a loaded config in hand.
 2. Add `[agent.openai]` (`base_url`, `api_key_env`, `request_timeout_s`,
    `max_retries`, `allow_insecure_endpoint`) with a per-repository override
    of the endpoint, one parser for the endpoint's host that both the policy
@@ -82,13 +82,13 @@ same in-session nudge the other backends send. Host tools keep the
 event/file relay.
 
 There is no native MCP: a job carrying `mcp_servers` is refused by name.
-Credentialed HTTP MCP servers work through sbxloop's host mediation, as
+Credentialed HTTP MCP servers work through lantern's host mediation, as
 they do under codex.
 
 ### Authentication and session state
 
 Where the calls go is the sandbox's environment, delivered by provisioning:
-`OPENAI_BASE_URL` names the endpoint, `SBXLOOP_OPENAI_API_KEY_ENV` names
+`OPENAI_BASE_URL` names the endpoint, `LANTERN_OPENAI_API_KEY_ENV` names
 the variable holding the credential, and the client's timeout and retry
 count ride beside them. The credential itself rides the secret path under
 that variable's name and never appears in `sbx` argv or an event; its value
@@ -116,7 +116,7 @@ that combination on `/v1/chat/completions` with a 400. `auto`, the default,
 is `responses` when `base_url`'s host is `api.openai.com` and `chat` for
 every other host, because self-hosted servers generally serve only chat
 completions. The host settles the value (a repository override settles it
-against its own `base_url`) and delivers it as `SBXLOOP_OPENAI_API` beside
+against its own `base_url`) and delivers it as `LANTERN_OPENAI_API` beside
 the endpoint.
 
 The responses loop is the chat loop with a different wire shape: the same
@@ -161,7 +161,7 @@ instead of parking the run. An
 `expect="json"` reply that will not parse gets one reask and then the
 runner's own missing-JSON error — never an unbounded retry.
 
-Steering, hold and resume retain sbxloop's existing phase/checkpoint
+Steering, hold and resume retain lantern's existing phase/checkpoint
 behaviour. The code-run trail fixture is unchanged across the whole change.
 
 ## Verification

@@ -18,14 +18,14 @@ from typing import Any
 
 from sqlalchemy import select
 
-from sbxloop.config import Config
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.errors import GithubOpsError
-from sbxloop.plans.model import Drift, Plan, PlanNode
-from sbxloop.plans.reconcile import Reconciliation, merge_drift, reconcile_plan
-from sbxloop.plans.render import marker
-from sbxloop.plans.store import PlanStore
-from sbxloop.vcs.checklist import END, START, ChecklistEntry, add_child, remove_child
+from lantern.config import Config
+from lantern.db.api_models import ApiEventRow
+from lantern.errors import GithubOpsError
+from lantern.plans.model import Drift, Plan, PlanNode
+from lantern.plans.reconcile import Reconciliation, merge_drift, reconcile_plan
+from lantern.plans.render import marker
+from lantern.plans.store import PlanStore
+from lantern.vcs.checklist import END, START, ChecklistEntry, add_child, remove_child
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
 from tests.unit.test_plans_publish import (
@@ -72,7 +72,7 @@ def _drift(store: PlanStore) -> list[dict[str, Any]]:
 
 
 def _writes(fake: FakeGithub, since: int) -> list[tuple[str, str]]:
-    """Every write sbxloop sent the forge after call ``since``."""
+    """Every write lantern sent the forge after call ``since``."""
     return [(m, p) for m, p, _ in fake.raw_calls[since:] if m != "GET"]
 
 
@@ -312,7 +312,7 @@ class TestChildren:
 
 
 class TestAPlanThatChangesMeanwhile:
-    def test_an_edit_in_sbxloop_during_the_read_is_folded_again(self, tmp_path: Path) -> None:
+    def test_an_edit_in_lantern_during_the_read_is_folded_again(self, tmp_path: Path) -> None:
         config, fake = _github(tmp_path), FakeGithub()
 
         class Busy(PlanStore):
@@ -329,7 +329,7 @@ class TestAPlanThatChangesMeanwhile:
                         plan_id,
                         expected_revision=plan.revision,
                         now=LATER,
-                        upsert=[replace(c, title="edited in sbxloop")],
+                        upsert=[replace(c, title="edited in lantern")],
                     )
                 return super().apply(plan_id, **kwargs)
 
@@ -338,7 +338,7 @@ class TestAPlanThatChangesMeanwhile:
         fake.person_edits("o/r", _number(plan, "a"), title="edited on the forge")
         result = _reconcile(fake, store, config)
         titles = {n.id: n.title for n in result.plan.nodes}
-        assert titles["a"] == "edited on the forge" and titles["c"] == "edited in sbxloop"
+        assert titles["a"] == "edited on the forge" and titles["c"] == "edited in lantern"
         assert result.plan.revision == plan.revision + 2
         assert [e["change"] for e in _drift(store)] == ["title"]
 

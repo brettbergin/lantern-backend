@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.errors import WorkerError
-from sbxloop_worker.protocol import ErrorInfo, JobRequest, JobResult
-from sbxloop_worker.runner import JobRunner
+from lantern import hostgit
+from lantern.config import Config
+from lantern.engine.phases import PhaseRunner
+from lantern.errors import WorkerError
+from lantern_worker.protocol import ErrorInfo, JobRequest, JobResult
+from lantern_worker.runner import JobRunner
 from tests.unit.test_hostgit import git, make_run_clone, push_upstream_commit
 
 

@@ -1,4 +1,4 @@
-"""`sbxloop daemon notify` — one message to the control channel, from the
+"""`lantern daemon notify` — one message to the control channel, from the
 host, without the daemon (#639)."""
 
 from __future__ import annotations
@@ -13,11 +13,11 @@ from urllib.request import Request
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.daemon import notify
-from sbxloop.daemon.notify import MAX_CHARS, USER_AGENT, Posted, post_notice
-from sbxloop.errors import SbxloopError
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.daemon import notify
+from lantern.daemon.notify import MAX_CHARS, USER_AGENT, Posted, post_notice
+from lantern.errors import LanternError
 
 runner = CliRunner()
 
@@ -112,7 +112,7 @@ class TestDiscord:
     )
     def test_http_errors_name_what_to_fix(self, tmp_path: Path, code: int, hint: str) -> None:
         opener = Recorder(raise_=_http_error(code))
-        with pytest.raises(SbxloopError, match=f"posting to discord failed: .*{hint}"):
+        with pytest.raises(LanternError, match=f"posting to discord failed: .*{hint}"):
             post_notice(_discord(tmp_path), "hi", env={"DISCORD_BOT_TOKEN": "tok"}, open_url=opener)
 
     def test_an_edge_block_is_named_as_such(self, tmp_path: Path) -> None:
@@ -122,12 +122,12 @@ class TestDiscord:
             "https://x", 403, "Forbidden", {}, io.BytesIO(b"error code: 1010\n")
         )  # type: ignore[arg-type]
         opener = Recorder(raise_=error)
-        with pytest.raises(SbxloopError, match=r"Cloudflare 1010.*User-Agent"):
+        with pytest.raises(LanternError, match=r"Cloudflare 1010.*User-Agent"):
             post_notice(_discord(tmp_path), "hi", env={"DISCORD_BOT_TOKEN": "tok"}, open_url=opener)
 
-    def test_network_errors_are_sbxloop_errors(self, tmp_path: Path) -> None:
+    def test_network_errors_are_lantern_errors(self, tmp_path: Path) -> None:
         opener = Recorder(raise_=urllib.error.URLError("no route"))
-        with pytest.raises(SbxloopError, match=r"posting to discord failed: .*no route"):
+        with pytest.raises(LanternError, match=r"posting to discord failed: .*no route"):
             post_notice(_discord(tmp_path), "hi", env={"DISCORD_BOT_TOKEN": "tok"}, open_url=opener)
 
 
@@ -163,12 +163,12 @@ class TestSlack:
         self, tmp_path: Path, error: str, hint: str
     ) -> None:
         opener = Recorder(json.dumps({"ok": False, "error": error}).encode())
-        with pytest.raises(SbxloopError, match=f"posting to slack failed: .*{hint}"):
+        with pytest.raises(LanternError, match=f"posting to slack failed: .*{hint}"):
             post_notice(_slack(tmp_path), "hi", env={"SLACK_BOT_TOKEN": "xoxb"}, open_url=opener)
 
     def test_a_non_json_reply_is_an_error(self, tmp_path: Path) -> None:
         opener = Recorder(b"<html>")
-        with pytest.raises(SbxloopError, match="the reply is not JSON"):
+        with pytest.raises(LanternError, match="the reply is not JSON"):
             post_notice(_slack(tmp_path), "hi", env={"SLACK_BOT_TOKEN": "xoxb"}, open_url=opener)
 
 
@@ -176,7 +176,7 @@ class TestRefusals:
     def test_headless_daemon_cannot_notify(self, tmp_path: Path) -> None:
         config = Config.model_validate({"home": str(tmp_path / "state")})
         opener = Recorder()
-        with pytest.raises(SbxloopError, match=r"no chat backend is configured.*\[chat\] backend"):
+        with pytest.raises(LanternError, match=r"no chat backend is configured.*\[chat\] backend"):
             post_notice(config, "hi", env={"DISCORD_BOT_TOKEN": "tok"}, open_url=opener)
         assert opener.requests == []
 
@@ -188,20 +188,20 @@ class TestRefusals:
         self, tmp_path: Path, make: Any, token_env: str
     ) -> None:
         opener = Recorder()
-        with pytest.raises(SbxloopError, match=f"{token_env} is not set.*never in sbxloop.toml"):
+        with pytest.raises(LanternError, match=f"{token_env} is not set.*never in lantern.toml"):
             post_notice(make(tmp_path), "hi", env={}, open_url=opener)
         assert opener.requests == []
 
     @pytest.mark.parametrize("text", ["", "   \n"])
     def test_empty_text_is_refused(self, tmp_path: Path, text: str) -> None:
         opener = Recorder()
-        with pytest.raises(SbxloopError, match="notice text is empty"):
+        with pytest.raises(LanternError, match="notice text is empty"):
             post_notice(_discord(tmp_path), text, env={"DISCORD_BOT_TOKEN": "t"}, open_url=opener)
         assert opener.requests == []
 
     def test_oversize_text_is_refused_before_sending(self, tmp_path: Path) -> None:
         opener = Recorder()
-        with pytest.raises(SbxloopError, match=f"the limit is {MAX_CHARS}"):
+        with pytest.raises(LanternError, match=f"the limit is {MAX_CHARS}"):
             post_notice(
                 _discord(tmp_path),
                 "x" * (MAX_CHARS + 1),
@@ -212,7 +212,7 @@ class TestRefusals:
 
     def test_oversize_reply_is_refused(self, tmp_path: Path) -> None:
         opener = Recorder(b"x" * (notify._MAX_REPLY_BYTES + 1))
-        with pytest.raises(SbxloopError, match="reply exceeds"):
+        with pytest.raises(LanternError, match="reply exceeds"):
             post_notice(_discord(tmp_path), "hi", env={"DISCORD_BOT_TOKEN": "t"}, open_url=opener)
 
 
@@ -227,7 +227,7 @@ class TestCli:
     def test_notify_posts_through_the_configured_backend(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (workdir / "sbxloop.toml").write_text("[discord]\nchannel_id = 123\n")
+        (workdir / "lantern.toml").write_text("[discord]\nchannel_id = 123\n")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
         opener = Recorder()
         monkeypatch.setattr(notify, "_open_url", opener)
@@ -242,7 +242,7 @@ class TestCli:
     def test_notify_can_target_another_channel(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (workdir / "sbxloop.toml").write_text("[discord]\nchannel_id = 123\n")
+        (workdir / "lantern.toml").write_text("[discord]\nchannel_id = 123\n")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
         opener = Recorder()
         monkeypatch.setattr(notify, "_open_url", opener)
@@ -254,7 +254,7 @@ class TestCli:
     def test_notify_fails_closed_without_a_backend(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (workdir / "sbxloop.toml").write_text("")
+        (workdir / "lantern.toml").write_text("")
         opener = Recorder()
         monkeypatch.setattr(notify, "_open_url", opener)
         result = runner.invoke(app, ["daemon", "notify", "hello"])
@@ -265,7 +265,7 @@ class TestCli:
     def test_notify_fails_closed_without_a_token(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        (workdir / "sbxloop.toml").write_text("[discord]\nchannel_id = 123\n")
+        (workdir / "lantern.toml").write_text("[discord]\nchannel_id = 123\n")
         opener = Recorder()
         monkeypatch.setattr(notify, "_open_url", opener)
         result = runner.invoke(app, ["daemon", "notify", "hello"])
@@ -324,5 +324,5 @@ class TestMattermost:
         assert "@\u200bchannel" in message  # parked: still readable, now inert
 
     def test_a_missing_token_names_the_right_variable(self, tmp_path: Path) -> None:
-        with pytest.raises(SbxloopError, match="MATTERMOST_BOT_TOKEN is not set"):
+        with pytest.raises(LanternError, match="MATTERMOST_BOT_TOKEN is not set"):
             post_notice(_mattermost(tmp_path), "x", env={}, open_url=Recorder())

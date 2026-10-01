@@ -1,5 +1,5 @@
-"""The committed example files cannot rot: `sbxloop.toml.example` is the
-single source `sbxloop init` writes from, it covers the config model, and
+"""The committed example files cannot rot: `lantern.toml.example` is the
+single source `lantern init` writes from, it covers the config model, and
 neither example nor template may carry anything that looks like a real
 credential, host path or repository."""
 
@@ -14,18 +14,18 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from sbxloop.chatservices import CHAT_SERVICES
-from sbxloop.config import (
+from lantern.chatservices import CHAT_SERVICES
+from lantern.config import (
     RESERVED_ENV_KEYS,
     Config,
     PlanningConfig,
     load_config,
     load_secrets_env,
 )
-from sbxloop.data import DEFAULT_CONFIG_TOML, config_presets, render_config_template
+from lantern.data import DEFAULT_CONFIG_TOML, config_presets, render_config_template
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-EXAMPLE = REPO_ROOT / "sbxloop.toml.example"
+EXAMPLE = REPO_ROOT / "lantern.toml.example"
 
 
 def _key_paths(data: dict[str, Any], prefix: str = "") -> set[str]:
@@ -44,7 +44,7 @@ def test_example_exists_and_parses() -> None:
 
 
 def test_init_template_is_the_example_file() -> None:
-    """One source of truth: `sbxloop init` writes this exact file."""
+    """One source of truth: `lantern init` writes this exact file."""
     assert EXAMPLE.read_text() == DEFAULT_CONFIG_TOML
     assert _key_paths(tomllib.loads(DEFAULT_CONFIG_TOML)) == _key_paths(
         tomllib.loads(EXAMPLE.read_text())
@@ -52,10 +52,10 @@ def test_init_template_is_the_example_file() -> None:
 
 
 def test_packaged_copy_matches_the_root_example() -> None:
-    """`sbxloop init` reads the packaged copy; it must be byte-identical to
+    """`lantern init` reads the packaged copy; it must be byte-identical to
     the file published at the repository root."""
     packaged = (
-        REPO_ROOT / "packages" / "sbxloop" / "src" / "sbxloop" / "data" / "sbxloop.toml.example"
+        REPO_ROOT / "packages" / "lantern" / "src" / "lantern" / "data" / "lantern.toml.example"
     )
     assert packaged.is_file()
     assert packaged.read_text() == EXAMPLE.read_text()
@@ -70,7 +70,7 @@ def test_codex_selection_is_documented_in_the_shipped_examples() -> None:
     assert config.agent.backend == "codex"
     assert '"codex" runs the Python Codex SDK' in DEFAULT_CONFIG_TOML
     assert "OPENAI_API_KEY" in DEFAULT_CONFIG_TOML
-    secrets = REPO_ROOT / "packages/sbxloop/src/sbxloop/data/secrets.env.example"
+    secrets = REPO_ROOT / "packages/lantern/src/lantern/data/secrets.env.example"
     assert "#OPENAI_API_KEY=" in secrets.read_text()
 
 
@@ -106,7 +106,7 @@ def test_openai_endpoint_selection_is_documented_in_the_shipped_examples() -> No
         "`[vcs.repos.openai] base_url`",
     ):
         assert key in guide, key
-    secrets = REPO_ROOT / "packages/sbxloop/src/sbxloop/data/secrets.env.example"
+    secrets = REPO_ROOT / "packages/lantern/src/lantern/data/secrets.env.example"
     assert '[agent] backend = "openai"' in secrets.read_text()
 
 
@@ -157,7 +157,7 @@ def test_oidc_sign_in_is_documented_in_the_shipped_examples() -> None:
     for row in re.findall(r"\| `\[api\.oidc\] ([^|]+)\|", guide):
         documented |= set(re.findall(r"`(?:\[api\.oidc\] )?([a-z_]+)`", "`" + row))
     assert documented == fields
-    secrets = REPO_ROOT / "packages/sbxloop/src/sbxloop/data/secrets.env.example"
+    secrets = REPO_ROOT / "packages/lantern/src/lantern/data/secrets.env.example"
     assert f"#{oidc.client_secret_env}=" in secrets.read_text(encoding="utf-8")
 
 
@@ -172,32 +172,32 @@ def test_every_chat_backend_credential_is_in_the_secrets_example() -> None:
     """A bridge's token has to appear in the file an operator actually fills
     in. Generic over the descriptor set, so a fourth service cannot land with
     its credential documented nowhere."""
-    secrets = (REPO_ROOT / "packages/sbxloop/src/sbxloop/data/secrets.env.example").read_text()
+    secrets = (REPO_ROOT / "packages/lantern/src/lantern/data/secrets.env.example").read_text()
     for service in CHAT_SERVICES:
         for env in service.token_envs:
             assert f"#{env}=" in secrets, f"{service.name}: {env} is not in secrets.env.example"
 
 
-def test_sbxloop_init_renders_the_example_file(tmp_path: Path, monkeypatch: Any) -> None:
-    """End-to-end drift check: what `sbxloop init` actually writes into a
+def test_lantern_init_renders_the_example_file(tmp_path: Path, monkeypatch: Any) -> None:
+    """End-to-end drift check: what `lantern init` actually writes into a
     temp dir has the same dotted key paths as the committed example."""
     from typer.testing import CliRunner
 
-    from sbxloop.cli.app import app
+    from lantern.cli.app import app
 
     monkeypatch.chdir(tmp_path)
     result = CliRunner().invoke(app, ["init", "--project"])
     assert result.exit_code == 0, result.output
-    written = (tmp_path / "sbxloop.toml").read_text()
+    written = (tmp_path / "lantern.toml").read_text()
     assert _key_paths(tomllib.loads(written)) == _key_paths(tomllib.loads(EXAMPLE.read_text()))
     assert written == EXAMPLE.read_text()
 
 
-PRESETS_DIR = REPO_ROOT / "packages" / "sbxloop" / "src" / "sbxloop" / "data" / "presets"
+PRESETS_DIR = REPO_ROOT / "packages" / "lantern" / "src" / "lantern" / "data" / "presets"
 
 
 class TestPresets:
-    """#636: presets are package data, applied by `sbxloop init --preset`, so
+    """#636: presets are package data, applied by `lantern init --preset`, so
     they work from a wheel and nothing `init` writes points at a checkout."""
 
     def test_presets_ship_as_package_data_and_the_contrib_path_is_an_alias(self) -> None:
@@ -228,18 +228,18 @@ class TestPresets:
         assert config.limits.mem_abort == 97.0
         header = config_presets()["large-repo"]
         assert "two minutes or more" in header  # framed by measured gate duration
-        assert "sbxloop init --preset large-repo" in header
+        assert "lantern init --preset large-repo" in header
 
     def test_workload_preset_declares_one_of_everything_a_workload_needs(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
-        """#762: `sbxloop init --preset workload` is a config `load_config`
+        """#762: `lantern init --preset workload` is a config `load_config`
         accepts with the example variable set — a credential, a profile
         bounded to it and named the default. The schedule asking for it is
         not declared in the file: schedules live in the daemon's database
         (#818), so the preset says how to create one instead."""
         text = render_config_template("workload")
-        (tmp_path / "sbxloop.toml").write_text(text)
+        (tmp_path / "lantern.toml").write_text(text)
         monkeypatch.setenv("WEATHER_API_KEY", "value_never_shown")
         config = load_config(tmp_path)
         assert [c.name for c in config.credentials] == ["weather"]
@@ -251,31 +251,31 @@ class TestPresets:
         assert not any(line.strip() == "[[schedules]]" for line in text.splitlines())
         assert "schedules add morning-brief --profile research" in text
         header = config_presets()["workload"]
-        assert "sbxloop init --preset workload" in header
+        assert "lantern init --preset workload" in header
         assert "ONLY its inference credential" in header  # the separation, stated
         assert "Not yet exercised against a live sandbox" in header  # the caveats
 
     def test_nothing_init_writes_references_a_path_outside_the_project(self) -> None:
         for name in (None, *config_presets()):
             text = render_config_template(name)
-            for needle in ("contrib/", "packages/sbxloop", "#25"):
+            for needle in ("contrib/", "packages/lantern", "#25"):
                 assert needle not in text, (name, needle)
 
     def test_unknown_preset_is_a_key_error(self) -> None:
         with pytest.raises(KeyError):
             render_config_template("not-a-preset")
 
-    def test_sbxloop_init_preset_writes_one_self_contained_file(
+    def test_lantern_init_preset_writes_one_self_contained_file(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         from typer.testing import CliRunner
 
-        from sbxloop.cli.app import app
+        from lantern.cli.app import app
 
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["init", "--project", "--preset", "large-repo"])
         assert result.exit_code == 0, result.output
-        written = (tmp_path / "sbxloop.toml").read_text()
+        written = (tmp_path / "lantern.toml").read_text()
         assert written == render_config_template("large-repo")
         assert written.startswith(EXAMPLE.read_text().rstrip("\n"))
         assert Config.model_validate(tomllib.loads(written)).budgets.max_wall_clock_s == 14400.0
@@ -283,23 +283,23 @@ class TestPresets:
         assert streamed.exit_code == 0, streamed.output
         assert streamed.output == written
 
-    def test_sbxloop_init_rejects_an_unknown_preset_before_writing(
+    def test_lantern_init_rejects_an_unknown_preset_before_writing(
         self, tmp_path: Path, monkeypatch: Any
     ) -> None:
         from typer.testing import CliRunner
 
-        from sbxloop.cli.app import app
+        from lantern.cli.app import app
 
         monkeypatch.chdir(tmp_path)
         result = CliRunner().invoke(app, ["init", "--project", "--preset", "huge-repo"])
         assert result.exit_code == 2, result.output
         assert "unknown preset 'huge-repo'" in result.output
         assert "large-repo" in result.output  # names what does exist
-        assert not (tmp_path / "sbxloop.toml").exists()
+        assert not (tmp_path / "lantern.toml").exists()
 
 
 # Derived internals the engine sets on a narrowed config; never configured.
-# `home` is SBXLOOP_HOME, never a file key (sbxloop.paths).
+# `home` is LANTERN_HOME, never a file key (lantern.paths).
 INTERNAL_KEYS = {
     "github.enabled_repo_count",
     "workload.result_issue",
@@ -343,7 +343,7 @@ def test_example_mentions_every_key_the_config_model_knows() -> None:
                 missing.append(f"{prefix}{name}")
 
     walk(Config, "")
-    assert not missing, f"keys absent from sbxloop.toml.example: {missing}"
+    assert not missing, f"keys absent from lantern.toml.example: {missing}"
 
 
 def test_example_documents_the_repo_entry_and_the_legacy_form() -> None:
@@ -356,7 +356,7 @@ def test_example_documents_the_repo_entry_and_the_legacy_form() -> None:
 
 
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
-SOURCE_ROOT = REPO_ROOT / "packages" / "sbxloop" / "src" / "sbxloop"
+SOURCE_ROOT = REPO_ROOT / "packages" / "lantern" / "src" / "lantern"
 
 # Credentials the code reads by name; each must be documented in .env.example.
 CREDENTIAL_ENVS = {
@@ -367,7 +367,7 @@ CREDENTIAL_ENVS = {
     "GITLAB_TOKEN",
     "GITEA_TOKEN",
     "DISCORD_BOT_TOKEN",
-    "SBXLOOP_OIDC_CLIENT_SECRET",
+    "LANTERN_OIDC_CLIENT_SECRET",
 }
 
 
@@ -401,25 +401,25 @@ def test_env_example_documents_the_per_repo_token_pattern() -> None:
 
 def test_env_example_documents_where_it_lives() -> None:
     text = ENV_EXAMPLE.read_text()
-    assert "~/.sbxloop/config/secrets.env" in text
+    assert "~/.lantern/config/secrets.env" in text
     assert "0600" in text
-    assert "~/.config/sbxloop" not in text
+    assert "~/.config/lantern" not in text
 
 
-def test_env_example_sbxloop_overrides_name_real_config_keys() -> None:
-    """Each SBXLOOP_<SECTION>__<KEY> mentioned maps onto a model field."""
+def test_env_example_lantern_overrides_name_real_config_keys() -> None:
+    """Each LANTERN_<SECTION>__<KEY> mentioned maps onto a model field."""
     known = _config_key_paths()
     seen = 0
     for name in _env_example_names():
-        if not name.startswith("SBXLOOP_"):
+        if not name.startswith("LANTERN_"):
             continue
-        remainder = name[len("SBXLOOP_") :].lower()
+        remainder = name[len("LANTERN_") :].lower()
         if remainder in RESERVED_ENV_KEYS:
             continue  # a credential or worker variable, never a setting
         dotted = remainder.replace("__", ".")
         assert dotted in known, f"{name} is not a config key ({dotted})"
         seen += 1
-    assert seen, "expected .env.example to document some SBXLOOP_* overrides"
+    assert seen, "expected .env.example to document some LANTERN_* overrides"
 
 
 def _config_key_paths() -> set[str]:
@@ -442,12 +442,12 @@ def _config_key_paths() -> set[str]:
 
 
 def test_env_example_loads_with_the_cli_secrets_loader(tmp_path: Path, monkeypatch: Any) -> None:
-    """The file parses with the same loader `sbxloop` uses, and — since every
+    """The file parses with the same loader `lantern` uses, and — since every
     credential ships blank or commented — sets nothing that could shadow a
     real export."""
-    from sbxloop.paths import SbxloopHome
+    from lantern.paths import LanternHome
 
-    home = SbxloopHome(tmp_path / ".sbxloop")  # HOME is tmp_path (autouse fixture)
+    home = LanternHome(tmp_path / ".lantern")  # HOME is tmp_path (autouse fixture)
     home.config.mkdir(parents=True, exist_ok=True)
     home.secrets_env.write_text(ENV_EXAMPLE.read_text())
     for name in CREDENTIAL_ENVS:
@@ -461,7 +461,7 @@ def test_env_example_has_no_legacy_single_repo_override_uncommented() -> None:
     for line in ENV_EXAMPLE.read_text().splitlines():
         if line.lstrip().startswith("#"):
             continue
-        assert "SBXLOOP_GITHUB__REPO" not in line
+        assert "LANTERN_GITHUB__REPO" not in line
 
 
 PLACEHOLDER_REPOS = {"you/your-repo", "you/other-repo"}
@@ -472,16 +472,16 @@ REAL_LOOKING = [
     ("fine-grained PAT", re.compile(r"github_pat_[A-Za-z0-9_]{10,}")),
     ("gh server/oauth token", re.compile(r"gh[opsu]_[A-Za-z0-9]{10,}")),
     ("discord token", re.compile(r"[\w-]{24}\.[\w-]{6}\.[\w-]{27,}")),
-    ("home path", re.compile(r"/home/(?!agent/\.sbxloop)[A-Za-z0-9._-]+")),
+    ("home path", re.compile(r"/home/(?!agent/\.lantern)[A-Za-z0-9._-]+")),
     ("users path", re.compile(r"/Users/[A-Za-z0-9._-]+")),
 ]
 
-EXAMPLE_FILES = ("sbxloop.toml.example", ".env.example")
+EXAMPLE_FILES = ("lantern.toml.example", ".env.example")
 
 
 def _texts() -> dict[str, str]:
     files = {name: (REPO_ROOT / name).read_text() for name in EXAMPLE_FILES}
-    files["sbxloop init template"] = DEFAULT_CONFIG_TOML
+    files["lantern init template"] = DEFAULT_CONFIG_TOML
     return files
 
 
@@ -715,7 +715,7 @@ def test_example_agent_entry_loads_with_its_credential_and_server() -> None:
     """The commented `[[agents]]` entry loads as one block beside the
     `[[credentials]]` and `[[mcp]]` entries it names, and joins the
     built-in agents under its slug and alias."""
-    from sbxloop.agents.registry import ConfigAgentRegistry
+    from lantern.agents.registry import ConfigAgentRegistry
 
     def block_after(header: str) -> dict[str, Any]:
         text = ""
@@ -748,7 +748,7 @@ def test_example_agent_entry_loads_with_its_credential_and_server() -> None:
 def test_example_documents_renaming_the_assistant() -> None:
     """The commented `[[agents]]` entry for `concierge` loads on its own and
     renames the assistant without changing its slug."""
-    from sbxloop.agents.registry import ConfigAgentRegistry
+    from lantern.agents.registry import ConfigAgentRegistry
 
     lines = EXAMPLE.read_text().splitlines()
     start = next(
@@ -765,7 +765,7 @@ def test_example_documents_renaming_the_assistant() -> None:
     registry = ConfigAgentRegistry(Config.model_validate({"agents": [entry]}))
     concierge = registry.get(entry["aliases"][0])
     assert concierge is not None and concierge.slug == "concierge"
-    assert concierge.spec.name == entry["name"] != "Angie"
+    assert concierge.spec.name == entry["name"] != "Lantern"
     assert f"You are {entry['name']}," in concierge.chat_persona()
 
 
@@ -804,7 +804,7 @@ def test_example_documents_concurrent_runs_at_the_model_default() -> None:
 
 def test_example_memory_section_documents_the_defaults() -> None:
     """The commented `[memory]` block (read from the packaged copy
-    `sbxloop init` writes), uncommented whole, loads and equals the model's
+    `lantern init` writes), uncommented whole, loads and equals the model's
     defaults, so the example never advertises a stale value."""
     text = ""
     in_block = False

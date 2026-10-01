@@ -14,17 +14,17 @@ from typing import Any, ClassVar
 import pytest
 from typer.testing import CliRunner
 
-import sbxloop
-from sbxloop.cli.app import app
-from sbxloop.cli.doctor import Check
-from sbxloop.config import Config, GithubConfig, RepoConfig, SandboxConfig
-from sbxloop.daemon.model import WorkItem
-from sbxloop.deliver import RepositoryProbe
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import GithubOpsError, SbxloopError
-from sbxloop.events import Event
-from sbxloop.paths import SbxloopHome
-from sbxloop_worker.protocol import Event as ProtocolEvent
+import lantern
+from lantern.cli.app import app
+from lantern.cli.doctor import Check
+from lantern.config import Config, GithubConfig, RepoConfig, SandboxConfig
+from lantern.daemon.model import WorkItem
+from lantern.deliver import RepositoryProbe
+from lantern.engine.store import StateStore
+from lantern.errors import GithubOpsError, LanternError
+from lantern.events import Event
+from lantern.paths import LanternHome
+from lantern_worker.protocol import Event as ProtocolEvent
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
@@ -35,7 +35,7 @@ runner = CliRunner()
 
 # A verbatim-shaped bash tool call from a real run thread: the informative
 # verb sits behind a long, per-run `cd` prefix (#403).
-RUN_PATH = "/home/bergs/.local/state/sbxloop/sbxloop-work/runs/rfxm7ad23/workspace"
+RUN_PATH = "/home/bergs/.local/state/lantern/lantern-work/runs/rfxm7ad23/workspace"
 RUN_CMD = (
     f"cd {RUN_PATH} && git diff --stat -- README.md docs/architecture.md CHANGELOG.md | head -120"
 )
@@ -60,17 +60,17 @@ def workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def home(workdir: Path) -> SbxloopHome:
+def home(workdir: Path) -> LanternHome:
     """The home every command in these tests runs against: HOME is the
-    test's tmp dir (autouse fixture), so the home is ``<workdir>/.sbxloop``."""
-    return SbxloopHome(workdir / ".sbxloop")
+    test's tmp dir (autouse fixture), so the home is ``<workdir>/.lantern``."""
+    return LanternHome(workdir / ".lantern")
 
 
 def seed_store(workdir: Path) -> StateStore:
     store = StateStore(home(workdir).state_db)
     store.create_run("rseeded11", "make everything better")
     store.set_run_state("rseeded11", "completed")
-    from sbxloop.engine.model import TaskSpec
+    from lantern.engine.model import TaskSpec
 
     store.save_tasks("rseeded11", [TaskSpec(id="t1", title="Task one")])
     store.append_event(
@@ -91,7 +91,7 @@ class TestBasics:
     def test_version(self) -> None:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert sbxloop.__version__ in result.output
+        assert lantern.__version__ in result.output
 
     def test_help_lists_commands(self) -> None:
         result = runner.invoke(app, ["--help"])
@@ -143,20 +143,20 @@ class TestStatusAndLogs:
         assert "-rseeded11-run-agent" in result.output
         assert "-rseeded11-run-vcs-github" in result.output
         assert "not running" in result.output
-        assert "sbxloop shell" not in result.output
+        assert "lantern shell" not in result.output
 
     def test_status_run_detail_flags_live_sandboxes(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.models import SandboxSpec
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.models import SandboxSpec
 
         seed_store(workdir)
         SbxCLI(binary=str(fake_sbx.binary)).create(
-            SandboxSpec(name="sbxloop-rseeded11-agent", role="agent", workspace=workdir)
+            SandboxSpec(name="lantern-rseeded11-agent", role="agent", workspace=workdir)
         )
         result = runner.invoke(app, ["status", "rseeded11"])
         assert result.exit_code == 0
         assert "running" in result.output
-        assert "sbxloop shell rseeded11" in result.output
+        assert "lantern shell rseeded11" in result.output
 
     def test_status_run_detail_survives_sbx_failure(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         seed_store(workdir)
@@ -323,12 +323,12 @@ class TestArtifactsCommand:
 
 class TestConfigAndInit:
     def test_config_show_sources(self, workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        (workdir / "sbxloop.toml").write_text('model = "gpt-5"\n')
-        monkeypatch.setenv("SBXLOOP_KEEP_SANDBOXES", "true")
+        (workdir / "lantern.toml").write_text('model = "gpt-5"\n')
+        monkeypatch.setenv("LANTERN_KEEP_SANDBOXES", "true")
         result = runner.invoke(app, ["config", "show"])
         assert result.exit_code == 0
         assert "gpt-5" in result.output
-        assert "sbxloop.toml" in result.output
+        assert "lantern.toml" in result.output
         assert "env" in result.output
 
     def test_config_show_lists_credentials_and_profiles_without_values(
@@ -339,7 +339,7 @@ class TestConfigAndInit:
         profile shows what it bounds and which one is the default."""
         monkeypatch.setenv("WEATHER_API_KEY", "value_never_shown")
         monkeypatch.delenv("MAIL_TOKEN", raising=False)
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[[credentials]]\n"
             'name = "weather"\n'
             'env = "WEATHER_API_KEY"\n'
@@ -389,7 +389,7 @@ class TestConfigAndInit:
         assert "api.githubcopilot.com" in result.output
 
     def test_config_policy_shows_bounds(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[policy]\nallow = ["registry.npmjs.org"]\ndeny = ["evil.example.com"]\n'
         )
         result = runner.invoke(app, ["config", "policy"])
@@ -400,9 +400,9 @@ class TestConfigAndInit:
     def test_init_writes_and_refuses_overwrite(self, workdir: Path) -> None:
         result = runner.invoke(app, ["init", "--project"])
         assert result.exit_code == 0
-        assert (workdir / "sbxloop.toml").is_file()
+        assert (workdir / "lantern.toml").is_file()
         # the generated file must itself be valid config
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
         config = load_config(cwd=workdir, env={})
         assert config.model == "auto"
@@ -415,7 +415,7 @@ class TestConfigAndInit:
     def test_init_template_documents_landing_knobs(self, workdir: Path) -> None:
         result = runner.invoke(app, ["init", "--project"])
         assert result.exit_code == 0
-        text = (workdir / "sbxloop.toml").read_text()
+        text = (workdir / "lantern.toml").read_text()
         # landing is always on; its budgets and the merge style are documented
         assert "[landing]" in text
         assert "max_review_rounds" in text and "merge_method" in text
@@ -424,41 +424,41 @@ class TestConfigAndInit:
         # the retired tracker knobs must not be taught to a fresh install
         assert "close_on_success" not in text and "tracking_issue" not in text
 
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
         config = load_config(cwd=workdir, env={})
         assert config.landing.max_review_rounds == 3
-        assert config.daemon.blocked_label == "sbxloop:blocked"
+        assert config.daemon.blocked_label == "lantern:blocked"
         # the concierge block documents its knobs and stays commented (defaults)
         assert "[concierge]" in text and "session_turns" in text
         assert config.concierge.enabled is True and config.concierge.model is None
 
 
 class TestSandboxCommands:
-    def test_sandbox_ls_filters_sbxloop(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.models import SandboxSpec
-        from sbxloop.sbx.naming import run_name
+    def test_sandbox_ls_filters_lantern(self, workdir: Path, fake_sbx: FakeSbx) -> None:
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.models import SandboxSpec
+        from lantern.sbx.naming import run_name
 
         cli = SbxCLI(binary=str(fake_sbx.binary))
-        cli.create(SandboxSpec(name="sbxloop-r1-agent", role="agent", workspace=workdir))
+        cli.create(SandboxSpec(name="lantern-r1-agent", role="agent", workspace=workdir))
         current = run_name(home(workdir), "rabc12345", "agent")
         cli.create(SandboxSpec(name=current, role="agent", workspace=workdir))
         cli.create(SandboxSpec(name="unrelated", role="agent", workspace=workdir))
         result = runner.invoke(app, ["sandbox", "ls"])
         assert result.exit_code == 0
-        assert "sbxloop-r1-agent" in result.output
+        assert "lantern-r1-agent" in result.output
         assert current in result.output
         assert "unrelated" not in result.output
 
     def test_sandbox_rm_by_run(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.models import SandboxSpec
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.models import SandboxSpec
+        from lantern.sbx.naming import run_name
 
         cli = SbxCLI(binary=str(fake_sbx.binary))
         for role in ("agent", "github"):
-            cli.create(SandboxSpec(name=f"sbxloop-r9-{role}", role="agent", workspace=workdir))
+            cli.create(SandboxSpec(name=f"lantern-r9-{role}", role="agent", workspace=workdir))
         cli.create(
             SandboxSpec(
                 name=run_name(home(workdir), "r9", "service"),
@@ -471,13 +471,13 @@ class TestSandboxCommands:
         assert cli.ls() == []
 
     def test_sandbox_rm_all_keeps_another_home(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.models import SandboxSpec
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.models import SandboxSpec
+        from lantern.sbx.naming import run_name
 
         cli = SbxCLI(binary=str(fake_sbx.binary))
         own = run_name(home(workdir), "rabc12345", "agent")
-        other = run_name(SbxloopHome(workdir / "other"), "rabc12345", "agent")
+        other = run_name(LanternHome(workdir / "other"), "rabc12345", "agent")
         for name in (own, other):
             cli.create(SandboxSpec(name=name, role="agent", workspace=workdir))
         result = runner.invoke(app, ["sandbox", "rm", "--all"])
@@ -491,12 +491,12 @@ class TestSandboxCommands:
 
 class TestShellCommand:
     def seed_run_with_sandbox(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.models import SandboxSpec
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.models import SandboxSpec
 
         seed_store(workdir)
         SbxCLI(binary=str(fake_sbx.binary)).create(
-            SandboxSpec(name="sbxloop-rseeded11-agent", role="agent", workspace=workdir)
+            SandboxSpec(name="lantern-rseeded11-agent", role="agent", workspace=workdir)
         )
 
     def test_unknown_run_errors(self, workdir: Path, fake_sbx: FakeSbx) -> None:
@@ -520,7 +520,7 @@ class TestShellCommand:
         self.seed_run_with_sandbox(workdir, fake_sbx)
         result = runner.invoke(app, ["shell", "rseeded11", "-c", "touch /home/agent/proof"])
         assert result.exit_code == 0, result.output
-        assert (fake_sbx.sandbox_fs("sbxloop-rseeded11-agent") / "home/agent/proof").is_file()
+        assert (fake_sbx.sandbox_fs("lantern-rseeded11-agent") / "home/agent/proof").is_file()
 
     def test_inner_exit_code_passes_through(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         self.seed_run_with_sandbox(workdir, fake_sbx)
@@ -534,8 +534,8 @@ class TestDaemonCommand:
         """No sandbox, no GitHub: the stale-sandbox sweep is a no-op and the
         issue poll answers from memory, so `daemon --repo o/r --once` runs a
         whole tick without a network (the test_daemon_control pattern)."""
-        from sbxloop.daemon.github import DaemonGithub
-        from sbxloop.daemon.sources import GitHubIssueSource
+        from lantern.daemon.github import DaemonGithub
+        from lantern.daemon.sources import GitHubIssueSource
 
         monkeypatch.setattr(DaemonGithub, "remove_stale", lambda self: None)
         monkeypatch.setattr(GitHubIssueSource, "poll", lambda self: list(items or []))
@@ -558,7 +558,7 @@ class TestDaemonCommand:
     def test_dry_run_lists_candidates_without_claiming(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.daemon.sources import GitHubIssueSource
+        from lantern.daemon.sources import GitHubIssueSource
 
         item = WorkItem(
             item_id="gh:issue:12",
@@ -607,7 +607,7 @@ class TestDaemonCommand:
         """A headless daemon still has the operator console's bridge: the
         startup summary says so, the store gains the mailbox, and the
         liveness stamp lands before the tick."""
-        from sbxloop.daemon.store import LOCAL_STARTED_KEY, DaemonStore
+        from lantern.daemon.store import LOCAL_STARTED_KEY, DaemonStore
 
         self.offline(monkeypatch)
         result = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
@@ -626,9 +626,9 @@ class TestDaemonCommand:
         """#760: a chat backend with the concierge on is intake enough — the
         daemon starts on chat-asked workloads alone, its source named
         `chat`, and `--once` still runs what a concierge already queued."""
-        from sbxloop.daemon.discord import DiscordBridge
+        from lantern.daemon.discord import DiscordBridge
 
-        (workdir / "sbxloop.toml").write_text("[discord]\nchannel_id = 42\n")
+        (workdir / "lantern.toml").write_text("[discord]\nchannel_id = 42\n")
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
         monkeypatch.setattr(DiscordBridge, "start", lambda self, **kw: None)
         monkeypatch.setattr(DiscordBridge, "close", lambda self, **kw: None)
@@ -644,7 +644,7 @@ class TestDaemonCommand:
     ) -> None:
         """#761: `[[schedules]]` is intake enough — the daemon starts on its
         ticks alone, its source named `schedule`."""
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[[workloads]]\nname = 'brief'\n"
             "[[schedules]]\nname = 'daily'\nprofile = 'brief'\n"
             "ask = 'Summarise the day'\ncron = '0 7 * * *'\n"
@@ -660,7 +660,7 @@ class TestDaemonCommand:
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # nothing can queue a workload from chat, so nothing would ever be work
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[discord]\nchannel_id = 42\n[concierge]\nenabled = false\n"
         )
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
@@ -671,7 +671,7 @@ class TestDaemonCommand:
     def test_the_concierge_is_wanted_headless(self) -> None:
         """The change that un-gated the concierge from a chat backend: a
         headless long-lived daemon builds it; `--once` never does."""
-        from sbxloop.cli.app import concierge_wanted
+        from lantern.cli.app import concierge_wanted
 
         headless = Config.model_validate({})
         assert concierge_wanted(headless, once=False)
@@ -682,29 +682,29 @@ class TestDaemonCommand:
     def test_tui_help_and_a_missing_store_are_actionable(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`sbxloop tui` explains itself, and with no daemon state on the
+        """`lantern tui` explains itself, and with no daemon state on the
         host it says what to do rather than open an empty console."""
         result = runner.invoke(app, ["tui", "--help"])
         assert result.exit_code == 0, result.output
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "--run" in plain and "--read-only" in plain and "--unit" in plain
-        assert "--state-dir" not in plain  # the home is the home; SBXLOOP_HOME moves it
+        assert "--state-dir" not in plain  # the home is the home; LANTERN_HOME moves it
         result = runner.invoke(
-            app, ["tui"], env={"COLUMNS": "300", "SBXLOOP_HOME": str(workdir / "nowhere")}
+            app, ["tui"], env={"COLUMNS": "300", "LANTERN_HOME": str(workdir / "nowhere")}
         )
         assert result.exit_code == 2
-        assert "does not exist" in result.output and "sbxloop daemon" in result.output
+        assert "does not exist" in result.output and "lantern daemon" in result.output
 
     def test_once_never_starts_the_version_check(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The drift check reaches GitHub Releases, so it belongs to a long-running
         daemon only — this is what keeps the unit suite off the network."""
-        from sbxloop.cli import app as app_mod
+        from lantern.cli import app as app_mod
 
         started: list[object] = []
         # Patch where it is USED: app binds the name at import time, so
-        # patching sbxloop.daemon.versions would pass no matter what.
+        # patching lantern.daemon.versions would pass no matter what.
         monkeypatch.setattr(app_mod, "start_drift_check", lambda *a, **k: started.append(a))
         self.offline(monkeypatch)
         result = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
@@ -718,8 +718,8 @@ class TestDaemonCommand:
         concierge's `version_status` uses too, so the whole daemon makes zero
         release lookups — not just the startup drift check; #638: the
         operator's `upgrade_command` rides along for the advice text."""
-        from sbxloop.cli import app as app_mod
-        from sbxloop.daemon.versions import VersionProbe
+        from lantern.cli import app as app_mod
+        from lantern.daemon.versions import VersionProbe
 
         built: list[VersionProbe] = []
 
@@ -729,27 +729,27 @@ class TestDaemonCommand:
             return probe
 
         monkeypatch.setattr(app_mod, "VersionProbe", capture)
-        (workdir / "sbxloop.toml").write_text(
-            '[daemon]\nversion_check = false\nupgrade_command = "pipx upgrade sbxloop"\n'
+        (workdir / "lantern.toml").write_text(
+            '[daemon]\nversion_check = false\nupgrade_command = "pipx upgrade lantern"\n'
         )
         self.offline(monkeypatch)
         result = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
         assert result.exit_code == 0, result.output
         (probe,) = built
         assert probe.check_releases is False
-        assert probe.upgrade_command == "pipx upgrade sbxloop"
+        assert probe.upgrade_command == "pipx upgrade lantern"
 
     def test_state_lives_in_the_home_and_is_announced(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The daemon's state is under the home, never a relative .sbxloop
+        """The daemon's state is under the home, never a relative .lantern
         that would nest run clones inside the checkout, and the startup
         line names the home."""
         self.offline(monkeypatch)
         result = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
         assert result.exit_code == 0, result.output
         assert home(workdir).state_db.is_file()
-        assert not (workdir / ".sbxloop" / "state.db").exists()
+        assert not (workdir / ".lantern" / "state.db").exists()
         assert "daemon.starting" in result.output
         assert str(home(workdir).root) in result.output.replace("\n", "")
 
@@ -797,7 +797,7 @@ class TestDaemonCommand:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self.offline(monkeypatch)
-        monkeypatch.setenv("SBXLOOP_DAEMON__LOG_LEVEL", "WARNING")
+        monkeypatch.setenv("LANTERN_DAEMON__LOG_LEVEL", "WARNING")
         quiet = runner.invoke(app, ["daemon", "--repo", "o/r", "--once"])
         assert quiet.exit_code == 0, quiet.output
         assert "daemon.starting" not in quiet.output  # INFO suppressed by env
@@ -851,7 +851,7 @@ class TestDaemonCommand:
 
 
 class TestDaemonItemControls:
-    """#229: `sbxloop daemon items|abandon|retry|requeue` act on the store
+    """#229: `lantern daemon items|abandon|retry|requeue` act on the store
     the daemon shares; they need no live daemon and no sandbox."""
 
     @staticmethod
@@ -860,7 +860,7 @@ class TestDaemonItemControls:
         return home(workdir).state
 
     def seed(self, workdir: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         dstore = DaemonStore(self.daemon_state(workdir) / "state.db")
         dstore.upsert_new(WorkItem(item_id="gh:issue:12", source_key="12", title="Do X"), 1.0)
@@ -883,7 +883,7 @@ class TestDaemonItemControls:
             assert result.exit_code == 2 and "unknown item state" in result.output
 
     def test_abandon_retry_requeue_transitions(self, workdir: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         self.seed(workdir)
         result = runner.invoke(app, ["daemon", "retry", "gh:issue:12"])
@@ -896,7 +896,7 @@ class TestDaemonItemControls:
         # ("attempts \x1b[1;36m1"): assert on the ANSI-stripped text.
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         # an operator abandon is a failure by decision; the run stays pinned
-        # so the ledger and `sbxloop logs` still tie the item to it
+        # so the ledger and `lantern logs` still tie the item to it
         assert "gh:issue:12: failed (attempts 1, run r_x)" in plain
         dstore = DaemonStore(self.daemon_state(workdir) / "state.db")
         item = dstore.get("gh:issue:12")
@@ -922,7 +922,7 @@ class TestDaemonItemControls:
     def test_item_verbs_take_legacy_and_typed_ids(self, workdir: Path) -> None:
         """#508: `gh:12` is the legacy spelling of `gh:issue:12`. Both forms
         must reach the same row, and every rendering is the typed one."""
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         self.seed(workdir)
         result = runner.invoke(app, ["daemon", "requeue", "gh:12"])  # legacy in
@@ -947,7 +947,7 @@ class TestDaemonItemControls:
         """A row written by the pre-#508 daemon still lists — as `gh:issue:`."""
         import sqlite3
 
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         self.seed(workdir)
         db = self.daemon_state(workdir) / "state.db"
@@ -969,7 +969,7 @@ class TestDaemonItemControls:
             assert "gh:issue:12" in out and not re.search(r"gh:\d", out)
 
     def test_requeue_unpins_a_running_item(self, workdir: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         self.seed(workdir)
         result = runner.invoke(app, ["daemon", "requeue", "gh:issue:12"])
@@ -1011,9 +1011,9 @@ class TestDoctor:
     def test_doctor_reports_the_concierge_when_discord_is_on(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
-        (workdir / "sbxloop.toml").write_text("[discord]\nchannel_id = 42\n")
+        (workdir / "lantern.toml").write_text("[discord]\nchannel_id = 42\n")
         env = {"GH_TOKEN": "tok", "DISCORD_BOT_TOKEN": "tok"}
         (row,) = [c for c in collect_checks(env) if c.name == "chat concierge"]
         assert not row.ok and not row.hard and "COPILOT_GITHUB_TOKEN not set" in row.detail
@@ -1021,12 +1021,12 @@ class TestDoctor:
         (row,) = [c for c in collect_checks(env) if c.name == "chat concierge"]
         assert row.ok and "180s per message" in row.detail
         assert "config edits: on (13 prefix(es) locked)" in row.detail
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[discord]\nchannel_id = 42\n[concierge]\nedit_config = false\n"
         )
         (row,) = [c for c in collect_checks(env) if c.name == "chat concierge"]
         assert "config edits: off" in row.detail
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[discord]\nchannel_id = 42\n[concierge]\nenabled = false\n"
         )
         assert not [c for c in collect_checks(env) if c.name == "chat concierge"]
@@ -1036,13 +1036,13 @@ class TestDoctor:
     ) -> None:
         """No chat backend at all: the operator console's row is there, and
         the concierge row is too — it answers the console."""
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
         env = {"GH_TOKEN": "tok", "COPILOT_GITHUB_TOKEN": "tok"}
         checks = collect_checks(env)
         (console,) = [c for c in checks if c.name == "operator console"]
         assert console.ok and not console.hard
-        assert "sbxloop tui" in console.detail and "sbxloop-daemon" in console.detail
+        assert "lantern tui" in console.detail and "lantern-daemon" in console.detail
         (row,) = [c for c in checks if c.name == "chat concierge"]
         assert row.ok
         assert not [c for c in checks if c.name.startswith("chat bridge")]
@@ -1052,7 +1052,7 @@ class TestDoctor:
     ) -> None:
         import getpass
 
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
         def no_user() -> str:
             raise OSError("No username set in the environment")
@@ -1070,9 +1070,9 @@ class TestDoctor:
         token warned "mentions will fail" on a claude-backend host where
         nothing was wrong — and stayed quiet about the token that matters.
         """
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[agent]\nbackend = "claude"\n[discord]\nchannel_id = 42\n'
         )
         env = {"GH_TOKEN": "tok", "DISCORD_BOT_TOKEN": "tok", "COPILOT_GITHUB_TOKEN": "tok"}
@@ -1092,16 +1092,16 @@ class TestDoctor:
         host, not a hint: doctor fails and names the command that moves it."""
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        (workdir / ".config" / "sbxloop").mkdir(parents=True)
+        (workdir / ".config" / "lantern").mkdir(parents=True)
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code != 0, result.output
         assert "legacy layout" in result.output
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
         (legacy,) = [c for c in collect_checks(dict(os.environ)) if c.name == "legacy layout"]
         assert not legacy.ok and legacy.hard
-        assert str(workdir / ".config" / "sbxloop") in legacy.detail
-        assert "sbxloop init --migrate --purge" in legacy.detail
+        assert str(workdir / ".config" / "lantern") in legacy.detail
+        assert "lantern init --migrate --purge" in legacy.detail
 
     def test_doctor_fails_on_an_uninitialised_home(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
@@ -1109,11 +1109,11 @@ class TestDoctor:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
         home(workdir).record.unlink()
-        from sbxloop.cli.doctor import collect_checks
+        from lantern.cli.doctor import collect_checks
 
         (row,) = [c for c in collect_checks(dict(os.environ)) if c.name == "home"]
-        assert not row.ok and row.hard and "sbxloop init" in row.detail
-        home(workdir).write_record(sbxloop_version="x", created_by="test")
+        assert not row.ok and row.hard and "lantern init" in row.detail
+        home(workdir).write_record(lantern_version="x", created_by="test")
         (row,) = [c for c in collect_checks(dict(os.environ)) if c.name == "home"]
         assert row.ok and "layout v1" in row.detail
 
@@ -1123,7 +1123,7 @@ class TestDoctor:
         """#899: on POSIX the row is the mode it always was. On a host whose
         access control could not be read the row *fails* saying so — never
         passes, which would call every unreadable secrets file safe."""
-        from sbxloop.cli.doctor import home_checks
+        from lantern.cli.doctor import home_checks
 
         secrets = home(workdir).secrets_env
         secrets.write_text("GH_TOKEN=tok\n")
@@ -1139,10 +1139,10 @@ class TestDoctor:
         assert not row.ok and "mode 0644" in row.detail and "chmod 600" in row.detail
 
         monkeypatch.setattr(
-            "sbxloop.hostfiles._run",
+            "lantern.hostfiles._run",
             lambda argv: subprocess.CompletedProcess(list(argv), 1, "", "Access is denied."),
         )
-        windows = SbxloopHome(home(workdir).root, os_name="nt")
+        windows = LanternHome(home(workdir).root, os_name="nt")
         (row,) = [c for c in home_checks(windows, dict(os.environ)) if c.name == "secrets file"]
         assert not row.ok and "could not be read" in row.detail
         assert "chmod" not in row.detail and "icacls" in row.detail
@@ -1173,7 +1173,7 @@ class TestDoctor:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         for name in ("GH_TOKEN", "GITHUB_TOKEN"):
             monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("SBXLOOP_GITHUB__REPO", "owner/repo")
+        monkeypatch.setenv("LANTERN_GITHUB__REPO", "owner/repo")
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 1
         assert "FAIL" in result.output
@@ -1185,7 +1185,7 @@ class TestDoctor:
         fails the config by name and says where the secret now belongs."""
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        (workdir / "sbxloop.toml").write_text('[sandbox]\nsecret_env = ["NPM_TOKEN"]\n')
+        (workdir / "lantern.toml").write_text('[sandbox]\nsecret_env = ["NPM_TOKEN"]\n')
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code != 0
         output = result.output + str(result.exception or "")
@@ -1201,7 +1201,7 @@ class TestDoctor:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
         monkeypatch.delenv("ARTIFACTORY_TOKEN", raising=False)
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[[registries]]\n"
             'kind = "npm"\n'
             'host = "artifactory.example.com"\n'
@@ -1227,7 +1227,7 @@ class TestDoctor:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
         monkeypatch.delenv("WEATHER_API_KEY", raising=False)
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             "[[credentials]]\n"
             'name = "weather"\n'
             'env = "WEATHER_API_KEY"\n'
@@ -1251,7 +1251,7 @@ class TestDoctor:
         is set."""
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[workloads]]\nname = "research"\negress = ["*.example.com"]\nsinks = ["chat"]\n'
         )
         result = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
@@ -1262,7 +1262,7 @@ class TestDoctor:
             in result.output
         )
         assert "no [workload] default" in result.output
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[workloads]]\nname = "research"\n\n[workload]\ndefault = "research"\n'
         )
         result = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
@@ -1270,7 +1270,7 @@ class TestDoctor:
         assert "research (default): egress 0 patterns" in result.output
         assert "no [workload] default" not in result.output
         # nothing declared, no row
-        (workdir / "sbxloop.toml").write_text("")
+        (workdir / "lantern.toml").write_text("")
         result = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
         assert "workload profiles" not in result.output
 
@@ -1284,7 +1284,7 @@ class TestDoctor:
         would refuse to start (soft: a CLI-only host never starts one)."""
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[workloads]]\nname = "brief"\n\n'
             '[[schedules]]\nname = "daily"\nprofile = "brief"\nask = "Summarise"\n'
             'cron = "0 7 * * mon-fri"\ntimezone = "Europe/London"\n\n'
@@ -1292,12 +1292,12 @@ class TestDoctor:
         )
         result = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
         assert result.exit_code == 0, result.output
-        assert "schedules in sbxloop.toml" in result.output
+        assert "schedules in lantern.toml" in result.output
         assert "daily, hourly" in result.output
         assert "schedules live in the daemon's database now" in result.output
         assert "daemon intake" in result.output and "2 schedules" in result.output
         # the repository and chat asks are named too
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[github]\nrepo = "o/r"\n\n[discord]\nchannel_id = 42\n'
         )
         monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
@@ -1305,7 +1305,7 @@ class TestDoctor:
         assert "labeled issues of o/r; chat asks (discord, concierge on)" in result.output
         assert "schedules" not in result.output.split("daemon intake")[1].splitlines()[0]
         # nothing would be work: a soft failure naming the three ways
-        (workdir / "sbxloop.toml").write_text("")
+        (workdir / "lantern.toml").write_text("")
         result = runner.invoke(app, ["doctor"], env={"COLUMNS": "200"})
         assert result.exit_code == 0, result.output  # soft
         assert "nothing would be work" in result.output
@@ -1325,7 +1325,7 @@ class TestDoctor:
         record: dict[str, object] = {
             "ref": ref,
             "worker_version": worker_version,
-            "python": "/home/agent/.sbxloop/venv/bin/python",
+            "python": "/home/agent/.lantern/venv/bin/python",
             "runtime_cached": True,
             "baked_at": 0.0,
         }
@@ -1342,15 +1342,15 @@ class TestDoctor:
         baked: list[str] | None,
         configured: list[str] | None = None,
     ) -> Check:
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
         self._bake_record(
-            workdir, worker_version=sbxloop.__version__, ref="sbxloop-baked:latest", languages=baked
+            workdir, worker_version=lantern.__version__, ref="lantern-baked:latest", languages=baked
         )
-        env = {"COPILOT_GITHUB_TOKEN": "tok", "SBXLOOP_SANDBOX__TEMPLATE": "sbxloop-baked:latest"}
+        env = {"COPILOT_GITHUB_TOKEN": "tok", "LANTERN_SANDBOX__TEMPLATE": "lantern-baked:latest"}
         if configured is not None:
-            env["SBXLOOP_SANDBOX__LANGUAGES"] = json.dumps(configured)
+            env["LANTERN_SANDBOX__LANGUAGES"] = json.dumps(configured)
         checks = collect_checks(env, cli=SbxCLI(binary=str(fake_sbx.binary)))
         return {c.name: c for c in checks}["languages in template"]
 
@@ -1367,7 +1367,7 @@ class TestDoctor:
         # A run tops the missing toolchain up per provision: slower, not lost.
         row = self._languages_row(workdir, fake_sbx, baked=["python"], configured=["python", "go"])
         assert not row.ok and not row.hard
-        assert "also wants go" in row.detail and "sbxloop bake" in row.detail
+        assert "also wants go" in row.detail and "lantern bake" in row.detail
 
     def test_doctor_languages_in_template_unrecorded_by_older_bake(
         self, workdir: Path, fake_sbx: FakeSbx
@@ -1377,14 +1377,14 @@ class TestDoctor:
         assert "not recorded" in row.detail
 
     def _git_row(self, workdir: Path, fake_sbx: FakeSbx, git: bool | None) -> Check:
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
         self._bake_record(
-            workdir, worker_version=sbxloop.__version__, ref="sbxloop-baked:latest", git=git
+            workdir, worker_version=lantern.__version__, ref="lantern-baked:latest", git=git
         )
         checks = collect_checks(
-            {"COPILOT_GITHUB_TOKEN": "tok", "SBXLOOP_SANDBOX__TEMPLATE": "sbxloop-baked:latest"},
+            {"COPILOT_GITHUB_TOKEN": "tok", "LANTERN_SANDBOX__TEMPLATE": "lantern-baked:latest"},
             cli=SbxCLI(binary=str(fake_sbx.binary)),
         )
         return {c.name: c for c in checks}["git in template"]
@@ -1404,7 +1404,7 @@ class TestDoctor:
         # apt-installs it per run, so the run is not lost — only slower.
         row = self._git_row(workdir, fake_sbx, git=False)
         assert not row.ok and not row.hard
-        assert "sbxloop bake" in row.detail
+        assert "lantern bake" in row.detail
 
     def test_doctor_git_in_template_unrecorded_by_older_bake(
         self, workdir: Path, fake_sbx: FakeSbx
@@ -1419,13 +1419,13 @@ class TestDoctor:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The rendered table wraps long details, so assert on the checks."""
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
-        self._bake_record(workdir, worker_version=sbxloop.__version__, ref="sbxloop-baked:latest")
-        fake_sbx.script("template ls", stdout="REPOSITORY  TAG\nsbxloop-baked  latest\n")
+        self._bake_record(workdir, worker_version=lantern.__version__, ref="lantern-baked:latest")
+        fake_sbx.script("template ls", stdout="REPOSITORY  TAG\nlantern-baked  latest\n")
         checks = collect_checks(
-            {"COPILOT_GITHUB_TOKEN": "tok", "SBXLOOP_SANDBOX__TEMPLATE": "sbxloop-baked:latest"},
+            {"COPILOT_GITHUB_TOKEN": "tok", "LANTERN_SANDBOX__TEMPLATE": "lantern-baked:latest"},
             cli=SbxCLI(binary=str(fake_sbx.binary)),
         )
         by_name = {c.name: c for c in checks}
@@ -1438,24 +1438,24 @@ class TestDoctor:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
-        monkeypatch.setenv("SBXLOOP_SANDBOX__TEMPLATE", "sbxloop-baked:latest")
-        self._bake_record(workdir, worker_version="0.0.0", ref="sbxloop-baked:latest")
+        monkeypatch.setenv("LANTERN_SANDBOX__TEMPLATE", "lantern-baked:latest")
+        self._bake_record(workdir, worker_version="0.0.0", ref="lantern-baked:latest")
         result = runner.invoke(app, ["doctor"])
         # stale template is a warning (runs fall back to the ladder), never a FAIL
         assert result.exit_code == 0, result.output
         assert "stale" in result.output
-        assert "sbxloop bake" in result.output
+        assert "lantern bake" in result.output
 
     def test_doctor_unbaked_template_is_soft(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
         checks = collect_checks(
             {
                 "COPILOT_GITHUB_TOKEN": "tok",
-                "SBXLOOP_SANDBOX__TEMPLATE": "docker.io/you/custom:v1",
+                "LANTERN_SANDBOX__TEMPLATE": "docker.io/you/custom:v1",
             },
             cli=SbxCLI(binary=str(fake_sbx.binary)),
         )
@@ -1466,7 +1466,7 @@ class TestDoctor:
         # not in `sbx template ls` either -> soft warn with remediation
         available = by_name["template available"]
         assert not available.ok and not available.hard
-        assert "sbxloop bake" in available.detail
+        assert "lantern bake" in available.detail
 
     def test_doctor_no_template_no_template_checks(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
@@ -1477,8 +1477,8 @@ class TestDoctor:
         assert "sandbox template" not in result.output
 
     def _sdk_kind_check(self, fake_sbx: FakeSbx):
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
         checks = collect_checks(
             {"COPILOT_GITHUB_TOKEN": "tok"}, cli=SbxCLI(binary=str(fake_sbx.binary))
@@ -1488,7 +1488,7 @@ class TestDoctor:
     def test_doctor_sdk_kinds_soft_ok_when_sdk_absent(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.cli import doctor
+        from lantern.cli import doctor
 
         monkeypatch.setattr(doctor, "installed_sdk_permission_kinds", lambda: None)
         check = self._sdk_kind_check(fake_sbx)
@@ -1499,7 +1499,7 @@ class TestDoctor:
     def test_doctor_sdk_kinds_match_verified_vocabulary(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.cli import doctor
+        from lantern.cli import doctor
 
         monkeypatch.setattr(
             doctor, "installed_sdk_permission_kinds", lambda: doctor.SDK_PERMISSION_KINDS
@@ -1511,7 +1511,7 @@ class TestDoctor:
     def test_doctor_sdk_kind_drift_warns_naming_the_kinds(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.cli import doctor
+        from lantern.cli import doctor
 
         drifted = (doctor.SDK_PERMISSION_KINDS - {"read"}) | {"novel-kind"}
         monkeypatch.setattr(doctor, "installed_sdk_permission_kinds", lambda: drifted)
@@ -1522,8 +1522,8 @@ class TestDoctor:
         assert "read" in check.detail
 
     def _lfs_check(self, fake_sbx: FakeSbx) -> Check:
-        from sbxloop.cli.doctor import collect_checks
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.cli.doctor import collect_checks
+        from lantern.sbx.cli import SbxCLI
 
         checks = collect_checks(
             {"COPILOT_GITHUB_TOKEN": "tok"}, cli=SbxCLI(binary=str(fake_sbx.binary))
@@ -1533,7 +1533,7 @@ class TestDoctor:
     def test_doctor_host_git_lfs_found(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import hostgit
+        from lantern import hostgit
 
         monkeypatch.setattr(hostgit, "lfs_version", lambda: "git-lfs/3.8.0 (GitHub; linux amd64)")
         check = self._lfs_check(fake_sbx)
@@ -1546,7 +1546,7 @@ class TestDoctor:
         # #693: a repository on LFS fails to provision without it — said
         # here, before a run finds out; soft because most repositories
         # never use LFS.
-        from sbxloop import hostgit
+        from lantern import hostgit
 
         monkeypatch.setattr(hostgit, "lfs_version", lambda: None)
         check = self._lfs_check(fake_sbx)
@@ -1557,10 +1557,10 @@ class TestDoctor:
     def test_doctor_host_git_lfs_missing_is_fine_when_opted_out(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import hostgit
+        from lantern import hostgit
 
         monkeypatch.setattr(hostgit, "lfs_version", lambda: None)
-        (workdir / "sbxloop.toml").write_text("[sandbox]\nclone_lfs = false\n")
+        (workdir / "lantern.toml").write_text("[sandbox]\nclone_lfs = false\n")
         check = self._lfs_check(fake_sbx)
         assert check.ok and not check.hard
         assert "pointer files" in check.detail
@@ -1592,7 +1592,7 @@ class TestDoctor:
     def test_doctor_deep_probes_and_caches(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx.conformance import CATALOG, load_verdicts
+        from lantern.sbx.conformance import CATALOG, load_verdicts
 
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         result = runner.invoke(app, ["doctor", "--deep"])
@@ -1611,7 +1611,7 @@ class TestDoctor:
     ) -> None:
         import time as time_module
 
-        from sbxloop.sbx.conformance import (
+        from lantern.sbx.conformance import (
             PROBE_WORKSPACE_MOUNT,
             ProbeRecord,
             save_verdicts,
@@ -1657,12 +1657,12 @@ class TestBakeCommand:
     """CLI wiring only — the bake flow itself is covered in test_bake.py."""
 
     def _stub_record(self, **overrides: Any) -> Any:
-        from sbxloop.sbx.bake import BakeRecord
+        from lantern.sbx.bake import BakeRecord
 
         base: dict[str, Any] = {
-            "ref": "sbxloop-baked:latest",
-            "worker_version": sbxloop.__version__,
-            "python": "/home/agent/.sbxloop/venv/bin/python",
+            "ref": "lantern-baked:latest",
+            "worker_version": lantern.__version__,
+            "python": "/home/agent/.lantern/venv/bin/python",
             "runtime_cached": True,
             "baked_at": 0.0,
         }
@@ -1672,7 +1672,7 @@ class TestBakeCommand:
     def test_bake_success_prints_config_hint(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop.cli.app as app_mod
+        import lantern.cli.app as app_mod
 
         captured: dict[str, Any] = {}
 
@@ -1685,23 +1685,23 @@ class TestBakeCommand:
         assert result.exit_code == 0, result.output
         assert captured["cache_runtime"] is False
         assert captured["keep"] is True
-        assert captured["ref"] == "sbxloop-baked:latest"
-        assert 'template = "sbxloop-baked:latest"' in result.output
+        assert captured["ref"] == "lantern-baked:latest"
+        assert 'template = "lantern-baked:latest"' in result.output
 
     def test_bake_notes_already_configured_template(
         self, workdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop.cli.app as app_mod
+        import lantern.cli.app as app_mod
 
-        monkeypatch.setenv("SBXLOOP_SANDBOX__TEMPLATE", "sbxloop-baked:latest")
+        monkeypatch.setenv("LANTERN_SANDBOX__TEMPLATE", "lantern-baked:latest")
         monkeypatch.setattr(app_mod, "bake_template", lambda *a, **k: self._stub_record())
         result = runner.invoke(app, ["bake"])
         assert result.exit_code == 0, result.output
         assert "already points at this ref" in result.output
 
     def test_bake_failure_exits_2(self, workdir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import sbxloop.cli.app as app_mod
-        from sbxloop.errors import BakeError
+        import lantern.cli.app as app_mod
+        from lantern.errors import BakeError
 
         def fail(*args: Any, **kwargs: Any) -> Any:
             raise BakeError("bake failed: sandbox exploded")
@@ -1717,7 +1717,7 @@ class TestResolveRunWorkspace:
     around the current directory; nothing anywhere is harvest mode."""
 
     def test_flag_pins_the_directory_on_the_config(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
 
         ws = tmp_path / "ws"
         ws.mkdir()
@@ -1729,13 +1729,13 @@ class TestResolveRunWorkspace:
         assert pinned.github.repos[0].workspace == ws.resolve()
 
     def test_flag_must_exist(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
 
-        with pytest.raises(SbxloopError, match="is not a directory"):
+        with pytest.raises(LanternError, match="is not a directory"):
             _resolve_run_workspace(Config(), tmp_path / "nope", cwd=tmp_path)
 
     def test_configured_workspace_wins_over_the_cwd(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
         from tests.unit.test_hostgit import make_repo
 
         ws = tmp_path / "ws"
@@ -1747,7 +1747,7 @@ class TestResolveRunWorkspace:
         assert same is config
 
     def test_checkout_configured_for_another_repository_means_a_clone(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
         from tests.unit.test_hostgit import make_repo
 
         other = tmp_path / "other"
@@ -1767,7 +1767,7 @@ class TestResolveRunWorkspace:
         assert same is config
 
     def test_enclosing_checkout_is_used(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
         from tests.unit.test_hostgit import make_repo
 
         root = make_repo(tmp_path)
@@ -1778,7 +1778,7 @@ class TestResolveRunWorkspace:
         assert pinned.sandbox.workspace == root.resolve()
 
     def test_nothing_anywhere_is_harvest_mode(self, tmp_path: Path) -> None:
-        from sbxloop.cli.app import _resolve_run_workspace
+        from lantern.cli.app import _resolve_run_workspace
 
         assert _resolve_run_workspace(Config(), None, cwd=tmp_path)[1:] == (None, "none")
 
@@ -1789,12 +1789,12 @@ class TestRunCommand:
     ) -> None:
         script = workdir / "echo-script.json"
         script.write_text(json.dumps(responses))
-        monkeypatch.setenv("SBXLOOP_WORKER_BACKEND", "echo")
-        monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(script))
+        monkeypatch.setenv("LANTERN_WORKER_BACKEND", "echo")
+        monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(script))
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        monkeypatch.setenv("SBXLOOP_WORKER_PYTHON", sys.executable)
-        monkeypatch.setenv("SBXLOOP_INSTALL_WORKERS", "false")
+        monkeypatch.setenv("LANTERN_WORKER_PYTHON", sys.executable)
+        monkeypatch.setenv("LANTERN_INSTALL_WORKERS", "false")
 
     def test_a_tool_run_needs_its_recipe_and_target(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
@@ -1960,7 +1960,7 @@ class TestRunCommand:
         execute = {"text": "on it\n\n## Result\n\ndone"}
         verdict = {"json": {"passed": True, "unmet": [], "notes": ""}}
         self.make_run_env(workdir, monkeypatch, [self.HAPPY_RUN[0], execute, verdict])
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[workloads]]\nname = "research"\n\n'
             '[[workloads]]\nname = "bare"\nbudgets = { max_tasks = 2 }\n\n'
             '[workload]\ndefault = "research"\n'
@@ -1993,7 +1993,7 @@ class TestRunCommand:
         """A profile on a code run, or one the config does not declare, is
         a usage error before any sandbox."""
         self.make_run_env(workdir, monkeypatch, self.HAPPY_RUN)
-        (workdir / "sbxloop.toml").write_text('[[workloads]]\nname = "research"\n')
+        (workdir / "lantern.toml").write_text('[[workloads]]\nname = "research"\n')
         result = runner.invoke(app, ["run", "x", "--profile", "research", "--no-tui"])
         assert result.exit_code == 2, result.output
         assert "--profile cannot be combined with --kind code" in result.output.replace("\n", "")
@@ -2027,7 +2027,7 @@ class TestRunCommand:
     def test_run_inside_a_checkout_works_on_that_checkout(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`sbxloop run` typed from anywhere inside a git checkout means that
+        """`lantern run` typed from anywhere inside a git checkout means that
         checkout (#670); the state dir still resolves under $HOME."""
         from tests.unit.test_hostgit import make_repo
 
@@ -2052,7 +2052,7 @@ class TestRunCommand:
         self.make_run_env(workdir, monkeypatch, self.HAPPY_RUN)
         ws = workdir / "configured-ws"
         ws.mkdir()
-        monkeypatch.setenv("SBXLOOP_SANDBOX__WORKSPACE", str(ws))
+        monkeypatch.setenv("LANTERN_SANDBOX__WORKSPACE", str(ws))
         result = runner.invoke(app, ["run", "make it so", "--no-tui"])
         assert result.exit_code == 0, result.output
         assert f"workspace: {ws} (configured)" in result.output.replace("\n", "")
@@ -2071,7 +2071,7 @@ class TestRunCommand:
         assert result.exit_code == 2, result.output
         assert "run failed:" in result.output
         assert "was not visible inside the agent sandbox" in result.output
-        assert "sbxloop doctor" in result.output
+        assert "lantern doctor" in result.output
         assert "t1: done" not in result.output
 
     HAPPY_RUN: ClassVar[list[dict[str, Any]]] = [
@@ -2097,7 +2097,7 @@ class TestRunCommand:
     ) -> None:
         # keep_sandboxes=true in config must be forceable OFF from the CLI.
         self.make_run_env(workdir, monkeypatch, self.HAPPY_RUN)
-        monkeypatch.setenv("SBXLOOP_KEEP_SANDBOXES", "true")
+        monkeypatch.setenv("LANTERN_KEEP_SANDBOXES", "true")
         result = runner.invoke(app, ["run", "make it so", "--no-tui", "--no-keep-sandboxes"])
         assert result.exit_code == 0, result.output
         boxes = fake_sbx.state / "sandboxes"
@@ -2152,10 +2152,10 @@ class TestRunCommand:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Ctrl+C mid-run exits 130 without a traceback, removes the run's
-        sandboxes, and points at `sbxloop resume` (the run state stays
+        sandboxes, and points at `lantern resume` (the run state stays
         resumable)."""
         self.make_run_env(workdir, monkeypatch, [])
-        from sbxloop.engine.phases import PhaseRunner
+        from lantern.engine.phases import PhaseRunner
 
         def interrupt(self: PhaseRunner) -> Any:
             raise KeyboardInterrupt
@@ -2177,7 +2177,7 @@ class TestRunCommand:
         cleanly instead of leaking a traceback and a live engine thread."""
         import time as real_time
 
-        import sbxloop.cli.app as app_module
+        import lantern.cli.app as app_module
 
         self.make_run_env(
             workdir,
@@ -2276,8 +2276,8 @@ class TestRunCommand:
         through the engine's ``github_ops`` seam. Returns the fake, which
         records everything the run asked GitHub for. The CI-wait knobs are
         set the way an operator would set them (environment)."""
-        import sbxloop.cli.app as app_mod
-        from sbxloop.engine.engine import LoopEngine
+        import lantern.cli.app as app_mod
+        from lantern.engine.engine import LoopEngine
 
         fake = FakeGithub(repo="o/r", number=8, draft=True)
 
@@ -2286,18 +2286,18 @@ class TestRunCommand:
 
         monkeypatch.setattr(app_mod, "LoopEngine", engine_with_fake)
         self.make_run_env(workdir, monkeypatch, self.LANDED_RUN)
-        monkeypatch.setenv("SBXLOOP_LANDING__CI_POLL_INTERVAL_S", "0.01")
-        monkeypatch.setenv("SBXLOOP_LANDING__CI_SETTLE_S", "0")
+        monkeypatch.setenv("LANTERN_LANDING__CI_POLL_INTERVAL_S", "0.01")
+        monkeypatch.setenv("LANTERN_LANDING__CI_SETTLE_S", "0")
         return fake
 
     def test_run_with_repo_lands_a_pull_request(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With a repository configured, `sbxloop run` is the whole pipeline:
+        """With a repository configured, `lantern run` is the whole pipeline:
         a draft PR, the run's own review, CI, the merge. The finish summary
         restates the GitHub outcome — it must not live only in scrollback."""
         fake = self._delivery_env(workdir, monkeypatch)
-        monkeypatch.setenv("SBXLOOP_GITHUB__REPO", "o/r")
+        monkeypatch.setenv("LANTERN_GITHUB__REPO", "o/r")
         result = runner.invoke(app, ["run", "ship it", "--no-tui"])
         assert result.exit_code == 0, result.output
         assert len(fake.merges) == 1
@@ -2306,12 +2306,12 @@ class TestRunCommand:
         assert "github: o/r" in result.output
         assert "PR #8" in result.output and "pull/8" in result.output
         assert "review round 1: approve" in result.output
-        assert "merged by sbxloop" in result.output
+        assert "merged by lantern" in result.output
 
     def test_run_repo_flag_enables_github_without_config(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """--repo alone turns the GitHub integration on — no sbxloop.toml
+        """--repo alone turns the GitHub integration on — no lantern.toml
         needed — and the run lands there."""
         fake = self._delivery_env(workdir, monkeypatch)
         result = runner.invoke(app, ["run", "ship it", "--no-tui", "--repo", "o/cli"])
@@ -2324,7 +2324,7 @@ class TestRunCommand:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         fake = self._delivery_env(workdir, monkeypatch)
-        monkeypatch.setenv("SBXLOOP_GITHUB__REPO", "o/toml")
+        monkeypatch.setenv("LANTERN_GITHUB__REPO", "o/toml")
         result = runner.invoke(app, ["run", "ship it", "--no-tui", "--repo", "o/cli"])
         assert result.exit_code == 0, result.output
         assert len(fake.merges) == 1
@@ -2334,7 +2334,7 @@ class TestRunCommand:
     def test_run_create_repo_flags_reach_the_probe(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop.engine.engine as engine_mod
+        import lantern.engine.engine as engine_mod
 
         self._delivery_env(workdir, monkeypatch)
         seen: dict[str, Any] = {}
@@ -2414,7 +2414,7 @@ class TestRunCommand:
         boxes = fake_sbx.state / "sandboxes"
         assert any(p.name.startswith("sbxl-") for p in boxes.iterdir())
         # the run.keep event reaches the transcript with the shell pointer
-        assert "sbxloop shell" in result.output
+        assert "lantern shell" in result.output
 
     def test_failed_run_summary_prints_kept_hint(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
@@ -2450,11 +2450,11 @@ class TestRunCommand:
                 *[execute] * 6,
             ],
         )
-        monkeypatch.setenv("SBXLOOP_KEEP_ON_FAILURE", "true")
+        monkeypatch.setenv("LANTERN_KEEP_ON_FAILURE", "true")
         result = runner.invoke(app, ["run", "doomed", "--no-tui"])
         assert result.exit_code == 1, result.output
         assert "sandboxes kept:" in result.output
-        assert "sbxloop shell" in result.output
+        assert "lantern shell" in result.output
         assert "sandbox rm --run" in result.output
 
 
@@ -2462,8 +2462,8 @@ class TestArtifactsTree:
     def test_tree_caps_and_hides_denylisted_dirs(self, tmp_path: Path) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.app import _artifacts_tree
-        from sbxloop.engine.model import artifact_files
+        from lantern.cli.app import _artifacts_tree
+        from lantern.engine.model import artifact_files
 
         root = tmp_path / "ws"
         (root / "sub").mkdir(parents=True)
@@ -2489,7 +2489,7 @@ class TestArtifactsTree:
         assert ".git" not in text
 
     def test_human_size_units(self) -> None:
-        from sbxloop.cli.app import _human_size
+        from lantern.cli.app import _human_size
 
         assert _human_size(3) == "3 B"
         assert _human_size(2048) == "2.0 KB"
@@ -2502,9 +2502,9 @@ class TestWorkspaceCloneSummary:
     mined from the persisted sandbox.workspace_clone event."""
 
     def _summary(self, tmp_path: Path, *, mounted: bool) -> str:
-        import sbxloop.cli.app as app_mod
-        from sbxloop.config import Config
-        from sbxloop.engine.model import RunResult
+        import lantern.cli.app as app_mod
+        from lantern.config import Config
+        from lantern.engine.model import RunResult
 
         config = Config.model_validate({"home": str(tmp_path / "state")})
         store = StateStore(config.paths.state_db)
@@ -2516,7 +2516,7 @@ class TestWorkspaceCloneSummary:
                 source="/home/me/proj",
                 target="/state/runs/r1/workspace",
                 commit="a" * 40,
-                branch="sbxloop/r1",
+                branch="lantern/r1",
                 dirty=False,
                 reused=False,
                 message="cloned",
@@ -2531,8 +2531,8 @@ class TestWorkspaceCloneSummary:
         text = self._summary(tmp_path, mounted=True)
         assert "cloned from /home/me/proj" in text
         assert "HEAD aaaaaaaaaaaa" in text
-        assert "branch sbxloop/r1" in text
-        assert "git fetch /state/runs/r1/workspace sbxloop/r1" in text
+        assert "branch lantern/r1" in text
+        assert "git fetch /state/runs/r1/workspace lantern/r1" in text
 
     def test_unmounted_run_warns_uncommitted_harvest(self, tmp_path: Path) -> None:
         text = self._summary(tmp_path, mounted=False)
@@ -2540,9 +2540,9 @@ class TestWorkspaceCloneSummary:
         assert "git fetch" not in text
 
     def test_run_without_clone_prints_nothing(self, tmp_path: Path) -> None:
-        import sbxloop.cli.app as app_mod
-        from sbxloop.config import Config
-        from sbxloop.engine.model import RunResult
+        import lantern.cli.app as app_mod
+        from lantern.config import Config
+        from lantern.engine.model import RunResult
 
         config = Config.model_validate({"home": str(tmp_path / "state")})
         StateStore(config.paths.state_db).create_run("r1", "x")
@@ -2557,7 +2557,7 @@ class TestDashboard:
     def test_pinned_status_renders_run_and_tasks(self) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         for event in [
@@ -2582,7 +2582,7 @@ class TestDashboard:
         """#374: a reconciled run's reason appears in the TUI header."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         dashboard.on_event(Event.now("run.state", "r1", state="running"))
@@ -2601,7 +2601,7 @@ class TestDashboard:
         time as prior tasks complete."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         for event in [
@@ -2626,7 +2626,7 @@ class TestDashboard:
         messages must NOT appear in the re-rendered status panel."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         dashboard.on_event(Event.now("run.state", "r1", state="running"))
@@ -2641,7 +2641,7 @@ class TestDashboard:
         lines wrapped), not as clipped single lines."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         long_value = "x" * 200  # far beyond one terminal row
         content = (
@@ -2667,7 +2667,7 @@ class TestDashboard:
         "agent" title (covered above)."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         rendered = render_event(
             Event.now("agent.message", "r1", content="looks good", agent="scrutinizer")
@@ -2683,7 +2683,7 @@ class TestDashboard:
         the plain persona-and-timestamp header."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         rendered = render_event(
             Event.now(
@@ -2708,14 +2708,14 @@ class TestDashboard:
         assert "·" not in console.export_text()
 
     def test_format_event_includes_agent_name(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(Event.now("agent.message", "r1", agent="planner", content="hi"))
         assert "[planner]" in line
         assert "hi" in line
 
     def test_deltas_and_heartbeats_stay_out_of_transcript(self) -> None:
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         assert render_event(Event.now("agent.message_delta", "r1", delta="chunk")) is None
         assert render_event(Event.now("worker.heartbeat", "r1")) is None
@@ -2724,7 +2724,7 @@ class TestDashboard:
     def test_worker_error_renders_red_panel(self) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         rendered = render_event(
             Event.now("worker.error", "r1", error_type="RuntimeError", message="boom happened")
@@ -2737,7 +2737,7 @@ class TestDashboard:
         assert "boom happened" in text
 
     def test_format_event_variants(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(Event.now("task.end", "r1", task_id="t1", state="done"))
         assert "task.end" in line
@@ -2745,7 +2745,7 @@ class TestDashboard:
         assert "done" in line
 
     def test_format_event_includes_tool_args(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(
             Event.now("agent.tool_start", "r1", tool="bash", args="pip install -e .")
@@ -2754,7 +2754,7 @@ class TestDashboard:
         assert "pip install -e ." in line
 
     def test_format_event_tool_command_is_readable(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(Event.now("agent.tool_start", "r1", tool="bash", args=RUN_CMD))
         assert "cd $RUN &&" in line
@@ -2763,7 +2763,7 @@ class TestDashboard:
         assert_no_silent_truncation(line)
 
     def test_format_event_tool_end_failure_includes_error(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(
             Event.now(
@@ -2784,7 +2784,7 @@ class TestToolTranscript:
     def render_text(self, event: Event) -> str | None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         rendered = render_event(event)
         if rendered is None:
@@ -2818,7 +2818,7 @@ class TestToolTranscript:
         are not mistaken for truncation."""
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         rendered = render_event(event)
         assert rendered is not None
@@ -2853,8 +2853,8 @@ class TestToolTranscript:
         assert_no_silent_truncation(text)
 
     def test_rendering_leaves_stored_args_untouched(self) -> None:
-        from sbxloop.cli.tui import format_event, render_event
-        from sbxloop.events import summarize_event
+        from lantern.cli.tui import format_event, render_event
+        from lantern.events import summarize_event
 
         event = Event.now("agent.tool_start", "r1", tool="bash", args=RUN_CMD)
         summarize_event(event)
@@ -2863,7 +2863,7 @@ class TestToolTranscript:
         assert event.data["args"] == RUN_CMD
 
     def test_summarize_event_still_clips_non_tool_args(self) -> None:
-        from sbxloop.events import summarize_event
+        from lantern.events import summarize_event
 
         event = Event.now("worker.exec", "r1", args="cd " + RUN_PATH + " && " + "y" * 300)
         summary = summarize_event(event)
@@ -2941,7 +2941,7 @@ class TestToolTranscript:
 
 class TestDoctorRendering:
     def test_multiline_error_detail_is_flattened(self) -> None:
-        from sbxloop.cli.doctor import _clean
+        from lantern.cli.doctor import _clean
 
         messy = "sbx ls failed | rc=1 | stderr=line one\nline two\n\n   line three"
         cleaned = _clean(messy)
@@ -2949,7 +2949,7 @@ class TestDoctorRendering:
         assert "line one line two line three" in cleaned
 
     def test_overlong_detail_is_elided(self) -> None:
-        from sbxloop.cli.doctor import _clean
+        from lantern.cli.doctor import _clean
 
         cleaned = _clean("x" * 1000)
         assert len(cleaned) == 300
@@ -2970,18 +2970,18 @@ class TestDoctorRendering:
     ) -> None:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        monkeypatch.setenv("SBXLOOP_APP_NAME", "sbxloop-iso")
+        monkeypatch.setenv("LANTERN_APP_NAME", "lantern-iso")
         fake_sbx.script("ls", returncode=1, stderr="not logged in", once=True)
         result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 1
         # the table may fold the hint across lines; assert on whole words
         assert "--app-name" in result.output
-        assert "sbxloop-iso" in result.output
+        assert "lantern-iso" in result.output
 
 
 class TestResourceGauge:
     def sample_event(self, **data: Any) -> Any:
-        from sbxloop.events import Event
+        from lantern.events import Event
 
         base: dict[str, Any] = {
             "role": "agent",
@@ -2996,7 +2996,7 @@ class TestResourceGauge:
     def test_gauge_renders_in_status_panel(self) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         dashboard.on_event(self.sample_event())
@@ -3012,7 +3012,7 @@ class TestResourceGauge:
     def test_gauge_escalates_past_thresholds(self) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import Dashboard
+        from lantern.cli.tui import Dashboard
 
         dashboard = Dashboard()
         dashboard.on_event(self.sample_event(level="abort", disk_used_pct=97.0))
@@ -3021,15 +3021,15 @@ class TestResourceGauge:
         assert "⚠ abort" in console.export_text()
 
     def test_samples_stay_out_of_transcript(self) -> None:
-        from sbxloop.cli.tui import render_event
+        from lantern.cli.tui import render_event
 
         assert render_event(self.sample_event()) is None
 
     def test_warning_event_prints_to_transcript(self) -> None:
         from rich.console import Console
 
-        from sbxloop.cli.tui import render_event
-        from sbxloop.events import Event
+        from lantern.cli.tui import render_event
+        from lantern.events import Event
 
         rendered = render_event(
             Event.now(
@@ -3045,7 +3045,7 @@ class TestResourceGauge:
         assert "disk 90.0% used" in console.export_text()
 
     def test_format_event_shows_resource_summary(self) -> None:
-        from sbxloop.cli.tui import format_event
+        from lantern.cli.tui import format_event
 
         line = format_event(self.sample_event(level="warn"))
         assert "disk=42.0%" in line
@@ -3081,7 +3081,7 @@ enabled = false
 class TestMultiRepoCli:
     def test_status_shows_the_repo_a_run_targeted(self, workdir: Path) -> None:
         store = seed_store(workdir)
-        from sbxloop.config import Config
+        from lantern.config import Config
 
         config = Config.model_validate({"github": {"repo": "acme/alpha"}})
         store.create_run("rmulti001", "second outcome", config.model_dump_json())
@@ -3092,7 +3092,7 @@ class TestMultiRepoCli:
 
     def test_status_detail_shows_the_repo(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         store = seed_store(workdir)
-        from sbxloop.config import Config
+        from lantern.config import Config
 
         config = Config.model_validate({"github": {"repo": "acme/beta"}})
         store.create_run("rmulti002", "an outcome", config.model_dump_json())
@@ -3104,7 +3104,7 @@ class TestMultiRepoCli:
         self, workdir: Path, fake_sbx: FakeSbx
     ) -> None:
         store = seed_store(workdir)
-        from sbxloop.config import Config
+        from lantern.config import Config
 
         config = Config.model_validate(
             {
@@ -3127,7 +3127,7 @@ class TestMultiRepoCli:
         assert "rseeded11" in result.output and "completed" in result.output
 
     def test_daemon_items_show_their_repository(self, workdir: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         dstore = DaemonStore(home(workdir).state_db)
         dstore.upsert_new(
@@ -3145,7 +3145,7 @@ class TestMultiRepoCli:
         assert "acme/alpha" in result.output
 
     def test_config_repos_lists_registered_repositories(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(MULTI_REPO_TOML)
+        (workdir / "lantern.toml").write_text(MULTI_REPO_TOML)
         result = runner.invoke(app, ["config", "repos"])
         assert result.exit_code == 0, result.output
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
@@ -3154,20 +3154,20 @@ class TestMultiRepoCli:
         assert "no" in plain  # beta is disabled
 
     def test_repo_selector_defaults_to_the_sole_repo(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text('[github]\nrepo = "acme/only"\n')
-        from sbxloop.cli.app import _resolve_repo
-        from sbxloop.config import load_config
+        (workdir / "lantern.toml").write_text('[github]\nrepo = "acme/only"\n')
+        from lantern.cli.app import _resolve_repo
+        from lantern.config import load_config
 
         assert _resolve_repo(load_config(), None).repo == "acme/only"
 
     def test_repo_selector_is_ambiguous_with_several_repos(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[github.repos]]\nrepo = "acme/alpha"\n[[github.repos]]\nrepo = "acme/beta"\n'
         )
         import typer
 
-        from sbxloop.cli.app import _resolve_repo
-        from sbxloop.config import load_config
+        from lantern.cli.app import _resolve_repo
+        from lantern.config import load_config
 
         config = load_config()
         with pytest.raises(typer.Exit):
@@ -3177,7 +3177,7 @@ class TestMultiRepoCli:
             _resolve_repo(config, "acme/nope")
 
     def test_config_repos_rejects_an_unknown_selector(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(MULTI_REPO_TOML)
+        (workdir / "lantern.toml").write_text(MULTI_REPO_TOML)
         result = runner.invoke(app, ["config", "repos", "--repo", "acme/nope"])
         assert result.exit_code == 2
         assert "unknown repository" in result.output
@@ -3199,13 +3199,13 @@ class PatProvisioner:
 
 class TestDoctorRepoChecks:
     def _config(self, toml: str, workdir: Path) -> Any:
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
-        (workdir / "sbxloop.toml").write_text(toml)
+        (workdir / "lantern.toml").write_text(toml)
         return load_config()
 
     def test_one_row_per_configured_repository(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import repo_checks
+        from lantern.cli.doctor import repo_checks
 
         config = self._config(MULTI_REPO_TOML, workdir)
         rows = repo_checks(config, {"GH_TOKEN": "tok"})
@@ -3215,7 +3215,7 @@ class TestDoctorRepoChecks:
         assert "disabled" in rows[1].detail
 
     def test_missing_per_repo_token_fails_only_that_repo(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import repo_checks
+        from lantern.cli.doctor import repo_checks
 
         config = self._config(
             '[[github.repos]]\nrepo = "acme/alpha"\n'
@@ -3227,7 +3227,7 @@ class TestDoctorRepoChecks:
         assert not beta.ok and "BETA_TOKEN" in beta.detail
 
     def test_probe_results_are_reported_per_repo(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config(
             '[[github.repos]]\nrepo = "acme/alpha"\n[[github.repos]]\nrepo = "acme/beta"\n',
@@ -3244,7 +3244,7 @@ class TestDoctorRepoChecks:
         assert not beta.ok and "issues:write" in beta.detail
 
     def test_a_raising_probe_does_not_mask_the_other_repos(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config(
             '[[github.repos]]\nrepo = "acme/alpha"\n[[github.repos]]\nrepo = "acme/beta"\n',
@@ -3261,7 +3261,7 @@ class TestDoctorRepoChecks:
         assert beta.ok
 
     def test_missing_repo_is_ok_when_create_repo_is_on(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/new"\ncreate_repo = true\n', workdir)
         (row,) = repo_checks(
@@ -3273,7 +3273,7 @@ class TestDoctorRepoChecks:
 
     def test_an_unavailable_probe_is_unverified_not_a_failure(self, workdir: Path) -> None:
         """No github sandbox is "we could not ask", not "the repo is bad"."""
-        from sbxloop.cli.doctor import RepoProbeUnavailable, repo_checks
+        from lantern.cli.doctor import RepoProbeUnavailable, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
 
@@ -3284,7 +3284,7 @@ class TestDoctorRepoChecks:
         assert row.ok and not row.hard and "unverified" in row.detail
 
     def test_probe_reads_permissions_from_the_repo_payload(self) -> None:
-        from sbxloop.cli.doctor import _missing_from_push_bit as _missing_permissions
+        from lantern.cli.doctor import _missing_from_push_bit as _missing_permissions
 
         assert _missing_permissions({"permissions": {"push": True}}) == ()
         assert _missing_permissions({"permissions": {"admin": True}}) == ()
@@ -3307,8 +3307,8 @@ class TestDoctorRepoChecks:
     ) -> None:
         """One github-ops box per credential, scoped to the first repository
         on it (every repository on that credential shares the box, #515)."""
-        import sbxloop.daemon.github as daemon_github
-        from sbxloop.cli.doctor import sandbox_repo_probe
+        import lantern.daemon.github as daemon_github
+        from lantern.cli.doctor import sandbox_repo_probe
 
         seen: dict[str, object] = {}
 
@@ -3339,7 +3339,7 @@ class TestDoctorRepoChecks:
         monkeypatch.setattr(daemon_github, "DaemonGithub", FakeBox)
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         boxes: dict[str, Any] = {}
-        from sbxloop.sbx.cli import SbxCLI
+        from lantern.sbx.cli import SbxCLI
 
         probe = sandbox_repo_probe(config, SbxCLI(), boxes=boxes)
         result = probe(config.github.repo_list()[0])
@@ -3349,7 +3349,7 @@ class TestDoctorRepoChecks:
         assert set(boxes) == {""}, "keyed by credential: the daemon-wide token"
 
     def test_missing_repo_fails_without_create_repo(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/gone"\n', workdir)
         (row,) = repo_checks(
@@ -3362,7 +3362,7 @@ class TestDoctorRepoChecks:
     ) -> None:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
         monkeypatch.setenv("GH_TOKEN", "tok")
-        (workdir / "sbxloop.toml").write_text(MULTI_REPO_TOML)
+        (workdir / "lantern.toml").write_text(MULTI_REPO_TOML)
         monkeypatch.setenv("COLUMNS", "300")
         result = runner.invoke(app, ["doctor"])
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
@@ -3422,18 +3422,18 @@ class TestDoctorProbeCost:
     def _reset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self.Box.instances = []
         self.Box.fail_names = set()
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         monkeypatch.setattr(github_module, "DaemonGithub", self.Box)
 
     def _config(self, workdir: Path) -> Any:
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
-        (workdir / "sbxloop.toml").write_text(self.TOML)
+        (workdir / "lantern.toml").write_text(self.TOML)
         return load_config()
 
     def test_one_sandbox_per_credential_not_per_repo(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, sandbox_repo_probe
+        from lantern.cli.doctor import RepoProbe, sandbox_repo_probe
 
         config = self._config(workdir)
         boxes: dict[str, Any] = {}
@@ -3443,15 +3443,15 @@ class TestDoctorProbeCost:
         assert sorted(boxes) == ["", "GAMMA_TOKEN"], "keyed by credential"
         assert len(self.Box.instances) == 2
         default, gamma = boxes[""], boxes["GAMMA_TOKEN"]
-        assert default.name == "sbxloop-doctor-default" and default.repo == "acme/alpha"
+        assert default.name == "lantern-doctor-default" and default.repo == "acme/alpha"
         assert default.lookups == ["acme/alpha", "acme/beta"], "beta shares alpha's box"
-        assert gamma.name == "sbxloop-doctor-gamma_token" and gamma.lookups == ["acme/gamma"]
+        assert gamma.name == "lantern-doctor-gamma_token" and gamma.lookups == ["acme/gamma"]
 
     def test_a_credential_that_will_not_boot_answers_unverified_once(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbeUnavailable, repo_checks, sandbox_repo_probe
+        from lantern.cli.doctor import RepoProbeUnavailable, repo_checks, sandbox_repo_probe
 
         config = self._config(workdir)
-        self.Box.fail_names = {"sbxloop-doctor-default"}
+        self.Box.fail_names = {"lantern-doctor-default"}
         boxes: dict[str, Any] = {}
         probe = sandbox_repo_probe(config, cli=None, boxes=boxes)  # type: ignore[arg-type]
         entries = config.github.repo_list()
@@ -3499,8 +3499,8 @@ class TestDoctorProbeCost:
         result = runner.invoke(app, ["doctor", "--probe"])
         assert result.exit_code == 0, result.output
         assert sorted(b.name for b in self.Box.instances) == [
-            "sbxloop-doctor-default",
-            "sbxloop-doctor-gamma_token",
+            "lantern-doctor-default",
+            "lantern-doctor-gamma_token",
         ]
         assert all(b.closed for b in self.Box.instances), "torn down before the table"
         # The table folds the detail across lines with box borders between.
@@ -3515,10 +3515,10 @@ class TestDoctorRepoHealthRow:
     """#516: doctor shows the polling health the daemon persisted."""
 
     def test_suspended_and_backing_off_repos_are_flagged(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import repo_checks
-        from sbxloop.config import load_config
+        from lantern.cli.doctor import repo_checks
+        from lantern.config import load_config
 
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[github.repos]]\nrepo = "acme/alpha"\n\n[[github.repos]]\nrepo = "acme/beta"\n'
         )
         config = load_config()
@@ -3539,12 +3539,12 @@ class TestDoctorRepoHealthRow:
     ) -> None:
         import json
 
-        from sbxloop.cli.doctor import daemon_repo_health
-        from sbxloop.config import load_config_with_sources
-        from sbxloop.daemon.sources import REPO_HEALTH_KEY
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.cli.doctor import daemon_repo_health
+        from lantern.config import load_config_with_sources
+        from lantern.daemon.sources import REPO_HEALTH_KEY
+        from lantern.daemon.store import DaemonStore
 
-        (workdir / "sbxloop.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
         config, sources = load_config_with_sources()
         env = dict(os.environ)
         assert daemon_repo_health(config, sources, env) == {}
@@ -3568,11 +3568,11 @@ class TestDoctorRepoHealthRow:
         """
         import sqlite3
 
-        from sbxloop.cli.doctor import daemon_repo_health, stored_schedules
-        from sbxloop.config import load_config_with_sources
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.cli.doctor import daemon_repo_health, stored_schedules
+        from lantern.config import load_config_with_sources
+        from lantern.daemon.store import DaemonStore
 
-        (workdir / "sbxloop.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
         config, sources = load_config_with_sources()
         env = dict(os.environ)
         DaemonStore(config.paths.state_db).close()
@@ -3597,13 +3597,13 @@ class TestDoctorBranchProtection:
     doctor lists them as advice (human-out-of-the-loop doctrine, #673)."""
 
     def _config(self, toml: str, workdir: Path) -> Any:
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
-        (workdir / "sbxloop.toml").write_text(toml)
+        (workdir / "lantern.toml").write_text(toml)
         return load_config()
 
     def test_protection_adds_a_soft_advisory_row(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         rows = repo_checks(
@@ -3629,7 +3629,7 @@ class TestDoctorBranchProtection:
         assert "\n- the base requires signed commits" in protection.detail
 
     def test_unverifiable_protection_adds_no_row(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         for probe in (
@@ -3642,7 +3642,7 @@ class TestDoctorBranchProtection:
     def test_the_sandbox_probe_lists_every_blocker_of_the_base(self, workdir: Path) -> None:
         """#673: the probe reads the base's rulesets and reports each rule
         the loop cannot satisfy; a PAT cannot sign, a GitHub App can."""
-        from sbxloop.cli.doctor import sandbox_repo_probe
+        from lantern.cli.doctor import sandbox_repo_probe
 
         rules = [
             {
@@ -3670,7 +3670,7 @@ class TestDoctorBranchProtection:
                         return None
 
                     def raw(self, method: str, path: str, body: Any = None) -> Any:
-                        from sbxloop.errors import GithubOpsError
+                        from lantern.errors import GithubOpsError
 
                         if path.endswith("/labels?per_page=100&page=1"):
                             return []
@@ -3680,7 +3680,7 @@ class TestDoctorBranchProtection:
 
                 return Ops()
 
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         with pytest.MonkeyPatch.context() as mp:
@@ -3705,7 +3705,7 @@ class TestDoctorBranchProtection:
     def test_the_repo_row_says_how_the_loop_will_merge(self, workdir: Path) -> None:
         """#620: `auto` resolves against what the repository allows; an
         explicit method it refuses gets a soft failing row of its own."""
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         (row,) = repo_checks(
@@ -3737,7 +3737,7 @@ class TestDoctorBranchProtection:
         assert "it allows: merge" in method.detail
 
     def test_the_sandbox_probe_reads_the_merge_flags(self, workdir: Path) -> None:
-        from sbxloop.cli.doctor import sandbox_repo_probe
+        from lantern.cli.doctor import sandbox_repo_probe
 
         class Box:
             provisioner = PatProvisioner()
@@ -3759,7 +3759,7 @@ class TestDoctorBranchProtection:
                         return None
 
                     def raw(self, method: str, path: str, body: Any = None) -> Any:
-                        from sbxloop.errors import GithubOpsError
+                        from lantern.errors import GithubOpsError
 
                         if path.endswith("/labels?per_page=100&page=1"):
                             return []
@@ -3767,7 +3767,7 @@ class TestDoctorBranchProtection:
 
                 return Ops()
 
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(github_module, "DaemonGithub", Box)
@@ -3780,7 +3780,7 @@ class TestDoctorBranchProtection:
         """#630/#631: the probe reads the repository's labels against the
         effective (per-repo renamed) set and ``has_issues`` off the payload
         it already fetched."""
-        from sbxloop.cli.doctor import sandbox_repo_probe
+        from lantern.cli.doctor import sandbox_repo_probe
 
         class Box:
             provisioner = PatProvisioner()
@@ -3798,13 +3798,13 @@ class TestDoctorBranchProtection:
 
                     def raw(self, method: str, path: str, body: Any = None) -> Any:
                         if path == "/repos/acme/alpha/labels?per_page=100&page=1":
-                            return [{"name": "SBXLOOP:RUN"}, {"name": "loop:done"}]
+                            return [{"name": "LANTERN:RUN"}, {"name": "loop:done"}]
                         assert path.startswith("/repos/acme/alpha/"), path
                         return []  # the permission reads (#696): every one allowed
 
                 return Ops()
 
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(github_module, "DaemonGithub", Box)
@@ -3815,21 +3815,21 @@ class TestDoctorBranchProtection:
             result = probe(config.github.repo_list()[0])
         assert result.issues_enabled is False
         assert result.missing_labels == (
-            "sbxloop:in-progress",
-            "sbxloop:failed",
-            "sbxloop:blocked",
-            "sbxloop:awaiting-merge",
-            "sbxloop:workload",
+            "lantern:in-progress",
+            "lantern:failed",
+            "lantern:blocked",
+            "lantern:awaiting-merge",
+            "lantern:workload",
             "sbx:initiative",
             "sbx:epic",
             "sbx:task",
-            "sbxloop:follow-up",
+            "lantern:follow-up",
         )
 
     def test_missing_labels_and_disabled_issues_get_advisory_rows(self, workdir: Path) -> None:
         """Doctor stays advisory (#630): the drift row points at
-        ``sbxloop init-repo`` rather than fixing anything itself."""
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        ``lantern init-repo`` rather than fixing anything itself."""
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         rows = repo_checks(
@@ -3837,7 +3837,7 @@ class TestDoctorBranchProtection:
             {"GH_TOKEN": "tok"},
             probe=lambda _e: RepoProbe(
                 reachable=True,
-                missing_labels=("sbxloop:run", "sbxloop:failed"),
+                missing_labels=("lantern:run", "lantern:failed"),
                 issues_enabled=False,
             ),
         )
@@ -3847,8 +3847,8 @@ class TestDoctorBranchProtection:
         assert not issues.ok and not issues.hard and "Issues are disabled" in issues.detail
         labels = by_name["github repo acme/alpha labels"]
         assert not labels.ok and not labels.hard
-        assert "`sbxloop:run`, `sbxloop:failed`" in labels.detail
-        assert "`sbxloop init-repo acme/alpha`" in labels.detail
+        assert "`lantern:run`, `lantern:failed`" in labels.detail
+        assert "`lantern init-repo acme/alpha`" in labels.detail
         clean = repo_checks(
             config,
             {"GH_TOKEN": "tok"},
@@ -3857,9 +3857,9 @@ class TestDoctorBranchProtection:
         assert [row.name for row in clean] == ["github repo acme/alpha"]
 
     def test_base_blockers_read_both_sources(self) -> None:
-        from sbxloop.cli.doctor import _base_blockers
-        from sbxloop.config import Config
-        from sbxloop.errors import GithubOpsError
+        from lantern.cli.doctor import _base_blockers
+        from lantern.config import Config
+        from lantern.errors import GithubOpsError
 
         class Ops(OpsStub):
             def __init__(self, protection: Any, rules: Any) -> None:
@@ -3911,7 +3911,7 @@ class TestDoctorBranchProtection:
         """#674: a write-not-admin token cannot read classic protection;
         doctor says so, and that the required checks come from the PR's
         rollup, instead of printing "unknown" or nothing."""
-        from sbxloop.cli.doctor import RepoProbe, repo_checks
+        from lantern.cli.doctor import RepoProbe, repo_checks
 
         config = self._config('[[github.repos]]\nrepo = "acme/alpha"\n', workdir)
         main, row = repo_checks(
@@ -3965,9 +3965,9 @@ class TestDoctorPermissions:
     }
 
     def _config(self, workdir: Path) -> Any:
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
-        (workdir / "sbxloop.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[[github.repos]]\nrepo = "acme/alpha"\n')
         return load_config()
 
     def _rows(
@@ -3985,8 +3985,8 @@ class TestDoctorPermissions:
         """Doctor's repo rows for a token described by ``scopes`` (classic),
         ``app_permissions`` (App) or neither (fine-grained), whose reads of
         the paths in ``forbidden`` 403; plus the GET paths asked."""
-        from sbxloop.cli.doctor import repo_checks, sandbox_repo_probe
-        from sbxloop.errors import GithubOpsError
+        from lantern.cli.doctor import repo_checks, sandbox_repo_probe
+        from lantern.errors import GithubOpsError
 
         asked: list[str] = []
         listing = self.ONE_WORKFLOW if workflows is None else workflows
@@ -4008,7 +4008,7 @@ class TestDoctorPermissions:
                 if any(path.endswith(suffix) for suffix in forbidden):
                     raise GithubOpsError("Resource not accessible", http_status=403)
                 if path.endswith("/labels?per_page=100&page=1"):
-                    return [{"name": "sbxloop:run"}]
+                    return [{"name": "lantern:run"}]
                 if path.endswith("/rules/branches/main"):
                     return []
                 if path.endswith("/actions/workflows?per_page=100"):
@@ -4029,7 +4029,7 @@ class TestDoctorPermissions:
             def ops(self) -> Ops:
                 return Ops()
 
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         config = self._config(workdir)
         with pytest.MonkeyPatch.context() as mp:
@@ -4135,13 +4135,13 @@ class TestDoctorPermissions:
 
 
 class TestInitRepo:
-    """``sbxloop init-repo`` (#630): the lifecycle labels, the planning
+    """``lantern init-repo`` (#630): the lifecycle labels, the planning
     level labels (#2343) and the follow-up label, colored and described,
     created through a github-ops sandbox and left alone when already
     present."""
 
     def _patch_box(self, mp: pytest.MonkeyPatch, fake: FakeGithub) -> list[str]:
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         closed: list[str] = []
 
@@ -4159,26 +4159,26 @@ class TestInitRepo:
         return closed
 
     def test_creates_every_label_with_a_color_and_description(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[[github.repos]]\nrepo = "acme/alpha"\ncompleted_label = "loop:done"\n'
         )
         fake = FakeGithub()
-        fake.labels_existing = {"sbxloop:run"}
+        fake.labels_existing = {"lantern:run"}
         with pytest.MonkeyPatch.context() as mp:
             closed = self._patch_box(mp, fake)
             result = runner.invoke(app, ["init-repo", "acme/alpha"])
         assert result.exit_code == 0, result.output
         assert fake.labels_created == [
-            "sbxloop:in-progress",
-            "sbxloop:failed",
+            "lantern:in-progress",
+            "lantern:failed",
             "loop:done",
-            "sbxloop:blocked",
-            "sbxloop:awaiting-merge",
-            "sbxloop:workload",
+            "lantern:blocked",
+            "lantern:awaiting-merge",
+            "lantern:workload",
             "sbx:initiative",
             "sbx:epic",
             "sbx:task",
-            "sbxloop:follow-up",
+            "lantern:follow-up",
         ]
         created = [
             body for (m, path, body) in fake.raw_calls if m == "POST" and path.endswith("/labels")
@@ -4201,7 +4201,7 @@ class TestInitRepo:
         assert closed == ["acme/alpha"], "the sandbox is torn down"
 
     def test_a_second_run_creates_nothing(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text('[github]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[github]\nrepo = "acme/alpha"\n')
         fake = FakeGithub()
         with pytest.MonkeyPatch.context() as mp:
             self._patch_box(mp, fake)
@@ -4217,7 +4217,7 @@ class TestInitRepo:
     def test_a_repository_outside_the_config_gets_the_daemon_wide_labels(
         self, workdir: Path
     ) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[github]\nrepo = "acme/alpha"\n[daemon]\ntrigger_label = "go"\n'
         )
         fake = FakeGithub()
@@ -4229,7 +4229,7 @@ class TestInitRepo:
         assert all(path.startswith("/repos/acme/other/") for (_m, path, _b) in fake.raw_calls)
 
     def test_a_label_the_token_cannot_write_fails_the_command(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text('[github]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[github]\nrepo = "acme/alpha"\n')
 
         class Forbidden(FakeGithub):
             def raw(self, method: str, path: str, body: Any = None) -> Any:
@@ -4247,19 +4247,19 @@ class TestInitRepo:
         assert "permission to write issue labels" in plain
 
     def test_a_malformed_repository_is_rejected(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text('[github]\nrepo = "acme/alpha"\n')
+        (workdir / "lantern.toml").write_text('[github]\nrepo = "acme/alpha"\n')
         result = runner.invoke(app, ["init-repo", "alpha"])
         assert result.exit_code == 1
         assert "expected owner/name" in result.output
 
 
 class TestInitRepoGitlab:
-    """``sbxloop init-repo`` against a GitLab-hosted repository (#630): the
+    """``lantern init-repo`` against a GitLab-hosted repository (#630): the
     same label plumbing as GitHub, but a GitLab-flavored sandbox banner and
     permission hint when a label cannot be created."""
 
     def _patch_box(self, mp: pytest.MonkeyPatch, fake: FakeGitlab) -> list[str]:
-        import sbxloop.daemon.github as github_module
+        import lantern.daemon.github as github_module
 
         closed: list[str] = []
 
@@ -4277,7 +4277,7 @@ class TestInitRepoGitlab:
         return closed
 
     def test_creates_every_label_on_a_gitlab_project(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[vcs]\nkind = "gitlab"\n[github]\nrepo = "acme/widgets"\n'
         )
         fake = FakeGitlab(repo="acme/widgets")
@@ -4286,24 +4286,24 @@ class TestInitRepoGitlab:
             result = runner.invoke(app, ["init-repo", "acme/widgets"])
         assert result.exit_code == 0, result.output
         assert fake.label_creates == [
-            "sbxloop:run",
-            "sbxloop:in-progress",
-            "sbxloop:failed",
-            "sbxloop:completed",
-            "sbxloop:blocked",
-            "sbxloop:awaiting-merge",
-            "sbxloop:workload",
+            "lantern:run",
+            "lantern:in-progress",
+            "lantern:failed",
+            "lantern:completed",
+            "lantern:blocked",
+            "lantern:awaiting-merge",
+            "lantern:workload",
             "sbx:initiative",
             "sbx:epic",
             "sbx:task",
-            "sbxloop:follow-up",
+            "lantern:follow-up",
         ]
         plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "11 label(s) created, 0 already present" in plain
         assert closed == ["acme/widgets"], "the sandbox is torn down"
 
     def test_the_boot_banner_names_gitlab_not_github(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[vcs]\nkind = "gitlab"\n[github]\nrepo = "acme/widgets"\n'
         )
         fake = FakeGitlab(repo="acme/widgets")
@@ -4315,7 +4315,7 @@ class TestInitRepoGitlab:
         assert "github-ops sandbox" not in result.output
 
     def test_a_label_the_token_cannot_write_fails_with_a_gitlab_hint(self, workdir: Path) -> None:
-        (workdir / "sbxloop.toml").write_text(
+        (workdir / "lantern.toml").write_text(
             '[vcs]\nkind = "gitlab"\n[github]\nrepo = "acme/widgets"\n'
         )
 

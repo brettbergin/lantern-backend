@@ -18,18 +18,18 @@ from typing import Any, cast
 
 import pytest
 
-from sbxloop.agentmodels import model_for_phase
-from sbxloop.agents.assignment import AgentAssignment, AgentBinding, plan_assignment
-from sbxloop.agents.definition import AgentDefinition
-from sbxloop.agents.registry import AgentRegistry, ConfigAgentRegistry
-from sbxloop.config import Config
-from sbxloop.engine.harness import brief_for_phase
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import PhaseRunner
-from sbxloop.engine.service import TOOL_NAME as CALL_SERVICE
-from sbxloop.engine.skilltools import SKILL_TOOL_NAME
-from sbxloop.worker.hosttools import HostToolCall
-from sbxloop_worker.protocol import HostToolResponse, HostToolSpec, JobRequest, JobResult
+from lantern.agentmodels import model_for_phase
+from lantern.agents.assignment import AgentAssignment, AgentBinding, plan_assignment
+from lantern.agents.definition import AgentDefinition
+from lantern.agents.registry import AgentRegistry, ConfigAgentRegistry
+from lantern.config import Config
+from lantern.engine.harness import brief_for_phase
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import PhaseRunner
+from lantern.engine.service import TOOL_NAME as CALL_SERVICE
+from lantern.engine.skilltools import SKILL_TOOL_NAME
+from lantern.worker.hosttools import HostToolCall
+from lantern_worker.protocol import HostToolResponse, HostToolSpec, JobRequest, JobResult
 
 ADA = {
     "slug": "ada",
@@ -127,7 +127,7 @@ class TestPlanAssignment:
         assert plan.lead == "concierge"
         assert set(plan.agents) == {"concierge", "planner", "builder", "critic", "operator"}
 
-    def test_the_lead_defaults_to_angie_and_takes_a_lead_agent(self) -> None:
+    def test_the_lead_defaults_to_lantern_and_takes_a_lead_agent(self) -> None:
         boss = {"slug": "boss", "name": "Boss", "roles": ["lead"]}
         plain = registry(boss, ADA)
 
@@ -138,7 +138,7 @@ class TestPlanAssignment:
 
         assert lead(None) == "concierge"
         assert lead("boss") == "boss"
-        # Ada takes no lead role: Angie leads.
+        # Ada takes no lead role: Lantern leads.
         assert lead("ada") == "concierge"
 
     def test_memory_fills_each_binding_and_none_leaves_it_empty(self) -> None:
@@ -512,7 +512,7 @@ class TestPhaseRunner:
     def test_a_review_checkpoint_changes_with_the_critic_s_persona(self, tmp_path: Any) -> None:
         from contextlib import closing
 
-        from sbxloop.engine.store import StateStore
+        from lantern.engine.store import StateStore
 
         critic = {
             "slug": "carla",

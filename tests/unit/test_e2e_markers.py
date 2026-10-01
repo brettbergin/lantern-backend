@@ -18,8 +18,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOTS = [
-    REPO_ROOT / "packages" / "sbxloop" / "src",
-    REPO_ROOT / "packages" / "sbxloop-worker" / "src",
+    REPO_ROOT / "packages" / "lantern" / "src",
+    REPO_ROOT / "packages" / "lantern-worker" / "src",
 ]
 E2E_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e2e.yml"
 

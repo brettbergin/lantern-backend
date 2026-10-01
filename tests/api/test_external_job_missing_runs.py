@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import delete
 
-from sbxloop.db.engine_models import Run
+from lantern.db.engine_models import Run
 from tests.api.test_collaboration import bearer, register
 from tests.api.test_external_work import _run, channels, external_item
 from tests.api.test_work_delivery import setup_work

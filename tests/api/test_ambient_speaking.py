@@ -24,9 +24,9 @@ import time
 from concurrent.futures import Future
 from typing import Any
 
-from sbxloop.agents.definition import AgentSpec
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.usagepool import Admission
+from lantern.agents.definition import AgentSpec
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.usagepool import Admission
 from tests.api.conftest import build
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -278,10 +278,10 @@ def test_each_listener_looks_at_a_message_once(tmp_path: Any) -> None:
     that already passed on it."""
     api = _api(tmp_path, ambient_window_messages=1, pair_cooldown_s=0)
     with api.client:
-        # Angie's own answer keeps the topic newest, so anything that looks
+        # Lantern's own answer keeps the topic newest, so anything that looks
         # at the conversation again would still find something to match.
         api.ctx.concierge = ClassifyingConcierge(
-            {"baker": "RELEVANT", "miller": "PASS"}, replies={"angie": "bread takes a while"}
+            {"baker": "RELEVANT", "miller": "PASS"}, replies={"lantern": "bread takes a while"}
         )
         headers = bearer(register(api))
         _agent(api, "baker", ["bread"])

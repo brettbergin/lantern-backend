@@ -7,7 +7,7 @@ process per job protocol paid three of them per job (cp the job in, exec
 the worker, cp the result out) and one more per host-tool response. A
 resident worker pays the exec once per sandbox.
 
-These run the real worker (sys.executable has sbxloop_worker importable)
+These run the real worker (sys.executable has lantern_worker importable)
 under the fake sbx with a live stdin pipe (SBX_FAKE_EXEC_STDIN=stream).
 """
 
@@ -21,19 +21,19 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.errors import WorkerError, WorkerTimeoutError
-from sbxloop.events import Event, EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxSpec
-from sbxloop.sbx.sandbox import Sandbox
-from sbxloop.worker.client import WorkerClient
-from sbxloop_worker.protocol import EventTypes, HostToolCall, HostToolResponse, JobRequest
+from lantern.errors import WorkerError, WorkerTimeoutError
+from lantern.events import Event, EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.sbx.sandbox import Sandbox
+from lantern.worker.client import WorkerClient
+from lantern_worker.protocol import EventTypes, HostToolCall, HostToolResponse, JobRequest
 from tests.conftest import FakeSbx
 
 
 @pytest.fixture(autouse=True)
 def resident_fake(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SBXLOOP_WORKER_BACKEND", "echo")
+    monkeypatch.setenv("LANTERN_WORKER_BACKEND", "echo")
     # The fake forwards a live stdin pipe to the exec'd process, the way
     # sbx does where the exec-stdin-env probe passes.
     monkeypatch.setenv("SBX_FAKE_EXEC_STDIN", "stream")
@@ -51,7 +51,7 @@ def make_client(sandbox: Sandbox, bus: EventBus | None = None, **kwargs: object)
     kwargs.setdefault("transport", "resident")
     # Stdin delivery is what makes a resident worker possible; a provider
     # (even an empty one) is the provisioner's word that it works here.
-    kwargs.setdefault("job_env", lambda: {"SBXLOOP_TEST_TOKEN": "t0k3n"})
+    kwargs.setdefault("job_env", lambda: {"LANTERN_TEST_TOKEN": "t0k3n"})
     return WorkerClient(sandbox, bus or EventBus(), **kwargs)  # type: ignore[arg-type]
 
 
@@ -69,7 +69,7 @@ def job(job_id: str = "j1", **overrides: object) -> JobRequest:
 def script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, responses: list[dict]) -> None:
     path = tmp_path / "script.json"
     path.write_text(json.dumps(responses))
-    monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(path))
+    monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(path))
 
 
 def sbx_calls(fake_sbx: FakeSbx) -> list[str]:
@@ -119,16 +119,16 @@ class TestOneProcessPerSandbox:
                 {"text": "two"},
             ],
         )
-        exports = {"SBXLOOP_TEST_TOKEN": "first"}
+        exports = {"LANTERN_TEST_TOKEN": "first"}
         client = make_client(sandbox, job_env=lambda: dict(exports))
         seen_env: list[str] = []
         # The echo backend runs inside the worker; read the env it saw
         # through a file the job writes.
         marker = tmp_path / "env-seen"
-        check = ["sh", "-c", f"printenv SBXLOOP_TEST_TOKEN > {marker}"]
+        check = ["sh", "-c", f"printenv LANTERN_TEST_TOKEN > {marker}"]
         client.submit(job("j1", kind="shell.check", argv=check, prompt=None))
         seen_env.append(marker.read_text().strip())
-        exports["SBXLOOP_TEST_TOKEN"] = "rotated"
+        exports["LANTERN_TEST_TOKEN"] = "rotated"
         client.submit(job("j2", kind="shell.check", argv=check, prompt=None))
         seen_env.append(marker.read_text().strip())
         assert seen_env == ["first", "rotated"]
@@ -167,7 +167,7 @@ class TestHostTools:
         # and the tools directory was cleaned inside the VM, not by an exec.
         assert later == ["exec"]
         assert client._brokers == {}
-        assert not (fake_sbx.sandbox_fs("boxa") / "home/agent/.sbxloop/tools/j1").exists()
+        assert not (fake_sbx.sandbox_fs("boxa") / "home/agent/.lantern/tools/j1").exists()
         client.close()
 
 

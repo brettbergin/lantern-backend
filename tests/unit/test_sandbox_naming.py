@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.naming import (
+from lantern.paths import LanternHome
+from lantern.sbx.naming import (
     concierge_name,
     daemon_vcs_name,
     run_name,
@@ -12,7 +12,7 @@ from sbxloop.sbx.naming import (
 
 
 def test_names_show_owner_and_purpose(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     agent = run_name(home, "r7k2m9qp3", "agent")
     prefix = agent.removesuffix("-r7k2m9qp3-run-agent")
     assert prefix.startswith("sbxl-")
@@ -26,9 +26,9 @@ def test_names_show_owner_and_purpose(tmp_path: Path) -> None:
 
 
 def test_legacy_run_names_remain_discoverable(tmp_path: Path) -> None:
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     assert run_name_candidates(home, "r7k2m9qp3", "github", vcs_kind="gitlab") == (
         run_name(home, "r7k2m9qp3", "github", vcs_kind="gitlab"),
-        "sbxloop-r7k2m9qp3-gitlab",
-        "sbxloop-r7k2m9qp3-github",
+        "lantern-r7k2m9qp3-gitlab",
+        "lantern-r7k2m9qp3-github",
     )

@@ -125,7 +125,7 @@ def require_sandbox(root: Path, name: str) -> Path:
 # the fake's model of the sbx workspace mount (a symlink to the real host
 # workspace dir, created by cmd_create).
 _SANDBOX_ROOTS_PATTERN = (
-    r"(^|[\s='\"(:])(/(?:home/agent|etc/sandbox|tmp/sbxloop|workspace)(?=[/._\-\s]|$))"
+    r"(^|[\s='\"(:])(/(?:home/agent|etc/sandbox|tmp/lantern|workspace)(?=[/._\-\s]|$))"
 )
 _SANDBOX_ROOTS = re.compile(_SANDBOX_ROOTS_PATTERN)
 
@@ -133,7 +133,7 @@ _SANDBOX_ROOTS = re.compile(_SANDBOX_ROOTS_PATTERN)
 def rewrite_abs(fs: Path, arg: str) -> str:
     """Map sandbox-canonical paths onto the fake fs root.
 
-    Rewrites /home/agent, /etc/sandbox*, /tmp/sbxloop*, and /workspace — as
+    Rewrites /home/agent, /etc/sandbox*, /tmp/lantern*, and /workspace — as
     whole args and embedded in shell strings, so both ``exec box
     /home/agent/x`` and ``exec box sh -c 'cat /home/agent/x'`` hit the fake
     filesystem. All other absolute paths (host binaries, host tmp files) are
@@ -266,7 +266,7 @@ def fake_pkill(fs: Path, args: list[str]) -> int:
     the VM's own processes. The fake runs on the host, where a raw pkill
     would TERM matching processes belonging to *other* tests — pytest-xdist
     runs many sandboxes concurrently and job ids repeat across tests, so
-    the client's ``sbxloop_worker.*<job_id>`` pattern collides. Emulate the
+    the client's ``lantern_worker.*<job_id>`` pattern collides. Emulate the
     VM boundary: only processes whose command line references this
     sandbox's fs are candidates (processes launched through this sandbox's
     exec always qualify, because absolute-path rewriting embeds the fs path
@@ -369,9 +369,9 @@ def cmd_exec(root: Path, args: list[str], stdin: str = "") -> int:
             rewritten = [c.replace(workspace, unmounted) for c in rewritten]
     if rewritten[0] == "pkill":
         return fake_pkill(fs, rewritten[1:])
-    if any("SBXLOOP_API_REACH_PROBE" in c for c in rewritten):
+    if any("LANTERN_API_REACH_PROBE" in c for c in rewritten):
         # The api-host-unreachable probe: the fake never opens a socket.
-        # It models the verdict sbxloop is built against — the host's API
+        # It models the verdict lantern is built against — the host's API
         # port refuses from inside the VM — unless a test flips it.
         answer = os.environ.get("SBX_FAKE_API_REACH", "")
         print(
@@ -403,7 +403,7 @@ def cmd_exec(root: Path, args: list[str], stdin: str = "") -> int:
     env["PATH"] = f"{login_shell_dir(root)}{os.pathsep}{env.get('PATH', '')}"
     try:
         # Whether stdin piped through `sbx exec` reaches the in-VM process is
-        # an sbx semantic sbxloop field-probes (exec-stdin-env, #592). The
+        # an sbx semantic lantern field-probes (exec-stdin-env, #592). The
         # fake stays conservative — stdin consumed, not forwarded — unless a
         # test opts in, so both probe verdicts are exercisable.
         # "stream" hands the exec'd process the live pipe itself (main()

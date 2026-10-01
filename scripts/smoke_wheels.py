@@ -12,18 +12,18 @@ from pathlib import Path
 
 
 def check_installed(dist: Path, expected: str) -> None:
-    import sbxloop
-    import sbxloop_worker
-    from sbxloop.worker.wheel import resolve_worker_wheel
+    import lantern
+    import lantern_worker
+    from lantern.worker.wheel import resolve_worker_wheel
 
-    if any(version(name) != expected for name in ("sbxloop", "sbxloop-worker")):
+    if any(version(name) != expected for name in ("lantern-backend", "lantern-worker")):
         raise ValueError("installed distribution versions do not match the release")
-    if sbxloop.__version__ != expected or sbxloop_worker.__version__ != expected:
+    if lantern.__version__ != expected or lantern_worker.__version__ != expected:
         raise ValueError("imported package versions do not match the release")
-    if f"sbxloop-worker=={expected}" not in (requires("sbxloop") or []):
+    if f"lantern-worker=={expected}" not in (requires("lantern-backend") or []):
         raise ValueError("host wheel does not pin its matching worker")
     bundled = resolve_worker_wheel()
-    worker = dist / f"sbxloop_worker-{expected}-py3-none-any.whl"
+    worker = dist / f"lantern_worker-{expected}-py3-none-any.whl"
     if bundled is None or bundled.parent.name != "_vendor":
         raise ValueError("installed host did not resolve its vendored worker wheel")
     if (
@@ -36,11 +36,12 @@ def check_installed(dist: Path, expected: str) -> None:
 def smoke(dist: Path, expected: str) -> None:
     dist = dist.resolve()
     wheels = [
-        dist / f"{name}-{expected}-py3-none-any.whl" for name in ("sbxloop", "sbxloop_worker")
+        dist / f"{name}-{expected}-py3-none-any.whl"
+        for name in ("lantern_backend", "lantern_worker")
     ]
     if set(dist.glob("*.whl")) != set(wheels):
         raise ValueError("expected exactly the matching host and worker release wheels")
-    with tempfile.TemporaryDirectory(prefix="sbxloop-wheel-smoke-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="lantern-wheel-smoke-") as temporary:
         root = Path(temporary)
         environment = root / "venv"
         env = {
@@ -59,8 +60,8 @@ def smoke(dist: Path, expected: str) -> None:
         python = str(scripts / ("python.exe" if os.name == "nt" else "python"))
         run("uv", "pip", "install", "--python", python, *(str(path) for path in wheels))
         run(python, "-I", str(Path(__file__).resolve()), "--installed", str(dist), expected)
-        result = run(str(scripts / ("sbxloop.exe" if os.name == "nt" else "sbxloop")), "--version")
-        if result != f"sbxloop {expected}":
+        result = run(str(scripts / ("lantern.exe" if os.name == "nt" else "lantern")), "--version")
+        if result != f"lantern {expected}":
             raise ValueError(f"unexpected CLI version: {result}")
         print(f"Clean wheel smoke passed: {result}")
 

@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from sbxloop.engine.store import StateStore
-from sbxloop.events import EventBus
-from sbxloop.provider import ProviderHeldError, ProviderRecovery
-from sbxloop.worker.client import WorkerClient
-from sbxloop_worker.protocol import ErrorInfo, JobRequest, JobResult, ProviderFailure, Usage
+from lantern.engine.store import StateStore
+from lantern.events import EventBus
+from lantern.provider import ProviderHeldError, ProviderRecovery
+from lantern.worker.client import WorkerClient
+from lantern_worker.protocol import ErrorInfo, JobRequest, JobResult, ProviderFailure, Usage
 
 
 def job(**overrides):
@@ -200,9 +200,9 @@ def test_concierge_repeats_interrupted_request_after_status_changes(
 
 @pytest.mark.parametrize("kind", ["code", "workload"])
 def test_daemon_holds_without_reclaim_or_repair_budgets(tmp_path, kind):
-    from sbxloop.config import Config
-    from sbxloop.daemon.control import dispatch
-    from sbxloop.engine.model import RunResult
+    from lantern.config import Config
+    from lantern.daemon.control import dispatch
+    from lantern.engine.model import RunResult
     from tests.unit.test_daemon_loop import Harness, gh_item
 
     config = Config.model_validate(
@@ -285,8 +285,8 @@ def test_inflight_success_does_not_clear_another_requests_hold(recovery):
 
 @pytest.mark.parametrize("phase", ["build", "steer", "operator_execute", "operator_judge"])
 def test_all_phase_entry_points_raise_typed_failures_without_json_repair(phase):
-    from sbxloop.config import Config
-    from sbxloop.engine.phases import PhaseRunner
+    from lantern.config import Config
+    from lantern.engine.phases import PhaseRunner
 
     calls = []
 
@@ -301,8 +301,8 @@ def test_all_phase_entry_points_raise_typed_failures_without_json_repair(phase):
 
 
 def test_steering_hold_persists_the_message_without_spending_attempt(tmp_path):
-    from sbxloop.config import Config
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.config import Config
+    from lantern.engine.engine import LoopEngine
 
     engine = LoopEngine(Config.model_validate({"home": str(tmp_path / "state")}))
     engine.store.create_run("r1", "do the task")
@@ -361,7 +361,7 @@ def test_other_holds_are_not_released(recovery, category, fields):
 
 
 def test_daemon_startup_releases_a_refused_request_hold_and_says_so(tmp_path):
-    from sbxloop.config import Config
+    from lantern.config import Config
     from tests.unit.test_daemon_loop import Harness, RecordingFrontend
 
     config = Config.model_validate(
@@ -380,7 +380,7 @@ def test_daemon_startup_releases_a_refused_request_hold_and_says_so(tmp_path):
 
 
 def test_daemon_startup_keeps_any_other_hold(tmp_path):
-    from sbxloop.config import Config
+    from lantern.config import Config
     from tests.unit.test_daemon_loop import Harness, RecordingFrontend
 
     config = Config.model_validate(

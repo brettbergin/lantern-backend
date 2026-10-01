@@ -7,7 +7,7 @@ survives is the append-only contract the concierge relies on.
 
 from __future__ import annotations
 
-from sbxloop_worker.backends.copilot import system_message_config
+from lantern_worker.backends.copilot import system_message_config
 
 
 class TestSystemMessageConfig:

@@ -1,5 +1,8 @@
 # Spike: planning work into the forge (initiative, epic, task)
 
+> **Renamed.** sbxloop is now Lantern and Angie is the Lantern web app. This record
+> keeps the names it was written with.
+
 Status: **proposed; tracked as an initiative.** The product decisions below
 were taken with the maintainer on 2026-09-26; nothing here is built yet. The
 initiative is [sbxloop#2334](https://github.com/brettbergin/sbxloop/issues/2334); its epics and tasks are listed in the

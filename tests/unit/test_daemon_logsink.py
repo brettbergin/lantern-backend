@@ -1,4 +1,4 @@
-"""The per-run event → log mirror (``sbxloop.run``)."""
+"""The per-run event → log mirror (``lantern.run``)."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import logging
 
 import pytest
 
-from sbxloop.cli.tui import format_event
-from sbxloop.daemon.logsink import RUN_LOGGER_NAME, event_log_subscriber, level_for
-from sbxloop.events import Event, EventBus, HostEventTypes, summarize_event
-from sbxloop_worker.protocol import EventTypes
+from lantern.cli.tui import format_event
+from lantern.daemon.logsink import RUN_LOGGER_NAME, event_log_subscriber, level_for
+from lantern.events import Event, EventBus, HostEventTypes, summarize_event
+from lantern_worker.protocol import EventTypes
 
 
 class TestLevelFor:
@@ -100,7 +100,7 @@ class TestSubscriber:
 
 OLD_TOOL_END = {
     "tool": "bash",
-    "args": "cd /home/x/.local/state/sbxloop/sbxloop-work/runs/rfxm7ad23/workspace && uv run mypy",
+    "args": "cd /home/x/.local/state/lantern/lantern-work/runs/rfxm7ad23/workspace && uv run mypy",
     "success": False,
     "exit_code": 1,
     "error": "error: bad type",

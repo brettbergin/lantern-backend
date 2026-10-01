@@ -14,7 +14,7 @@ gcc -Os -s -fno-pie -no-pie -fno-ident -Wl,--build-id=none \
   -o inert_keylogger_indicators.elf inert_keylogger_indicators.c
 ```
 
-The specimen is meant to demonstrate the current limit: generic sbxloop tools
+The specimen is meant to demonstrate the current limit: generic Lantern tools
 can find and display these byte strings, but cannot yet determine executable
 behavior or parse ELF sections/imports. A future static analyzer must report
 observed indicators separately from conclusions about behavior.

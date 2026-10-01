@@ -1,0 +1,225 @@
+"""Build a prebaked sandbox template carrying lantern's runtime prerequisites.
+
+The worker install ladder (venv → apt self-heal → user-site pip) plus the
+Copilot runtime download are deterministic for a given worker version, yet
+run identically on every provision. ``lantern bake`` runs them ONCE in a
+scratch sandbox and persists the result with ``sbx template save``; with
+``[sandbox] template`` pointing at the saved ref, provisioning verifies the
+baked worker with fast probes instead of reinstalling it, and falls back to
+the ladder when the template is stale.
+
+Two manifests record what was baked:
+
+- **in-VM** (``~/.lantern/bake.json``, travels inside the template): read by
+  provisioning to verify the baked worker version before trusting it.
+- **host** (``<home>/state/bake.json``): read by ``lantern doctor`` to flag a
+  stale template (host upgraded since the bake) without booting a microVM.
+
+Templates carry *software only* — the scratch sandbox gets no secrets, and
+network policy is applied per-sandbox at provision time as always.
+"""
+
+from __future__ import annotations
+
+import json
+import secrets
+import tempfile
+import time
+from collections.abc import Callable
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict
+
+import lantern
+from lantern import toolchains
+from lantern.config import Config
+from lantern.errors import BakeError, LanternError, SbxError
+from lantern.log import get_logger
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxSpec
+from lantern.sbx.provision import agent_policy_allows
+from lantern.sbx.sandbox import BAKE_MANIFEST, LANTERN_DIR, VENV_PYTHON, Sandbox
+from lantern.worker.client import WorkerClient
+
+log = get_logger(__name__)
+
+DEFAULT_TEMPLATE_REF = "lantern-baked:latest"
+
+Progress = Callable[[str], None]
+
+
+class BakeRecord(BaseModel):
+    """What a bake produced; persisted host-side for doctor's drift check."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str
+    worker_version: str
+    python: str
+    runtime_cached: bool
+    baked_at: float
+    # Whether git was on PATH when the template was saved (#252). Optional so
+    # records written before the field existed still load; None reads as
+    # "not recorded" in doctor rather than as a failure.
+    git: bool | None = None
+    # The language toolchains on PATH when the template was saved (#615):
+    # canonical registry names, what actually landed rather than what was
+    # configured. None for records older than the field.
+    languages: tuple[str, ...] | None = None
+
+
+def bake_record_path(config: Config) -> Path:
+    return config.paths.bake_json
+
+
+def load_bake_record(config: Config) -> BakeRecord | None:
+    """The last bake's host-side record, or None (missing/unreadable)."""
+    path = bake_record_path(config)
+    if not path.is_file():
+        return None
+    try:
+        return BakeRecord.model_validate_json(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def bake_template(
+    cli: SbxCLI,
+    config: Config,
+    *,
+    ref: str = DEFAULT_TEMPLATE_REF,
+    base_template: str | None = None,
+    cache_runtime: bool = True,
+    keep: bool = False,
+    name: str | None = None,
+    progress: Progress | None = None,
+) -> BakeRecord:
+    """Run the full worker install once and persist it as a template.
+
+    Builds from sbx's default base template unless ``base_template`` is
+    given — deliberately NOT from ``[sandbox].template``, so re-baking
+    always starts clean instead of layering onto a stale image. The scratch
+    sandbox is removed afterwards (``keep`` retains it for debugging).
+    """
+    report = progress or (lambda _message: None)
+    name = name or f"lantern-bake-{secrets.token_hex(4)}"
+    runtime_cached = False
+    git_present = False
+    baked_languages: list[str] = []
+    # Config languages only: there is no workspace to detect from at bake
+    # time (#624). A run that resolves more tops the template up (#615).
+    languages = config.sandbox.effective_languages
+    with tempfile.TemporaryDirectory(prefix="lantern-bake-") as scratch:
+        spec = SandboxSpec(
+            name=name,
+            role="agent",
+            resources=config.sandbox_resources_for("agent"),
+            workspace=Path(scratch),
+            template=base_template,
+            # Same allows a run's agent sandbox gets, so the wheel deps, the
+            # dev-tools apt ensure, and the Copilot runtime download all
+            # resolve during the bake — including the configured
+            # toolchains' installer hosts (#616).
+            policy_allows=agent_policy_allows(config, languages),
+        )
+        report(f"creating scratch sandbox {name}")
+        sandbox: Sandbox | None = None
+        try:
+            cli.create(spec)
+            sandbox = Sandbox(cli, name)
+            cli.policy_allow(*spec.policy_allows, sandbox=name)
+
+            report(f"installing the worker (full install ladder) and {', '.join(languages)}")
+            client = WorkerClient(sandbox)
+            client.install(
+                extras=config.agent.backend,
+                ensure_dev_tools=True,
+                languages=languages,
+                # The global list only: a `[[vcs.repos]]` override is
+                # paid at that repository's provision (#681).
+                # Archive extraction must work even when a later run adds
+                # a language that was not selected for this bake.
+                apt_packages=list(dict.fromkeys(["xz-utils", *config.sandbox.apt_packages])),
+            )
+            if client.python != VENV_PYTHON:
+                raise BakeError(
+                    "baking requires an isolated worker virtualenv; install the base image's "
+                    "matching python3.X-venv package and retry (use --keep to inspect the "
+                    "scratch sandbox). The user-site fallback cannot be saved as a template"
+                )
+
+            if cache_runtime and config.agent.backend == "copilot":
+                report("pre-caching the Copilot runtime")
+                runtime_cached = _cache_copilot_runtime(sandbox, client.python)
+
+            # The dev-tools ensure above is best-effort; record what
+            # actually landed (git, #252; the toolchains, #615) so doctor can
+            # say whether runs will pay a top-up on every provision.
+            selected = toolchains.resolve(languages)
+            missing = client.missing_toolchains((*toolchains.BASELINE_TOOLS, *selected))
+            if missing is None:
+                raise BakeError("could not probe the baked toolchains")
+            absent = {tc.name for tc in missing}
+            git_present = toolchains.GIT.name not in absent
+            baked_languages = [tc.name for tc in selected if tc.name not in absent]
+            if absent:
+                report(f"not on PATH after the install: {', '.join(sorted(absent))}")
+
+            manifest = {
+                "worker_version": lantern.__version__,
+                "python": client.python,
+                "runtime_cached": runtime_cached,
+                "baked_at": time.time(),
+                "languages": baked_languages,
+            }
+            sandbox.mkdirs(LANTERN_DIR)
+            sandbox.write_text(BAKE_MANIFEST, json.dumps(manifest))
+
+            # sbx refuses to save a running sandbox (0.43: "is running and
+            # must be stopped before saving"); the scratch box is done.
+            report(f"stopping {name}")
+            cli.stop(name)
+            report(f"saving template {ref}")
+            cli.template_save(name, ref)
+        except LanternError as exc:
+            raise BakeError(f"bake failed: {exc}") from exc
+        finally:
+            if sandbox is not None and not keep:
+                try:
+                    sandbox.rm()
+                except SbxError:
+                    log.warning("bake.sandbox_remove_failed", sandbox=name, exc_info=True)
+
+    record = BakeRecord(
+        ref=ref,
+        worker_version=lantern.__version__,
+        python=client.python,
+        runtime_cached=runtime_cached,
+        baked_at=time.time(),
+        git=git_present,
+        languages=tuple(baked_languages),
+    )
+    path = bake_record_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record.model_dump_json(indent=2) + "\n")
+    return record
+
+
+def _cache_copilot_runtime(sandbox: Sandbox, python: str) -> bool:
+    """Best-effort ``python -m copilot download-runtime`` so first sessions
+    skip the runtime download. Never fatal: the SDK downloads on demand."""
+    try:
+        result = sandbox.exec([python, "-m", "copilot", "download-runtime"], timeout=600.0)
+    except SbxError:
+        log.warning("bake.runtime_precache_failed", sandbox=sandbox.name, exc_info=True)
+        return False
+    if not result.ok:
+        combined = "\n".join(p.strip() for p in (result.stderr, result.stdout) if p.strip())
+        log.warning(
+            "bake.runtime_precache_failed",
+            sandbox=sandbox.name,
+            rc=result.returncode,
+            output=combined[-2000:] or "(no output)",
+            hint="sessions will download the runtime on demand",
+        )
+    return result.ok

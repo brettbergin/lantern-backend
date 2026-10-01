@@ -10,11 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.conftest import FakeSbx
 from tests.fakes.gitserver import PrivateGitServer
 from tests.unit.test_hostgit import git, make_repo, make_submodule_setup

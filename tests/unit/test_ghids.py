@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.ghids import (
+from lantern.ghids import (
     FORGE_PREFIXES,
     GhId,
     api_item_id,

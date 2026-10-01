@@ -13,8 +13,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from sbxloop.config import Config
-from sbxloop.engine.followups import (
+from lantern.config import Config
+from lantern.engine.followups import (
     FollowupFiler,
     collect_followups,
     followup_key,
@@ -23,9 +23,9 @@ from sbxloop.engine.followups import (
     marker_key,
     recorded_review_rounds,
 )
-from sbxloop.engine.issue_lookup import LookupReceipt, fingerprint
-from sbxloop.engine.review import Followup, ReviewRound, ReviewVerdict
-from sbxloop.events import EventBus, HostEventTypes
+from lantern.engine.issue_lookup import LookupReceipt, fingerprint
+from lantern.engine.review import Followup, ReviewRound, ReviewVerdict
+from lantern.events import EventBus, HostEventTypes
 from tests.fakes.fake_github import BLOCKED_405, FakeGithub, human_review
 from tests.unit.test_daemon_loop import PR_URL, Harness
 from tests.unit.test_daemon_merge_gate import FakeDaemonGithub, gated_harness, park
@@ -123,7 +123,7 @@ class TestGatedApproval:
         assert fake.merges
         ((title, body, labels),) = fake.issues_created
         assert title == TITLE
-        assert labels == ["sbxloop:follow-up"]
+        assert labels == ["lantern:follow-up"]
         assert marker_key(body) == (run_id, followup_key(TITLE))
         assert f"Out of scope for [PR #9]({PR_URL}) (issue #1)" in body
         # The daemon watches the repository: the body names its trigger.
@@ -295,7 +295,7 @@ class TestFilingAfterTheFinish:
     ) -> None:
         h, fake, run_id = gate_ready(tmp_path)
         seen: list[dict[str, Any]] = []
-        monkeypatch.setattr("sbxloop.daemon.loop.FollowupFiler", finishing_filer(h, seen))
+        monkeypatch.setattr("lantern.daemon.loop.FollowupFiler", finishing_filer(h, seen))
         approve(h, run_id)
         assert fake.merges
         assert seen == [{"state": "done", "ledger_finished": True, "reported": True}]
@@ -312,7 +312,7 @@ class TestFilingAfterTheFinish:
         run_id = park_for_review(h)
         seed_review(h, run_id, followup())
         seen: list[dict[str, Any]] = []
-        monkeypatch.setattr("sbxloop.daemon.loop.FollowupFiler", finishing_filer(h, seen))
+        monkeypatch.setattr("lantern.daemon.loop.FollowupFiler", finishing_filer(h, seen))
         fake.reviews_payload = [
             human_review("alice", "APPROVED", "", id=1),
             human_review("bob", "APPROVED", "", id=2),
@@ -357,7 +357,7 @@ class TestIssueBody:
                 "",
                 "Out of scope for [PR #7](https://x/pull/7), noted by the review in round 1; "
                 "run `r1` on `o/r`.",
-                "Filed by sbxloop after that pull request merged. It is **not** queued for "
+                "Filed by lantern after that pull request merged. It is **not** queued for "
                 "the loop.",
                 "",
                 followup_marker("r1", cand.key),
@@ -380,7 +380,7 @@ class TestIssueBody:
         assert body.endswith(followup_marker("r1", cand.key))
 
     def test_the_filer_passes_attribution_through(self, tmp_path: Path) -> None:
-        from sbxloop.engine.followups import FollowupFiler
+        from lantern.engine.followups import FollowupFiler
 
         h = gated_harness(tmp_path)
         run_id = park(h)

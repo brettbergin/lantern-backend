@@ -1,0 +1,538 @@
+"""Host-side model listing for the configured agent backend.
+
+`lantern list-models` asks the configured backend (#617) which models this
+host's credential can use, so `model = "..."` in lantern.toml (or
+`--model`) can be chosen from real ids instead of guesswork:
+
+- copilot: the github-copilot-sdk — the same SDK agent sessions run on
+  inside the sandbox — lists what the authenticated Copilot subscription
+  can use. The SDK resolves auth from the environment (COPILOT_GITHUB_TOKEN
+  → GH_TOKEN → GITHUB_TOKEN; ./.env is loaded by the CLI callback). It is
+  optional host-side (the worker's `[copilot]` extra), so the import is
+  deferred and its absence surfaces as an actionable error instead of a
+  broken CLI.
+- claude: the Anthropic Models API (`GET /v1/models`, paginated by
+  `after_id`) with ANTHROPIC_API_KEY, over the stdlib — no SDK needed on
+  the host. Response shape per the public API reference (2026-09-02):
+  ``{"data": [{"id", "display_name", "created_at", "type"}], "has_more",
+  "last_id"}``; the rows are read defensively so a field change degrades a
+  column, never the command. FIELD-UNVERIFIED against a live key.
+- codex: the Codex SDK's model catalogue, with OPENAI_API_KEY and an
+  isolated runtime configuration. The optional host `[codex]` extra is
+  needed for this command; listing authenticates but starts no model turn.
+- openai: ``GET {base_url}/models`` on the endpoint `[agent.openai]` names
+  — served by vLLM, LiteLLM and the hosted API alike — with the credential
+  `api_key_env` names as a bearer token, over the stdlib. The listing
+  carries no billing, context or reasoning metadata, so the row is id and
+  name. An endpoint that 404s the listing serves none: reported as exactly
+  that, with the configured model still valid to use. FIELD-UNVERIFIED
+  against a live served endpoint.
+
+Runs on the host and needs no sandbox either way.
+
+API shape verified against github-copilot-sdk 1.0.8 (2026-07-25):
+``CopilotClient.list_models() -> list[ModelInfo]`` where ModelInfo carries
+id, name, capabilities.supports.{vision,reasoning_effort},
+capabilities.limits.{max_prompt_tokens,max_context_window_tokens},
+policy.state, billing.multiplier, supported_reasoning_efforts and
+default_reasoning_effort, plus a to_dict(). Attribute access below is
+getattr-defensive anyway so an SDK bump degrades a column, never the
+command.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from lantern.backends import ANTHROPIC_TOKEN_ENV, OPENAI_TOKEN_ENV, AgentBackend
+from lantern.endpoint import parse_endpoint
+from lantern.errors import LanternError
+from lantern.log import redact_text
+from lantern.releases import extra_install_hint
+
+if TYPE_CHECKING:
+    from lantern.config import Config
+
+# The SDK's documented auth resolution order.
+SDK_TOKEN_ENVS = ("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN")
+
+ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_PAGE_SIZE = 100
+# Pages are ~100 short records; anything past this is not a model list.
+ANTHROPIC_MAX_BYTES = 1 << 20
+
+# A listing is ~100 short records; anything past this is not a model list.
+OPENAI_MAX_BYTES = 1 << 20
+# How long doctor waits for the endpoint to answer from the host.
+ENDPOINT_PROBE_TIMEOUT_S = 5.0
+
+
+class NoModelListing(LanternError):
+    """The configured endpoint serves no model listing (a 404 on
+    ``/models``). Not a failure: the configured model is still valid, and
+    the catalog is advisory."""
+
+
+SDK_INSTALL_HINT = (
+    "github-copilot-sdk is not installed on this host — "
+    f"{extra_install_hint('copilot', 'github-copilot-sdk')} to list models"
+)
+
+
+@dataclass(frozen=True)
+class ModelRow:
+    """One model, flattened for display (raw carries the SDK's full dict)."""
+
+    id: str
+    name: str
+    multiplier: float | None
+    context_window: int | None
+    vision: bool
+    reasoning_efforts: tuple[str, ...] | None
+    default_reasoning_effort: str | None
+    policy_state: str | None
+    raw: dict[str, Any]
+    created: str | None = None
+
+
+def auth_hint(env: dict[str, str] | None = None) -> str:
+    """Say which SDK auth env var (if any) this process can see."""
+    env = dict(os.environ) if env is None else env
+    for name in SDK_TOKEN_ENVS:
+        if env.get(name):
+            return (
+                f"auth: {name} is set — if listing failed anyway, the token "
+                'likely lacks the "Copilot Requests" permission or the '
+                "subscription has no model access"
+            )
+    return (
+        f"auth: none of {', '.join(SDK_TOKEN_ENVS)} is set — create a "
+        'fine-grained PAT with the "Copilot Requests" permission and export '
+        f"{SDK_TOKEN_ENVS[0]} (or put it in ./.env)"
+    )
+
+
+def fetch_models(timeout_s: float = 60.0) -> list[Any]:
+    """The SDK's ModelInfo list, via a short-lived host-side client."""
+    try:
+        from copilot import CopilotClient
+    except ImportError as exc:
+        raise LanternError(SDK_INSTALL_HINT) from exc
+
+    async def _session() -> list[Any]:
+        async with CopilotClient() as client:
+            models = await client.list_models()
+            return list(models)
+
+    try:
+        return asyncio.run(asyncio.wait_for(_session(), timeout=timeout_s))
+    except TimeoutError as exc:
+        raise LanternError(
+            f"listing models timed out after {timeout_s:.0f}s — the bundled "
+            f"Copilot runtime may be unable to start or reach the API | {auth_hint()}"
+        ) from exc
+    except LanternError:
+        raise
+    except Exception as exc:
+        # Auth failures surface as opaque SDK errors; append what the token
+        # environment actually looks like (mirrors the worker backend).
+        raise LanternError(f"listing models failed: {exc} | {auth_hint()}") from exc
+
+
+def _raw_dict(info: Any) -> dict[str, Any]:
+    to_dict = getattr(info, "to_dict", None)
+    if callable(to_dict):
+        try:
+            raw = to_dict()
+        except Exception:
+            return {}
+        if isinstance(raw, dict):
+            return raw
+    return {}
+
+
+def model_row(info: Any) -> ModelRow:
+    """Flatten one SDK ModelInfo (or anything shaped like it) for display."""
+    capabilities = getattr(info, "capabilities", None)
+    supports = getattr(capabilities, "supports", None)
+    limits = getattr(capabilities, "limits", None)
+    context = getattr(limits, "max_context_window_tokens", None)
+    if not isinstance(context, int):
+        context = None
+    multiplier = getattr(getattr(info, "billing", None), "multiplier", None)
+    multiplier = float(multiplier) if isinstance(multiplier, int | float) else None
+    efforts = getattr(info, "supported_reasoning_efforts", None)
+    policy_state = getattr(getattr(info, "policy", None), "state", None)
+    default_effort = getattr(info, "default_reasoning_effort", None)
+    return ModelRow(
+        id=str(getattr(info, "id", "") or ""),
+        name=str(getattr(info, "name", "") or ""),
+        multiplier=multiplier,
+        context_window=context,
+        vision=bool(getattr(supports, "vision", False)),
+        reasoning_efforts=(
+            tuple(str(e) for e in efforts) if isinstance(efforts, list | tuple) else None
+        ),
+        default_reasoning_effort=str(default_effort) if isinstance(default_effort, str) else None,
+        policy_state=str(policy_state) if isinstance(policy_state, str) else None,
+        raw=_raw_dict(info),
+    )
+
+
+# -- the claude backend: Anthropic Models API over the stdlib ----------------
+
+OpenUrl = Callable[[urllib.request.Request, float], bytes]
+
+
+def _open_url(request: urllib.request.Request, timeout_s: float) -> bytes:
+    # nosec B310 - ANTHROPIC_MODELS_URL is a constant https:// literal
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # nosec B310
+        return bytes(response.read(ANTHROPIC_MAX_BYTES + 1))
+
+
+def fetch_anthropic_models(
+    timeout_s: float = 60.0,
+    env: dict[str, str] | None = None,
+    *,
+    open_url: OpenUrl | None = None,
+) -> list[dict[str, Any]]:
+    """Every model record the Anthropic Models API lists for the key in
+    ``ANTHROPIC_API_KEY`` (all pages), as the API's own dicts."""
+    env = dict(os.environ) if env is None else env
+    key = env.get(ANTHROPIC_TOKEN_ENV, "")
+    if not key:
+        raise LanternError(
+            f'{ANTHROPIC_TOKEN_ENV} is not set — [agent] backend = "claude" lists '
+            "models with it; create an Anthropic API key and export it (or put "
+            "it in ./.env)"
+        )
+    opener = _open_url if open_url is None else open_url
+    records: list[dict[str, Any]] = []
+    after_id: str | None = None
+    for _ in range(50):  # pagination guard: never loop on a misbehaving server
+        query = {"limit": str(ANTHROPIC_PAGE_SIZE)}
+        if after_id:
+            query["after_id"] = after_id
+        request = urllib.request.Request(
+            f"{ANTHROPIC_MODELS_URL}?{urllib.parse.urlencode(query)}",
+            headers={
+                "x-api-key": key,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "Accept": "application/json",
+            },
+        )
+        page = _anthropic_page(opener, request, timeout_s)
+        data = page.get("data")
+        records.extend(
+            item for item in (data if isinstance(data, list) else []) if isinstance(item, dict)
+        )
+        last_id = page.get("last_id")
+        if not page.get("has_more") or not isinstance(last_id, str) or last_id == after_id:
+            break
+        after_id = last_id
+    return records
+
+
+def _anthropic_page(
+    opener: OpenUrl, request: urllib.request.Request, timeout_s: float
+) -> dict[str, Any]:
+    try:
+        raw = opener(request, timeout_s)
+    except urllib.error.HTTPError as exc:
+        hint = " — the key is invalid or revoked" if exc.code in (401, 403) else ""
+        raise LanternError(f"listing models failed: HTTP {exc.code}{hint}") from exc
+    except urllib.error.URLError as exc:
+        raise LanternError(f"listing models failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LanternError(f"listing models timed out after {timeout_s:.0f}s") from exc
+    except OSError as exc:
+        raise LanternError(f"listing models failed: {exc}") from exc
+    if len(raw) > ANTHROPIC_MAX_BYTES:
+        raise LanternError("listing models failed: response is not a model list (too large)")
+    try:
+        page = json.loads(raw)
+    except ValueError as exc:
+        raise LanternError("listing models failed: response is not JSON") from exc
+    if not isinstance(page, dict):
+        raise LanternError("listing models failed: response is not a model list")
+    return page
+
+
+def anthropic_model_row(record: dict[str, Any]) -> ModelRow:
+    """Flatten one Models API record; the Copilot-only columns stay blank."""
+    created = record.get("created_at")
+    return ModelRow(
+        id=str(record.get("id") or ""),
+        name=str(record.get("display_name") or ""),
+        multiplier=None,
+        context_window=None,
+        vision=False,
+        reasoning_efforts=None,
+        default_reasoning_effort=None,
+        policy_state=None,
+        raw=dict(record),
+        created=str(created)[:10] if isinstance(created, str) else None,
+    )
+
+
+def fetch_codex_models(timeout_s: float = 60.0) -> list[dict[str, Any]]:
+    """The Codex runtime's full visible catalogue, without a model turn.
+
+    The shared runtime context bounds startup, authentication and every
+    page with one watchdog, and removes the temporary auth/config home.
+    ``model`` is the runnable slug; ``id`` can be a catalogue entry id.
+    """
+    if not os.environ.get(OPENAI_TOKEN_ENV):
+        raise LanternError(
+            f'{OPENAI_TOKEN_ENV} is not set — [agent] backend = "codex" lists '
+            "models with it; create an OpenAI API key and export it"
+        )
+    try:
+        from openai_codex.types import ModelListResponse
+    except ImportError as exc:
+        raise LanternError(
+            "openai-codex is not installed on this host — "
+            f"{extra_install_hint('codex', 'openai-codex')} to list models"
+        ) from exc
+
+    from lantern_worker.backends.codex_runtime import authenticated_client
+
+    records: list[dict[str, Any]] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    try:
+        with authenticated_client(persistent=False, timeout_s=timeout_s) as client:
+            for _ in range(50):
+                page = client.request(
+                    "model/list",
+                    {"includeHidden": False, "cursor": cursor, "limit": 100},
+                    response_model=ModelListResponse,
+                )
+                records.extend(model.model_dump(mode="json", by_alias=True) for model in page.data)
+                cursor = page.next_cursor
+                if cursor is None:
+                    return records
+                if not cursor or cursor in seen:
+                    raise LanternError("listing codex models failed: pagination cursor repeated")
+                seen.add(cursor)
+            raise LanternError("listing codex models failed: pagination exceeded 50 pages")
+    except subprocess.TimeoutExpired as exc:
+        raise LanternError(f"listing codex models timed out after {timeout_s:.0f}s") from exc
+    except LanternError:
+        raise
+    except Exception as exc:
+        raise LanternError(f"listing codex models failed: {redact_text(str(exc))}") from exc
+
+
+def codex_model_row(record: dict[str, Any]) -> ModelRow:
+    """Flatten the Codex catalogue's fields without inventing billing data."""
+    model = record.get("model")
+    if not isinstance(model, str) or not model:
+        raise LanternError("listing codex models failed: catalogue entry has no runnable model")
+    efforts = record.get("supportedReasoningEfforts") or []
+    return ModelRow(
+        id=model,
+        name=str(record.get("displayName") or ""),
+        multiplier=None,
+        context_window=None,
+        vision="image" in (record.get("inputModalities") or []),
+        reasoning_efforts=tuple(
+            item["reasoningEffort"]
+            for item in efforts
+            if isinstance(item, dict) and isinstance(item.get("reasoningEffort"), str)
+        )
+        or None,
+        default_reasoning_effort=record.get("defaultReasoningEffort"),
+        policy_state=None,
+        raw=dict(record),
+    )
+
+
+# -- the openai backend: the endpoint's own listing over the stdlib ----------
+
+
+def _openai_target(config: Config) -> tuple[str, str, str]:
+    """(models URL, endpoint authority, credential env) for the configured
+    endpoint; config validation has required the URL under the backend."""
+    settings = config.openai_for()
+    if settings.base_url is None:
+        raise LanternError(
+            '[agent.openai] base_url is not set — [agent] backend = "openai" lists models '
+            "from the endpoint it names"
+        )
+    endpoint = parse_endpoint(settings.base_url)
+    return f"{endpoint.url}/models", endpoint.authority, settings.api_key_env
+
+
+def fetch_openai_models(
+    config: Config,
+    timeout_s: float = 60.0,
+    env: dict[str, str] | None = None,
+    *,
+    open_url: OpenUrl | None = None,
+) -> list[dict[str, Any]]:
+    """Every model record the configured endpoint lists, as its own dicts."""
+    env = dict(os.environ) if env is None else env
+    url, authority, key_env = _openai_target(config)
+    key = env.get(key_env, "")
+    if not key:
+        raise LanternError(
+            f'{key_env} is not set — [agent] backend = "openai" lists models from the '
+            f"endpoint at {authority} with it; export it (a placeholder value if the "
+            "endpoint wants no credential)"
+        )
+    opener = _open_url if open_url is None else open_url
+    request = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    )
+    try:
+        raw = opener(request, timeout_s)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise NoModelListing(
+                f"the endpoint at {authority} serves no model listing (HTTP 404 for {url})"
+            ) from exc
+        hint = f" — the key in {key_env} was refused" if exc.code in (401, 403) else ""
+        raise LanternError(
+            f"listing models from {authority} failed: HTTP {exc.code}{hint}"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise LanternError(f"listing models from {authority} failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LanternError(
+            f"listing models from {authority} timed out after {timeout_s:.0f}s"
+        ) from exc
+    except OSError as exc:
+        raise LanternError(f"listing models from {authority} failed: {exc}") from exc
+    if len(raw) > OPENAI_MAX_BYTES:
+        raise LanternError(
+            f"listing models from {authority} failed: response is not a model list (too large)"
+        )
+    try:
+        page = json.loads(raw)
+    except ValueError as exc:
+        raise LanternError(f"listing models from {authority} failed: response is not JSON") from exc
+    data = page.get("data") if isinstance(page, dict) else None
+    if not isinstance(data, list):
+        raise LanternError(f"listing models from {authority} failed: response is not a model list")
+    return [item for item in data if isinstance(item, dict) and isinstance(item.get("id"), str)]
+
+
+def openai_model_row(record: dict[str, Any]) -> ModelRow:
+    """Flatten one listing record: the id, and whatever the server calls it
+    (a display name where one is given, else who serves it)."""
+    name = next(
+        (
+            str(record[key])
+            for key in ("display_name", "name", "owned_by")
+            if isinstance(record.get(key), str) and record[key]
+        ),
+        "",
+    )
+    return ModelRow(
+        id=str(record.get("id") or ""),
+        name=name,
+        multiplier=None,
+        context_window=None,
+        vision=False,
+        reasoning_efforts=None,
+        default_reasoning_effort=None,
+        policy_state=None,
+        raw=dict(record),
+    )
+
+
+def probe_openai_endpoint(
+    config: Config,
+    timeout_s: float = ENDPOINT_PROBE_TIMEOUT_S,
+    env: dict[str, str] | None = None,
+    *,
+    open_url: OpenUrl | None = None,
+) -> tuple[bool, str]:
+    """Whether the configured endpoint answers **from the host** — stated
+    as exactly that: the agent sandbox's route to it is a separate
+    question this probe cannot answer, and the detail says so. Any HTTP
+    answer counts, a 404 for the listing included; only no answer at all
+    (refused, unresolved, timed out) is a failure."""
+    env = dict(os.environ) if env is None else env
+    url, _authority, key_env = _openai_target(config)
+    headers = {"Accept": "application/json"}
+    if env.get(key_env):
+        headers["Authorization"] = f"Bearer {env[key_env]}"
+    opener = _open_url if open_url is None else open_url
+    # The listing is the same under either API; the model calls are not, so
+    # the row names the path the selected API sends them to.
+    settings = config.openai_for()
+    path = "responses" if settings.resolved_api() == "responses" else "chat/completions"
+    caveat = (
+        f"; model calls go to {url.removesuffix('/models')}/{path} ([agent.openai] api = "
+        f'"{settings.api}"); whether the agent sandbox can reach it is a separate question '
+        "doctor cannot answer"
+    )
+    try:
+        opener(urllib.request.Request(url, headers=headers), timeout_s)
+    except urllib.error.HTTPError as exc:
+        return True, f"answers from the host (HTTP {exc.code} for {url}){caveat}"
+    except urllib.error.URLError as exc:
+        return False, f"no answer from the host ({redact_text(str(exc.reason))}){caveat}"
+    except TimeoutError:
+        return False, f"no answer from the host within {timeout_s:.0f}s{caveat}"
+    except OSError as exc:
+        return False, f"no answer from the host ({redact_text(str(exc))}){caveat}"
+    return True, f"answers from the host (served {url}){caveat}"
+
+
+def fetch_backend_rows(
+    backend: AgentBackend, timeout_s: float = 60.0, *, config: Config | None = None
+) -> list[ModelRow]:
+    """The configured backend's models, flattened for display. The openai
+    backend lists from its configured endpoint, so it needs the config."""
+    if backend.name == "claude":
+        return [anthropic_model_row(record) for record in fetch_anthropic_models(timeout_s)]
+    if backend.name == "codex":
+        return [codex_model_row(record) for record in fetch_codex_models(timeout_s)]
+    if backend.name == "openai":
+        if config is None:
+            raise LanternError("the openai backend lists models from its configured endpoint")
+        return [openai_model_row(record) for record in fetch_openai_models(config, timeout_s)]
+    return [model_row(info) for info in fetch_models(timeout_s=timeout_s)]
+
+
+def table_columns(backend: AgentBackend) -> tuple[str, ...]:
+    """The columns `list-models` renders for ``backend``: the Models API
+    carries no billing/context/reasoning metadata, so the claude table is
+    id, name and release date; an endpoint's listing carries id and name."""
+    if backend.name == "claude":
+        return ("model", "name", "created")
+    if backend.name == "codex":
+        return ("model", "name", "vision", "reasoning")
+    if backend.name == "openai":
+        return ("model", "name")
+    return ("model", "name", "billing", "context", "vision", "reasoning", "policy")
+
+
+def format_context(tokens: int | None) -> str:
+    if tokens is None:
+        return ""
+    if tokens >= 1000:
+        return f"{tokens // 1000}k"
+    return str(tokens)
+
+
+def format_efforts(row: ModelRow) -> str:
+    if not row.reasoning_efforts:
+        return ""
+    return ", ".join(
+        f"{effort}*" if effort == row.default_reasoning_effort else effort
+        for effort in row.reasoning_efforts
+    )

@@ -16,28 +16,28 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.control import CommandReply
-from sbxloop.daemon.mailbox import MailboxClient
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import TaskSpec
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import SbxloopError
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import ExecResult, SandboxInfo
-from sbxloop.tui.app import SbxloopTui
-from sbxloop.tui.runner import RunOutcome
-from sbxloop_worker.protocol import Event
+from lantern.config import Config
+from lantern.daemon.control import CommandReply
+from lantern.daemon.mailbox import MailboxClient
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import TaskSpec
+from lantern.engine.store import StateStore
+from lantern.errors import LanternError
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import ExecResult, SandboxInfo
+from lantern.tui.app import LanternTui
+from lantern.tui.runner import RunOutcome
+from lantern_worker.protocol import Event
 
 
 @pytest.fixture(autouse=True)
 def no_live_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     def unavailable(*args: Any, **kwargs: Any) -> None:
-        raise SbxloopError("Model discovery is unavailable in this test.")
+        raise LanternError("Model discovery is unavailable in this test.")
 
-    monkeypatch.setattr("sbxloop.modelcatalog.fetch_backend_rows", unavailable)
+    monkeypatch.setattr("lantern.modelcatalog.fetch_backend_rows", unavailable)
 
 
 class FakeCtl:
@@ -177,7 +177,7 @@ class RecordingSbx(SbxCLI):
         return list(self.infos)
 
 
-def backdate(state_dir: SbxloopHome, run_id: str, days: float) -> None:
+def backdate(state_dir: LanternHome, run_id: str, days: float) -> None:
     """Make a run look untouched for ``days`` (age drives orphan and gc verdicts)."""
     conn = sqlite3.connect(state_dir.state_db)
     try:
@@ -215,9 +215,9 @@ def live_status(**overrides: Any) -> dict[str, Any]:
 
 
 @pytest.fixture
-def seeded(tmp_path: Path) -> SbxloopHome:
+def seeded(tmp_path: Path) -> LanternHome:
     """A home with a live run, a merged run, a failed run, items, a gate."""
-    state_dir = SbxloopHome(tmp_path / "state")
+    state_dir = LanternHome(tmp_path / "state")
     state_dir.ensure_tree()
     db = state_dir.state_db
     store = StateStore(db)
@@ -307,7 +307,7 @@ def seeded(tmp_path: Path) -> SbxloopHome:
 
 
 def make_app(
-    state_dir: SbxloopHome,
+    state_dir: LanternHome,
     *,
     ctl: FakeCtl | None = None,
     run: str | None = None,
@@ -317,13 +317,13 @@ def make_app(
     daemon: dict[str, Any] | None = None,
     cwd: Path | None = None,
     **tui: Any,
-) -> SbxloopTui:
+) -> LanternTui:
     config = Config.model_validate(
         {"home": str(state_dir.root), "tui": tui, "daemon": daemon or {}}
     )
     mailbox = MailboxClient(state_dir.state_db, operator_id="brett")
     box = sbx or RecordingSbx()
-    return SbxloopTui(
+    return LanternTui(
         config,
         state_dir,
         mailbox=mailbox,

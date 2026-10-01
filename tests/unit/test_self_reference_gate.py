@@ -1,4 +1,4 @@
-"""The gate against sbxloop self-references in user-facing surfaces (#645),
+"""The gate against lantern self-references in user-facing surfaces (#645),
 the strings #635 cleaned so it passes, and CI's push filter (#643).
 
 `scripts/check_self_references.py` is stdlib-only and runs from `make lint`
@@ -81,7 +81,7 @@ class TestTheTreeIsClean:
             if line.strip() and not line.startswith("#")
         ]
         assert {path for path, _ in entries} == {
-            "packages/sbxloop/src/sbxloop/engine/prompts/concierge.md"
+            "packages/lantern/src/lantern/engine/prompts/concierge.md"
         }
         assert all(text.startswith("#") and len(text) <= 3 for _, text in entries)
 
@@ -94,14 +94,14 @@ class TestPromptBodies:
         self, gate: ModuleType, tmp_path: Path
     ) -> None:
         (tmp_path / "prompts" / "build.md").write_text(
-            "<!--\nContract for humans: see #225 and packages/sbxloop/x.py.\n-->\n"
-            "# Body\n\nFixed in #641 — see packages/sbxloop/src/sbxloop/engine.\n"
+            "<!--\nContract for humans: see #225 and packages/lantern/x.py.\n-->\n"
+            "# Body\n\nFixed in #641 — see packages/lantern/src/lantern/engine.\n"
             "A link https://github.com/o/r/issues/641 is fine, so is `#0e8a16`.\n"
         )
         assert _rendered(gate) == [
             "prompts/build.md:6: issue-ref in prompt: #641",
-            "prompts/build.md:6: sbxloop path in prompt: packages/sbxloop",
-            "prompts/build.md:6: sbxloop path in prompt: src/sbxloop",
+            "prompts/build.md:6: lantern path in prompt: packages/lantern",
+            "prompts/build.md:6: lantern path in prompt: src/lantern",
         ]
 
     def test_a_prompt_without_a_header_is_read_from_line_one(
@@ -174,13 +174,13 @@ class TestInitWrittenFiles:
     def test_comments_in_templates_count(
         self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        template = tmp_path / "data" / "sbxloop.toml.example"
+        template = tmp_path / "data" / "lantern.toml.example"
         template.write_text(
             '# [agent]\n# Which SDK runs the agent (#533):\n# backend = "copilot"\n'
         )
         monkeypatch.setattr(gate, "TEMPLATES", [template])
         assert _rendered(gate) == [
-            "data/sbxloop.toml.example:2: issue-ref in init-written file: #533"
+            "data/lantern.toml.example:2: issue-ref in init-written file: #533"
         ]
 
 
@@ -189,14 +189,16 @@ class TestPersonalIdentifiers:
         self, gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         files = {
-            "README.md": "Source: https://github.com/brettbergin/sbxloop — the project's own URL\n",
+            "README.md": (
+                "Source: https://github.com/brettbergin/lantern-backend — the project's own URL\n"
+            ),
             "src/host.py": 'HOST = "db.comp.bergco.net"\nHOME = "/home/bergs"\n',
             "src/repo.py": 'REPO = "brettbergin/project-mountain-dew"\n',
             "docs/deploy.md": "ssh bergs@db.comp.bergco.net\n",
             "contrib/unit.service": "User=bergs\n",
             ".github/workflows/deploy.yml": "runs-on: db\n",
             "tests/fixture.py": 'login = "brettbergin"\n',
-            "pyproject.toml": 'Homepage = "https://github.com/brettbergin/sbxloop"\n',
+            "pyproject.toml": 'Homepage = "https://github.com/brettbergin/lantern-backend"\n',
         }
         for rel, text in files.items():
             path = tmp_path / rel

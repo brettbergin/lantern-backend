@@ -1,8 +1,8 @@
-"""A registered repository says whether it carries the labels sbxloop
+"""A registered repository says whether it carries the labels lantern
 applies, and an operator can create the missing ones without leaving the
 console (#630).
 
-Nothing but ``sbxloop init-repo`` on the host could create them, so a
+Nothing but ``lantern init-repo`` on the host could create them, so a
 repository registered through the API showed the loop's states as bare
 text until somebody remembered to run a command — and nothing anywhere
 said which repositories were set up and which were not. The daemon now
@@ -16,9 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sbxloop.config import Config
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.labels import LabelSpec, audit_labels, lifecycle_specs, sync_labels
+from lantern.config import Config
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.labels import LabelSpec, audit_labels, lifecycle_specs, sync_labels
 from tests.fakes.fake_github import FakeGithub
 from tests.unit.test_daemon_loop import Harness
 
@@ -132,7 +132,7 @@ class TestTheDaemonReadsThemBack:
         (row,) = h.dstore.repositories()
         assert row.labels_checked_at == h.clock()
         assert row.labels_missing == ()
-        assert "sbxloop:run" in row.labels_expected
+        assert "lantern:run" in row.labels_expected
         # The follow-up label is one of the set the reading answers for.
         assert h.config.landing.followup_label in row.labels_expected
 
@@ -140,12 +140,12 @@ class TestTheDaemonReadsThemBack:
         h = harness(tmp_path)
         h.loop.repositories.activate()
         ops = FakeGithub()
-        ops.labels_existing = {"sbxloop:run"}
+        ops.labels_existing = {"lantern:run"}
         h.loop.github = Box(ops)
         h.loop.tick()
         (row,) = h.dstore.repositories()
-        assert "sbxloop:run" not in row.labels_missing
-        assert "sbxloop:failed" in row.labels_missing
+        assert "lantern:run" not in row.labels_missing
+        assert "lantern:failed" in row.labels_missing
 
     def test_a_repository_is_read_once_per_interval(self, tmp_path: Path) -> None:
         h = harness(tmp_path, label_check_interval_s=3600.0)
@@ -257,11 +257,11 @@ class TestSyncingThroughTheLoop:
         h = harness(tmp_path)
         h.loop.repositories.activate()
         ops = FakeGithub()
-        ops.labels_existing = {"sbxloop:run"}
+        ops.labels_existing = {"lantern:run"}
         h.loop.github = Box(ops)
         result = h.loop.sync_repo_labels("o/r", by="tester")
         assert result["state"] == "compliant"
-        assert "sbxloop:failed" in result["created"]
+        assert "lantern:failed" in result["created"]
         assert result["missing"] == []
         assert result["checked_at"] == h.clock()
         (row,) = h.dstore.repositories()

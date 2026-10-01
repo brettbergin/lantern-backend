@@ -10,21 +10,21 @@ from typing import Any
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.deliver import (
+from lantern import hostgit
+from lantern.deliver import (
     _plan_git_diff,
     _plan_snapshot,
     branch_name,
     deliver_workspace,
     ensure_repository,
 )
-from sbxloop.errors import (
+from lantern.errors import (
     DeliveryError,
     DeliveryPermissionError,
     EmptyDeliveryError,
     GithubOpsError,
 )
-from sbxloop.vcs.github.ops import PrRef
+from lantern.vcs.github.ops import PrRef
 from tests.fakes.github_errors import github_error
 from tests.fakes.gitrepo import git
 from tests.fakes.gitserver import PrivateGitServer, bare_from
@@ -85,7 +85,7 @@ class StubOps(OpsStub):
 
     def ref_lookup(self, repo: str, ref: str) -> str | None:
         self.ref_lookups.append((repo, ref))
-        if ref.startswith("heads/sbxloop/"):
+        if ref.startswith("heads/lantern/"):
             return self.branch_sha
         return "base123"
 
@@ -107,7 +107,7 @@ class StubOps(OpsStub):
             return {"sha": "commit789"}
         if path.endswith("/git/refs"):
             if self.branch_sha is not None and str((body or {}).get("ref", "")).startswith(
-                "refs/heads/sbxloop/"
+                "refs/heads/lantern/"
             ):
                 # Creating a ref that exists is GitHub's 422 (#518): the
                 # doomed POST a re-delivery used to pay, in the ledger.
@@ -173,7 +173,7 @@ class TestDeliverWorkspace:
 
         # PR from the new branch onto base, artifacts listed in the body
         assert ops.pr_kwargs["base"] == "main"
-        assert ops.pr_kwargs["head"] == "sbxloop/r42"
+        assert ops.pr_kwargs["head"] == "lantern/r42"
         assert ops.pr_kwargs["draft"] is False
         assert "hello.txt" in ops.pr_kwargs["body"]
         assert "sub/logo.bin" in ops.pr_kwargs["body"]
@@ -332,7 +332,7 @@ class TestDeliverWorkspace:
                 return super().pr_create(repo, **kwargs)
 
         ops = NoDraftsOps()
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             pr = deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -408,7 +408,7 @@ class TestDeliverWorkspace:
     ) -> None:
         """50 files stay O(1) jobs; chunk splits happen only on the byte cap,
         and a single file over the cap still ships in its own chunk."""
-        import sbxloop.deliver as deliver_mod
+        import lantern.deliver as deliver_mod
 
         root = tmp_path / "big"
         root.mkdir()
@@ -503,7 +503,7 @@ class TestWorkflowPermission:
         assert "`workflows: write`" in text
         assert "Workflows: Read and write" in text and "installation" in text
         assert "`workflow` scope" in text
-        assert "sbxloop doctor --probe" in text and "Nothing was delivered" in text
+        assert "lantern doctor --probe" in text and "Nothing was delivered" in text
         assert exc.paths == (".github/workflows/release-on-merge.yml",)
         assert exc.permission == "workflows:write"
         # Fail-closed and cheap: zero blobs, zero trees, zero commits.
@@ -785,7 +785,7 @@ def make_clone_workspace(tmp_path: Path) -> tuple[Path, str]:
     git("add", ".", cwd=source)
     git("commit", "-m", "init", cwd=source)
     clone = tmp_path / "clone"
-    hostgit.clone_for_run(source, clone, "sbxloop/r1")
+    hostgit.clone_for_run(source, clone, "lantern/r1")
     return clone, git("rev-parse", "HEAD", cwd=source)
 
 
@@ -1020,7 +1020,7 @@ class TestSubmoduleDelivery:
             git("submodule", "add", "-q", f"{srv.url}/lib.git", "vendor/lib", cwd=app)
             git("commit", "-q", "-m", "init", cwd=app)
             clone = tmp_path / "clone"
-            hostgit.clone_for_run(app, clone, "sbxloop/r1")
+            hostgit.clone_for_run(app, clone, "lantern/r1")
             hostgit.populate_submodules(clone, source=app, token=None)
 
             def bump() -> str:
@@ -1129,7 +1129,7 @@ class TestLfsDelivery:
         git("add", "-A", cwd=app)
         git("commit", "-q", "-m", "init", cwd=app)
         clone = tmp_path / "clone"
-        hostgit.clone_for_run(app, clone, "sbxloop/r1")
+        hostgit.clone_for_run(app, clone, "lantern/r1")
         hostgit.populate_lfs(clone, source=app, lfs_url=None, token=None)
         return clone, git("rev-parse", "HEAD", cwd=app)
 
@@ -1202,7 +1202,7 @@ def _force_moves(caplog: pytest.LogCaptureFixture) -> list[str]:
 class TestRedeliveryCollisions:
     """The delivery branch is a pure function of the run id, so it already
     exists for every fix round after the first and for a manual
-    `sbxloop deliver <run>` after a failed attempt (#223). Field run
+    `lantern deliver <run>` after a failed attempt (#223). Field run
     `rfxja288b` (#518) showed each such round paying a doomed refs POST —
     a `worker.error` panel per healthy re-delivery — before the force-move
     that was the real operation; the ref is now looked up first.
@@ -1232,7 +1232,7 @@ class TestRedeliveryCollisions:
         ops = StubOps()
         ops.branch_sha = "e31ae110407f0000deadbeef"
         with pytest.raises(GithubOpsError) as excinfo:
-            ops.raw("POST", "/repos/o/r/git/refs", {"ref": "refs/heads/sbxloop/r42", "sha": "x"})
+            ops.raw("POST", "/repos/o/r/git/refs", {"ref": "refs/heads/lantern/r42", "sha": "x"})
         assert excinfo.value.http_status == 422
         assert ops.failed_jobs == [("raw.api", "POST", "/repos/o/r/git/refs", 422)]
         with pytest.raises(AssertionError, match="failed worker jobs recorded"):
@@ -1242,7 +1242,7 @@ class TestRedeliveryCollisions:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         ops = StubOps()  # branch_sha None: no prior delivery
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -1261,7 +1261,7 @@ class TestRedeliveryCollisions:
         only 422 is never made — no `worker.error`, no `job_done error=`."""
         ops = StubOps()
         ops.branch_sha = "e31ae110407f0000deadbeef"
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             pr = deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -1288,11 +1288,11 @@ class TestRedeliveryCollisions:
     def test_manual_redelivery_has_no_round_to_report(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """`sbxloop deliver <run>` (#223) lands on the same branch; it does
+        """`lantern deliver <run>` (#223) lands on the same branch; it does
         not count rounds, and the event does not invent one."""
         ops = StubOps()
         ops.branch_sha = "abc123abc123abc123"
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -1318,7 +1318,7 @@ class TestRedeliveryCollisions:
                 return super().raw(method, path, body)
 
         ops = RacedOps()
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             pr = deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -1473,14 +1473,14 @@ class TestContinuedHistory:
         git("commit", "-m", "init", cwd=source)
         base_sha = git("rev-parse", "HEAD", cwd=source)
         clone = tmp_path / "clone"
-        hostgit.clone_for_run(source, clone, "sbxloop/rnew")
+        hostgit.clone_for_run(source, clone, "lantern/rnew")
         # What a restarted run's fresh base-cut clone looks like.
         (clone / "new.txt").write_text("new\n")
 
         class KnownBaseOps(StubOps):
             def ref_lookup(self, repo: str, ref: str) -> str | None:
                 self.ref_lookups.append((repo, ref))
-                if ref.startswith("heads/sbxloop/"):
+                if ref.startswith("heads/lantern/"):
                     return "PRIORHEAD"
                 return base_sha
 
@@ -1499,7 +1499,7 @@ class TestContinuedHistory:
             outcome="o",
             source_dir=clone,
             base="main",
-            branch="sbxloop/prev",
+            branch="lantern/prev",
             parent="PRIORHEAD",
         )
         (tree_body,) = [b for _, p, b in ops.raw_calls if p.endswith("/git/trees")]
@@ -1514,7 +1514,7 @@ class TestContinuedHistory:
 
 class TestPrConventions:
     """#678: the repository's pull request template opens the body, the
-    agent's own `.sbxloop/pr-body` wins over it, and a title lint in the
+    agent's own `.lantern/pr-body` wins over it, and a title lint in the
     tree is detected — each from the delivered tree itself."""
 
     def test_the_template_opens_the_body_verbatim(self, tmp_path: Path) -> None:
@@ -1534,7 +1534,7 @@ class TestPrConventions:
         )
         body = ops.pr_kwargs["body"]
         assert body.startswith("## Summary\n\n## Checklist\n- [ ] tests\n\n---\n\n")
-        assert "Artifacts produced by sbxloop run `r42`." in body
+        assert "Artifacts produced by lantern run `r42`." in body
         assert body.endswith("\nCloses #5\n")
 
     def test_the_agents_body_wins_over_the_template(self, tmp_path: Path) -> None:
@@ -1553,7 +1553,7 @@ class TestPrConventions:
         body = ops.pr_kwargs["body"]
         assert body.startswith("## Summary\n\nDid the thing.\n\n- [x] tests\n\n---\n\n")
         assert "Files (" not in body, "the authored body replaces the summary"
-        assert "sbxloop run `r42`" in body and body.endswith("\nCloses #5\n")
+        assert "lantern run `r42`" in body and body.endswith("\nCloses #5\n")
 
     def test_without_either_the_body_reads_as_before(self, tmp_path: Path) -> None:
         ops = StubOps()
@@ -1565,7 +1565,7 @@ class TestPrConventions:
             source_dir=make_workspace(tmp_path),
         )
         body = ops.pr_kwargs["body"]
-        assert body.startswith("Artifacts produced by sbxloop run `r42`.\n\n**Outcome:** x\n")
+        assert body.startswith("Artifacts produced by lantern run `r42`.\n\n**Outcome:** x\n")
         assert "---" not in body
 
     def test_a_redelivery_with_an_authored_body_rewrites_the_open_pr(self, tmp_path: Path) -> None:
@@ -1614,7 +1614,7 @@ class TestPrConventions:
     def test_pr_template_takes_githubs_first_choice_and_skips_empty_ones(
         self, tmp_path: Path
     ) -> None:
-        from sbxloop.deliver import pr_template
+        from lantern.deliver import pr_template
 
         # One spelling per directory: the checkout may sit on a
         # case-insensitive filesystem, where the two spellings are one file.
@@ -1657,7 +1657,7 @@ class TestPrConventions:
     def test_conventional_titles_names_the_evidence(
         self, tmp_path: Path, files: dict[str, str], expected: str | None
     ) -> None:
-        from sbxloop.deliver import conventional_titles
+        from lantern.deliver import conventional_titles
 
         root = make_workspace(tmp_path)
         for rel, text in files.items():
@@ -1671,7 +1671,7 @@ class TestPrConventions:
             ("feat(api): add the endpoint", "feat(api): add the endpoint"),
             ("fix!: drop  the\n thing", "fix!: drop the thing"),
             ("Add the endpoint", "chore: add the endpoint"),
-            ("sbxloop: Add the endpoint", "chore: sbxloop: Add the endpoint"),
+            ("lantern: Add the endpoint", "chore: lantern: Add the endpoint"),
             ("Feat: shouting type", "chore: feat: shouting type"),
             ("revert: the last change", "revert: the last change"),
             ("", "chore: deliver artifacts"),
@@ -1680,14 +1680,14 @@ class TestPrConventions:
     def test_conventional_title_keeps_one_and_guesses_otherwise(
         self, title: str, expected: str
     ) -> None:
-        from sbxloop.deliver import conventional_title
+        from lantern.deliver import conventional_title
 
         assert conventional_title(title) == expected
 
     def test_pr_conventions_is_a_paragraph_only_when_the_workspace_says_so(
         self, tmp_path: Path
     ) -> None:
-        from sbxloop.deliver import pr_conventions
+        from lantern.deliver import pr_conventions
 
         root = make_workspace(tmp_path)
         assert pr_conventions(None) == "" and pr_conventions(root) == ""
@@ -1697,7 +1697,7 @@ class TestPrConventions:
         assert "pr-body" not in text
         (root / "PULL_REQUEST_TEMPLATE.md").write_text("## Why\n")
         text = pr_conventions(root)
-        assert "`PULL_REQUEST_TEMPLATE.md`" in text and "`.sbxloop/pr-body`" in text
+        assert "`PULL_REQUEST_TEMPLATE.md`" in text and "`.lantern/pr-body`" in text
         assert text.count("\n- ") == 1 and text.startswith("- ")
 
 
@@ -1707,7 +1707,7 @@ class TestNaming:
     are byte-for-byte what the loop always wrote."""
 
     def test_render_naming(self) -> None:
-        from sbxloop.deliver import render_naming
+        from lantern.deliver import render_naming
 
         out = render_naming(
             "{repo} · {title} · {outcome} · {run_id}",
@@ -1722,8 +1722,8 @@ class TestNaming:
         )
 
     def test_defaults_render_identically_with_no_title(self, tmp_path: Path) -> None:
-        from sbxloop.config import DEFAULT_COMMIT_MESSAGE_TEMPLATE, DEFAULT_PR_TITLE_TEMPLATE
-        from sbxloop.deliver import render_naming
+        from lantern.config import DEFAULT_COMMIT_MESSAGE_TEMPLATE, DEFAULT_PR_TITLE_TEMPLATE
+        from lantern.deliver import render_naming
 
         plain, templated = StubOps(), StubOps()
         kwargs: dict[str, Any] = {"run_id": "r42", "outcome": "write hello"}
@@ -1738,14 +1738,14 @@ class TestNaming:
             ),
             **kwargs,
         )
-        assert plain.pr_kwargs["title"] == templated.pr_kwargs["title"] == "sbxloop: write hello"
+        assert plain.pr_kwargs["title"] == templated.pr_kwargs["title"] == "lantern: write hello"
         commits = [
             b["message"]
             for ops in (plain, templated)
             for _, p, b in ops.raw_calls
             if p.endswith("/git/commits") and b
         ]
-        assert commits == ["sbxloop run r42: deliver artifacts\n\nOutcome: write hello"] * 2
+        assert commits == ["lantern run r42: deliver artifacts\n\nOutcome: write hello"] * 2
 
     def test_a_given_title_and_message_are_used_and_the_title_clipped(self, tmp_path: Path) -> None:
         ops = StubOps()
@@ -1780,7 +1780,7 @@ class TestNaming:
                 return super().raw(method, path, body)
 
         ops = TitledOps()
-        with caplog.at_level(logging.INFO, logger="sbxloop.deliver"):
+        with caplog.at_level(logging.INFO, logger="lantern.deliver"):
             deliver_workspace(
                 ops,  # type: ignore[arg-type]
                 "o/r",
@@ -1911,7 +1911,7 @@ class TestNaming:
                 outcome="x",
                 source_dir=make_workspace(tmp_path),
             )
-        assert "'sbxloop/r42'" in str(info.value)
+        assert "'lantern/r42'" in str(info.value)
         assert "creations being restricted" in str(info.value)
 
 
@@ -1933,7 +1933,7 @@ class TestVerificationSection:
             verification=self.NOTE,
         )
         body = ops.pr_kwargs["body"]
-        assert body.startswith("Artifacts produced by sbxloop run `r42`.")
+        assert body.startswith("Artifacts produced by lantern run `r42`.")
         assert f"\n**Verification:** {self.NOTE}\n\nCloses #5\n" in body
         assert body.endswith("\nCloses #5\n")
 
@@ -1950,7 +1950,7 @@ class TestVerificationSection:
         )
         body = ops.pr_kwargs["body"]
         assert body.startswith(
-            "## Summary\n\nDid it.\n\n---\n\nArtifacts produced by sbxloop run `r42`."
+            "## Summary\n\nDid it.\n\n---\n\nArtifacts produced by lantern run `r42`."
         )
         assert body.endswith(f"\n**Verification:** {self.NOTE}\n")
 
@@ -1973,8 +1973,8 @@ class TestPullRequestCollision:
     any other status is not a collision."""
 
     def test_each_forges_status_counts_and_others_do_not(self) -> None:
-        from sbxloop.deliver import _is_pr_collision
-        from sbxloop.errors import GithubOpsError
+        from lantern.deliver import _is_pr_collision
+        from lantern.errors import GithubOpsError
 
         assert _is_pr_collision(github_error("pr_exists_422"))
         assert _is_pr_collision(
@@ -1990,8 +1990,8 @@ class TestRefCollision:
     19.3.2); a 400 that says anything else is not a collision."""
 
     def test_each_forges_words_count_and_others_do_not(self) -> None:
-        from sbxloop.deliver import _is_ref_collision
-        from sbxloop.errors import GithubOpsError
+        from lantern.deliver import _is_ref_collision
+        from lantern.errors import GithubOpsError
 
         assert _is_ref_collision(github_error("ref_exists_422"))
         assert _is_ref_collision(

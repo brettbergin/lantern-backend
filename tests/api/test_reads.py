@@ -30,7 +30,7 @@ class TestStatus:
         api.harness.source.items = [gh_item()]
         # A scripted tick runs to completion; the current run is only visible
         # mid-tick, so check the shape from a synthetic status instead.
-        from sbxloop.api.models import Status
+        from lantern.api.models import Status
 
         status = Status.from_status(
             {
@@ -47,7 +47,7 @@ class TestStatus:
         assert status.current is not None and status.current.run_id == "r1"
 
     def test_status_lists_every_run_in_flight(self, api: Api) -> None:
-        from sbxloop.api.models import Status
+        from lantern.api.models import Status
 
         runs = [
             {"item_id": "gh:issue:1", "run_id": "r1", "title": "Do 1", "kind": "code"},
@@ -90,7 +90,7 @@ class TestCapabilities:
 
 class TestOperations:
     def _record(self, api: Api, n: int) -> list[str]:
-        from sbxloop.daemon.controls import ControlService, Principal
+        from lantern.daemon.controls import ControlService, Principal
 
         service = ControlService(api.loop)
         ids = []

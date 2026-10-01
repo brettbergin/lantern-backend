@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.cli.cmdfmt import COMMAND_DISPLAY_CLIP, collapse_run_prefix, format_command
+from lantern.cli.cmdfmt import COMMAND_DISPLAY_CLIP, collapse_run_prefix, format_command
 
-RUN_ROOT = "/home/bergs/.local/state/sbxloop/sbxloop-work/runs/rfxm7ad23/workspace"
+RUN_ROOT = "/home/bergs/.local/state/lantern/lantern-work/runs/rfxm7ad23/workspace"
 REAL_CALL = f"cd {RUN_ROOT} && git diff -- README.md docs/architecture.md CHANGELOG.md | head -120"
 
 

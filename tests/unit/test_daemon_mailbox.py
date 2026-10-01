@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.mailbox import MailboxClient
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import DaemonError
-from sbxloop_worker.protocol import Event
+from lantern.daemon.mailbox import MailboxClient
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.errors import DaemonError
+from lantern_worker.protocol import Event
 
 
 def stores(tmp_path: Path) -> tuple[Path, DaemonStore, StateStore]:

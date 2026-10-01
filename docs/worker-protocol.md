@@ -2,7 +2,7 @@
 
 The host orchestrator and the in-sandbox worker communicate through files and
 process streams — no sockets, no servers. All wire models live in
-`sbxloop_worker.protocol` (pydantic, `extra="forbid"`, versioned `v: 1`);
+`lantern_worker.protocol` (pydantic, `extra="forbid"`, versioned `v: 1`);
 the host imports the exact same module, so drift is a validation error.
 
 ## Provider failures
@@ -28,7 +28,7 @@ output/permission modes always participate in checkpoint matching.
 ## Filesystem layout (inside each sandbox)
 
 ```
-/home/agent/.sbxloop/
+/home/agent/.lantern/
   jobs/<job_id>.json      # JobRequest, written by the host (sbx cp)
   events/<job_id>.jsonl   # Event stream, appended by the worker (fsync/line)
   results/<job_id>.json   # JobResult, written by the worker — AUTHORITATIVE
@@ -39,7 +39,7 @@ output/permission modes always participate in checkpoint matching.
 ## Job lifecycle
 
 1. Host writes `jobs/<id>.json` and runs
-   `venv/bin/python -m sbxloop_worker run --job … --events … --result …`
+   `venv/bin/python -m lantern_worker run --job … --events … --result …`
    via `sbx exec`.
 2. Worker emits `worker.start`, dispatches the job, emits events as it goes
    (mirrored to stdout for live streaming), writes `results/<id>.json`,
@@ -54,14 +54,14 @@ Worker exit codes: `0` result written (including error/timeout results),
 ## Credentials
 
 The worker takes credentials from its process environment first; the
-`--env-file` (`~/.sbxloop/env.sh`) is loaded underneath it (existing env
+`--env-file` (`~/.lantern/env.sh`) is loaded underneath it (existing env
 wins, except over an sbx proxy sentinel). How they get there depends on the
 delivery tier provisioning chose (see docs/architecture.md):
 
 - **sbx secret proxy**: values never enter the VM at all.
 - **per-job stdin** (#592): the host pipes `export KEY=VALUE` lines into
   the launch's stdin; the launch shell captures them into
-  `SBXLOOP_JOB_ENV` and the login shell evals them after its profile ran,
+  `LANTERN_JOB_ENV` and the login shell evals them after its profile ran,
   so the worker inherits them in memory — nothing at rest, nothing on any
   argv, and no env.sh needed.
 - **env file**: the pre-#592 fallback; the worker loads it at startup.
@@ -81,7 +81,7 @@ The `agent.rate_limits` job runs in the existing agent sandbox, using
 `params: {backend}` and a positive timeout of at most ten seconds. It rejects
 credentials, executable fields and session-resume fields. It calls the
 backend's read-only status method without opening a model session. Its
-`output_json` is a `RateLimitReport` (`sbxloop_worker.rate_limits`): backend,
+`output_json` is a `RateLimitReport` (`lantern_worker.rate_limits`): backend,
 status, observation/snapshot times, source, freshness, scope, capabilities,
 reason, retry timing and up to 32 normalized limits. Null fields are unknown;
 short-term rate limits and longer-term quotas have distinct categories.
@@ -162,7 +162,7 @@ tool; when the model invokes one:
 2. The host runs the tool and copies a `HostToolResponse` JSON
    (`{v, call_id, ok, text, error?}`) to `<host_tools_dir>/<call_id>.json`
    inside the sandbox — `host_tools_dir` is set by the host
-   (`~/.sbxloop/tools/<job_id>`, also passed as `--tools-dir` on the worker
+   (`~/.lantern/tools/<job_id>`, also passed as `--tools-dir` on the worker
    argv like `--cwd`), never derived by the worker.
 3. The worker polls for the file (`sbx cp` is not atomic: a file that does
    not yet validate is still being written) and hands `text` back to the
@@ -187,9 +187,9 @@ mediation between the sandboxes before anything else.
   stdout line-by-line onto its EventBus. Unparseable lines become
   `worker.stdout` events, never crashes.
 - **resident** (`worker_transport = "resident"`): one `sbx exec` per sandbox
-  runs `python -m sbxloop_worker serve`; the host writes each job to its
+  runs `python -m lantern_worker serve`; the host writes each job to its
   stdin and reads the job's events and result back on its stdout, and a
-  host-tool response rides the same stdin (`sbxloop_worker.serve` documents
+  host-tool response rides the same stdin (`lantern_worker.serve` documents
   the line protocol). Every `sbx` invocation costs about a second of
   backend round trip whatever it runs (field, db 2026-09-19), and stream
   pays three per job plus one per tool response; resident pays one per
@@ -234,7 +234,7 @@ pair on the id rather than on command text.
   and whole lines are then dropped from around the marker — so the first
   line, the marker and the last line survive however wide the output is,
   and an excerpt can never approach Discord's 2000-char message limit. The excerpt (and `error`) are secret-redacted inside the worker
-  (`sbxloop_worker.secrets.redact_secrets`) *before* emission, so no
+  (`lantern_worker.secrets.redact_secrets`) *before* emission, so no
   credential-shaped text leaves the sandbox in an event.
 - `output_lines` (int, optional) — total line count of the *untruncated*
   output, so a reader can see how much was elided.
@@ -259,7 +259,7 @@ job fails after crossing `disk_abort` or `mem_abort`, the worker rewrites the
 result error to `SandboxResourcesExhausted` so a full disk or an OOM is
 diagnosed instead of surfacing as whatever confusing error the in-VM tooling
 produced. Query history with
-`sbxloop logs <run> --type-prefix sandbox.resources`.
+`lantern logs <run> --type-prefix sandbox.resources`.
 
 ## Forge ops
 
@@ -283,7 +283,7 @@ returned under `text` — a GitLab job trace; `allow_missing_statuses` as on
 commit with their Actions job logs, head+tail clipped; the REST transport fetches
 the log's blob-storage redirect without the bearer token), `token.scopes` (the
 classic PAT's `X-OAuth-Scopes` from `GET /rate_limit`, or `null` for a
-fine-grained PAT or App token — how `sbxloop doctor` learns what the credential
+fine-grained PAT or App token — how `lantern doctor` learns what the credential
 may do, #696). Transport inside the sandbox: a pure-stdlib REST client that
 speaks whatever the descriptor describes — the universal path — or `gh api`
 when the descriptor allows it and gh is available; both produce identical
@@ -301,7 +301,7 @@ transcript shows no error event for a question whose answer was "no".
 `service.http` jobs execute in the service sandbox only (#765) — the box a
 run granted `[[credentials]]` gets, holding exactly those values. The job
 names a credential; the worker resolves it against the catalogue the host
-put in `SBXLOOP_SERVICE_CREDENTIALS` (a JSON list of `{name, env, host, header, scheme}` — no values) and sends one request to
+put in `LANTERN_SERVICE_CREDENTIALS` (a JSON list of `{name, env, host, header, scheme}` — no values) and sends one request to
 `https://<host><path>` with `<header>: <scheme> <value>` attached. The job
 carries no host, so neither a model nor a mis-built job can point a
 credential elsewhere. A header the op owns (`Host`, `Authorization`, the
@@ -315,7 +315,7 @@ wherever an API echoed it; request headers are never returned. Events:
 `service.fetch` downloads registry data in the credential-bearing service
 sandbox. It accepts `params: {registry, path, operation?, ref?, sha256?}`;
 `argv`, `cwd`, `commands`, `prompt` and `op` are forbidden. The registry name
-resolves through the host-authored `SBXLOOP_REGISTRIES` catalogue. Download
+resolves through the host-authored `LANTERN_REGISTRIES` catalogue. Download
 URLs and redirects stay on that entry's HTTPS authority. `operation=git`
 fetches a ref into fresh bare Git metadata and emits a bundle without
 checking out files. Neither operation loads manifests or invokes a package
@@ -337,15 +337,15 @@ tool response names the copied local file; it contains no artifact bytes.
 A discovery-only fetch returns registry names, URLs and cache information
 without submitting a service job.
 
-`SBXLOOP_SERVICE_FAKE=<path>` (tests) swaps the HTTPS transport for scripted
+`LANTERN_SERVICE_FAKE=<path>` (tests) swaps the HTTPS transport for scripted
 responses from that JSON file, each request appended to
 `<path>.requests.jsonl`.
 
 ## Worker installation
 
 At provision time the host resolves a worker wheel — vendored inside the
-sbxloop package, else built from a workspace checkout; with neither it
+Lantern package, else built from a workspace checkout; with neither it
 refuses, since the worker is never installed by name from a package index —
-copies it into the sandbox, creates `~/.sbxloop/venv`,
+copies it into the sandbox, creates `~/.lantern/venv`,
 installs it (`[copilot]` extra in the agent sandbox only), and verifies the
 imported version matches the host exactly.

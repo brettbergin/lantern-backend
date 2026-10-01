@@ -25,29 +25,29 @@ from typing import Any, ClassVar
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.engine.engine import LoopEngine
-from sbxloop.engine.model import (
+from lantern import hostgit
+from lantern.config import Config
+from lantern.engine.engine import LoopEngine
+from lantern.engine.model import (
     PIPELINE_STAGES,
     RESUMABLE_RUN_STATES,
     TERMINAL_RUN_STATES,
 )
-from sbxloop.engine.phases import PhaseRunner, toolchains
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import (
+from lantern.engine.phases import PhaseRunner, toolchains
+from lantern.engine.store import StateStore
+from lantern.errors import (
     BudgetExceededError,
     GithubOpsError,
     ProvisionError,
     StateError,
     WorkerError,
 )
-from sbxloop.events import Event, EventBus, HostEventTypes
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.naming import run_name
-from sbxloop.vcs.github.ops import ChecksVerdict, FailedCheck, GithubOps
-from sbxloop.verifylint import project_gate
+from lantern.events import Event, EventBus, HostEventTypes
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.naming import run_name
+from lantern.vcs.github.ops import ChecksVerdict, FailedCheck, GithubOps
+from lantern.verifylint import project_gate
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import (
     BLOCKED_405,
@@ -141,10 +141,10 @@ class Harness:
         self.tmp_path = tmp_path
         self.monkeypatch = monkeypatch
         self.script_path = tmp_path / "echo-script.json"
-        self.home = SbxloopHome(tmp_path / "state")
+        self.home = LanternHome(tmp_path / "state")
         self.events: list[Event] = []
-        monkeypatch.setenv("SBXLOOP_WORKER_BACKEND", "echo")
-        monkeypatch.setenv("SBXLOOP_ECHO_SCRIPT", str(self.script_path))
+        monkeypatch.setenv("LANTERN_WORKER_BACKEND", "echo")
+        monkeypatch.setenv("LANTERN_ECHO_SCRIPT", str(self.script_path))
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "copilot_tok")
         monkeypatch.setenv("GH_TOKEN", "gh_tok")
 
@@ -212,7 +212,7 @@ class Harness:
         """Every job request the agent sandbox received (keep_sandboxes runs
         only — teardown removes the fs the job files live in)."""
         fs = self.fake_sbx.sandbox_fs(run_name(self.home, run_id, "agent"))
-        return [json.loads(p.read_text()) for p in (fs / "home/agent/.sbxloop/jobs").iterdir()]
+        return [json.loads(p.read_text()) for p in (fs / "home/agent/.lantern/jobs").iterdir()]
 
 
 @pytest.fixture
@@ -222,7 +222,7 @@ def harness(fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def new_run_id_for(engine: LoopEngine) -> str:
     """A run id to pre-seed store rows under before `start(run_id=...)`."""
-    from sbxloop.ids import new_run_id
+    from lantern.ids import new_run_id
 
     return new_run_id()
 
@@ -715,13 +715,13 @@ class TestResume:
         assert result.workspace == clone_dir
         assert engine.store.get_run(result.run_id).workspace == clone_dir
         assert (source / "hello.txt").read_text() == "hi\n"
-        assert not (source / ".git" / "refs" / "heads" / "sbxloop").exists()
+        assert not (source / ".git" / "refs" / "heads" / "lantern").exists()
 
     def test_phase_runner_sees_the_run_workspace(self, harness: Harness) -> None:
         # #250: the verify-command lint keys on the host workspace (a
         # `uv.lock` there flips the Python convention), so the runner must
         # be handed the run's actual workspace path, not left blind.
-        from sbxloop.engine.phases import PhaseRunner
+        from lantern.engine.phases import PhaseRunner
 
         captured: dict[str, PhaseRunner] = {}
         original_init = PhaseRunner.__init__
@@ -929,7 +929,7 @@ class TestKeepOnFailure:
         assert engine.store.get_run(result.run_id).kept_reason == "debug"
         keep_events = [e for e in harness.events if e.type == "run.keep"]
         assert len(keep_events) == 1
-        assert "sbxloop shell" in str(keep_events[0].data.get("message"))
+        assert "lantern shell" in str(keep_events[0].data.get("message"))
 
     def test_infra_failure_keeps_pair(self, harness: Harness) -> None:
         # Bad decompose output twice -> WorkerError: the exception path must
@@ -1100,7 +1100,7 @@ class TestWorkspaceExecution:
         assert harness.sandboxes_left() == []
         assert (result.workspace / "hello.txt").read_text() == "hi\n"
 
-        # persisted for post-run reads (sbxloop artifacts / resume)
+        # persisted for post-run reads (lantern artifacts / resume)
         record = engine.store.get_run(result.run_id)
         assert record.workspace == result.workspace
         assert record.mounted
@@ -1272,8 +1272,8 @@ class TestLanguageResolution:
     that one answer."""
 
     def _run_capturing(self, harness: Harness, **config: Any) -> tuple[Any, dict[str, Any]]:
-        from sbxloop.engine.phases import PhaseRunner
-        from sbxloop.worker.client import WorkerClient
+        from lantern.engine.phases import PhaseRunner
+        from lantern.worker.client import WorkerClient
 
         captured: dict[str, Any] = {}
         original_init = PhaseRunner.__init__
@@ -1407,26 +1407,26 @@ class TestPrebakedTemplate:
     """[sandbox].template + a baked template: install verifies and skips the
     ladder, and the run emits sandbox.prebaked telemetry."""
 
-    REF = "sbxloop-baked:latest"
+    REF = "lantern-baked:latest"
 
     def seed_template(self, harness: Harness, *, version: str | None = None) -> None:
         """Bake a template the fake-sbx way: seed sandbox fs with a manifest
         whose interpreter is the test python, save, remove."""
-        import sbxloop
-        from sbxloop.sbx.models import SandboxSpec
-        from sbxloop.sbx.sandbox import Sandbox
+        import lantern
+        from lantern.sbx.models import SandboxSpec
+        from lantern.sbx.sandbox import Sandbox
 
         cli = SbxCLI(binary=str(harness.fake_sbx.binary))
         workspace = harness.tmp_path / "seed-ws"
         workspace.mkdir(exist_ok=True)
         cli.create(SandboxSpec(name="seed", role="agent", workspace=workspace))
         manifest = {
-            "worker_version": version or sbxloop.__version__,
+            "worker_version": version or lantern.__version__,
             "python": sys.executable,
             "runtime_cached": True,
             "baked_at": 0.0,
         }
-        Sandbox(cli, "seed").write_text("/home/agent/.sbxloop/bake.json", json.dumps(manifest))
+        Sandbox(cli, "seed").write_text("/home/agent/.lantern/bake.json", json.dumps(manifest))
         cli.template_save("seed", self.REF)
         cli.rm("seed")
 
@@ -1434,7 +1434,7 @@ class TestPrebakedTemplate:
         """The prebaked path probes the run's toolchains in one batched
         `sh -c` (#615); unscripted it runs on the host. The sandbox name is
         not known before the run, so answer at the client instead."""
-        from sbxloop.worker.client import WorkerClient
+        from lantern.worker.client import WorkerClient
 
         def answer(self: WorkerClient, selected: Any) -> list[toolchains.Toolchain]:
             return [tc for tc in selected if tc.name in missing]
@@ -1631,10 +1631,10 @@ class TestPipeline:
         # Delivered as a draft, un-drafted once, merged at the round-2 head,
         # branch tidied away.
         assert fake.pr_kwargs["draft"] is True
-        assert fake.pr_kwargs["head"] == f"sbxloop/{result.run_id}"
+        assert fake.pr_kwargs["head"] == f"lantern/{result.run_id}"
         assert fake.ready_calls == ["PR_node7"]
         assert fake.merges == [(7, "squash", "commit2")]
-        assert fake.deleted_branches == [f"sbxloop/{result.run_id}"]
+        assert fake.deleted_branches == [f"lantern/{result.run_id}"]
         assert fake.pr["merged"] is True
 
         assert harness.run_states() == [
@@ -1678,7 +1678,7 @@ class TestPipeline:
         assert run.ci_rounds == 0
         assert run.pr_number == 7
         assert run.pr_node_id == "PR_node7"
-        assert run.branch == f"sbxloop/{result.run_id}"
+        assert run.branch == f"lantern/{result.run_id}"
         assert run.head_sha == "commit2"
         assert run.last_verdict == "approve"
         phases = [(row.phase, row.status) for row in engine.store.phase_attempts(run.run_id)]
@@ -1790,7 +1790,7 @@ class TestPipeline:
         assert len(fake.replies) == 1
         _, body = fake.replies[0]
         assert body.startswith("**addressed in commit2**: say hello, not hi")
-        assert f"sbxloop:reconciled run={result.run_id} round=1" in body
+        assert f"lantern:reconciled run={result.run_id} round=1" in body
         assert fake.resolved and all(t.is_resolved for t in fake.threads)
         assert fake.issue_comments_posted == []
 
@@ -1858,8 +1858,8 @@ class TestPipeline:
         assert fake.pr_kwargs == {
             "repo": "o/r",
             "base": "main",
-            "head": f"sbxloop/{result.run_id}",
-            "title": "sbxloop: ship hello",
+            "head": f"lantern/{result.run_id}",
+            "title": "lantern: ship hello",
             "body": fake.pr_kwargs["body"],
             "draft": True,
         }
@@ -1871,7 +1871,7 @@ class TestPipeline:
         creates = [p for m, p, _ in fake.raw_calls if m == "POST" and p.endswith("/git/refs")]
         assert len(creates) == 1
         patches = [p for m, p, _ in fake.raw_calls if m == "PATCH"]
-        assert patches == [f"/repos/o/r/git/refs/heads/sbxloop/{result.run_id}"]
+        assert patches == [f"/repos/o/r/git/refs/heads/lantern/{result.run_id}"]
 
     def test_a_refused_review_post_reposts_the_record_and_merges(self, harness: Harness) -> None:
         """#503, self-healed: the review 422'd, so there is no review record
@@ -1885,7 +1885,7 @@ class TestPipeline:
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("ship hello")
         assert result.state == "merged", result.reason
-        assert any("sbxloop:review-record" in c for c in fake.issue_comments_posted)
+        assert any("lantern:review-record" in c for c in fake.issue_comments_posted)
         (verdict,) = self._events(harness, HostEventTypes.REVIEW_VERDICT)
         assert verdict.data["verdict"] == "approve" and verdict.data["url"] == ""
 
@@ -2058,12 +2058,12 @@ class TestPipeline:
             "the greeting is not documented",
         ]
         for _, body, labels in fake.issues_created:
-            assert labels == ["sbxloop:follow-up"]
-            assert "sbxloop:run" not in labels
+            assert labels == ["lantern:follow-up"]
+            assert "lantern:run" not in labels
             assert "Out of scope for [PR #7]" in body and f"run `{result.run_id}`" in body
-            assert "<!-- sbxloop-followup run=" in body
+            assert "<!-- lantern-followup run=" in body
         assert "The fix round deferred" in fake.issues_created[2][1]
-        assert fake.labels_created == ["sbxloop:follow-up"]
+        assert fake.labels_created == ["lantern:follow-up"]
         # The PR gets one pointer comment listing them.
         pointer = [c for c in fake.issue_comments_posted if c.startswith("## Follow-ups")]
         assert len(pointer) == 1 and "issues/901" in pointer[0] and "issues/903" in pointer[0]
@@ -2094,7 +2094,7 @@ class TestPipeline:
         engine = harness.pipeline(fake)
         run_id = new_run_id_for(engine)
         # Pretend an earlier attempt filed A (recorded) and B (on the repo only).
-        from sbxloop.engine.followups import followup_key, followup_marker
+        from lantern.engine.followups import followup_key, followup_marker
 
         engine.store.record_phase(
             run_id,
@@ -2524,7 +2524,7 @@ class TestPipeline:
         """#676: the loop never PUTs a merge on a merge-queue base. The
         queue's removal for a red check on its own commit is one CI round
         with that check named; the fix is re-enqueued and the queue merges."""
-        from sbxloop.vcs.github.ops import QueueEntry, QueueState
+        from lantern.vcs.github.ops import QueueEntry, QueueState
 
         fake = FakeGithub()
         fake.rules = [{"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}}]
@@ -2609,7 +2609,7 @@ class TestPipeline:
     def test_a_queue_removal_past_the_ci_budget_fails_naming_the_check(
         self, harness: Harness
     ) -> None:
-        from sbxloop.vcs.github.ops import QueueEntry, QueueState
+        from lantern.vcs.github.ops import QueueEntry, QueueState
 
         fake = FakeGithub()
         fake.rules = [{"type": "merge_queue"}]
@@ -2922,7 +2922,7 @@ class TestPipeline:
 
     def test_the_loops_own_review_never_objects_to_itself(self, harness: Harness) -> None:
         fake = FakeGithub()
-        fake.reviews_payload = [human_review("sbxloop-bot", "CHANGES_REQUESTED", "round 1")]
+        fake.reviews_payload = [human_review("lantern-bot", "CHANGES_REQUESTED", "round 1")]
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("land it")
         assert result.state == "merged"
@@ -2946,7 +2946,7 @@ class TestPipeline:
         # The loop's own standing CHANGES_REQUESTED: only the identity
         # fallback (login = PR author = the bot) keeps it from being read
         # as a human objection and spending a fix round.
-        fake.reviews_payload = [human_review("sbxloop-bot", "CHANGES_REQUESTED", "round 1")]
+        fake.reviews_payload = [human_review("lantern-bot", "CHANGES_REQUESTED", "round 1")]
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("land it")
         assert result.state == "merged"
@@ -3015,7 +3015,7 @@ class TestPipeline:
         fake = FakeGithub()
         fake.repo_lookup = lambda repo: None  # type: ignore[method-assign]
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
-        from sbxloop.errors import DeliveryError
+        from lantern.errors import DeliveryError
 
         with pytest.raises(DeliveryError, match="does not exist"):
             harness.pipeline(fake).start("nowhere to go")
@@ -3370,7 +3370,7 @@ class TestInteractiveChat:
         assert steer.task_id is None
 
     def test_resume_replays_persisted_guidance_into_prompts(self, harness: Harness) -> None:
-        from sbxloop.engine.phases import PhaseRunner
+        from lantern.engine.phases import PhaseRunner
 
         # Run 1: steer_run lands guidance, then the task fails its only
         # verify (no retry budgets) and the run fails — a resumable state.
@@ -3397,8 +3397,8 @@ class TestInteractiveChat:
         assert captured["phases"].user_guidance == ["use postgres everywhere"]
 
     def test_steer_task_with_no_live_task_downgrades_to_steer_run(self, harness: Harness) -> None:
-        from sbxloop.engine.model import SteerVerdict
-        from sbxloop.engine.phases import PhaseRunner
+        from lantern.engine.model import SteerVerdict
+        from lantern.engine.phases import PhaseRunner
 
         engine = harness.engine()
         engine.store.create_run("r1chat", "outcome", "{}")
@@ -3550,11 +3550,11 @@ class TestNamingInThePipeline:
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("write hello.txt")
         assert result.state == "merged"
-        assert fake.pr_kwargs["title"] == "sbxloop: write hello.txt"
-        assert fake.pr_kwargs["head"] == f"sbxloop/{result.run_id}"
+        assert fake.pr_kwargs["title"] == "lantern: write hello.txt"
+        assert fake.pr_kwargs["head"] == f"lantern/{result.run_id}"
         (commit,) = [b for m, p, b in fake.raw_calls if p.endswith("/git/commits") and b]
         assert commit["message"] == (
-            f"sbxloop run {result.run_id}: deliver artifacts\n\nOutcome: write hello.txt"
+            f"lantern run {result.run_id}: deliver artifacts\n\nOutcome: write hello.txt"
         )
 
     def test_the_branch_prefix_is_the_operators(self, harness: Harness) -> None:
@@ -3571,35 +3571,35 @@ class TestNamingInThePipeline:
 
     def test_a_fix_round_can_retitle_the_pr(self, harness: Harness) -> None:
         """A red title-lint check is cured by the fixer writing the title to
-        `.sbxloop/pr-title`; re-delivery renames the PR, the file never
+        `.lantern/pr-title`; re-delivery renames the PR, the file never
         ships, and the new title sticks for the next round."""
         fake = FakeGithub()
         fake.checks = [ChecksVerdict("red", 1, (), ("title-lint",)), GREEN]
         fake.failed_logs = [FailedCheck("title-lint", "failure", "no type prefix", "https://x")]
         retitle = {
             "text": "retitled",
-            "files": {".sbxloop/pr-title": "  fix:  the corrected\n title\n"},
+            "files": {".lantern/pr-title": "  fix:  the corrected\n title\n"},
         }
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK, retitle, REVIEW_OK])
         engine = harness.pipeline(fake)
         result = engine.start("write hello.txt")
         assert result.state == "merged"
         fix = result.tasks[1].spec
-        assert ".sbxloop/pr-title" in fix.description
-        assert ("PATCH", "/repos/o/r/pulls/7", {"title": "sbxloop: fix: the corrected title"}) in (
+        assert ".lantern/pr-title" in fix.description
+        assert ("PATCH", "/repos/o/r/pulls/7", {"title": "lantern: fix: the corrected title"}) in (
             fake.raw_calls
         )
-        assert fake.pr["title"] == "sbxloop: fix: the corrected title"
+        assert fake.pr["title"] == "lantern: fix: the corrected title"
         delivered = [e["path"] for batch in fake.blob_batches for e in batch]
-        assert ".sbxloop/pr-title" not in delivered
+        assert ".lantern/pr-title" not in delivered
         assert engine.store.get_run(result.run_id).pr_title == "fix: the corrected title"
 
 
 class TestPrConventionsInThePipeline:
     """#678: the repository's own pull request conventions — a title lint,
-    a template, the agent's `.sbxloop/pr-body` — shape the PR the run opens."""
+    a template, the agent's `.lantern/pr-body` — shape the PR the run opens."""
 
-    def test_a_title_lint_in_the_workspace_drops_the_sbxloop_prefix(self, harness: Harness) -> None:
+    def test_a_title_lint_in_the_workspace_drops_the_lantern_prefix(self, harness: Harness) -> None:
         fake = FakeGithub()
         plan = taskgraph(task("t1"))
         plan["json"]["pr_title"] = "feat(hello): add the greeting"
@@ -3646,7 +3646,7 @@ class TestPrConventionsInThePipeline:
         assert result.state == "merged"
         body = fake.pr_kwargs["body"]
         assert body.startswith("## Why\n\n- [ ] tests added\n")
-        assert f"sbxloop run `{result.run_id}`" in body
+        assert f"lantern run `{result.run_id}`" in body
 
     def test_the_agents_pr_body_is_the_description_and_never_ships(self, harness: Harness) -> None:
         fake = FakeGithub()
@@ -3655,7 +3655,7 @@ class TestPrConventionsInThePipeline:
             "files": {
                 "hello.txt": "hi\n",
                 ".github/PULL_REQUEST_TEMPLATE.md": "## Why\n",
-                ".sbxloop/pr-body": "## Why\n\nBecause hello.\n\n- [x] tests added\n",
+                ".lantern/pr-body": "## Why\n\nBecause hello.\n\n- [x] tests added\n",
             },
         }
         harness.script([taskgraph(task("t1")), build, REVIEW_OK])
@@ -3664,19 +3664,19 @@ class TestPrConventionsInThePipeline:
         assert result.state == "merged"
         body = fake.pr_kwargs["body"]
         assert body.startswith("## Why\n\nBecause hello.\n\n- [x] tests added\n")
-        assert f"sbxloop run `{result.run_id}`" in body
+        assert f"lantern run `{result.run_id}`" in body
         delivered = [e["path"] for batch in fake.blob_batches for e in batch]
-        assert ".sbxloop/pr-body" not in delivered
+        assert ".lantern/pr-body" not in delivered
 
     def test_a_fix_round_can_rewrite_the_body(self, harness: Harness) -> None:
         fake = FakeGithub()
         fake.checks = [ChecksVerdict("red", 1, (), ("pr-lint",)), GREEN]
         fake.failed_logs = [FailedCheck("pr-lint", "failure", "checklist unticked", "https://x")]
-        rebody = {"text": "rewrote", "files": {".sbxloop/pr-body": "## Why\n\n- [x] done\n"}}
+        rebody = {"text": "rewrote", "files": {".lantern/pr-body": "## Why\n\n- [x] done\n"}}
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK, rebody, REVIEW_OK])
         result = harness.pipeline(fake).start("write hello.txt")
         assert result.state == "merged"
-        assert ".sbxloop/pr-body" in result.tasks[1].spec.description
+        assert ".lantern/pr-body" in result.tasks[1].spec.description
         patched = [b for m, p, b in fake.raw_calls if m == "PATCH" and p == "/repos/o/r/pulls/7"]
         assert patched and patched[-1]["body"].startswith("## Why\n\n- [x] done\n")
 
@@ -3703,7 +3703,7 @@ class TestAppIdentityLanding:
     from the credential itself, and landing never classifies with ""."""
 
     def _loop_thread(self, fake: FakeGithub) -> None:
-        from sbxloop.vcs.github.ops import ReviewThread, ThreadComment
+        from lantern.vcs.github.ops import ReviewThread, ThreadComment
 
         fake.threads = [
             ReviewThread(
@@ -3720,14 +3720,14 @@ class TestAppIdentityLanding:
         resolved thread read as "a human thread with no reply" and the run
         ended blocked. The host-resolved bot login classifies it right —
         and the doomed ``GET /user`` is never even asked."""
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.sbx.provision import Provisioner
 
         fake = FakeGithub()
         fake.fail_user_lookup = GithubOpsError("HTTP 403", http_status=403)
         fake.pr["user"] = None  # even the PR author is unreadable
         self._loop_thread(fake)
         harness.monkeypatch.setattr(
-            Provisioner, "gh_bot_login", lambda self, repo=None: "sbxloop-bot"
+            Provisioner, "gh_bot_login", lambda self, repo=None: "lantern-bot"
         )
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("land it")
@@ -3764,18 +3764,18 @@ class TestAppIdentityLanding:
         assert result.state == "merged", result.reason
 
     def test_an_app_and_a_person_of_the_same_name_are_told_apart(self, harness: Harness) -> None:
-        """#622 acceptance: the loop is the App `sbxloop[bot]`; a person
-        whose login is `sbxloop` opens a thread — theirs, acknowledged as
+        """#622 acceptance: the loop is the App `lantern[bot]`; a person
+        whose login is `lantern` opens a thread — theirs, acknowledged as
         a human's; the App's own resolved thread is its own."""
-        from sbxloop.sbx.provision import Provisioner
-        from sbxloop.vcs.github.ops import ReviewThread, ThreadComment
+        from lantern.sbx.provision import Provisioner
+        from lantern.vcs.github.ops import ReviewThread, ThreadComment
 
         fake = FakeGithub()
-        fake.user_login = "sbxloop"
+        fake.user_login = "lantern"
         fake.user_type = "Bot"
         fake.fail_user_lookup = GithubOpsError("HTTP 403", http_status=403)
         harness.monkeypatch.setattr(
-            Provisioner, "gh_bot_login", lambda self, repo=None: "sbxloop[bot]"
+            Provisioner, "gh_bot_login", lambda self, repo=None: "lantern[bot]"
         )
         fake.threads = [
             ReviewThread(
@@ -3783,14 +3783,14 @@ class TestAppIdentityLanding:
                 is_resolved=True,
                 path="a.py",
                 line=1,
-                comments=(ThreadComment(1, "sbxloop", "[minor] naming", is_bot=True),),
+                comments=(ThreadComment(1, "lantern", "[minor] naming", is_bot=True),),
             ),
             ReviewThread(
                 thread_id="PRRT_2",
                 is_resolved=False,
                 path="b.py",
                 line=2,
-                comments=(ThreadComment(2, "sbxloop", "why this way?", is_bot=False),),
+                comments=(ThreadComment(2, "lantern", "why this way?", is_bot=False),),
             ),
         ]
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
@@ -3813,7 +3813,7 @@ class TestReviewRecordRepost:
         harness.script([taskgraph(task("t1")), FILES_BUILD, REVIEW_OK])
         result = harness.pipeline(fake).start("land it")
         assert result.state == "merged", result.reason
-        records = [c for c in fake.issue_comments_posted if "sbxloop:review-record" in c]
+        records = [c for c in fake.issue_comments_posted if "lantern:review-record" in c]
         assert len(records) == 1
         assert "Review verdict: approve" in records[0]
 
@@ -3854,19 +3854,19 @@ class TestMergeGateRun:
 
 class TestBotSuffixLanding:
     """End to end under the REST/GraphQL identity split: REST attributes
-    the App as sbxloop[bot] (PR author, /user is 403), the fake's threads
+    the App as lantern[bot] (PR author, /user is 403), the fake's threads
     carry the bare GraphQL spelling, and the run must still merge."""
 
     def test_an_app_run_owns_its_bare_login_threads(self, harness: Harness) -> None:
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.sbx.provision import Provisioner
 
         fake = FakeGithub()
-        fake.user_login = "sbxloop"  # thread comments: GraphQL's bare spelling
+        fake.user_login = "lantern"  # thread comments: GraphQL's bare spelling
         fake.user_type = "Bot"  # ...typed as an App, which is what tells it apart (#622)
-        fake.pr["user"] = {"login": "sbxloop[bot]"}  # REST attribution
+        fake.pr["user"] = {"login": "lantern[bot]"}  # REST attribution
         fake.fail_user_lookup = GithubOpsError("HTTP 403", http_status=403)
         harness.monkeypatch.setattr(
-            Provisioner, "gh_bot_login", lambda self, repo=None: "sbxloop[bot]"
+            Provisioner, "gh_bot_login", lambda self, repo=None: "lantern[bot]"
         )
         harness.script(
             [taskgraph(task("t1")), FILES_BUILD, review("approve", "noting one thing", FINDING)]

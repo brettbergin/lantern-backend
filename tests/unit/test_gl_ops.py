@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError, RoleNotImplemented
-from sbxloop.vcs.gitlab.ops import (
+from lantern.errors import GithubOpsError, RoleNotImplemented
+from lantern.vcs.gitlab.ops import (
     GitlabOps,
     check_run_record,
     fold_statuses,
@@ -22,10 +22,10 @@ from sbxloop.vcs.gitlab.ops import (
     repo_record,
     user_record,
 )
-from sbxloop.vcs.gitlab.permissions import missing_from_scopes
-from sbxloop.vcs.model import ChecksVerdict, FailedCheck
-from sbxloop.vcs.protocol import CAPABILITIES, Capability
-from sbxloop_worker.protocol import TransportSpec
+from lantern.vcs.gitlab.permissions import missing_from_scopes
+from lantern.vcs.model import ChecksVerdict, FailedCheck
+from lantern.vcs.protocol import CAPABILITIES, Capability
+from lantern_worker.protocol import TransportSpec
 from tests.fakes.fake_gitlab import FakeGitlab
 from tests.unit.test_gh_ops import StubWorkerClient
 
@@ -125,13 +125,13 @@ class TestFolds:
         record = note_record(
             {
                 "id": 21,
-                "body": "<!-- sbxloop:claim --> claimed",
-                "author": {"id": 2, "username": "sbxloop-bot"},
+                "body": "<!-- lantern:claim --> claimed",
+                "author": {"id": 2, "username": "lantern-bot"},
                 "created_at": "2026-09-12T21:31:48.478Z",
             },
             issue_url="https://gl/acme/widgets/-/issues/3",
         )
-        assert record["id"] == 21 and record["user"]["login"] == "sbxloop-bot"
+        assert record["id"] == 21 and record["user"]["login"] == "lantern-bot"
         assert record["created_at"] == "2026-09-12T21:31:48Z"
         assert record["html_url"] == "https://gl/acme/widgets/-/issues/3#note_21"
 
@@ -139,14 +139,14 @@ class TestFolds:
         added = label_event_record(
             {
                 "action": "add",
-                "label": {"name": "sbxloop:run"},
+                "label": {"name": "lantern:run"},
                 "user": {"username": "u"},
                 "created_at": "2026-09-12T20:02:00.000Z",
             }
         )
         assert added == {
             "event": "labeled",
-            "label": {"name": "sbxloop:run"},
+            "label": {"name": "lantern:run"},
             "actor": {"login": "u"},
             "created_at": "2026-09-12T20:02:00Z",
         }
@@ -234,7 +234,7 @@ class TestRepository:
     def test_ref_lookup_names_branches_and_a_missing_one(self) -> None:
         fake = FakeGitlab()
         assert fake.ref_lookup(REPO, "heads/main") == "base123"
-        assert fake.ref_lookup(REPO, "heads/sbxloop/never") is None
+        assert fake.ref_lookup(REPO, "heads/lantern/never") is None
         fake.assert_no_failed_jobs()
         assert calls(fake)[0] == ("GET", f"{PROJECT}/repository/branches/main", None)
         with pytest.raises(GithubOpsError, match="heads/"):
@@ -247,9 +247,9 @@ class TestRepository:
 
     def test_merge_base_and_compare(self) -> None:
         fake = FakeGitlab()
-        fake.branches["sbxloop/r1"] = "commit1"
-        assert fake.merge_base(REPO, "main", "sbxloop/r1") == "base123"
-        compared = fake.compare_lookup(REPO, "main", "sbxloop/r1")
+        fake.branches["lantern/r1"] = "commit1"
+        assert fake.merge_base(REPO, "main", "lantern/r1") == "base123"
+        compared = fake.compare_lookup(REPO, "main", "lantern/r1")
         assert compared is not None and compared["merge_base_commit"] == {"sha": "base123"}
         assert fake.compare_lookup(REPO, "main", "unrelated") is None
         assert fake.merge_base(REPO, "main", "unrelated") is None
@@ -262,27 +262,27 @@ class TestRepository:
 
     def test_branch_delete_tolerates_a_gone_branch(self) -> None:
         fake = FakeGitlab()
-        fake.branches["sbxloop/r1"] = "c"
-        fake.branch_delete(REPO, "sbxloop/r1")
-        fake.branch_delete(REPO, "sbxloop/r1")
-        assert fake.deleted_branches == ["sbxloop/r1", "sbxloop/r1"]
+        fake.branches["lantern/r1"] = "c"
+        fake.branch_delete(REPO, "lantern/r1")
+        fake.branch_delete(REPO, "lantern/r1")
+        assert fake.deleted_branches == ["lantern/r1", "lantern/r1"]
         fake.assert_no_failed_jobs()
 
 
 class TestIssues:
     def test_lifecycle(self) -> None:
         fake = FakeGitlab()
-        ref = fake.issue_create(REPO, "the checks never run", "body", labels=["sbxloop:run"])
+        ref = fake.issue_create(REPO, "the checks never run", "body", labels=["lantern:run"])
         assert ref.number == 901 and ref.url.endswith("/-/issues/901")
         assert calls(fake)[-1] == (
             "POST",
             f"{PROJECT}/issues",
-            {"title": "the checks never run", "description": "body", "labels": "sbxloop:run"},
+            {"title": "the checks never run", "description": "body", "labels": "lantern:run"},
         )
         issue = fake.issue_get(REPO, 901)
-        assert issue["state"] == "open" and issue["labels"] == [{"name": "sbxloop:run"}]
-        fake.issue_labels_add(REPO, 901, ["sbxloop:in-progress"])
-        fake.issue_label_remove(REPO, 901, "sbxloop:run")
+        assert issue["state"] == "open" and issue["labels"] == [{"name": "lantern:run"}]
+        fake.issue_labels_add(REPO, 901, ["lantern:in-progress"])
+        fake.issue_label_remove(REPO, 901, "lantern:run")
         fake.issue_label_remove(REPO, 901, "never-there")
         assert calls(fake)[-1] == ("PUT", f"{PROJECT}/issues/901", {"remove_labels": "never-there"})
         url = fake.issue_comment(REPO, 901, "claimed")
@@ -292,7 +292,7 @@ class TestIssues:
         assert fake.issue_get(REPO, 901)["state"] == "closed"
         events = fake.issue_events(REPO, 901)
         assert [e["event"] for e in events] == ["labeled"]
-        assert events[0]["label"] == {"name": "sbxloop:in-progress"}
+        assert events[0]["label"] == {"name": "lantern:in-progress"}
 
     def test_comments_leave_system_notes_out_and_delete_by_issue(self) -> None:
         fake = FakeGitlab()
@@ -311,22 +311,22 @@ class TestIssues:
 
     def test_listing_filters_by_state_and_labels(self) -> None:
         fake = FakeGitlab()
-        fake.seed_issue(1, "queued", ["sbxloop:run"])
-        fake.seed_issue(2, "done", ["sbxloop:run"], state="closed")
+        fake.seed_issue(1, "queued", ["lantern:run"])
+        fake.seed_issue(2, "done", ["lantern:run"], state="closed")
         fake.seed_issue(3, "other", ["bug"])
-        listed = fake.issues_list(REPO, labels=["sbxloop:run"])
+        listed = fake.issues_list(REPO, labels=["lantern:run"])
         assert [i["number"] for i in listed] == [1]
-        assert "state=opened" in calls(fake)[-1][1] and "labels=sbxloop%3Arun" in calls(fake)[-1][1]
+        assert "state=opened" in calls(fake)[-1][1] and "labels=lantern%3Arun" in calls(fake)[-1][1]
         everything = fake.issues_list(
-            REPO, state="all", labels=["sbxloop:run"], sort="updated", direction="desc"
+            REPO, state="all", labels=["lantern:run"], sort="updated", direction="desc"
         )
         assert {i["number"] for i in everything} == {1, 2}
         assert "order_by=updated_at" in calls(fake)[-1][1] and "sort=desc" in calls(fake)[-1][1]
 
     def test_the_daemons_search_becomes_a_list(self) -> None:
         fake = FakeGitlab()
-        fake.seed_issue(1, "queued", ["sbxloop:run"])
-        found = fake.search_issues(f'repo:{REPO} is:issue is:open label:"sbxloop:run"')
+        fake.seed_issue(1, "queued", ["lantern:run"])
+        found = fake.search_issues(f'repo:{REPO} is:issue is:open label:"lantern:run"')
         assert [i["number"] for i in found] == [1]
         with pytest.raises(GithubOpsError):
             fake.search_issues("is:issue is:open")
@@ -344,15 +344,15 @@ class TestIssues:
 
     def test_labels(self) -> None:
         fake = FakeGitlab()
-        assert fake.label_lookup(REPO, "sbxloop:run") is None
-        made = fake.label_create(REPO, name="sbxloop:run", color="0e8a16", description="d")
-        assert made["name"] == "sbxloop:run" and made["color"] == "0e8a16"
-        assert calls(fake)[-1][2] == {"name": "sbxloop:run", "color": "#0e8a16", "description": "d"}
-        assert fake.label_lookup(REPO, "SBXLOOP:RUN") == made
+        assert fake.label_lookup(REPO, "lantern:run") is None
+        made = fake.label_create(REPO, name="lantern:run", color="0e8a16", description="d")
+        assert made["name"] == "lantern:run" and made["color"] == "0e8a16"
+        assert calls(fake)[-1][2] == {"name": "lantern:run", "color": "#0e8a16", "description": "d"}
+        assert fake.label_lookup(REPO, "LANTERN:RUN") == made
         with pytest.raises(GithubOpsError, match="already exists") as info:
-            fake.label_create(REPO, name="sbxloop:run", color="0e8a16", description="d")
+            fake.label_create(REPO, name="lantern:run", color="0e8a16", description="d")
         assert info.value.http_status == 409
-        assert [lb["name"] for lb in fake.labels_list(REPO)] == ["sbxloop:run"]
+        assert [lb["name"] for lb in fake.labels_list(REPO)] == ["lantern:run"]
 
     def test_issues_disabled_refuses_creation(self) -> None:
         fake = FakeGitlab()
@@ -396,9 +396,9 @@ class TestChecks:
         fake.seed_status("commit0", "ci", "running")
         (run,) = fake.check_runs(REPO, "commit0")
         assert run["name"] == "ci" and run["conclusion"] is None and run["status"] == "in_progress"
-        fake.status_create(REPO, "commit0", "failure", context="sbxloop", description="d")
+        fake.status_create(REPO, "commit0", "failure", context="lantern", description="d")
         assert fake.statuses_posted == [
-            ("commit0", {"state": "failed", "name": "sbxloop", "description": "d"})
+            ("commit0", {"state": "failed", "name": "lantern", "description": "d"})
         ]
 
     def test_no_per_change_rollup(self) -> None:
@@ -427,7 +427,7 @@ class TestPolicy:
     def test_identity_and_token(self) -> None:
         fake = FakeGitlab()
         user = fake.authenticated_user()
-        assert user["login"] == "sbxloop-bot" and user["type"] == "User"
+        assert user["login"] == "lantern-bot" and user["type"] == "User"
         fake.users[2]["bot"] = True
         assert fake.authenticated_user()["type"] == "Bot"
         assert fake.token_scopes() == ("api",)

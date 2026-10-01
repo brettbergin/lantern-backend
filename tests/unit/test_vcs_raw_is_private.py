@@ -4,7 +4,7 @@
 spell a forge path by hand. Fifty such sites had accumulated outside the
 GitHub package before this gate: GitHub knowledge living where nothing
 types it and nothing tests it as an operation. Every one of them is a
-named operation on a role in :mod:`sbxloop.vcs.protocol` now, and a new
+named operation on a role in :mod:`lantern.vcs.protocol` now, and a new
 one must be too — a path a module outside ``vcs/`` needs is an operation a
 role lacks.
 """
@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[2] / "packages" / "sbxloop" / "src" / "sbxloop"
+SRC = Path(__file__).resolve().parents[2] / "packages" / "lantern" / "src" / "lantern"
 BACKENDS = SRC / "vcs"
 
 # ``<anything>.raw(``, ``raw_lookup(<ops>,`` and ``raw_pages(<ops>,`` — the

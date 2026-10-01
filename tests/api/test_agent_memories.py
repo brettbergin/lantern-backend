@@ -7,10 +7,10 @@ from typing import Any
 
 from sqlalchemy import select
 
-from sbxloop.agents.memory import WorkspaceChannelVisibility
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.db.collaboration_models import ChannelMemberRow, ChannelRow
+from lantern.agents.memory import WorkspaceChannelVisibility
+from lantern.daemon.controls.principal import ALL_CAPABILITIES
+from lantern.db.api_models import ApiEventRow
+from lantern.db.collaboration_models import ChannelMemberRow, ChannelRow
 from tests.api.conftest import build
 from tests.api.test_collaboration import bearer, register
 
@@ -111,7 +111,7 @@ def test_a_memory_is_addressed_through_its_own_agent(api: Any) -> None:
 
 def test_an_alias_names_the_same_agent(api: Any) -> None:
     headers = bearer(register(api))
-    created = api.client.post(memories_url("angie"), headers=headers, json={"content": "hi"})
+    created = api.client.post(memories_url("lantern"), headers=headers, json={"content": "hi"})
     assert created.status_code == 201, created.text
     assert created.json()["agent_slug"] == "concierge"
     assert len(api.client.get(memories_url("concierge"), headers=headers).json()) == 1

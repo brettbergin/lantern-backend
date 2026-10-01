@@ -7,10 +7,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from sbxloop.api.app import create_app
-from sbxloop.api.auth.store import ApiAuthStore
-from sbxloop.api.context import ApiContext
-from sbxloop.daemon.store import DaemonStore
+from lantern.api.app import create_app
+from lantern.api.auth.store import ApiAuthStore
+from lantern.api.context import ApiContext
+from lantern.daemon.store import DaemonStore
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 
 
@@ -42,7 +42,7 @@ def test_restart_resumes_only_unstarted_turns_and_preserves_replies(api: Any) ->
     channel = api.client.post("/v1/channels", json={}, headers=headers).json()["id"]
     from sqlalchemy import select
 
-    from sbxloop.db.collaboration_models import LocalUserRow
+    from lantern.db.collaboration_models import LocalUserRow
 
     with api.loop.dstore.read() as session:
         user_id = session.scalars(select(LocalUserRow)).one().id
@@ -130,7 +130,7 @@ def test_history_contains_only_this_channels_prior_turns(api: Any) -> None:
 def test_failed_turn_is_visible_in_durable_history(api: Any) -> None:
     from concurrent.futures import Future
 
-    from sbxloop.daemon.concierge import ConciergeReply
+    from lantern.daemon.concierge import ConciergeReply
 
     class Broken(FakeConcierge):
         def submit_turn(self, text: str, **kwargs: Any) -> Future[ConciergeReply]:
@@ -154,7 +154,7 @@ def test_failed_turn_is_visible_in_durable_history(api: Any) -> None:
 def test_team_turn_finishes_before_next_turn_and_shares_prior_reply(api: Any) -> None:
     from concurrent.futures import Future
 
-    from sbxloop.daemon.concierge import ConciergeReply
+    from lantern.daemon.concierge import ConciergeReply
 
     class Blocking(FakeConcierge):
         def __init__(self) -> None:
@@ -199,7 +199,7 @@ def test_team_turn_finishes_before_next_turn_and_shares_prior_reply(api: Any) ->
         assert [call["session_key"].rsplit(":", 1)[-1] for call in concierge.calls] == [
             "github",
             "software-dev",
-            "angie",
+            "lantern",
         ]
         assert "first role answer" in concierge.calls[-1]["history"]
         assert "first role answer" in concierge.calls[1]["history"]
@@ -227,7 +227,7 @@ def test_tombstone_cancels_queued_work_and_drops_late_reply(api: Any) -> None:
     assert api.client.delete(f"/v1/channels/{channel}", headers=headers).status_code == 204
     assert not store.start_turn(turn.id, api.clock())
     assert store.append_reply(turn.id, content="late", agent_slug=None, now=api.clock()) is None
-    from sbxloop.db.collaboration_models import MessageRow, TurnRow
+    from lantern.db.collaboration_models import MessageRow, TurnRow
 
     with api.loop.dstore.read() as session:
         cancelled = session.get(TurnRow, turn.id)
@@ -259,7 +259,7 @@ def test_tombstone_settles_a_turn_when_a_late_reply_arrives(api: Any) -> None:
     assert api.client.delete(f"/v1/channels/{channel}", headers=headers).status_code == 204
     assert store.append_reply(turn.id, content="late", agent_slug=None, now=api.clock()) is None
 
-    from sbxloop.db.collaboration_models import MessageRow, TurnRow
+    from lantern.db.collaboration_models import MessageRow, TurnRow
 
     with api.loop.dstore.read() as session:
         cancelled = session.get(TurnRow, turn.id)
@@ -272,7 +272,7 @@ def test_tombstone_settles_a_turn_when_a_late_reply_arrives(api: Any) -> None:
 def test_deleting_channel_stops_remaining_team_members(api: Any) -> None:
     from concurrent.futures import Future
 
-    from sbxloop.daemon.concierge import ConciergeReply
+    from lantern.daemon.concierge import ConciergeReply
 
     class Blocking(FakeConcierge):
         def __init__(self) -> None:
@@ -317,7 +317,7 @@ def test_restart_runs_an_unprompted_answer_to_a_guest_for_the_guest(api: Any) ->
     for the same stand-in the guest's own turn runs for: never for the
     channel's owner, whose identity would answer a stranger, and never as
     an interrupted turn."""
-    from sbxloop.api.collaboration import Author
+    from lantern.api.collaboration import Author
 
     api.ctx.concierge = FakeConcierge()
     headers = bearer(register(api))

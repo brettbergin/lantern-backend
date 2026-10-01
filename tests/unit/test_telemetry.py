@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import telemetry
-from sbxloop.config import Config, TelemetryConfig, _project_layer, load_config
-from sbxloop.log import configure_logging, get_logger
+from lantern import telemetry
+from lantern.config import Config, TelemetryConfig, _project_layer, load_config
+from lantern.log import configure_logging, get_logger
 
 
 def test_reporting_is_disabled_without_a_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -21,7 +21,7 @@ def test_reporting_is_disabled_without_a_dsn(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_telemetry_is_operator_configuration(tmp_path: Path) -> None:
-    config = load_config(tmp_path, env={"SBXLOOP_TELEMETRY__ENVIRONMENT": "staging"})
+    config = load_config(tmp_path, env={"LANTERN_TELEMETRY__ENVIRONMENT": "staging"})
     assert config.telemetry.environment == "staging"
     assert Config().telemetry.dsn_env == "GLITCHTIP_DSN"
     assert Config().telemetry.log_fields == "diagnostic"
@@ -59,7 +59,7 @@ def test_logged_errors_are_reported_once_without_payloads(
         telemetry.configure_telemetry(TelemetryConfig(environment="test"))
         # Reconfiguring the daemon renderer must not duplicate reports.
         configure_logging("DEBUG", fmt=fmt, stream=io.StringIO())
-        log = get_logger("sbxloop.test")
+        log = get_logger("lantern.test")
         log.info("run.started", password="private-value")
         log.warning("run.retry")
         try:
@@ -130,7 +130,7 @@ def reports(monkeypatch: pytest.MonkeyPatch):
             telemetry.configure_telemetry(
                 TelemetryConfig(environment="test", log_fields=log_fields)
             )
-            emit(get_logger("sbxloop.test"))
+            emit(get_logger("lantern.test"))
             telemetry.shutdown_telemetry()
         finally:
             configure_logging("DEBUG")
@@ -267,7 +267,7 @@ def test_the_cli_reports_an_unhandled_error_once(reports) -> None:
 def test_cli_reports_and_flushes_an_unhandled_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib
 
-    cli = importlib.import_module("sbxloop.cli.app")
+    cli = importlib.import_module("lantern.cli.app")
     calls = []
     failure = RuntimeError("failure")
 
@@ -286,7 +286,7 @@ def test_cli_reports_and_flushes_an_unhandled_error(monkeypatch: pytest.MonkeyPa
 def test_cli_flushes_without_reporting_normal_exits(monkeypatch, failure) -> None:
     import importlib
 
-    cli = importlib.import_module("sbxloop.cli.app")
+    cli = importlib.import_module("lantern.cli.app")
     calls = []
 
     def stop():
@@ -323,7 +323,7 @@ def test_transport_failures_do_not_break_logging_or_shutdown(monkeypatch) -> Non
 
     monkeypatch.setattr(telemetry, "_client", BrokenClient())
     telemetry.capture_exception(RuntimeError("private-value"))
-    event = {"event": "run.crashed", "logger": "sbxloop.test"}
+    event = {"event": "run.crashed", "logger": "lantern.test"}
     assert telemetry.capture_log(None, "error", event) is event
     telemetry.shutdown_telemetry()
     assert calls == ["capture", "capture", 2.0]
@@ -333,12 +333,12 @@ def test_transport_failures_do_not_break_logging_or_shutdown(monkeypatch) -> Non
 def test_cli_initializes_after_loading_home_secrets(monkeypatch, tmp_path) -> None:
     import importlib
 
-    cli = importlib.import_module("sbxloop.cli.app")
-    monkeypatch.setenv("SBXLOOP_HOME", str(tmp_path))
+    cli = importlib.import_module("lantern.cli.app")
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path))
     monkeypatch.delenv("CUSTOM_GLITCHTIP_DSN", raising=False)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "sbxloop.toml").write_text('[telemetry]\ndsn_env="CUSTOM_GLITCHTIP_DSN"\n')
+    (config_dir / "lantern.toml").write_text('[telemetry]\ndsn_env="CUSTOM_GLITCHTIP_DSN"\n')
     (config_dir / "secrets.env").write_text("CUSTOM_GLITCHTIP_DSN=private-value\n")
     calls = []
 
@@ -359,9 +359,9 @@ def test_cli_initializes_after_loading_home_secrets(monkeypatch, tmp_path) -> No
 def test_invalid_config_does_not_prevent_repair_commands(monkeypatch) -> None:
     import importlib
 
-    from sbxloop.errors import ConfigError
+    from lantern.errors import ConfigError
 
-    cli = importlib.import_module("sbxloop.cli.app")
+    cli = importlib.import_module("lantern.cli.app")
 
     def invalid():
         raise ConfigError("invalid config")
@@ -394,13 +394,13 @@ def test_only_the_fields_this_module_chose_reach_extra() -> None:
     and is still dropped."""
     event = {
         "event_id": "id",
-        "culprit": "sbxloop.daemon.loop in _tick",
+        "culprit": "lantern.daemon.loop in _tick",
         "extra": {"argv": "private"},
         telemetry._FIELDS_KEY: {"attempt": 2},
     }
     assert telemetry._before_send(event, {}) == {
         "event_id": "id",
-        "culprit": "sbxloop.daemon.loop in _tick",
+        "culprit": "lantern.daemon.loop in _tick",
         "extra": {"attempt": 2},
     }
 

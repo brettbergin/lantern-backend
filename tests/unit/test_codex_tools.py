@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop_worker.backends.codex_tools import local_tools
-from sbxloop_worker.protocol import JobRequest
+from lantern_worker.backends.codex_tools import local_tools
+from lantern_worker.protocol import JobRequest
 
 
 def _job(tmp_path: Path, **changes: object) -> JobRequest:
@@ -137,7 +137,7 @@ def test_shell_capture_and_timeout_cleanup(tmp_path: Path, monkeypatch: pytest.M
     import io
     import subprocess
 
-    import sbxloop_worker.backends.codex_tools as module
+    import lantern_worker.backends.codex_tools as module
 
     class Process:
         pid = 12345

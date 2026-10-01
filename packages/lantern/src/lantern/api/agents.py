@@ -1,0 +1,95 @@
+"""Native lantern roles exposed through its collaboration transport.
+
+The catalogue itself lives in :mod:`lantern.agents`; these are the shapes the
+collaboration routes and the chat turn have always read, derived from the
+registry's built-ins.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from lantern.agents.builtin import (
+    CONCIERGE_NAME,
+    LANTERN_MENTIONED,
+    LANTERN_PERSONA,
+    LANTERN_SLUG,
+    LEGACY_BUILTINS,
+    PRIMARY_BUILTINS,
+    builtin_display_name,
+    chat_role,
+)
+from lantern.agents.definition import AgentDefinition as RegistryAgent
+from lantern.agents.registry import AgentRegistry, default_registry
+from lantern.engine.harness import ROLE_BY_PHASE, Role
+
+__all__ = [
+    "AGENTS",
+    "AGENTS_BY_SLUG",
+    "LANTERN_MENTIONED",
+    "LANTERN_PERSONA",
+    "LANTERN_SLUG",
+    "LEGACY_AGENTS",
+    "AgentDefinition",
+    "AgentRegistry",
+    "default_registry",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentDefinition:
+    slug: str
+    name: str
+    description: str
+    category: str
+    capabilities: tuple[str, ...]
+    instructions: str
+    role: Role = "concierge"
+    agent: RegistryAgent | None = None
+
+    @classmethod
+    def from_registry(cls, agent: RegistryAgent) -> AgentDefinition:
+        return cls(
+            agent.slug,
+            builtin_display_name(agent),
+            agent.spec.description,
+            agent.category,
+            agent.capabilities,
+            agent.spec.instructions,
+            chat_role(agent),
+            agent,
+        )
+
+    @property
+    def phase(self) -> str:
+        return next(
+            (phase for phase, role in ROLE_BY_PHASE.items() if role == self.role), "concierge"
+        )
+
+    @property
+    def persona(self) -> str:
+        return self.persona_in(CONCIERGE_NAME)
+
+    def persona_in(self, product: str) -> str:
+        """The chat persona, responding within ``product``: the name the
+        product agent answers to."""
+        if self.agent is not None:
+            return self.agent.chat_persona(product)
+        return (
+            "\n\n## Collaboration role\n\n"
+            f"You are lantern's **{self.name}**, responding in {product} as `@{self.slug}`. "
+            f"{self.instructions} Keep the answer useful in a shared chat, state any "
+            "action you took, and never imply that another agent or person approved it."
+        )
+
+
+LEGACY_AGENTS: tuple[AgentDefinition, ...] = tuple(
+    AgentDefinition.from_registry(agent) for agent in LEGACY_BUILTINS
+)
+
+AGENTS: tuple[AgentDefinition, ...] = tuple(
+    AgentDefinition.from_registry(agent) for agent in PRIMARY_BUILTINS
+)
+
+# Existing saved teams and API clients may still address these names.
+AGENTS_BY_SLUG = {agent.slug: agent for agent in (*LEGACY_AGENTS, *AGENTS)}

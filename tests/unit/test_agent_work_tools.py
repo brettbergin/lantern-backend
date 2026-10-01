@@ -15,25 +15,25 @@ from typing import Any
 
 import pytest
 
-from sbxloop.agents.definition import AgentDefinition, AgentSpec
-from sbxloop.agents.origin import (
+from lantern.agents.definition import AgentDefinition, AgentSpec
+from lantern.agents.origin import (
     WorkOrigin,
     origin_from_body,
     origin_marker,
     strip_origin_markers,
 )
-from sbxloop.agents.tools import (
+from lantern.agents.tools import (
     UNGUARDED_START_TOOLS,
     agent_tool_handler,
     work_dedupe_key,
     work_granted,
 )
-from sbxloop.config import Config
-from sbxloop.daemon.agentwork import AgentWorkService
-from sbxloop.daemon.controls.principal import ALL_CAPABILITIES, Principal
-from sbxloop.daemon.model import WorkItem
-from sbxloop.ghids import issue_item_id
-from sbxloop_worker.protocol import HostToolCall
+from lantern.config import Config
+from lantern.daemon.agentwork import AgentWorkService
+from lantern.daemon.controls.principal import ALL_CAPABILITIES, Principal
+from lantern.daemon.model import WorkItem
+from lantern.ghids import issue_item_id
+from lantern_worker.protocol import HostToolCall
 from tests.unit.test_daemon_loop import Harness
 
 
@@ -322,11 +322,11 @@ class TestTheMarkerRoundTrip:
         assert origin_from_body(two) == critic
 
     def test_discovery_reads_the_marker_an_agent_left(self) -> None:
-        from sbxloop.daemon.sources import GitHubIssueSource
+        from lantern.daemon.sources import GitHubIssueSource
         from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue
 
         origin = WorkOrigin("scout", "api:parent", 2)
-        row = issue(7, "sbxloop:run")
+        row = issue(7, "lantern:run")
         row["body"] = "Please. " + origin_marker(origin)
         source = GitHubIssueSource(
             lambda: RecordingOps({"7": row}),  # type: ignore[arg-type]
@@ -341,11 +341,11 @@ class TestTheMarkerRoundTrip:
         assert item.chain_depth == 2
 
     def test_an_ordinary_issue_still_has_no_origin(self) -> None:
-        from sbxloop.daemon.sources import GitHubIssueSource
+        from lantern.daemon.sources import GitHubIssueSource
         from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue
 
         source = GitHubIssueSource(
-            lambda: RecordingOps({"8": issue(8, "sbxloop:run")}),  # type: ignore[arg-type]
+            lambda: RecordingOps({"8": issue(8, "lantern:run")}),  # type: ignore[arg-type]
             "o/r",
             LABELS,
             host="db",
@@ -402,7 +402,7 @@ class TestAForgedMarker:
     def test_a_marker_nested_inside_another_is_stripped_too(self) -> None:
         inner = origin_marker(WorkOrigin("inner", None, 0))
         # Stripping the inner marker would otherwise leave a valid outer one.
-        nested = f"<!-- sbxloop:origin item=api:p agent=outer depth=1 {inner} -->"
+        nested = f"<!-- lantern:origin item=api:p agent=outer depth=1 {inner} -->"
         assert origin_from_body(strip_origin_markers(nested)) is None
 
     def test_the_daemons_own_marker_is_the_one_read_back(self) -> None:
@@ -657,7 +657,7 @@ class TestTheCapAndTheDedupeAreExact:
         assert len(github.created) == 1
 
     def test_a_forge_refusal_frees_the_ask_at_once(self, tmp_path: Path) -> None:
-        from sbxloop.errors import GithubOpsError
+        from lantern.errors import GithubOpsError
 
         work, _, github = service(tmp_path, agent_team={"max_agent_runs_per_day": 1})
         tools = offered(work, scout())
@@ -706,7 +706,7 @@ class TestACodeStartAnswersWhereItWasAsked:
         assert item is not None and item.channel_id == "chn_code"
 
     def test_a_marker_cannot_name_a_channel(self) -> None:
-        body = "<!-- sbxloop:origin item=none agent=scout depth=1 channel=chn_other -->"
+        body = "<!-- lantern:origin item=none agent=scout depth=1 channel=chn_other -->"
         assert origin_from_body(body) is None
 
 
@@ -771,7 +771,7 @@ class TestAnAgentThatMayStartWorkStartsItOnlyThroughItsGuards:
     def test_a_turn_handed_off_from_a_guarded_agent_is_offered_no_unguarded_start(
         self, tmp_path: Path
     ) -> None:
-        """A peer an agent with ``can_start`` hands off to (Angie, or an agent
+        """A peer an agent with ``can_start`` hands off to (Lantern, or an agent
         that declares nothing) is not offered the start tools that agent was
         denied, or a handoff would be the way round its guardrails. Every
         other tool the turn had stays."""

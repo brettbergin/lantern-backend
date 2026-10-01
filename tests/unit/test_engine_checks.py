@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.checks import (
+from lantern.config import LandingConfig
+from lantern.engine.checks import (
     NO_POLICY,
     CheckPolicy,
     check_policy_reader,
@@ -11,9 +11,9 @@ from sbxloop.engine.checks import (
     merged_over_comment,
     read_check_policy,
 )
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import ChecksVerdict
-from sbxloop.vcs.github.protection import BaseRequirements
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import ChecksVerdict
+from lantern.vcs.github.protection import BaseRequirements
 from tests.fakes.fake_github import GREEN, NO_CHECKS, FakeGithub
 
 

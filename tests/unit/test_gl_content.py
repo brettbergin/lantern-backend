@@ -8,9 +8,9 @@ import base64
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.gitlab.content import blob_sha, commit_record, plan_actions, tree_handle
-from sbxloop.vcs.gitlab.ops import GitlabOps
+from lantern.errors import GithubOpsError
+from lantern.vcs.gitlab.content import blob_sha, commit_record, plan_actions, tree_handle
+from lantern.vcs.gitlab.ops import GitlabOps
 from tests.fakes.fake_gitlab import FakeGitlab
 
 REPO = "acme/widgets"
@@ -118,19 +118,19 @@ class TestStaging:
         fake = FakeGitlab()
         fake.fail_always["commit_create"] = GithubOpsError("request timed out")
         with pytest.raises(GithubOpsError, match="request timed out"):
-            deliver(fake, "sbxloop/recovery", {"new.txt": b"reviewed"}, "deliver")
+            deliver(fake, "lantern/recovery", {"new.txt": b"reviewed"}, "deliver")
         assert len(fake.commit_posts) == 1
-        assert "sbxloop/recovery" not in fake.branches
+        assert "lantern/recovery" not in fake.branches
 
     def test_a_changed_tree_cannot_be_adopted_as_the_lost_write(self) -> None:
         fake = FakeGitlab()
-        first = deliver(fake, "sbxloop/recovery", {"new.txt": b"reviewed"}, "deliver")
+        first = deliver(fake, "lantern/recovery", {"new.txt": b"reviewed"}, "deliver")
         pending = fake._pending[(REPO, first)]
         fake.trees[first]["unreviewed.txt"] = ("100644", b"not part of the write")
         assert (
             fake._recover_commit(
                 REPO,
-                branch="sbxloop/recovery",
+                branch="lantern/recovery",
                 start=pending.start,
                 message=pending.message,
                 actions=pending.actions,
@@ -141,11 +141,11 @@ class TestStaging:
     def test_a_lost_commit_response_is_reconciled_without_replaying_the_write(self) -> None:
         fake = FakeGitlab()
         fake.lose_commit_response = True
-        sha = deliver(fake, "sbxloop/recovery", {"new.txt": b"reviewed"}, "deliver")
+        sha = deliver(fake, "lantern/recovery", {"new.txt": b"reviewed"}, "deliver")
         assert fake.trees[sha]["new.txt"] == ("100644", b"reviewed")
         assert len(fake.commit_posts) == 1
-        assert fake.branches["sbxloop/recovery"] == sha
-        assert not any(branch.startswith("sbxloop/pending/") for branch in fake.branches)
+        assert fake.branches["lantern/recovery"] == sha
+        assert not any(branch.startswith("lantern/pending/") for branch in fake.branches)
 
     def test_restart_preserves_unchanged_symlinks_and_refuses_changed_types(self) -> None:
         fake = FakeGitlab()
@@ -170,8 +170,8 @@ class TestStaging:
             "obsolete.txt": ("100644", b"old attempt"),
             "new.txt": ("100644", b"old attempt collision"),
         }
-        fake.branches["sbxloop/restart"] = "prior"
-        fake.seed_mr(1, source_branch="sbxloop/restart", head_sha="prior")
+        fake.branches["lantern/restart"] = "prior"
+        fake.seed_mr(1, source_branch="lantern/restart", head_sha="prior")
         shas = fake.blobs_create_many(REPO, [{"path": "new.txt", "content_b64": b64(b"reviewed")}])
         tree = fake.tree_create(
             REPO,
@@ -181,8 +181,8 @@ class TestStaging:
         commit = fake.commit_create(
             REPO, message="restart", tree=str(tree["sha"]), parents=["prior"]
         )
-        fake.ref_force_update(REPO, "sbxloop/restart", str(commit["sha"]))
-        head = fake.branches["sbxloop/restart"]
+        fake.ref_force_update(REPO, "lantern/restart", str(commit["sha"]))
+        head = fake.branches["lantern/restart"]
         assert fake.trees[head] == {**fake.trees["base123"], "new.txt": ("100644", b"reviewed")}
         assert fake.commits[head]["parent_ids"] == ["prior"]
         assert fake.merge_requests[1]["state"] == "opened"
@@ -248,7 +248,7 @@ class TestStaging:
         assert commit["sha"] == "gl000001" and commit["tree"] == {"sha": "gl000001"}
         assert commit["parents"] == [{"sha": "base123"}]
         ((branch, posted),) = fake.commit_posts
-        assert branch.startswith("sbxloop/pending/") and posted["start_sha"] == "base123"
+        assert branch.startswith("lantern/pending/") and posted["start_sha"] == "base123"
         assert posted["commit_message"] == "deliver" and "force" not in posted
         assert fake.trees["gl000001"]["hello.txt"] == ("100644", b"hi\n")
         assert fake.commit_get(REPO, "gl000001")["parents"] == [{"sha": "base123"}]
@@ -267,72 +267,72 @@ class TestStaging:
 class TestRefs:
     def test_the_first_delivery_creates_the_branch_and_drops_the_pending_one(self) -> None:
         fake = FakeGitlab()
-        sha = deliver(fake, "sbxloop/r7", {"hello.txt": b"hi\n"}, "deliver")
-        assert fake.ref_lookup(REPO, "heads/sbxloop/r7") == sha
-        assert fake.branch_creates == [("sbxloop/r7", sha)]
-        (pending,) = [b for b in fake.deleted_branches if b.startswith("sbxloop/pending/")]
+        sha = deliver(fake, "lantern/r7", {"hello.txt": b"hi\n"}, "deliver")
+        assert fake.ref_lookup(REPO, "heads/lantern/r7") == sha
+        assert fake.branch_creates == [("lantern/r7", sha)]
+        (pending,) = [b for b in fake.deleted_branches if b.startswith("lantern/pending/")]
         assert pending not in fake.branches
         with pytest.raises(GithubOpsError, match="refs/heads/<branch>"):
             fake.ref_create(REPO, "heads/x", sha)
 
     def test_a_collision_is_gitlabs_400_for_the_caller(self) -> None:
         fake = FakeGitlab()
-        fake.branches["sbxloop/r7"] = "base123"
+        fake.branches["lantern/r7"] = "base123"
         with pytest.raises(GithubOpsError) as info:
-            fake.ref_create(REPO, "refs/heads/sbxloop/r7", "base123")
+            fake.ref_create(REPO, "refs/heads/lantern/r7", "base123")
         assert info.value.http_status == 400 and "already exists" in str(info.value)
 
     def test_a_fix_round_rewrites_the_branch_under_force(self) -> None:
         fake = FakeGitlab()
-        first = deliver(fake, "sbxloop/r7", {"hello.txt": b"hi\n"}, "deliver")
-        fake.seed_mr(1, source_branch="sbxloop/r7", head_sha=first)
-        second = deliver(fake, "sbxloop/r7", {"hello.txt": b"hi again\n"}, "deliver again")
-        head = fake.ref_lookup(REPO, "heads/sbxloop/r7")
+        first = deliver(fake, "lantern/r7", {"hello.txt": b"hi\n"}, "deliver")
+        fake.seed_mr(1, source_branch="lantern/r7", head_sha=first)
+        second = deliver(fake, "lantern/r7", {"hello.txt": b"hi again\n"}, "deliver again")
+        head = fake.ref_lookup(REPO, "heads/lantern/r7")
         assert head and head != first and head != second, "a new commit of the same tree"
         assert fake.trees[head] == fake.trees[second]
         assert fake.commits[head]["parent_ids"] == ["base123"]
-        forced = [p for b, p in fake.commit_posts if b == "sbxloop/r7"]
+        forced = [p for b, p in fake.commit_posts if b == "lantern/r7"]
         assert forced == [
             {
-                "branch": "sbxloop/r7",
+                "branch": "lantern/r7",
                 "commit_message": "deliver again",
                 "actions": list(fake._pending[(REPO, second)].actions),
                 "start_sha": "base123",
                 "force": True,
             }
         ]
-        assert "sbxloop/r7" not in fake.deleted_branches, "deleting the branch closes the request"
+        assert "lantern/r7" not in fake.deleted_branches, "deleting the branch closes the request"
         assert fake.pr_get(REPO, 1)["state"] == "open"
-        assert not [b for b in fake.branches if b.startswith("sbxloop/pending/")]
+        assert not [b for b in fake.branches if b.startswith("lantern/pending/")]
 
     def test_a_branch_already_at_the_commit_is_left_alone(self) -> None:
         fake = FakeGitlab()
-        sha = deliver(fake, "sbxloop/r7", {"hello.txt": b"hi\n"}, "deliver")
+        sha = deliver(fake, "lantern/r7", {"hello.txt": b"hi\n"}, "deliver")
         before = len(fake.commit_posts)
-        fake.ref_force_update(REPO, "sbxloop/r7", sha)
+        fake.ref_force_update(REPO, "lantern/r7", sha)
         assert len(fake.commit_posts) == before
 
     def test_a_missing_branch_is_created_and_a_foreign_commit_is_refused(self) -> None:
         fake = FakeGitlab()
-        fake.ref_force_update(REPO, "sbxloop/r8", "base123")
-        assert fake.branches["sbxloop/r8"] == "base123"
-        fake.branches["sbxloop/r9"] = "base123"
-        with pytest.raises(GithubOpsError, match="no call that moves branch 'sbxloop/r9'"):
-            fake.ref_force_update(REPO, "sbxloop/r9", "someone-elses-commit")
+        fake.ref_force_update(REPO, "lantern/r8", "base123")
+        assert fake.branches["lantern/r8"] == "base123"
+        fake.branches["lantern/r9"] = "base123"
+        with pytest.raises(GithubOpsError, match="no call that moves branch 'lantern/r9'"):
+            fake.ref_force_update(REPO, "lantern/r9", "someone-elses-commit")
 
 
 class TestContentsPut:
     def test_create_then_replace_on_an_existing_branch(self) -> None:
         fake = FakeGitlab()
-        fake.branches["sbxloop/r1"] = "base123"
+        fake.branches["lantern/r1"] = "base123"
         written = fake.contents_put(
-            REPO, "notes.md", message="add", content_b64=b64(b"# n\n"), branch="sbxloop/r1"
+            REPO, "notes.md", message="add", content_b64=b64(b"# n\n"), branch="lantern/r1"
         )
         assert written["commit"]["sha"] == "gl000001"
         assert written["content"] == {"path": "notes.md", "sha": blob_sha(b"# n\n")}
         assert fake.commit_posts[0][1]["actions"][0]["action"] == "create"
         replaced = fake.contents_put(
-            REPO, "notes.md", message="again", content_b64=b64(b"# m\n"), branch="sbxloop/r1"
+            REPO, "notes.md", message="again", content_b64=b64(b"# m\n"), branch="lantern/r1"
         )
         assert replaced["commit"]["sha"] == "gl000002"
         assert fake.commit_posts[1][1]["actions"][0]["action"] == "update"

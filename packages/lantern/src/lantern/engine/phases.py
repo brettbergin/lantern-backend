@@ -1,0 +1,2118 @@
+"""Phase handlers: each turns engine state into one or more worker jobs.
+
+Session strategy per phase (a deliberate design decision):
+
+- DECOMPOSE / BUILD run with full ("auto") permissions — the microVM is the
+  security boundary. DECOMPOSE is always fresh; BUILD plans and executes in
+  one session and is the one phase that continues, resuming its own
+  previous attempt on a revision so the work already done is not re-derived
+  (a replan clears it — the approach that session holds is the one being
+  discarded).
+- VERIFY is mechanical — shell commands, no LLM, no opinions. Its commands
+  are DECOMPOSER-authored only: the agent that does the work must never
+  author its own exam (#94), which is also why the builder is shown the
+  commands verbatim but cannot edit them.
+- STEER (interactive chat) runs as a fresh read-only session: it may
+  inspect the workspace to answer the user accurately but must not
+  "helpfully" edit anything — direction changes flow back through the
+  engine as build restarts or standing guidance, never as direct edits.
+- REVIEW runs once per delivery as a fresh read-only session over the
+  PR's whole diff. There is no per-task critic: the old SCRUTINIZE/VALIDATE
+  stages audited task completion and rubber-stamped it (6/6 pass, 5/5
+  accept in the measured baseline) while diff-level defects leaked to the
+  PR. One adversarial pass over the assembled diff, driving bounded fix
+  rounds, is the critic that earns its turns (see ``engine.review``).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import time
+from collections.abc import Callable, Mapping, Sequence
+from functools import partial
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeVar
+
+from pydantic import BaseModel, Field, TypeAdapter
+
+from lantern import toolchains
+from lantern.agentmodels import ModelSelection, model_for_phase, refreshed_models, run_model_repo
+from lantern.agents.tools import MEMORY_TOOL_GROUP, AgentTool, agent_tool_handler, memory_tools
+from lantern.config import Config
+from lantern.deliver import pr_conventions
+from lantern.engine.harness import ROLE_BY_PHASE, brief_for_phase
+from lantern.engine.issue_lookup import IssueLookup
+from lantern.engine.model import (
+    JudgeVerdict,
+    SteerVerdict,
+    TaskGraph,
+    TaskRecord,
+    VerifyReauthor,
+    WorkloadPlan,
+)
+from lantern.engine.planning import (
+    PlanBrief,
+    PlanClarification,
+    PlanProposal,
+    PlanReplan,
+    clarification_problems,
+    proposal_problems,
+    replan_problems,
+)
+from lantern.engine.prompts import bullet_list, render
+from lantern.engine.repocontext import repo_conventions
+from lantern.engine.review import ReviewGuard, ReviewVerdict
+from lantern.engine.service import FETCH_TIMEOUT_S, FETCH_TOOL_NAME, TOOL_NAME as SERVICE_TOOL_NAME
+from lantern.engine.skilltools import SKILL_TOOL_NAME, answer_skill_call, skill_tool_spec
+from lantern.engine.store import StateStore
+from lantern.errors import InvalidOutputTwice, WorkerError
+from lantern.events import EventBus
+from lantern.ids import new_job_id
+from lantern.log import get_logger
+from lantern.provider import ProviderHeldError, ProviderHold
+from lantern.verifylint import (
+    UV_LOCKFILE,
+    command_heads,
+    config_override_example,
+    gate_problems,
+    gate_rule,
+    lint_verify_commands,
+    project_gate,
+    reviewer_gate_rule,
+    runs_gate,
+)
+from lantern.worker.client import WorkerClient
+from lantern.worker.hosttools import HostToolHandler
+from lantern_worker.gitops import MergeResult
+from lantern_worker.protocol import (
+    BatchCommandResult,
+    Event,
+    EventTypes,
+    HostToolCall,
+    HostToolResponse,
+    HostToolSpec,
+    JobRequest,
+    JobResult,
+    Usage,
+)
+
+if TYPE_CHECKING:
+    from lantern.agents.assignment import AgentAssignment, AgentBinding
+    from lantern.agents.memory import MemoryService
+
+OUTPUT_CLIP = 6_000
+REVIEW_RESPONSE_PHASE = "review_response_repair"
+
+
+class _ReviewResponseCheckpoint(BaseModel):
+    """Completed responses replayed around an interrupted provider request.
+
+    A string is an ExpectedJsonMissing error. Keep it in the attempt list
+    too: an unparseable correction still consumes one of the two attempts.
+    """
+
+    original: JobResult
+    repairs: list[JobResult | str] = Field(default_factory=list, max_length=2)
+    requested_model: str | None = None
+    model_source: str = "model"
+
+
+def _review_response_schema(model_cls: type[BaseModel]) -> str:
+    """Send validation rules without developer-only model docstrings."""
+
+    def without_descriptions(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: without_descriptions(item)
+                for key, item in value.items()
+                if not (key == "description" and isinstance(item, str))
+            }
+        if isinstance(value, list):
+            return [without_descriptions(item) for item in value]
+        return value
+
+    return json.dumps(without_descriptions(model_cls.model_json_schema()), ensure_ascii=False)
+
+
+# Verify output keeps head + tail (#253): a pytest run over hundreds of
+# tests prints the failing assertions in the middle/top of its output and
+# only a "N failed" summary at the bottom, so a tail-only clip handed the
+# critic a summary with no assertion text. The head is the first failure's
+# traceback; the tail is the summary and the last failure.
+VERIFY_HEAD_CLIP = 2_000
+VERIFY_TAIL_CLIP = 4_000
+
+# Every verify failure fed back to the executor starts with this; the
+# engine counts occurrences to headline "N more" in the live stream. It is
+# a display convention only — provenance decisions read the persisted
+# verify attempt, never this text (critic feedback is agent-authored).
+VERIFY_FAILURE_PREFIX = "verify command failed:"
+
+# Substitutions applied to verify output before fingerprinting it. A verify
+# command that cannot pass fails with the *same* diagnosis every attempt,
+# but never byte-identically: pytest prints "in 12.31s", mypy prints a
+# duration, tracebacks carry absolute sandbox paths whose run id differs
+# per attempt. Normalising those out is what lets the engine recognise "we
+# have already seen exactly this failure" without asking a model (#387).
+_NORMALISERS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Absolute paths (/home/agent/work/<run>/... ) -> the tail component,
+    # so the same file under a different run root compares equal.
+    (re.compile(r"(?<![\w/])/(?:[\w.+-]+/)+([\w.+-]+)"), r"<path>/\1"),
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}[\d:.]*\b"), "<ts>"),
+    # Durations: "in 12.31s", "took 1.2 sec", "(209s)" — a number carrying a
+    # time unit is unambiguous.
+    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds|ms|m|min|minutes)\b"), "<dur>"),
+    # Clock-style durations ("0:00:12") only in an explicit duration
+    # context. A bare `\d+:\d{2}` also matches the `line:column` coordinates
+    # every compiler and linter prints, and normalising those collapsed two
+    # materially different failures (the same error at 10:12 and at 20:15)
+    # into one fingerprint — which made the engine call a working check
+    # suspect. The keyword prefix is kept so "took" survives the
+    # substitution and cannot itself be a filename.
+    (
+        re.compile(r"(?i)\b(in|took|elapsed|time)(\s+)\d+:\d{2}(?::\d{2})?(?:\.\d+)?\b"),
+        r"\1\2<dur>",
+    ),
+    # Hex ids / memory addresses and bare timestamps.
+    (re.compile(r"\b0x[0-9a-fA-F]+\b"), "<addr>"),
+)
+
+
+def normalise_verify_output(output: str) -> str:
+    """Strip the run-to-run noise (timings, absolute paths, addresses) from
+    verify output so two attempts of the same failure compare equal."""
+    text = output or ""
+    for pattern, replacement in _NORMALISERS:
+        text = pattern.sub(replacement, text)
+    # Collapse trailing whitespace and blank-line drift.
+    lines = [line.rstrip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def verify_fingerprint(command: str, output: str) -> str:
+    """Stable identity of one verify failure: the command plus its
+    normalised output. Equal fingerprints mean the identical check failed
+    the identical way again."""
+    payload = f"{(command or '').strip()}\n--\n{normalise_verify_output(output)}"
+    return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
+
+
+def verify_suspect_feedback(failures: Sequence[VerifyFailure]) -> str:
+    """Feedback for a verify command that has now failed identically twice.
+
+    Addressed to the *builder*, because the builder is the only agent this
+    signal can reach: the verify commands are decomposer-authored and
+    build.md tells the builder they run exactly as written and cannot be
+    edited. So this must not order a re-author it is unable to perform. What
+    it can ask for is the two things that are in the builder's hands —
+    making the work satisfy the command as written (layout, paths, setup),
+    or, when the command is genuinely unpassable, saying so plainly in the
+    report so a human sees the diagnosis instead of another silent retry.
+    """
+    quoted = "\n\n".join(
+        f"`{failure.command}` (exit {failure.exit_code}) failed again with the "
+        f"same output:\n\n{failure.output}"
+        for failure in failures
+    )
+    return (
+        "VERIFY COMMAND SUSPECT: the same verify command has now failed twice "
+        "with identical output across attempts, so repeating the same change "
+        "will not change the result — treat the check itself as suspect.\n\n"
+        f"{quoted}\n\n"
+        "You cannot edit the verify commands. Do two things instead. First, "
+        "work out whether the work can be made to satisfy this command "
+        "exactly as written — a different file layout, a path the command "
+        "actually looks at, or missing setup the command needs — and if so, "
+        "do that. Second, if the command cannot pass however the work is "
+        "arranged (for example a config-driven tool given explicit paths that "
+        "override its own configured file set, a path that does not exist, or "
+        "a command that contradicts the task), stop retrying and state that "
+        "plainly in your report, naming the command and why it is unpassable, "
+        "so the humans reviewing the run can re-author it."
+    )
+
+
+class VerifyFailure(NamedTuple):
+    """One failing verify command, with the fingerprint used to recognise
+    it recurring on a later attempt."""
+
+    command: str
+    exit_code: int
+    output: str
+
+    @property
+    def fingerprint(self) -> str:
+        return verify_fingerprint(self.command, self.output)
+
+
+# Persona label per phase prompt: stamped onto the job's agent.* events (via
+# WorkerClient.submit) so the transcript header says WHO is responding
+# (decomposer, builder, ...) instead of a generic "agent".
+AGENT_NAMES = {
+    "decompose": "decomposer",
+    "build": "builder",
+    "steer": "steering",
+    "review": "reviewer",
+    # A workload's two actors (#756): the operator plans and executes, the
+    # judge holds the work to the plan's criteria.
+    "operator_plan": "operator",
+    "operator_execute": "operator",
+    "operator_judge": "judge",
+    # The one actor allowed to change the exam rather than the work.
+    "reauthor_verify": "verify editor",
+    # Breaking an initiative or an epic into its next level (#2343), from a
+    # read-only checkout: it proposes, a person publishes.
+    "plan": "planner",
+}
+# The phases whose session gets the run's host tools: the one doing the
+# work that may need a service. Planners and critics read and judge.
+TOOLED_PHASES = frozenset({"build", "operator_execute"})
+# System prompts for the workload's sessions. Both decline the backend's
+# coding-agent preset (`system_preset=False`): an operator is not a coding
+# agent and must not present as one, and the judge is not an operator.
+OPERATOR_SYSTEM_MESSAGE = (
+    "You are the operator of an automated workload running inside an isolated "
+    "sandbox: you get a piece of work done — research, data handling, calling "
+    "services, producing documents, whatever the outcome needs — following the "
+    "brief you are given, and you report what you actually did."
+)
+JUDGE_SYSTEM_MESSAGE = (
+    "You are the judge of an automated workload: you hold one task's result to "
+    "its acceptance criteria, reading the operator's report as a claim to be "
+    "checked against the data directory and the record of tool calls. You "
+    "inspect; you never modify anything, and you never pass work you could not "
+    "see meet its criteria."
+)
+# How many tool calls the judge's digest lists in full before it only
+# counts: the digest is evidence for one verdict, not a transcript.
+TOOL_DIGEST_MAX_CALLS = 80
+TOOL_DIGEST_ARGS_CHARS = 160
+# The review prompt carries the PR's diff inline; past this it is clipped
+# head+tail (the reviewer still has the tree). Overridden by
+# `[landing] review_diff_max_chars`.
+REVIEW_DIFF_HEAD_CLIP = 100_000
+
+log = get_logger(__name__)
+
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+class VerifyOutcome(NamedTuple):
+    """VERIFY's result: pass/fail, failure feedback for the builder, and
+    the full command transcript — persisted on the phase row so a resumed
+    run re-enters with the same evidence."""
+
+    passed: bool
+    feedback: str
+    results: str
+    failures: tuple[VerifyFailure, ...] = ()
+
+
+class ToolDigest:
+    """The tool calls one agent job made, as the judge reads them (#756):
+    what ran, in order, and whether it succeeded — collected from the
+    job's own ``agent.tool_end`` events, so a report describing work the
+    record does not show can be seen for what it is."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, bool | None]] = []
+        self.total = 0
+
+    def record(self, event: Event) -> None:
+        if event.type != EventTypes.AGENT_TOOL_END:
+            return
+        self.total += 1
+        if len(self.calls) >= TOOL_DIGEST_MAX_CALLS:
+            return
+        data = event.data
+        args = " ".join(str(data.get("args") or "").split())
+        if len(args) > TOOL_DIGEST_ARGS_CHARS:
+            args = args[: TOOL_DIGEST_ARGS_CHARS - 1] + "…"
+        success = data.get("success")
+        self.calls.append(
+            (str(data.get("tool") or "?"), args, success if isinstance(success, bool) else None)
+        )
+
+    def render(self) -> str:
+        if not self.total:
+            return "(no tool calls were made)"
+        lines = []
+        for index, (tool, args, success) in enumerate(self.calls, start=1):
+            mark = "ok" if success else ("failed" if success is False else "?")
+            lines.append(f"{index}. `{tool}` {args} — {mark}".rstrip())
+        if self.total > len(self.calls):
+            lines.append(f"… and {self.total - len(self.calls)} more call(s)")
+        return "\n".join(lines)
+
+
+class PhaseSpend(NamedTuple):
+    """Model usage accumulated since the last drain — the token bill for the
+    phase attempt the engine is about to record."""
+
+    usage: Usage | None
+    turns: int | None
+
+
+def clip(text: str | None, limit: int = OUTPUT_CLIP) -> str:
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    return f"...(clipped)...\n{text[-limit:]}"
+
+
+def clip_head_tail(
+    text: str | None, head: int = VERIFY_HEAD_CLIP, tail: int = VERIFY_TAIL_CLIP
+) -> str:
+    """Keep the first ``head`` and last ``tail`` characters, eliding the
+    middle with a marker that says how much was dropped."""
+    text = text or ""
+    if len(text) <= head + tail:
+        return text
+    dropped = len(text) - head - tail
+    return f"{text[:head]}\n...(clipped {dropped} chars)...\n{text[-tail:]}"
+
+
+def clip_diff(diff: str | None, limit: int) -> str:
+    """The review prompt's copy of the PR diff, cut to ``limit`` characters.
+
+    Head and tail survive (the tail carries the last files' hunks, the head
+    the first); what goes is the middle, mid-hunk. The marker says so in
+    the diff's own terms — how many characters and lines are missing — and
+    tells the reviewer not to read the gap as "unchanged" (#690): the
+    prompt's rule that anything not shown is untouched holds for the tree,
+    not for a diff the budget cut, and a reviewer that took the marker for
+    a hunk boundary approved changes it never saw.
+    """
+    diff = diff or ""
+    head = min(REVIEW_DIFF_HEAD_CLIP, limit * 2 // 3)
+    tail = limit // 3
+    if len(diff) <= head + tail:
+        return diff
+    hidden = diff[head:-tail]
+    return (
+        f"{diff[:head]}\n"
+        f"[diff clipped at {limit} chars — {len(hidden)} chars / "
+        f"{hidden.count(chr(10)) + 1} lines not shown; do not assume they are "
+        f"unchanged — read those files from the working tree]\n"
+        f"{diff[-tail:]}"
+    )
+
+
+def _service_credentials(tool: HostToolSpec, allowed: Sequence[str]) -> list[str]:
+    """The credentials ``tool`` (``call_service``) offers that ``allowed`` names."""
+    offered = tool.parameters.get("properties", {}).get("credential", {}).get("enum") or []
+    return [str(name) for name in offered if name in allowed]
+
+
+def _with_credentials(tool: HostToolSpec, allowed: Sequence[str]) -> HostToolSpec:
+    """``tool`` with its credential enum cut to ``allowed``."""
+    parameters = json.loads(json.dumps(tool.parameters))
+    parameters["properties"]["credential"]["enum"] = list(allowed)
+    return tool.model_copy(update={"parameters": parameters})
+
+
+def _credential_guard(delegate: HostToolHandler, binding: AgentBinding) -> HostToolHandler:
+    """``delegate``, refusing a service call on a credential the agent was
+    not given: the tool's enum already hides it, and this is the barrier."""
+    allowed = frozenset(binding.credentials)
+
+    def handler(call: HostToolCall) -> HostToolResponse:
+        if call.name == SERVICE_TOOL_NAME:
+            credential = str(call.arguments.get("credential", ""))
+            if credential not in allowed:
+                return HostToolResponse(
+                    call_id=call.call_id,
+                    ok=False,
+                    error=(
+                        f"credential {credential!r} is not one @{binding.slug} may use "
+                        f"(allowed: {', '.join(sorted(allowed))})"
+                    ),
+                )
+        return delegate(call)
+
+    return handler
+
+
+def _tool_guard(
+    delegate: HostToolHandler, binding: AgentBinding, allowed: frozenset[str]
+) -> HostToolHandler:
+    """``delegate``, refusing a run tool the agent's session was not given:
+    leaving a tool out of the job hides it, and this is the barrier."""
+
+    def handler(call: HostToolCall) -> HostToolResponse:
+        if call.name not in allowed:
+            return HostToolResponse(
+                call_id=call.call_id,
+                ok=False,
+                error=f"tool {call.name!r} is not one @{binding.slug} may use",
+            )
+        return delegate(call)
+
+    return handler
+
+
+class PhaseRunner:
+    """Runs the three phases for one run against the agent sandbox's worker."""
+
+    def __init__(
+        self,
+        agent: WorkerClient,
+        config: Config,
+        run_id: str,
+        outcome: str,
+        *,
+        workdir: str | None = None,
+        workspace: Path | None = None,
+        languages: Sequence[str] | None = None,
+        versions: Mapping[str, toolchains.ToolchainVersion] | None = None,
+        host_tools: Sequence[HostToolSpec] = (),
+        tool_handler: HostToolHandler | None = None,
+        bus: EventBus | None = None,
+        session_models: Mapping[str, str] | None = None,
+        store: StateStore | None = None,
+        assignment: AgentAssignment | None = None,
+        narrow_service: Callable[[Sequence[str]], HostToolSpec | None] | None = None,
+        memory: MemoryService | None = None,
+    ) -> None:
+        self.agent = agent
+        # Every agent's long-term memory: the tools an agent whose `tools`
+        # name `memory` is given. None (embedders, tests) offers none.
+        self.memory = memory
+        # The named agents taking this run's phases, when the host assigned
+        # any. A default assignment changes no job and no event: only a
+        # custom one credits the agents on what the worker reports.
+        self.assignment = assignment
+        self._credited = assignment is not None and not assignment.is_default()
+        # How the run's `call_service` tool is re-described for an agent
+        # narrowed to some of the granted credentials (the service sandbox
+        # knows their hosts); None filters the tool's enum alone.
+        self.narrow_service = narrow_service
+        self.config = config
+        self.run_id = run_id
+        self.session_models = dict(session_models or {})
+        self.outcome = outcome
+        self.store = store
+        # The run's event bus, when the caller has one: where a job's tool
+        # calls are read back from for the judge's digest (#756). None
+        # (embedders, tests) leaves the digest empty.
+        self.bus = bus
+        # Host tools the BUILD session gets (#765): the `call_service` tool
+        # when the run was granted credentials, answered by ``tool_handler``
+        # on the host — the agent asks, the service sandbox calls. Empty
+        # (no handler) is every run that has none, and the build job then
+        # carries no tools at all.
+        if bool(host_tools) != (tool_handler is not None):
+            raise ValueError("host_tools and tool_handler must be given together")
+        self.host_tools: tuple[HostToolSpec, ...] = tuple(host_tools)
+        self.issue_lookup: IssueLookup | None = None
+        self.tool_handler = tool_handler
+        # Canonical in-VM working directory for every job in this run: the
+        # discovered workspace mount, or the harvest dir. Evidence and verify
+        # commands must run where the executor wrote its files.
+        self.workdir = workdir
+        # The host-side workspace directory (the run's clone), consulted for
+        # project-shape facts the verify-command lint keys on — a `uv.lock`
+        # at the root flips the Python convention (#250). Host-side because
+        # the lint runs at JSON acceptance, where a round trip into the VM
+        # per retry would cost more than the check is worth; the workspace
+        # is mounted identically in the common case, and an unmounted run
+        # still starts from this clone.
+        self.workspace = workspace
+        # The run's resolved toolchain set (#624) — what the sandbox was
+        # actually provisioned with, which the verify-command lint keys its
+        # per-language rules on. None (embedders, tests) falls back to the
+        # config's own answer.
+        self.languages: tuple[str, ...] = (
+            tuple(languages) if languages is not None else config.sandbox.effective_languages
+        )
+        # And the series each was provisioned at (#627), named to the
+        # builder beside the set (#689). None (embedders, tests) reads the
+        # workspace's pins the way provisioning did.
+        self.versions: dict[str, toolchains.ToolchainVersion] = (
+            dict(versions)
+            if versions is not None
+            else toolchains.toolchain_versions(self.languages, workspace)
+        )
+        # Standing chat guidance (steer_run verdicts), injected into every
+        # later build prompt. The engine appends live entries and
+        # replays persisted ones on resume.
+        self.user_guidance: list[str] = []
+        # Running usage tally across agent jobs, drained by the engine when
+        # it records a phase attempt (drain_spend) so retries and critic
+        # re-runs bill to the phase row they served.
+        self._spend_usage = Usage()
+        self._spend_turns = 0
+
+    def add_guidance(self, text: str) -> None:
+        self.user_guidance.append(text)
+
+    def drain_spend(self) -> PhaseSpend:
+        """Usage accumulated since the last drain (every agent job, retries
+        included), then reset. A phase that fails before being recorded leaks
+        its spend into the next drained row — accepted: the columns serve
+        aggregate per-phase accounting, not billing."""
+        spend = PhaseSpend(
+            usage=self._spend_usage if self._spend_usage != Usage() else None,
+            turns=self._spend_turns or None,
+        )
+        self._spend_usage = Usage()
+        self._spend_turns = 0
+        return spend
+
+    def _guidance(self) -> str:
+        return bullet_list(self.user_guidance)
+
+    def _service_tools_section(self, tools: Sequence[HostToolSpec] | None = None) -> str:
+        """The build prompt's host-tool sections — credentials (#765) and
+        the dependency fetcher (#766) — or "" — with their own leading
+        blank lines, so the template stays byte-identical for a run that
+        has no host tools. ``tools`` is what the session actually gets: the
+        run's tools unless a named agent's narrowing cut them."""
+        tools = self.host_tools if tools is None else tools
+        if not tools:
+            return ""
+        fetchers = [tool for tool in tools if tool.name == FETCH_TOOL_NAME]
+        services = [tool for tool in tools if tool.name != FETCH_TOOL_NAME]
+        text = ""
+        if services:
+            lines = [f"- `{tool.name}`: {tool.description}" for tool in services]
+            text += (
+                "\n\n## Services you may call\n\n"
+                "You hold no credential and cannot reach these hosts yourself; the run's "
+                "service sandbox makes each request for you through these tools. Every "
+                "call is logged by name, method and path:\n\n" + "\n".join(lines)
+            )
+        if fetchers:
+            lines = [f"- `{tool.name}`: {tool.description}" for tool in fetchers]
+            text += (
+                "\n\n## Dependencies\n\n"
+                "This project's private registries are reached only from the run's "
+                "service sandbox, which holds the credential; this sandbox is offline "
+                "for those ecosystems. Download metadata and artifacts through the host, "
+                "then resolve, populate caches and install here. Every fetch is logged:\n\n"
+                + "\n".join(lines)
+            )
+        return text
+
+    def _lint_verify_commands(self, commands: Sequence[str]) -> list[str]:
+        """Verify-command lint under this run's toolchains and project shape.
+
+        Re-checks the lockfile and the project gate every time rather than
+        once at construction: on a mounted workspace the executor may have
+        created ``uv.lock`` — or a Makefile — in an earlier task, and later
+        plans should be held to the convention the workspace now has.
+        """
+        uv_project = self.workspace is not None and (self.workspace / UV_LOCKFILE).is_file()
+        return lint_verify_commands(
+            commands,
+            self.languages,
+            uv_project=uv_project,
+            workspace=self.workspace,
+        )
+
+    # -- named agents --------------------------------------------------------
+
+    def _binding(self, phase: str, task_id: str | None = None) -> AgentBinding | None:
+        """The agent taking ``phase``, or None when the run has no assignment."""
+        if self.assignment is None:
+            return None
+        return self.assignment.binding_for(phase, task_id)
+
+    @staticmethod
+    def _custom(binding: AgentBinding | None) -> AgentBinding | None:
+        """``binding`` when it changes anything about a session, else None."""
+        return binding if binding is not None and not binding.is_default() else None
+
+    def _system_message(self, phase: str, extra: str | None, binding: AgentBinding | None) -> str:
+        """The phase's briefing, then a custom agent's persona and memory."""
+        text = brief_for_phase(self.config, phase, extra)
+        custom = self._custom(binding)
+        if custom is not None:
+            text += custom.persona + custom.memory_block
+        return text
+
+    def _selection(self, phase: str, binding: AgentBinding | None) -> ModelSelection:
+        custom = self._custom(binding)
+        if custom is None:
+            return model_for_phase(
+                refreshed_models(self.config), phase, repo=run_model_repo(self.config)
+            )
+        return model_for_phase(
+            refreshed_models(self.config),
+            phase,
+            repo=run_model_repo(self.config),
+            agent_model=custom.model,
+            agent_slug=custom.slug,
+        )
+
+    def _session_tools(self, phase: str, binding: AgentBinding | None) -> tuple[HostToolSpec, ...]:
+        """The run's own host tools ``phase`` gets, narrowed to the agent's
+        tools and credentials when a custom agent takes it."""
+        tools = self.host_tools if phase in TOOLED_PHASES else ()
+        custom = self._custom(binding)
+        if custom is None:
+            return tools
+        if custom.tools is not None:
+            tools = tuple(tool for tool in tools if tool.name in custom.tools)
+        if not custom.credentials:
+            return tools
+        narrowed: list[HostToolSpec] = []
+        for tool in tools:
+            if tool.name != SERVICE_TOOL_NAME:
+                narrowed.append(tool)
+                continue
+            allowed = _service_credentials(tool, custom.credentials)
+            if not allowed:
+                continue
+            spec = (
+                self.narrow_service(allowed)
+                if self.narrow_service is not None
+                else _with_credentials(tool, allowed)
+            )
+            if spec is not None:
+                narrowed.append(spec)
+        return tuple(narrowed)
+
+    def _agent_tools(
+        self,
+        custom: AgentBinding | None,
+        *,
+        permission_mode: Literal["auto", "read_only"],
+    ) -> list[AgentTool]:
+        """The agent's own tools for one session: its memory, when its
+        ``tools`` name ``memory``. A built-in (no list) gets none, so the
+        default team's jobs are unchanged.
+
+        A session that may change nothing gets ``recall`` alone — a critic,
+        whatever it was asked to do, and any read-only session — exactly as
+        a read-only chat turn does: judging the work is not an occasion to
+        rewrite what the agent remembers of it."""
+        if (
+            self.memory is None
+            or custom is None
+            or custom.tools is None
+            or MEMORY_TOOL_GROUP not in custom.tools
+        ):
+            return []
+        return memory_tools(
+            self.memory,
+            custom.slug,
+            channel_id=None if self.assignment is None else self.assignment.channel_id,
+            run_id=self.run_id,
+            message_id=None,
+            writable=permission_mode != "read_only" and custom.role != "critic",
+        )
+
+    def _identity(self, binding: AgentBinding | None) -> dict[str, Any]:
+        """The ``submit`` keyword that credits the job to its agent, when
+        the run's assignment credits anyone."""
+        if not self._credited or binding is None:
+            return {}
+        return {"agent_identity": {"agent_slug": binding.slug, "agent_name": binding.name}}
+
+    # -- job plumbing ------------------------------------------------------
+
+    def _agent_job(
+        self,
+        prompt: str,
+        *,
+        phase: str,
+        permission_mode: Literal["auto", "read_only"],
+        expect: Literal["text", "json"],
+        resume_session_id: str | None = None,
+        system_message: str | None = None,
+        system_preset: bool = True,
+        digest: ToolDigest | None = None,
+        selection: ModelSelection | None = None,
+        response_only: bool = False,
+        task_id: str | None = None,
+        binding: AgentBinding | None = None,
+    ) -> JobResult:
+        # An explicit binding overrides the run's assignment for this job:
+        # a steer answered by a mentioned agent speaks as that agent, in
+        # whatever phase the run happens to be in (S-A11).
+        binding = binding or self._binding(phase, task_id)
+        custom = self._custom(binding)
+        selection = selection or self._selection(phase, binding)
+        agent_name = AGENT_NAMES[phase]
+        # Only the working phases get the host tools: the planners and the
+        # critics read and judge; the builder and the operator's executor
+        # are the ones whose work may need a service.
+        service_tools = self._session_tools(phase, binding)
+        # The skill tool is NOT narrowed to the tooled phases: a critic needs
+        # the verification procedure exactly as much as the builder does, and
+        # unlike a service call it reaches nothing outside the host.
+        host_tools, tool_handler = self._tools_for(phase, service_tools, custom)
+        agent_tools = self._agent_tools(custom, permission_mode=permission_mode)
+        if agent_tools:
+            assert custom is not None
+            host_tools = (*host_tools, *(tool.spec for tool in agent_tools))
+            tool_handler = agent_tool_handler(agent_tools, tool_handler, agent_slug=custom.slug)
+        allowed_tools = None if custom is None else custom.tools
+        if (
+            phase == "review"
+            and self.issue_lookup is not None
+            and not response_only
+            and (allowed_tools is None or self.issue_lookup.tool_spec().name in allowed_tools)
+        ):
+            lookup = self.issue_lookup
+            other_handler = tool_handler
+
+            def review_handler(call: HostToolCall) -> HostToolResponse:
+                if call.name == lookup.tool_spec().name:
+                    return lookup.handle(call)
+                if other_handler is not None:
+                    return other_handler(call)
+                return HostToolResponse(call_id=call.call_id, ok=False, error="unknown tool")
+
+            host_tools = (*host_tools, lookup.tool_spec())
+            tool_handler = review_handler
+        if response_only:
+            host_tools = ()
+            tool_handler = None
+        job = JobRequest(
+            job_id=new_job_id(),
+            run_id=self.run_id,
+            kind="agent.session",
+            prompt=prompt,
+            system_message=(
+                system_message
+                if response_only
+                else self._system_message(phase, system_message, binding)
+            ),
+            system_preset=system_preset,
+            model=selection.model,
+            permission_mode=permission_mode,
+            expect=expect,
+            cwd=self.workdir,
+            timeout_s=self.config.budgets.per_job_timeout_s,
+            max_tool_calls=self.config.budgets.max_tool_calls_per_phase or None,
+            # Builds continue their work; review corrections continue the
+            # completed investigation with every tool surface disabled.
+            resume_session_id=resume_session_id,
+            available_tools=[] if response_only else None,
+            host_tools=list(host_tools),
+            # Give an artifact operation time to finish and transfer its
+            # file before the agent abandons the host-tool response.
+            host_tool_timeout_s=(
+                FETCH_TIMEOUT_S + 30
+                if any(tool.name == FETCH_TOOL_NAME for tool in service_tools)
+                else 120.0
+            ),
+            # Role-filtered: `[[mcp]] roles` decides which sessions get a
+            # server, and the default excludes critics — a read-only review
+            # reaching a third-party service is a capability nobody asked
+            # for, and both backends already fail closed on an unknown MCP
+            # tool in read-only mode.
+            mcp_servers=[] if response_only else self.config.mcp_specs_for(ROLE_BY_PHASE[phase]),
+        )
+        recovery = getattr(self.agent, "provider_recovery", None)
+        if recovery is not None:
+            job = recovery.pin_model(job)
+            if job.model != selection.model:
+                assert job.model is not None
+                selection.model, selection.source = job.model, "interrupted call"
+        if resume_session_id and self.session_models.get(resume_session_id) != job.model:
+            log.info(
+                "phase.model_session_rotated",
+                run=self.run_id,
+                agent=agent_name,
+                previous=self.session_models.get(resume_session_id),
+                model=job.model,
+            )
+            job = job.model_copy(update={"resume_session_id": None})
+        started = time.monotonic()
+        log.info(
+            "phase.agent_call",
+            run=self.run_id,
+            job=job.job_id,
+            agent=agent_name,
+            model=job.model,
+            model_source=selection.source,
+            permission_mode=permission_mode,
+            expect=expect,
+            prompt_chars=len(prompt),
+            resumed=bool(job.resume_session_id),
+        )
+        unsubscribe = self._watch_tools(job.job_id, digest)
+        try:
+            result = self.agent.submit(
+                job,
+                agent=agent_name,
+                tool_handler=tool_handler if host_tools else None,
+                agent_phase=phase,
+                model_source=selection.source,
+                **self._identity(binding),
+            )
+        finally:
+            unsubscribe()
+        usage = result.usage
+        if usage is not None:
+            self._spend_usage = self._spend_usage.merged(usage)
+        if result.turns:
+            self._spend_turns += result.turns
+        log.info(
+            "phase.agent_done",
+            run=self.run_id,
+            job=job.job_id,
+            agent=agent_name,
+            status=result.status,
+            duration_s=round(time.monotonic() - started, 1),
+            input_tokens=getattr(usage, "input_tokens", None),
+            output_tokens=getattr(usage, "output_tokens", None),
+            error=result.error.message[:200] if result.error is not None else None,
+        )
+        if result.status != "ok":
+            assert result.error is not None
+            if result.error.provider is not None:
+                raise ProviderHeldError(ProviderHold(result.error.provider, None, 0))
+            raise WorkerError(f"agent job failed ({result.error.type}): {result.error.message}")
+        if result.session_id and job.model is not None:
+            self.session_models[result.session_id] = job.model
+        return result
+
+    def _tools_for(
+        self,
+        phase: str,
+        service_tools: Sequence[HostToolSpec],
+        custom: AgentBinding | None = None,
+    ) -> tuple[tuple[HostToolSpec, ...], HostToolHandler | None]:
+        """The host tools one phase's session gets, and the handler that
+        answers them.
+
+        Two sources meet here. The run's own tools (a service call, a
+        dependency fetch) are the caller's and only the working phases get
+        them. The skill tool is the loop's, every phase gets it, and it is
+        answered from package data without leaving the host — so a run with
+        no service tools still gets one, which is why the handler cannot
+        simply be ``self.tool_handler``.
+        """
+        role = ROLE_BY_PHASE[phase]
+        skill_spec = skill_tool_spec(role)
+        if custom is not None and custom.tools is not None and SKILL_TOOL_NAME not in custom.tools:
+            skill_spec = None
+        delegate = self.tool_handler
+        if custom is not None and custom.credentials and delegate is not None:
+            delegate = _credential_guard(delegate, custom)
+        if custom is not None and custom.tools is not None and delegate is not None:
+            delegate = _tool_guard(delegate, custom, frozenset(tool.name for tool in service_tools))
+        if skill_spec is None:
+            return tuple(service_tools), delegate if service_tools else None
+
+        def handler(call: HostToolCall) -> HostToolResponse:
+            if call.name == SKILL_TOOL_NAME:
+                return answer_skill_call(call, role)
+            if delegate is None:  # pragma: no cover - no tool but the skill one exists
+                return HostToolResponse(
+                    call_id=call.call_id, ok=False, error=f"unknown tool {call.name!r}"
+                )
+            return delegate(call)
+
+        return (*service_tools, skill_spec), handler
+
+    def _watch_tools(self, job_id: str, digest: ToolDigest | None) -> Callable[[], None]:
+        """Feed one job's tool events to ``digest`` while it runs; a no-op
+        unsubscribe when there is no digest to fill or no bus to read."""
+        if digest is None or self.bus is None:
+            return lambda: None
+
+        def record(event: Event) -> None:
+            if event.job_id == job_id:
+                digest.record(event)
+
+        return self.bus.subscribe(record)
+
+    def _agent_json(
+        self,
+        model_cls: type[ModelT],
+        prompt_name: str,
+        context: dict[str, str],
+        *,
+        permission_mode: Literal["auto", "read_only"] = "auto",
+        check: Callable[[ModelT], None] | None = None,
+        system_message: str | None = None,
+        system_preset: bool = True,
+        repair_check: Callable[[object, ModelT], None] | None = None,
+        repair_identity: str = "",
+        task_id: str | None = None,
+        binding: AgentBinding | None = None,
+        phase: str | None = None,
+    ) -> tuple[ModelT, JobResult]:
+        """Run a JSON-expecting job, normally with one validation retry.
+
+        ``phase`` is the agent phase the job runs as (its persona, model and
+        role) when that is not the template's own name — a plan run renders
+        ``plan_propose`` as the ``plan`` phase.
+
+        A parsed review instead gets at most two response-only corrections.
+        Completed responses survive provider holds and replay without tools
+        or further model calls before continuing the interrupted correction.
+
+        Retryable failures: schema mismatch (ValidationError), semantic
+        rejection by ``check`` (host-side validation on the parsed model;
+        raise ValueError to reject — pydantic's ValidationError is a
+        ValueError subclass, so both share the retry path), and a reply
+        containing no JSON at all (ExpectedJsonMissing — the field failure
+        that used to kill whole runs on one chatty reply). Anything else
+        raises immediately.
+
+        Returns the validated model together with the raw JobResult.
+        """
+        checkpoint_key: str | None = None
+        checkpoint: _ReviewResponseCheckpoint | None = None
+        agent_phase = phase or prompt_name
+        binding = binding or self._binding(agent_phase, task_id)
+        if prompt_name == "review" and self.store is not None:
+            identity = {
+                "prompt": render(prompt_name, retry_context="", **context),
+                # A custom critic's persona and memory are part of what it
+                # was asked, so another critic never replays this response.
+                "system_message": self._system_message(prompt_name, system_message, binding),
+                "system_preset": system_preset,
+                "permission_mode": permission_mode,
+                # Keep the run's original fallback in the identity for legacy
+                # checkpoints. The actual selection travels with the response;
+                # live model edits must not restart a pending correction.
+                "model": self.config.model,
+                "backend": self.config.agent.backend,
+                "cwd": self.workdir,
+                "schema": _review_response_schema(model_cls),
+                "guard": repair_identity,
+                "mcp": [
+                    spec.model_dump(mode="json")
+                    for spec in self.config.mcp_specs_for(ROLE_BY_PHASE[prompt_name])
+                ],
+            }
+            checkpoint_key = hashlib.sha256(
+                json.dumps(identity, sort_keys=True).encode()
+            ).hexdigest()
+            saved = self.store.latest_phase_output(
+                self.run_id, checkpoint_key, REVIEW_RESPONSE_PHASE
+            )
+            if saved is not None:
+                checkpoint = _ReviewResponseCheckpoint.model_validate_json(saved)
+        retry_context = ""
+        last_error: Exception | None = None
+        if checkpoint is None:
+            selection = self._selection(agent_phase, binding)
+        else:
+            # Checkpoints written before per-agent models used the run's
+            # top-level model. Restore session identities as well as responses
+            # so a host restart can continue the same review conversation.
+            selection = ModelSelection(
+                checkpoint.requested_model or self.config.model, checkpoint.model_source
+            )
+            for response in (checkpoint.original, *checkpoint.repairs):
+                if isinstance(response, JobResult) and response.session_id:
+                    self.session_models[response.session_id] = selection.model
+        for _ in range(2):
+            prompt = render(prompt_name, retry_context=retry_context, **context)
+            try:
+                result = (
+                    checkpoint.original
+                    if checkpoint is not None
+                    else self._agent_job(
+                        prompt,
+                        phase=agent_phase,
+                        permission_mode=permission_mode,
+                        expect="json",
+                        system_message=system_message,
+                        system_preset=system_preset,
+                        selection=selection,
+                        task_id=task_id,
+                        binding=binding,
+                    )
+                )
+            except WorkerError as exc:
+                if "ExpectedJsonMissing" not in str(exc):
+                    raise
+                last_error = exc
+                log.warning(
+                    "phase.retry",
+                    run=self.run_id,
+                    prompt=prompt_name,
+                    reason="reply contained no JSON",
+                )
+                retry_context = (
+                    "\n## Previous attempt was invalid\n\n"
+                    "Your previous response contained no parseable JSON. Respond "
+                    "with ONLY one fenced ```json block in the format above — no "
+                    "prose before or after it."
+                )
+                continue
+            try:
+                model = model_cls.model_validate(result.output_json)
+                if check is not None:
+                    check(model)
+                return model, result
+            except ValueError as exc:  # includes pydantic's ValidationError
+                if prompt_name == "review":
+                    if checkpoint is None:
+                        checkpoint = _ReviewResponseCheckpoint(
+                            original=result,
+                            requested_model=selection.model,
+                            model_source=selection.source,
+                        )
+                        self._save_review_checkpoint(checkpoint_key, checkpoint)
+                    return self._repair_review_response(
+                        model_cls,
+                        result,
+                        exc,
+                        check=check,
+                        repair_check=repair_check,
+                        checkpoint_key=checkpoint_key,
+                        checkpoint=checkpoint,
+                        prior_rounds=context["prior_rounds"],
+                        selection=selection,
+                    )
+                last_error = exc
+                log.warning(
+                    "phase.retry",
+                    run=self.run_id,
+                    prompt=prompt_name,
+                    reason="output failed validation",
+                    error=str(exc)[:300],
+                )
+                retry_context = (
+                    "\n## Previous attempt was invalid\n\n"
+                    "Your previous response failed validation with:\n\n"
+                    f"```\n{exc}\n```\n\nFix the structure and respond again."
+                )
+        log.warning(
+            "phase.invalid_twice", run=self.run_id, prompt=prompt_name, error=str(last_error)[:300]
+        )
+        raise InvalidOutputTwice(f"{prompt_name} produced invalid output twice: {last_error}")
+
+    def _save_review_checkpoint(
+        self, key: str | None, checkpoint: _ReviewResponseCheckpoint
+    ) -> None:
+        if self.store is None or key is None:
+            return
+        # Persist accounting with the completed responses. Replaying these
+        # responses adds no spend; an interrupted provider job is accounted
+        # when ProviderRecovery returns its cumulative result after resume.
+        self.store.record_phase(
+            self.run_id,
+            REVIEW_RESPONSE_PHASE,
+            task_id=key,
+            attempt=len(checkpoint.repairs) + 1,
+            status="checkpoint",
+            output_json=checkpoint.model_dump_json(),
+            started_at=time.time(),
+            usage=self._spend_usage if self._spend_usage != Usage() else None,
+            turns=self._spend_turns or None,
+        )
+        self.drain_spend()
+
+    def _repair_review_response(
+        self,
+        model_cls: type[ModelT],
+        result: JobResult,
+        error: ValueError,
+        *,
+        check: Callable[[ModelT], None] | None,
+        repair_check: Callable[[object, ModelT], None] | None,
+        checkpoint_key: str | None,
+        checkpoint: _ReviewResponseCheckpoint,
+        prior_rounds: str,
+        selection: ModelSelection,
+    ) -> tuple[ModelT, JobResult]:
+        """Correct a completed review at most twice, without another investigation.
+
+        Carry the actual response even when the backend cannot resume its
+        session. Keep the same semantic guard and strict schema: corrections
+        spend model tokens, but cannot run tests, read files or redo lookups.
+        """
+        last_error: Exception = error
+        original_response = result.output_json
+        schema = _review_response_schema(model_cls)
+        for attempt in range(1, 3):
+            log.warning(
+                "phase.response_repair",
+                run=self.run_id,
+                prompt="review",
+                attempt=attempt,
+                error=str(last_error)[:300],
+            )
+            prompt = render(
+                "review_repair",
+                prior_response=json.dumps(result.output_json, ensure_ascii=False),
+                original_response=(
+                    ""
+                    if result.output_json == original_response
+                    else "## Original response to preserve\n\n```json\n"
+                    + json.dumps(original_response, ensure_ascii=False)
+                    + "\n```\n"
+                ),
+                validation_error=str(last_error),
+                schema=schema,
+                prior_rounds=prior_rounds or "(no earlier review rounds)",
+            )
+            if attempt <= len(checkpoint.repairs):
+                completed = checkpoint.repairs[attempt - 1]
+                if isinstance(completed, str):
+                    last_error = WorkerError(completed)
+                    continue
+                result = completed
+            else:
+                try:
+                    result = self._agent_job(
+                        prompt,
+                        phase="review",
+                        permission_mode="read_only",
+                        expect="json",
+                        resume_session_id=result.session_id,
+                        system_message=(
+                            "Correct the supplied review response. All tools are disabled."
+                        ),
+                        system_preset=False,
+                        response_only=True,
+                        selection=selection,
+                    )
+                except WorkerError as exc:
+                    if "ExpectedJsonMissing" not in str(exc):
+                        raise
+                    checkpoint.repairs.append(str(exc))
+                    self._save_review_checkpoint(checkpoint_key, checkpoint)
+                    last_error = exc
+                    continue
+                checkpoint.repairs.append(result)
+                self._save_review_checkpoint(checkpoint_key, checkpoint)
+            try:
+                model = model_cls.model_validate(result.output_json)
+                if repair_check is not None:
+                    repair_check(original_response, model)
+                if check is not None:
+                    check(model)
+                return model, result
+            except ValueError as exc:
+                last_error = exc
+        raise InvalidOutputTwice(
+            f"review response remained invalid after two repair attempts: {last_error}"
+        )
+
+    def merge_from_base(
+        self, base_branch: str, *, base_sha: str, bundle: Path | None = None
+    ) -> MergeResult:
+        """Mutate the checkout only in the agent's uncredentialed sandbox."""
+        job_id = new_job_id()
+        params = {"base_branch": base_branch, "base_sha": base_sha}
+        if bundle is not None:
+            destination = f"/tmp/lantern-base-{job_id}.bundle"  # nosec B108 - path inside agent VM
+            self.agent.sandbox.cp_in(bundle, destination)
+            params["bundle_path"] = destination
+        job = JobRequest(
+            job_id=job_id,
+            run_id=self.run_id,
+            kind="git.merge",
+            cwd=self.workdir,
+            params=params,
+            timeout_s=self.config.budgets.per_job_timeout_s,
+        )
+        result = self.agent.submit(job)
+        if result.status != "ok":
+            assert result.error is not None
+            raise WorkerError(f"base merge failed ({result.error.type}): {result.error.message}")
+        return TypeAdapter(MergeResult).validate_python(result.output_json)
+
+    def shell_batch(
+        self, commands: Sequence[str], *, cwd: str | None = None
+    ) -> list[BatchCommandResult]:
+        """Run mechanical shell commands as ONE worker job (#125).
+
+        Every job pays a fixed round-trip cost (stage the job JSON, boot a
+        cold interpreter under ``sbx exec``, fetch the result file) that
+        dwarfs what verify/evidence commands actually do, so they ride
+        together. Per-command semantics are preserved: each command still
+        gets the per-job timeout, and the job budget covers the worst case
+        of all of them — matching what N sequential jobs cost before.
+        """
+        per_command = self.config.budgets.per_job_timeout_s
+        job = JobRequest(
+            job_id=new_job_id(),
+            run_id=self.run_id,
+            kind="shell.batch",
+            commands=list(commands),
+            command_timeout_s=per_command,
+            timeout_s=per_command * len(commands),
+            cwd=cwd or self.workdir,
+        )
+        started = time.monotonic()
+        log.debug(
+            "phase.shell_batch",
+            run=self.run_id,
+            job=job.job_id,
+            commands=len(commands),
+            cwd=cwd or self.workdir,
+        )
+        result = self.agent.submit(job)
+        log.debug(
+            "phase.shell_batch_done",
+            run=self.run_id,
+            job=job.job_id,
+            status=result.status,
+            duration_s=round(time.monotonic() - started, 1),
+        )
+        if result.status != "ok":
+            assert result.error is not None
+            raise WorkerError(f"shell batch failed ({result.error.type}): {result.error.message}")
+        return [BatchCommandResult.model_validate(item) for item in result.output_json or []]
+
+    # -- phases ------------------------------------------------------------
+
+    def decompose(self) -> TaskGraph:
+        graph, _ = self._agent_json(
+            TaskGraph,
+            "decompose",
+            {
+                "outcome": self.outcome,
+                "max_tasks": str(self.config.budgets.max_tasks),
+                "project_gate": gate_rule(self.project_gate()),
+                "config_override_example": config_override_example(self.languages),
+                "pr_conventions": pr_conventions(self.workspace),
+                "repo_conventions": self.repo_conventions(),
+            },
+            check=self._check_taskgraph,
+        )
+        return graph
+
+    # Commands that decide nothing: a "replacement" made of these passes
+    # whatever the workspace contains, which is a deleted check wearing the
+    # shape of one.
+    _NO_OP_HEADS = frozenset({"true", ":", "echo", "printf", "exit"})
+
+    def reauthor_verify(
+        self,
+        task: TaskRecord,
+        *,
+        suspect_command: str,
+        suspect_output: str,
+        builder_report: str,
+    ) -> VerifyReauthor:
+        """Decide what happens to one verify command that cannot pass.
+
+        The command has failed identically across attempts and approaches, so
+        the loop knows no further work on the code can change it. Until this
+        existed the loop could only say so and abandon the run, throwing away
+        work that was finished (field failure rkbgkf32a). Here the check
+        itself is the thing that gets to change.
+
+        Scoped to the one suspect command: everything else on the task is
+        passed as context and stays byte-identical whatever comes back. The
+        answer is held to the same mechanical gate a decomposition is —
+        toolchain conventions, no environment mutation, no network, no
+        pattern kills — plus two rules only this phase needs: a replacement
+        may not be a no-op, and the command carrying the project's own gate
+        may be replaced but never dropped.
+        """
+        gate_note = self._reauthor_gate_note(suspect_command)
+        answer, _ = self._agent_json(
+            VerifyReauthor,
+            "reauthor_verify",
+            {
+                "task_title": f"{task.spec.id}: {task.spec.title}",
+                "task_description": task.spec.description or "(no description)",
+                "acceptance_criteria": bullet_list(task.spec.acceptance_criteria),
+                "suspect_command": suspect_command,
+                "suspect_output": suspect_output.strip() or "(no output at all)",
+                "other_commands": bullet_list(
+                    [c for c in task.spec.verify_commands if c != suspect_command]
+                ),
+                "builder_report": builder_report or "(the builder said nothing about it)",
+                "gate_rule": gate_note,
+            },
+            permission_mode="read_only",
+            check=partial(self._check_reauthor, suspect_command=suspect_command),
+        )
+        return answer
+
+    def _reauthor_gate_note(self, suspect_command: str) -> str:
+        """The extra rule when the suspect check is the one carrying the
+        project's own gate: it may be rewritten, never removed."""
+        gate = self.project_gate()
+        if not gate or not runs_gate(suspect_command, gate):
+            return ""
+        return (
+            "This check runs the project's own gate, so it may be replaced but never "
+            f"dropped: whatever replaces it must run `{gate}` too."
+        )
+
+    def _check_reauthor(self, answer: VerifyReauthor, *, suspect_command: str) -> None:
+        """Reject an answer that would weaken the exam rather than fix it.
+
+        The lint is the same one a decomposition is held to, so a
+        replacement cannot smuggle in what the decomposer is forbidden. The
+        two rules beyond it exist because this phase, unlike the decomposer,
+        is talking to a model that has just been told a check is in its way:
+        a replacement that cannot fail is a deleted check wearing the shape
+        of one, and the command carrying the project's gate is the last one
+        that should quietly disappear.
+        """
+        gate = self.project_gate()
+        carries_gate = bool(gate and runs_gate(suspect_command, gate))
+        if answer.verdict == "drop" and carries_gate:
+            raise ValueError(
+                "this check runs the project's own gate and cannot be dropped — "
+                "replace it with one that still runs it, or keep it"
+            )
+        if answer.verdict != "replace":
+            return
+        if problems := self._lint_verify_commands([answer.command]):
+            raise ValueError("; ".join(problems))
+        heads = command_heads(answer.command)
+        if heads and all(head in self._NO_OP_HEADS for head in heads):
+            raise ValueError(
+                f"`{answer.command}` cannot fail whatever the workspace contains, so it "
+                "is not a check — give one that can fail, or keep the existing check"
+            )
+        if carries_gate and not runs_gate(answer.command, gate or ""):
+            raise ValueError(
+                f"the check being replaced runs this project's gate (`{gate}`); "
+                "the replacement must run it too"
+            )
+
+    def repo_conventions(self) -> str:
+        """The repository's own instruction files as a prompt section
+        (#688), re-read per call for the same reason as the gate: a task
+        may write the AGENTS.md the next task is held to."""
+        return repo_conventions(
+            self.workspace, max_chars=self.config.budgets.repo_context_max_chars
+        )
+
+    def project_gate(self) -> str | None:
+        """This project's own gate, honouring the operator's override.
+
+        Re-derived per call rather than cached: a run may create the
+        makefile (or the package.json) that declares it, and later plans
+        should be held to the convention the workspace now has. Detection
+        is bounded by the run's resolved toolchains (#624): a gate the
+        sandbox could not run is not a gate (#625).
+        """
+        return project_gate(
+            self.workspace, self.config.sandbox.gate_command, languages=self.languages
+        )
+
+    def _check_taskgraph(self, graph: TaskGraph) -> None:
+        """Reject graphs whose verify commands violate toolchain conventions
+        or whose egress is outside the operator's bounds, and require the
+        graph as a whole to run the project's own gate.
+
+        The builder cannot edit verify commands, so a bare `python -m
+        pytest` from the decomposer costs a revision cycle plus an in-VM
+        workaround at verify time (field failure r12ygfd7t); rejecting at
+        JSON acceptance costs one retry with the rule quoted.
+
+        The gate is checked **across the graph, not per task**. A delivered
+        PR (#389) failed `mdformat` and `security` — both plain `make check`
+        targets — because nothing in the run ran what CI enforces. But
+        demanding the gate of every task would run a multi-minute check once
+        per task for no extra signal, so one task carrying it is the
+        requirement; decompositions already tend to end with a "everything
+        green" task, which is exactly where it belongs.
+
+        Egress bounds are the "grant only within operator-set limits"
+        guardrail: the decomposer gets one retry to drop an out-of-bounds
+        domain (or find a baseline-reachable alternative) before the run
+        fails.
+        """
+        from lantern.policy import effective_egress_bounds, egress_rejection
+
+        problems = [
+            f"- task {task.id}: {message}"
+            for task in graph.tasks
+            for message in self._lint_verify_commands(task.verify_commands)
+        ]
+        gate = self.project_gate()
+        if gate:
+            every_command = [c for task in graph.tasks for c in task.verify_commands]
+            problems += [f"- {message}" for message in gate_problems(every_command, gate)]
+        if problems:
+            raise ValueError(
+                "verify commands violate the sandbox's toolchain conventions:\n"
+                + "\n".join(problems)
+            )
+        allow, deny = effective_egress_bounds(self.config, self.config.primary_repo)
+        egress_problems = [
+            f"- task {task.id}: {egress.domain}: {rejection}"
+            for task in graph.tasks
+            for egress in task.egress
+            if (rejection := egress_rejection(egress.domain, allow, deny)) is not None
+        ]
+        if egress_problems:
+            raise ValueError(
+                "task-declared egress is outside the operator's bounds:\n"
+                + "\n".join(egress_problems)
+                + "\nDrop these domains from `egress` (prefer baseline-reachable hosts: "
+                "PyPI, GitHub, apt mirrors — or the well-known package registries, "
+                "which are always declarable). Only the operator can extend the "
+                "bounds, via [policy] allow in lantern.toml."
+            )
+
+    def build(
+        self,
+        task: TaskRecord,
+        *,
+        prior_report: str = "",
+        resume_session_id: str | None = None,
+    ) -> JobResult:
+        """Plan and do the work for one task, in one session.
+
+        ``prior_report`` is what the previous attempt on this task said it
+        did, and ``resume_session_id`` continues that attempt's own agent
+        session where it still exists. Both exist to stop a revision
+        re-establishing what the last attempt already knew — the engine
+        holds that context either way and used to withhold it, so five
+        executor sessions on one task each re-ran the same setup and the
+        same gate from scratch (field failure rrhb28j7n/t5).
+        """
+        prompt = render(
+            "build",
+            outcome=self.outcome,
+            task_id=task.spec.id,
+            task_title=task.spec.title,
+            task_description=task.spec.description or "(no further description)",
+            acceptance_criteria=bullet_list(task.spec.acceptance_criteria),
+            verify_commands=bullet_list(
+                task.spec.verify_commands, empty="(no verify commands for this task)"
+            ),
+            feedback=task.last_feedback or "(none — first attempt)",
+            prior_attempt=clip(prior_report) or "(none — this is the first attempt)",
+            user_guidance=self._guidance(),
+            repo_conventions=self.repo_conventions(),
+            work_dir=self._work_dir(),
+            toolchains=toolchains.describe(self.languages, self.versions),
+            service_tools=self._service_tools_section(
+                self._session_tools("build", self._binding("build", task.spec.id))
+            ),
+        )
+        return self._agent_job(
+            prompt,
+            phase="build",
+            permission_mode="auto",
+            expect="text",
+            resume_session_id=resume_session_id,
+            task_id=task.spec.id,
+        )
+
+    def review(
+        self,
+        *,
+        diff: str | None,
+        pr_number: int,
+        round: int,
+        tasks: Sequence[TaskRecord],
+        history: str,
+        refuted: set[str],
+        verification: str = "",
+        head_sha: str | None = None,
+    ) -> ReviewVerdict:
+        """Review the delivered PR: a fresh read-only session over its diff.
+
+        ``history`` is the rendered earlier rounds and ``refuted`` the
+        anchors of findings the fixer refuted in them — the reviewer is
+        told about both, and :class:`ReviewGuard` sends back, once, a
+        verdict that only re-raises refuted findings. ``verification`` is
+        what the sandbox's checks did not decide (#682): the advisory
+        failures still standing, or that nothing ran under `ci-only`.
+        """
+        diff_shown = clip_diff(diff, self.config.landing.review_diff_max_chars)
+        board = bullet_list(
+            [
+                f"{t.spec.id} [{t.state}] {t.spec.title}"
+                + (
+                    "\n  acceptance: " + "; ".join(t.spec.acceptance_criteria)
+                    if t.spec.acceptance_criteria
+                    else ""
+                )
+                for t in tasks
+            ],
+            empty="(no tasks recorded)",
+        )
+        guard = ReviewGuard(refuted)
+        verdict, _ = self._agent_json(
+            ReviewVerdict,
+            "review",
+            {
+                "outcome": self.outcome,
+                "pr_number": str(pr_number),
+                "round": str(round),
+                "diff": diff_shown
+                or "(no diff text available — review the tree in the working directory)",
+                "tasks_summary": board,
+                "prior_rounds": history,
+                "user_guidance": self._guidance(),
+                "project_gate": reviewer_gate_rule(self.project_gate()),
+                "config_override_example": config_override_example(self.languages),
+                "verification": verification,
+                "repo_conventions": self.repo_conventions(),
+            },
+            permission_mode="read_only",
+            check=guard.check,
+            repair_check=guard.check_repair,
+            repair_identity=json.dumps(
+                {
+                    "refuted": sorted(refuted),
+                    "head_sha": head_sha,
+                    # The prompt's clipped middle is not a code identity.
+                    "diff_sha256": hashlib.sha256(diff.encode()).hexdigest()
+                    if diff is not None
+                    else None,
+                },
+                sort_keys=True,
+            ),
+        )
+        return verdict
+
+    def steer(
+        self,
+        message: str,
+        *,
+        tasks: Sequence[TaskRecord],
+        task: TaskRecord | None,
+        stage: str | None = None,
+        binding: AgentBinding | None = None,
+    ) -> SteerVerdict:
+        """Answer one interactive chat message and rule on its course change.
+
+        ``task`` is the task the engine is currently driving (None between
+        tasks, and throughout the post-build stages); ``tasks`` is the whole
+        board, so the agent can speak to overall progress; ``stage`` names
+        where the run is when no task is active ("awaiting CI on PR #12").
+
+        ``binding`` is the agent the message mentioned (S-A11): the answer
+        comes back in that agent's persona and with its model, rather than
+        in the run's default steering voice. None keeps the voice a steer
+        has always had, so an unmentioned steer is unchanged.
+        """
+        board = bullet_list(
+            [f"{t.spec.id} [{t.state}] {t.spec.title}" for t in tasks],
+            empty="(the outcome has not been decomposed into tasks yet)",
+        )
+        if task is None:
+            current = (
+                f"(no task is active right now — the run is {stage})"
+                if stage
+                else "(no task is active right now — the run is between tasks)"
+            )
+        else:
+            current = (
+                f"Task {task.spec.id}: {task.spec.title} (state: {task.state}, "
+                f"revisions: {task.revisions}, replans: {task.replans})\n\n"
+                f"{task.spec.description or '(no further description)'}\n\n"
+                f"Prior feedback:\n{task.last_feedback or '(none)'}"
+            )
+        verdict, _ = self._agent_json(
+            SteerVerdict,
+            "steer",
+            {
+                "outcome": self.outcome,
+                "tasks_summary": board,
+                "current_task": current,
+                "user_guidance": self._guidance(),
+                "user_message": message,
+            },
+            permission_mode="read_only",
+            binding=binding,
+        )
+        return verdict
+
+    # -- the workload's phases (#756) ----------------------------------------
+
+    def plan_workload(self) -> WorkloadPlan:
+        """The operator's plan: the outcome as ordered tasks, each with the
+        criteria the judge will hold it to and the needs it declares."""
+        plan, _ = self._agent_json(
+            WorkloadPlan,
+            "operator_plan",
+            {
+                "outcome": self.outcome,
+                "max_tasks": str(self.config.budgets.max_tasks),
+                "work_dir": self._work_dir(),
+                "bounds": self._bounds_section(),
+                "user_guidance": self._guidance(),
+            },
+            system_message=OPERATOR_SYSTEM_MESSAGE,
+            system_preset=False,
+        )
+        return plan
+
+    def execute(
+        self,
+        task: TaskRecord,
+        *,
+        prior_report: str = "",
+        resume_session_id: str | None = None,
+        digest: ToolDigest | None = None,
+    ) -> JobResult:
+        """Do one workload task in one operator session; ``digest`` collects
+        the session's tool calls for the judge. Prior report and session
+        resume serve a revision the way they serve a build's."""
+        prompt = render(
+            "operator_execute",
+            outcome=self.outcome,
+            task_id=task.spec.id,
+            task_title=task.spec.title,
+            task_description=task.spec.description or "(no further description)",
+            acceptance_criteria=bullet_list(task.spec.acceptance_criteria),
+            verify_commands=bullet_list(task.spec.verify_commands, empty="(none)"),
+            needs=self._needs_section(task),
+            work_dir=self._work_dir(),
+            prior_attempt=clip(prior_report) or "(none — this is the first attempt)",
+            feedback=task.last_feedback or "(none — first attempt)",
+            user_guidance=self._guidance(),
+            service_tools=self._service_tools_section(
+                self._session_tools(
+                    "operator_execute", self._binding("operator_execute", task.spec.id)
+                )
+            ),
+        )
+        return self._agent_job(
+            prompt,
+            phase="operator_execute",
+            permission_mode="auto",
+            expect="text",
+            resume_session_id=resume_session_id,
+            system_message=OPERATOR_SYSTEM_MESSAGE,
+            system_preset=False,
+            digest=digest,
+            task_id=task.spec.id,
+        )
+
+    def judge(
+        self,
+        task: TaskRecord,
+        *,
+        attempt: int,
+        report: str,
+        tool_digest: str,
+        evidence: str,
+    ) -> JudgeVerdict:
+        """The verdict on one executed task, read-only, against its
+        criteria. Raises :class:`InvalidOutputTwice` when the judge could
+        not produce a verdict on either attempt — the engine fails the run
+        closed on it rather than treating silence as a pass."""
+        verdict, _ = self._agent_json(
+            JudgeVerdict,
+            "operator_judge",
+            {
+                "outcome": self.outcome,
+                "task_id": task.spec.id,
+                "task_title": task.spec.title,
+                "task_description": task.spec.description or "(no further description)",
+                "acceptance_criteria": bullet_list(task.spec.acceptance_criteria),
+                "work_dir": self._work_dir(),
+                "attempt": str(attempt),
+                "report": clip(report) or "(the operator produced no report)",
+                "tool_digest": tool_digest or "(no tool calls were recorded)",
+                "evidence": evidence or "(no mechanical checks declared)",
+            },
+            permission_mode="read_only",
+            system_message=JUDGE_SYSTEM_MESSAGE,
+            system_preset=False,
+            task_id=task.spec.id,
+        )
+        return verdict
+
+    # -- a plan run's phases ------------------------------------------------
+
+    def clarify_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanClarification:
+        """The planner's clarifying turn, read-only, over the same checkout
+        the proposal will read: ``ready``, or at most ``max_questions``
+        questions in the chat choice question's shape, with the answers a
+        person already gave for this node in front of it so it never asks
+        them again. Held to the cap with one retry;
+        :class:`InvalidOutputTwice` when both answers break it."""
+
+        def check(answer: PlanClarification) -> None:
+            problems = clarification_problems(answer, brief)
+            if problems:
+                raise ValueError("the answer breaks these rules:\n" + "\n".join(problems))
+
+        answer, _ = self._agent_json(
+            PlanClarification,
+            "plan_clarify",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "note": brief.note.strip() or "(none)",
+                "kept": bullet_list(brief.kept),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "answers": plan_answers_section(brief),
+                "max_questions": str(brief.max_questions),
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return answer
+
+    def propose_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanProposal:
+        """The planner's proposal of one level, read-only, from the
+        checkouts cut into the data directory.
+
+        ``checkouts`` pairs the node's repository with where the planner
+        finds it; ``home`` is the host path of that checkout, whose
+        instruction files ride in the prompt and
+        whose toolchains the code tasks' verify commands are linted for —
+        the run that later works the task will hold them to the same rules.
+        The answer is held to the level's rules and cap with one retry, as
+        ``decompose`` is; :class:`InvalidOutputTwice` when both answers
+        break them."""
+        lint = self._plan_lint(home)
+
+        def check(proposal: PlanProposal) -> None:
+            problems = proposal_problems(proposal, brief, lint=lint)
+            if problems:
+                raise ValueError(
+                    "the proposal breaks these rules:\n" + "\n".join(f"- {p}" for p in problems)
+                )
+
+        proposal, _ = self._agent_json(
+            PlanProposal,
+            "plan_propose",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "room": str(brief.room),
+                "kept": bullet_list(brief.kept),
+                "profiles": _plan_profiles(brief),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "note": brief.note.strip() or "(none)",
+                "answers": plan_answers_section(brief),
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return proposal
+
+    def replan_plan(
+        self,
+        brief: PlanBrief,
+        *,
+        checkouts: Sequence[tuple[str, str]],
+        home: Path | None,
+    ) -> PlanReplan:
+        """The planner's re-plan of a published node (#2346): a diff —
+        ``add``, ``modify``, ``suggest_close`` — against the children the
+        brief carries, read-only, held to the level's rules and cap with
+        one retry as :meth:`propose_plan` is. An addition that repeats a
+        current child is sent back, never delivered."""
+        lint = self._plan_lint(home)
+
+        def check(replan: PlanReplan) -> None:
+            problems = replan_problems(replan, brief, lint=lint)
+            if problems:
+                raise ValueError(
+                    "the re-plan breaks these rules:\n" + "\n".join(f"- {p}" for p in problems)
+                )
+
+        replan, _ = self._agent_json(
+            PlanReplan,
+            "plan_replan",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_node_section(brief),
+                "current": _plan_current(brief),
+                "room": str(brief.room),
+                "profiles": _plan_profiles(brief),
+                "checkouts": _plan_checkouts(checkouts, brief.repository, brief.repositories),
+                "note": brief.note.strip() or "(none)",
+                "answers": plan_answers_section(brief),
+                "work_dir": self._work_dir(),
+                "user_guidance": self._guidance(),
+                "repo_conventions": repo_conventions(
+                    home, max_chars=self.config.budgets.repo_context_max_chars
+                ),
+            },
+            permission_mode="read_only",
+            check=check,
+            phase="plan",
+        )
+        return replan
+
+    def _plan_lint(self, home: Path | None) -> Callable[[Sequence[str]], list[str]]:
+        """The verify-command lint for the repository being planned: its
+        own toolchains and project shape, not this read-only sandbox's."""
+        languages = toolchains.resolve_languages(self.config.sandbox.languages, home).languages
+        uv_project = home is not None and (home / UV_LOCKFILE).is_file()
+
+        def lint(commands: Sequence[str]) -> list[str]:
+            return lint_verify_commands(commands, languages, uv_project=uv_project, workspace=home)
+
+        return lint
+
+    def _work_dir(self) -> str:
+        return f"`{self.workdir}`" if self.workdir else "the current working directory"
+
+    def _bounds_section(self) -> str:
+        """The run's workload profile (#758) as the planner reads it: what
+        a task may declare in ``needs`` and be granted. Names and hosts
+        only — a credential's value is never anywhere near a prompt."""
+        profile = self.config.workload_profile()
+        if profile is None:
+            return (
+                "This run has no workload profile: no host, credential or "
+                "repository can be granted, and `chat` is the only sink. Declare "
+                "no needs — plan work that reaches nothing beyond the "
+                "always-reachable package registries."
+            )
+        lines = [
+            f"Profile `{profile.name}`"
+            + (f" — {profile.description}" if profile.description else "")
+            + ":"
+        ]
+        if "*" in profile.egress and self.config.policy.deny:
+            # `*` would open the box past the deny list; the granter refuses it.
+            lines.append(
+                "- hosts: any named domain or `*.domain` wildcard; `*` is refused while "
+                "`[policy] deny` is set, so name each host the task will reach"
+            )
+        elif "*" in profile.egress:
+            lines.append(
+                "- hosts: any — declare `*` for a task that cannot know its hosts in advance, "
+                "otherwise name each domain; a wildcard needs a named domain "
+                "(`*.example.com`), and a bare suffix such as `*.com` is refused"
+            )
+        else:
+            lines.append(
+                "- hosts: "
+                + (
+                    ", ".join(f"`{p}`" for p in profile.egress)
+                    if profile.egress
+                    else "none beyond the always-reachable package registries"
+                )
+            )
+        if profile.credentials:
+            named = []
+            for name in profile.credentials:
+                entry = self.config.credential(name)
+                what = f"`{name}`"
+                if entry is not None:
+                    what += (
+                        f" ({entry.host}"
+                        + (f": {entry.description}" if entry.description else "")
+                        + ")"
+                    )
+                named.append(what)
+            lines.append("- credentials, by name: " + ", ".join(named))
+        else:
+            lines.append("- credentials: none")
+        # `chat` needs no granting: it is where a task's result goes when
+        # the plan names no sink (#759).
+        lines.append(
+            "- sinks: `chat` (always; the default when a task names none)"
+            + "".join(f", `{s}`" for s in profile.sinks if s != "chat")
+        )
+        lines.append(
+            "- a repository checkout (`repo`, as `owner/name`, one configured for this "
+            "host): " + ("allowed" if profile.repo else "not allowed")
+        )
+        # `[budgets] max_parallel_tasks` above 1 runs independent tasks at
+        # once in ONE workspace. `depends_on` is the planner's own word and
+        # certifies nothing about files, so the planner is told what it
+        # must keep apart rather than trusted to guess.
+        lanes = profile.budgets.max_parallel_tasks or self.config.budgets.max_parallel_tasks
+        if lanes > 1:
+            lines.append(
+                f"- up to {lanes} tasks run at the same time in one shared workspace: give "
+                "each task its own output files, and never have two tasks edit the same "
+                "file (make one depend on the other instead)"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _needs_section(task: TaskRecord) -> str:
+        needs = task.spec.needs
+        if needs.empty:
+            return "(none declared)"
+        lines = []
+        if needs.hosts:
+            lines.append("hosts: " + ", ".join(f"`{host}`" for host in needs.hosts))
+        if needs.credentials:
+            lines.append(
+                "credentials (by name, called on your behalf): "
+                + ", ".join(f"`{name}`" for name in needs.credentials)
+            )
+        if needs.sink:
+            lines.append(f"sink: {needs.sink}")
+        if needs.repo:
+            lines.append(f"repo: `{needs.repo}`")
+        return bullet_list(lines)
+
+    def verify(self, task: TaskRecord) -> VerifyOutcome:
+        """Run the task's decomposer-authored verify commands; the transcript
+        rides on the outcome."""
+        commands = list(dict.fromkeys(task.spec.verify_commands))
+        failures: list[VerifyFailure] = []
+        results: list[str] = []
+        for result in self.shell_batch(commands) if commands else []:
+            output = clip_head_tail(result.output)
+            results.append(f"$ {result.command}\n(exit {result.exit_code})\n{output}")
+            if result.exit_code != 0:
+                failures.append(VerifyFailure(result.command, result.exit_code, output))
+        return VerifyOutcome(
+            passed=not failures,
+            feedback="\n\n".join(
+                f"{VERIFY_FAILURE_PREFIX} `{failure.command}` "
+                f"(exit {failure.exit_code})\n{failure.output}"
+                for failure in failures
+            ),
+            results="\n\n".join(results) or "(no verify commands)",
+            failures=tuple(failures),
+        )
+
+
+# -- a plan run's prompt sections -------------------------------------------
+
+
+def _plan_node_section(brief: PlanBrief) -> str:
+    """The node being broken down, section by section, as a person wrote it."""
+    lines = [f"**{brief.level.capitalize()}:** {brief.title}"]
+    if brief.input:
+        lines.append(
+            "**Planning brief (input, not issue content):**\n\n"
+            + json.dumps(brief.input, ensure_ascii=False)
+        )
+    if brief.generate_root:
+        lines.append(
+            "The root is an unplanned placeholder. This plan needs an authored root and "
+            "children. The brief and clarification answers are requirements for that work, "
+            "not finished issue prose."
+        )
+    if brief.parent:
+        lines.append(f"**Part of:** {brief.parent}")
+    lines.append(f"**Repository:** {brief.repository}")
+    for heading, text in (
+        ("Goal", brief.goal),
+        ("Context", brief.context),
+        ("Non-goals", brief.non_goals),
+        ("Constraints", brief.constraints),
+    ):
+        if text.strip():
+            lines.append(f"**{heading}:**\n\n{text.strip()}")
+    if brief.acceptance_criteria:
+        lines.append("**Acceptance criteria:**\n\n" + bullet_list(brief.acceptance_criteria))
+    return "\n\n".join(lines)
+
+
+def plan_answers_section(brief: PlanBrief) -> str:
+    """The node's clarifying questions and what a person answered, as the
+    planner reads them: each question, then the choice picked (its label
+    and value) or the person's own words — or that they skipped."""
+    found = brief.clarification
+    if found is None or not found.settled:
+        return "(no questions were asked)"
+    lines: list[str] = []
+    if found.status == "skipped":
+        lines.append(
+            "The person skipped these questions and left the decisions to you; "
+            "decide from the node and the repository."
+        )
+    for question in found.questions:
+        lines.append(f"- **{question.prompt}**")
+        answer = found.answers.get(question.id)
+        choice = question.choice(answer.value) if answer and answer.value else None
+        if choice is not None:
+            said = f"{choice.label} (`{choice.value}`)"
+            if answer is not None and answer.text.strip():
+                said += f" — {' '.join(answer.text.split())}"
+        elif answer is not None and answer.text.strip():
+            said = f"in their words: {' '.join(answer.text.split())}"
+        else:
+            said = "not answered"
+        lines.append(f"  Answer: {said}")
+    return "\n".join(lines)
+
+
+def _plan_current(brief: PlanBrief) -> str:
+    """A re-plan's current children, each under its id, with what a diff
+    may do to it and its sections."""
+    if not brief.current:
+        return "(none)"
+    blocks: list[str] = []
+    for child in brief.current:
+        where = child.issue or "not on the forge"
+        state = child.forge_state or child.state
+        if child.changeable and child.owned:
+            may = "may be changed or closed"
+        elif child.changeable:
+            may = "filed by a person in their own words: may be closed, not rewritten"
+        else:
+            may = "closed or not followed: leave it"
+        lines = [f"### `{child.id}` — {child.title}", "", f"{where}, {state}; {may}."]
+        for heading, text in (
+            ("Goal", child.goal),
+            ("Context", child.context),
+            ("Non-goals", child.non_goals),
+            ("Constraints", child.constraints),
+        ):
+            if text.strip():
+                lines += ["", f"**{heading}:** {text.strip()}"]
+        if child.acceptance_criteria:
+            lines += ["", "**Acceptance criteria:**", bullet_list(child.acceptance_criteria)]
+        if child.kind:
+            kind = child.kind + (
+                f" (workload profile `{child.workload_profile}`)" if child.workload_profile else ""
+            )
+            lines += ["", f"**Kind:** {kind}"]
+        if child.verify_commands:
+            lines += ["", "**Verify commands:**", bullet_list(child.verify_commands)]
+        if child.depends_on:
+            lines += ["", "**Depends on:** " + ", ".join(f"`{d}`" for d in child.depends_on)]
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _plan_profiles(brief: PlanBrief) -> str:
+    if not brief.profiles:
+        return "(none is configured: every task is a `code` task)"
+    return "\n".join(
+        f"- `{profile.name}`" + (f" — {profile.description}" if profile.description else "")
+        for profile in brief.profiles
+    )
+
+
+def _plan_checkouts(
+    checkouts: Sequence[tuple[str, str]], home: str, others: Sequence[str] = ()
+) -> str:
+    lines = [
+        f"- `{where}` — {repo}, the repository this level lives in"
+        for repo, where in checkouts
+        if repo == home
+    ]
+    if not lines:
+        lines.append("(no checkout could be cut; plan from the node alone and say so in `context`)")
+    lines += [
+        f"- {repo} is not checked out here; a child that stays already targets it, so "
+        "leave its work to that child"
+        for repo in others
+    ]
+    return "\n".join(lines)

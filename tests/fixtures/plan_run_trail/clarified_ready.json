@@ -91,21 +91,21 @@
  "sandbox_events": [
   {
    "delivery": "env-file",
-   "name": "sbxloop-<run>-agent",
+   "name": "lantern-<run>-agent",
    "type": "sandbox.secret_env_fallback"
   },
   {
    "mounted": true,
-   "name": "sbxloop-<run>-agent",
+   "name": "lantern-<run>-agent",
    "type": "sandbox.workspace_mount"
   },
   {
-   "name": "sbxloop-<run>-agent",
+   "name": "lantern-<run>-agent",
    "role": "agent",
    "type": "sandbox.provision_start"
   },
   {
-   "name": "sbxloop-<run>-agent",
+   "name": "lantern-<run>-agent",
    "role": "agent",
    "type": "sandbox.ready"
   },

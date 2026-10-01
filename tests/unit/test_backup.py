@@ -1,4 +1,4 @@
-"""``sbxloop backup``: snapshots of what the home cannot regenerate."""
+"""``lantern backup``: snapshots of what the home cannot regenerate."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.backup import (
+from lantern.backup import (
     BackupError,
     create_backup,
     find_backup,
@@ -17,15 +17,15 @@ from sbxloop.backup import (
     prune_backups,
     restore_backup,
 )
-from sbxloop.cli.app import app
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
+from lantern.cli.app import app
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
 
 runner = CliRunner()
 
 
-def seeded_home(root: Path) -> SbxloopHome:
-    home = SbxloopHome(root)
+def seeded_home(root: Path) -> LanternHome:
+    home = LanternHome(root)
     home.ensure_tree()
     home.config_toml.write_text('model = "mine"\n')
     home.secrets_env.write_text("GH_TOKEN=x\n")
@@ -34,9 +34,9 @@ def seeded_home(root: Path) -> SbxloopHome:
     store = StateStore(home.state_db)
     store.create_run("r1abcdefg", "an outcome")
     store.close()
-    home.unit("sbxloop-daemon.service").write_text("[Unit]\n")
+    home.unit("lantern-daemon.service").write_text("[Unit]\n")
     home.launcher.write_text("#!/bin/sh\n")
-    home.write_record(sbxloop_version="1.2.3", created_by="test")
+    home.write_record(lantern_version="1.2.3", created_by="test")
     (home.runs / "r1abcdefg" / "workspace").mkdir(parents=True)
     (home.runs / "r1abcdefg" / "workspace" / "big").write_bytes(b"x" * 4096)
     return home
@@ -51,18 +51,18 @@ class TestCreate:
         names = sorted(str(p.relative_to(info.path)) for p in info.path.rglob("*") if p.is_file())
         assert names == [
             "MANIFEST",
-            "bin/sbxloop",
+            "bin/lantern",
             "config/github-app.pem",
-            "config/sbxloop.toml",
+            "config/lantern.toml",
             "config/secrets.env",
             "home.json",
             "meta.json",
             "state/state.db",
-            "systemd/sbxloop-daemon.service",
+            "systemd/lantern-daemon.service",
         ]
         assert (info.path / "config" / "secrets.env").stat().st_mode & 0o777 == 0o600
         manifest = (info.path / "MANIFEST").read_text()
-        assert "config/sbxloop.toml" in manifest and len(manifest.splitlines()) == info.files == 7
+        assert "config/lantern.toml" in manifest and len(manifest.splitlines()) == info.files == 7
         # the database copy is a real, independent SQLite file
         rows = sqlite3.connect(info.path / "state" / "state.db").execute("SELECT run_id FROM runs")
         assert [r[0] for r in rows] == ["r1abcdefg"]
@@ -85,7 +85,7 @@ class TestCreate:
         assert info.name.endswith("-deploy-1.0.132")
 
     def test_empty_home_still_snapshots(self, tmp_path: Path) -> None:
-        home = SbxloopHome(tmp_path / "h")
+        home = LanternHome(tmp_path / "h")
         home.ensure_tree()
         info = create_backup(home)
         assert info.files == 0 and (info.path / "MANIFEST").read_text() == ""
@@ -112,7 +112,7 @@ class TestListRestorePrune:
         home.config_toml.write_text('model = "broken"\n')
         home.state_db.unlink()
         restored = restore_backup(home, info.name)
-        assert "config/sbxloop.toml" in restored and "state/state.db" in restored
+        assert "config/lantern.toml" in restored and "state/state.db" in restored
         assert not any(r.startswith("legacy/") for r in restored)
         assert home.config_toml.read_text() == 'model = "mine"\n'
         assert StateStore(home.state_db).list_runs()[0].run_id == "r1abcdefg"
@@ -133,7 +133,7 @@ class TestListRestorePrune:
         restore_backup(home, info.name)
         assert not (home.channel_files / "unlisted").exists()
 
-        (info.path / "config" / "sbxloop.toml").write_text("tampered")
+        (info.path / "config" / "lantern.toml").write_text("tampered")
         with pytest.raises(BackupError, match="integrity verification"):
             restore_backup(home, info.name)
 
@@ -184,7 +184,7 @@ class TestCli:
     def test_backup_list_restore_prune(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        home = seeded_home(tmp_path / ".sbxloop")  # HOME is tmp_path (autouse fixture)
+        home = seeded_home(tmp_path / ".lantern")  # HOME is tmp_path (autouse fixture)
         result = runner.invoke(app, ["backup", "--label", "first"])
         assert result.exit_code == 0, result.output
         assert "-first" in result.output.replace("\n", "")
@@ -205,9 +205,9 @@ class TestCli:
         assert [b.label for b in list_backups(home)] == ["second"]
 
     def test_daemon_sweep_prunes_backups(self, tmp_path: Path) -> None:
-        from sbxloop.config import Config
-        from sbxloop.daemon.loop import DaemonLoop
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.config import Config
+        from lantern.daemon.loop import DaemonLoop
+        from lantern.daemon.store import DaemonStore
         from tests.unit.test_daemon_loop import FakeSource
 
         home = seeded_home(tmp_path / "h")

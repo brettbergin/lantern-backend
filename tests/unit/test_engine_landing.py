@@ -15,9 +15,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import LandingConfig
-from sbxloop.engine.checks import PolicyFor, check_policy_reader, no_policy
-from sbxloop.engine.landing import (
+from lantern.config import LandingConfig
+from lantern.engine.checks import PolicyFor, check_policy_reader, no_policy
+from lantern.engine.landing import (
     AwaitingReview,
     Blocked,
     CiTimeout,
@@ -33,8 +33,8 @@ from sbxloop.engine.landing import (
     poll_checks,
     resolve_merge_method,
 )
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import ChecksVerdict, FailedCheck, MergeOutcome, QueueEntry, QueueState
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import ChecksVerdict, FailedCheck, MergeOutcome, QueueEntry, QueueState
 from tests.fakes.fake_github import (
     BLOCKED_405,
     GREEN,
@@ -49,7 +49,7 @@ from tests.fakes.fake_github import (
 )
 
 REPO = "o/r"
-LOGIN = "sbxloop-bot"
+LOGIN = "lantern-bot"
 
 
 class FakeClock:
@@ -349,7 +349,7 @@ class Landing:
     def run(
         self,
         *,
-        branch: str | None = "sbxloop/r1",
+        branch: str | None = "lantern/r1",
         login: str = LOGIN,
         answered: Container[str] = frozenset(),
         review_posted: bool = True,
@@ -391,7 +391,7 @@ class TestLand:
         lp = Landing(FakeGithub())
         assert lp.run() == Landed("merge0001", by_human=False)
         assert lp.fake.merges == [(7, "squash", "commit0")], "the judged head rides on the merge"
-        assert lp.fake.deleted_branches == ["sbxloop/r1"]
+        assert lp.fake.deleted_branches == ["lantern/r1"]
         assert lp.rec.waits == []
 
     def test_the_merge_method_is_the_operators(self) -> None:
@@ -1194,7 +1194,7 @@ class TestBlockedWithGreenChecks:
         fake.protection = {"required_pull_request_reviews": {"required_approving_review_count": 2}}
         fake.reviews_payload = [
             human_review("alice", "APPROVED", "lgtm", id=90),
-            human_review("sbxloop-bot", "APPROVED", "own", id=91),
+            human_review("lantern-bot", "APPROVED", "own", id=91),
             human_review("ci-bot", "APPROVED", "bot", id=92, bot=True),
         ]
         lp = Landing(fake)
@@ -1250,7 +1250,7 @@ class TestBlockedWithGreenChecks:
         assert isinstance(Landing(fake).run(), Landed)
 
     def test_the_reason_names_what_is_known(self) -> None:
-        from sbxloop.vcs.github.protection import BaseRequirements
+        from lantern.vcs.github.protection import BaseRequirements
 
         reviews = BaseRequirements((), 1, "protection")
         assert "requires an approving review" in blocked_reason(reviews, cfg())
@@ -1280,7 +1280,7 @@ class TestBlockedWithGreenChecks:
         line; the fatal last-push rule comes first. (The merge-gate hint that
         used to follow a review rule is gone with #675: a review wait is a
         wait, not something to configure around.)"""
-        from sbxloop.vcs.github.protection import BaseRequirements
+        from lantern.vcs.github.protection import BaseRequirements
 
         rules = BaseRequirements(
             (),

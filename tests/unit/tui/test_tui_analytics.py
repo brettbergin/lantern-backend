@@ -7,9 +7,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sbxloop.engine.store import StateStore
-from sbxloop.tui.analytics import Cache, Lane, compute, fold
-from sbxloop_worker.protocol import Usage
+from lantern.engine.store import StateStore
+from lantern.tui.analytics import Cache, Lane, compute, fold
+from lantern_worker.protocol import Usage
 from tests.fakes.rawdb import exec_raw
 
 NOW = 1_800_000_000.0

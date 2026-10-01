@@ -43,7 +43,7 @@ def distribution_names(version: str) -> list[str]:
     version_key(version)
     return [
         f"{name}-{version}{suffix}"
-        for name in ("sbxloop", "sbxloop_worker")
+        for name in ("lantern_backend", "lantern_worker")
         for suffix in ("-py3-none-any.whl", ".tar.gz")
     ]
 
@@ -488,7 +488,7 @@ def deploy_notice(
     """Route a notice without requiring the installed CLI's newest options.
 
     The workflow helper comes from its trusted workflow SHA, while ``post``
-    comes from the installed sbxloop. Copying the selected backend's config
+    comes from the installed lantern. Copying the selected backend's config
     lets even the older two-argument ``post_notice(config, text)`` target the
     deploy channel before an upgrade and after a rollback.
     """
@@ -519,10 +519,10 @@ def main() -> None:
     mode = sys.argv[1]
     if mode == "deploy-notify":
         # Imports stay inside this mode: release and deploy selection above
-        # remain stdlib-only, including on a host with an older sbxloop.
-        from sbxloop.config import load_config, load_secrets_env
-        from sbxloop.daemon.notify import post_notice
-        from sbxloop.errors import SbxloopError
+        # remain stdlib-only, including on a host with an older lantern.
+        from lantern.config import load_config, load_secrets_env
+        from lantern.daemon.notify import post_notice
+        from lantern.errors import LanternError
 
         load_secrets_env()
         try:
@@ -532,7 +532,7 @@ def main() -> None:
                 os.environ["DEPLOY_CHANNEL"],
                 post=post_notice,
             )
-        except SbxloopError as exc:
+        except LanternError as exc:
             raise ValueError(str(exc)) from exc
         print(f"posted to {posted.backend} channel {posted.channel_id}")
         return
@@ -596,11 +596,11 @@ def main() -> None:
         data = json.loads(Path(os.environ["RECEIPT"]).read_text())
         output(eligible=receipt_valid(data))
         return
-    state_path = Path(os.environ["SBXLOOP_HOME"]) / "state" / "deploy.json"
+    state_path = Path(os.environ["LANTERN_HOME"]) / "state" / "deploy.json"
     state = read_state(state_path)
     if mode == "deploy-check":
         target = api.latest(os.environ.get("INPUT_VERSION", "").removeprefix("v"))["tag_name"][1:]
-        current = command(os.environ["VENV_SBXLOOP"], "--version").split()[1]
+        current = command(os.environ["VENV_LANTERN"], "--version").split()[1]
         decision = deploy_decision(current, target, state, now=int(time.time()), manual=manual)
         print(f"Deployment decision: {decision}; installed {current}; selected {target}")
         output(current=current, version=target, changed=decision == "deploy", reason=decision)

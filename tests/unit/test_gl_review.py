@@ -7,16 +7,16 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.gitlab.changes import (
+from lantern.errors import GithubOpsError
+from lantern.vcs.gitlab.changes import (
     change_record,
     file_record,
     merge_state,
     parse_thread_id,
     thread_id_for,
 )
-from sbxloop.vcs.gitlab.ops import GitlabOps
-from sbxloop.vcs.model import PostedFinding, ReviewComment, ReviewThread, SubmittedReview
+from lantern.vcs.gitlab.ops import GitlabOps
+from lantern.vcs.model import PostedFinding, ReviewComment, ReviewThread, SubmittedReview
 from tests.fakes.fake_gitlab import FakeGitlab
 
 REPO = "acme/widgets"
@@ -24,7 +24,7 @@ MR = "/projects/acme%2Fwidgets/merge_requests"
 
 
 def ready(fake: FakeGitlab, iid: int = 1) -> FakeGitlab:
-    fake.seed_mr(iid, source_branch="sbxloop/r1", head_sha="commit0")
+    fake.seed_mr(iid, source_branch="lantern/r1", head_sha="commit0")
     return fake
 
 
@@ -115,20 +115,20 @@ class TestFolds:
 class TestMergeRequests:
     def test_create_get_and_list(self) -> None:
         fake = FakeGitlab()
-        ref = fake.pr_create(REPO, "main", "sbxloop/r1", "sbxloop: ship it", "body", draft=True)
+        ref = fake.pr_create(REPO, "main", "lantern/r1", "lantern: ship it", "body", draft=True)
         assert ref.number == 1 and ref.url.endswith("/-/merge_requests/1")
         assert fake.mr_created == [
             {
-                "source_branch": "sbxloop/r1",
+                "source_branch": "lantern/r1",
                 "target_branch": "main",
-                "title": "Draft: sbxloop: ship it",
+                "title": "Draft: lantern: ship it",
                 "description": "body",
             }
         ]
         change = fake.pr_get(REPO, 1)
         assert change["draft"] is True and change["head"]["sha"] == "commit0"
         assert change["node_id"] == "1!1" and change["state"] == "open"
-        (found,) = fake.pr_list_open(REPO, head="sbxloop/r1")
+        (found,) = fake.pr_list_open(REPO, head="lantern/r1")
         assert found["number"] == 1
         assert fake.pr_list_open(REPO, head="other") == []
         query = fake.raw_calls[-1][1]
@@ -137,7 +137,7 @@ class TestMergeRequests:
     def test_a_second_open_request_from_the_branch_is_a_409(self) -> None:
         fake = ready(FakeGitlab())
         with pytest.raises(GithubOpsError) as info:
-            fake.pr_create(REPO, "main", "sbxloop/r1", "again")
+            fake.pr_create(REPO, "main", "lantern/r1", "again")
         assert info.value.http_status == 409
 
     def test_update_comment_and_files(self) -> None:
@@ -173,12 +173,12 @@ class TestReviewThreads:
         (thread,) = fake.pr_review_threads(REPO, 1)
         assert isinstance(thread, ReviewThread) and thread.thread_id == posted.thread_id
         assert thread.anchor == "hello.txt:1" and not thread.is_resolved
-        assert thread.comments[0].login == "sbxloop-bot" and thread.comments[0].is_bot is False
+        assert thread.comments[0].login == "lantern-bot" and thread.comments[0].is_bot is False
 
         fake.pr_comment_reply(REPO, 1, posted.comment_id, "fixed in the next push")
         assert fake.replies[0][2] == "fixed in the next push"
         (thread,) = fake.pr_review_threads(REPO, 1)
-        assert len(thread.comments) == 2 and thread.has_reply_from("sbxloop-bot", False)
+        assert len(thread.comments) == 2 and thread.has_reply_from("lantern-bot", False)
 
         assert fake.resolve_review_thread(posted.thread_id) is True
         (thread,) = fake.pr_review_threads(REPO, 1)
@@ -259,7 +259,7 @@ class TestVerdicts:
         ]
         assert records[0]["user"]["type"] == "User" and records[1]["user"]["type"] == "Bot"
         assert records[1]["id"] == "reviewer-4-requested_changes"
-        verdicts = fake.pr_review_verdicts(REPO, 1, exclude=("sbxloop-bot", False))
+        verdicts = fake.pr_review_verdicts(REPO, 1, exclude=("lantern-bot", False))
         assert {(v.login, v.state, v.is_bot) for v in verdicts} == {
             ("rev-bob", "APPROVED", False),
             ("project_1_bot_05b4", "CHANGES_REQUESTED", True),
@@ -280,9 +280,9 @@ class TestVerdicts:
         (theirs, mine) = fake.pr_review_comments(REPO, 1)
         assert theirs["user"]["login"] == "rev-bob" and theirs["path"] == "hello.txt"
         assert theirs["line"] == 2 and theirs["original_line"] == 2
-        assert mine["user"]["login"] == "sbxloop-bot"
+        assert mine["user"]["login"] == "lantern-bot"
         feedback = fake.pr_review_feedback(
-            REPO, 1, exclude_login="sbxloop-bot", exclude_is_bot=False
+            REPO, 1, exclude_login="lantern-bot", exclude_is_bot=False
         )
         assert feedback == "- `hello.txt:2`: Why two?"
 
@@ -301,7 +301,7 @@ class TestSubmittedVerdicts:
         review = fake.pr_review_create(REPO, 1, "APPROVE", "looks right")
         assert review.event == "APPROVE" and review.gates_merge
         assert fake.approvals_posted == [(1, {"sha": "commit0"})]
-        assert fake.pr_review_state(REPO, 1, login="sbxloop-bot") == "APPROVED"
+        assert fake.pr_review_state(REPO, 1, login="lantern-bot") == "APPROVED"
 
     def test_a_refused_approval_stands_as_a_comment(self) -> None:
         fake = ready(FakeGitlab())

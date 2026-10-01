@@ -1,4 +1,4 @@
-"""``sbxloop api client …`` and ``sbxloop api key …`` on the host, and the
+"""``lantern api client …`` and ``lantern api key …`` on the host, and the
 daemon refusing to start with the listener enabled but the extra absent."""
 
 from __future__ import annotations
@@ -9,25 +9,25 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.api import MISSING_EXTRA, api_available
-from sbxloop.api.auth.keys import load_or_create
-from sbxloop.api.auth.store import ApiAuthStore, StandaloneSessions
-from sbxloop.cli.app import app
-from sbxloop.paths import SbxloopHome
+from lantern.api import MISSING_EXTRA, api_available
+from lantern.api.auth.keys import load_or_create
+from lantern.api.auth.store import ApiAuthStore, StandaloneSessions
+from lantern.cli.app import app
+from lantern.paths import LanternHome
 
 runner = CliRunner()
 
 
 @pytest.fixture
-def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SbxloopHome:
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LanternHome:
     monkeypatch.chdir(tmp_path)
     # A wide terminal: rich would otherwise elide the ids the tests read.
     monkeypatch.setenv("COLUMNS", "200")
-    return SbxloopHome(tmp_path / ".sbxloop")
+    return LanternHome(tmp_path / ".lantern")
 
 
 class TestClients:
-    def test_create_prints_the_secret_once_and_stores_a_verifier(self, home: SbxloopHome) -> None:
+    def test_create_prints_the_secret_once_and_stores_a_verifier(self, home: LanternHome) -> None:
         result = runner.invoke(
             app,
             ["api", "client", "create", "reporter", "--cap", "runs:read", "--cap", "audit:read"],
@@ -42,7 +42,7 @@ class TestClients:
             store = ApiAuthStore(sessions)
             client = store.authenticate(client_id, secret, now=1.0)
             assert client.name == "reporter" and client.capabilities == {"runs:read", "audit:read"}
-            assert client.created_by is not None and client.created_by.endswith("via sbxloop api")
+            assert client.created_by is not None and client.created_by.endswith("via lantern api")
         finally:
             sessions.close()
         listed = runner.invoke(app, ["api", "client", "list"])
@@ -51,12 +51,12 @@ class TestClients:
         )
         assert secret not in listed.output
 
-    def test_create_refuses_unknown_or_no_capabilities(self, home: SbxloopHome) -> None:
+    def test_create_refuses_unknown_or_no_capabilities(self, home: LanternHome) -> None:
         assert runner.invoke(app, ["api", "client", "create", "x"]).exit_code == 2
         bad = runner.invoke(app, ["api", "client", "create", "x", "--cap", "root"])
         assert bad.exit_code == 2 and "unknown capabilities: root" in bad.output
 
-    def test_revoke(self, home: SbxloopHome) -> None:
+    def test_revoke(self, home: LanternHome) -> None:
         created = runner.invoke(app, ["api", "client", "create", "x", "--cap", "runs:read"])
         client_id = next(
             line.split(":", 1)[1].strip()
@@ -69,7 +69,7 @@ class TestClients:
 
 
 class TestKeys:
-    def test_show_creates_and_rotate_keeps_the_previous(self, home: SbxloopHome) -> None:
+    def test_show_creates_and_rotate_keeps_the_previous(self, home: LanternHome) -> None:
         shown = runner.invoke(app, ["api", "key", "show"])
         assert shown.exit_code == 0 and "kid:" in shown.output
         key_file = home.config / "api-signing.key"
@@ -87,15 +87,15 @@ class TestMissingExtra:
         assert api_available()
 
     def test_the_cli_loads_and_the_key_commands_refuse_without_the_extra(
-        self, home: SbxloopHome, monkeypatch: pytest.MonkeyPatch
+        self, home: LanternHome, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`sbxloop` as a whole must import on an install without the extra
+        """`lantern` as a whole must import on an install without the extra
         (CI's plain `uv sync` is one): the key module's `cryptography`
-        import was pulled in by `sbxloop.cli.app` at import time and took
+        import was pulled in by `lantern.cli.app` at import time and took
         every command down with it."""
         import importlib
 
-        import sbxloop.cli.api as cli_api
+        import lantern.cli.api as cli_api
 
         for name in ("fastapi", "uvicorn", "jwt", "cryptography"):
             monkeypatch.setitem(sys.modules, name, None)
@@ -115,11 +115,11 @@ class TestMissingExtra:
     def test_the_daemon_refuses_by_name_without_the_extra(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """What `sbxloop daemon` runs before any sandbox work when
+        """What `lantern daemon` runs before any sandbox work when
         `[api] enabled = true`: a missing extra is a configuration error
         that names the extra, not something discovered after recovery."""
-        from sbxloop.api import require_available
-        from sbxloop.errors import ConfigError
+        from lantern.api import require_available
+        from lantern.errors import ConfigError
 
         require_available()
         for name in ("fastapi", "uvicorn", "jwt"):

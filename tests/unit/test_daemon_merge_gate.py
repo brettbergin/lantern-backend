@@ -15,10 +15,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.control import dispatch
-from sbxloop.daemon.model import WorkItem
-from sbxloop.vcs.github.ops import ChecksVerdict
+from lantern.config import Config
+from lantern.daemon.control import dispatch
+from lantern.daemon.model import WorkItem
+from lantern.vcs.github.ops import ChecksVerdict
 from tests.fakes.fake_github import BLOCKED_405, FakeGithub, human_review
 from tests.unit.test_daemon_loop import (
     PR_URL,
@@ -250,12 +250,12 @@ class TestApprove:
     ) -> None:
         """`stop` (the operator's verb) waits for a landing in flight; a
         signal still cuts it short and the boot reconcile re-arms the gate."""
-        from sbxloop.errors import RunCancelledError
+        from lantern.errors import RunCancelledError
 
-        monkeypatch.setattr("sbxloop.daemon.loop.time.sleep", lambda _s: None)
+        monkeypatch.setattr("lantern.daemon.loop.time.sleep", lambda _s: None)
         h, _fake, run_id = self.approve_ready(tmp_path)
         h.loop.approve_merge("gh:issue:1", by="brett")
-        assert [t.name for t in h.loop._landing_threads] == [f"sbxloop-merge-{run_id}"]
+        assert [t.name for t in h.loop._landing_threads] == [f"lantern-merge-{run_id}"]
         h.loop.request_stop()
         h.loop._merge_tick("ci")  # graceful: the wait goes on
         h.loop._join_landings()
@@ -283,7 +283,7 @@ class TestApprove:
         read; a gate that moved loses the swap, typed, and a second
         approval at the same revision is told who got there first — while
         the prose edge keeps its sentence."""
-        from sbxloop.daemon.controls import ControlError
+        from lantern.daemon.controls import ControlError
 
         h, _fake, run_id = self.approve_ready(tmp_path)
         gate = h.dstore.merge_gate_for(run_id)
@@ -416,7 +416,7 @@ class TestGateStore:
         upgrades on open, rows intact."""
         import sqlite3
 
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         db = tmp_path / "state.db"
         conn = sqlite3.connect(db)
@@ -432,12 +432,12 @@ class TestGateStore:
             store.close()
 
     def test_gate_lookup_accepts_run_and_item_ids(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         store = DaemonStore(tmp_path / "state.db")
         try:
             store.create_merge_gate(
-                "r1", "gh:issue:7", "o/r", 9, PR_URL, "sbxloop/r1", ["U1"], "tok", 1.0
+                "r1", "gh:issue:7", "o/r", 9, PR_URL, "lantern/r1", ["U1"], "tok", 1.0
             )
             by_run = store.merge_gate_for("r1")
             by_item = store.merge_gate_for("gh:issue:7")
@@ -448,7 +448,7 @@ class TestGateStore:
             store.close()
 
     def test_create_is_insert_or_ignore(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.store import DaemonStore
+        from lantern.daemon.store import DaemonStore
 
         store = DaemonStore(tmp_path / "state.db")
         try:

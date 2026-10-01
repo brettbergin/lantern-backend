@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop import hostgit
+from lantern import hostgit
 from tests.conftest import FakeSbx
 from tests.fakes.gitrepo import make_repo
 from tests.unit.test_code_run_trail import trail

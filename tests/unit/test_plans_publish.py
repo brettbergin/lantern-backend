@@ -16,14 +16,14 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.errors import GithubOpsError
-from sbxloop.plans.model import Plan, PlanNode
-from sbxloop.plans.publish import level_targets, publish_level
-from sbxloop.plans.render import marker
-from sbxloop.plans.store import PlanStore
-from sbxloop.vcs.checklist import END, START, parse_checklist
+from lantern.config import Config
+from lantern.daemon.store import DaemonStore
+from lantern.errors import GithubOpsError
+from lantern.plans.model import Plan, PlanNode
+from lantern.plans.publish import level_targets, publish_level
+from lantern.plans.render import marker
+from lantern.plans.store import PlanStore
+from lantern.vcs.checklist import END, START, parse_checklist
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
 

@@ -1,4 +1,4 @@
-"""``[[vcs.repos]]``: the repositories sbxloop works with are declared under
+"""``[[vcs.repos]]``: the repositories lantern works with are declared under
 the forge section, whatever the forge (#2255).
 
 The contract: ``[[vcs.repos]]`` is the one place a repository is declared;
@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import DEFAULT_CONFIG_LOCKED, Config, GithubConfig, load_config
-from sbxloop.configedit.docs import doc_for
-from sbxloop.configedit.keys import is_model_key
-from sbxloop.daemon.configpolicy import locked_by
-from sbxloop.errors import ConfigError
+from lantern.config import DEFAULT_CONFIG_LOCKED, Config, GithubConfig, load_config
+from lantern.configedit.docs import doc_for
+from lantern.configedit.keys import is_model_key
+from lantern.daemon.configpolicy import locked_by
+from lantern.errors import ConfigError
 
 TWO = (
     "[vcs]\n"
@@ -38,7 +38,7 @@ TWO = (
 
 
 def _load(tmp_path: Path, body: str) -> Config:
-    (tmp_path / "sbxloop.toml").write_text(body)
+    (tmp_path / "lantern.toml").write_text(body)
     return load_config(cwd=tmp_path, env={})
 
 
@@ -150,7 +150,7 @@ class TestNarrowingKeepsTheTwoInStep:
 
     def test_a_replaced_github_section_updates_the_declared_list(self, tmp_path: Path) -> None:
         cfg = _load(tmp_path, TWO)
-        # How `sbxloop run --repo` and `sbxloop daemon --repo` rebuild the section.
+        # How `lantern run --repo` and `lantern daemon --repo` rebuild the section.
         github = GithubConfig.model_validate(
             {**cfg.github.model_dump(), "repo": "x/y", "repos": []}
         )

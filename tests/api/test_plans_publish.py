@@ -17,11 +17,11 @@ from typing import Any
 
 from sqlalchemy import select
 
-from sbxloop.daemon.controls.operations import OperationSpec, reconcile_operations
-from sbxloop.daemon.controls.principal import Capability
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.checklist import parse_checklist
+from lantern.daemon.controls.operations import OperationSpec, reconcile_operations
+from lantern.daemon.controls.principal import Capability
+from lantern.db.api_models import ApiEventRow
+from lantern.errors import GithubOpsError
+from lantern.vcs.checklist import parse_checklist
 from tests.api.conftest import Api, build
 from tests.fakes.fake_github import FakeGithub
 from tests.fakes.fake_gitlab import FakeGitlab
@@ -62,7 +62,7 @@ def _create(api: Api, headers: dict[str, str], **body: Any) -> dict[str, Any]:
     assert response.status_code == 201, response.text
     # Publish tests begin after the planner authored a root. Intake itself
     # is exercised in test_plan_input.py; these tests exercise forge writes.
-    from sbxloop.api.routes.plans import plan_out
+    from lantern.api.routes.plans import plan_out
 
     plan = api.ctx.plans.get(response.json()["id"])
     generated = replace(plan.root, **plan.input, origin="planner")
@@ -407,7 +407,7 @@ class TestAnInterruptedOperation:
     def test_a_publish_the_daemon_died_during_is_settled_failed_not_left_running(
         self, api: Api
     ) -> None:
-        from sbxloop.daemon.controls.principal import Principal
+        from lantern.daemon.controls.principal import Principal
 
         store = api.loop.operations
         op, _ = store.accept(

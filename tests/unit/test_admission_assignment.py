@@ -20,19 +20,19 @@ from typing import Any
 import pytest
 from alembic import command
 
-from sbxloop.agents.assignment import AgentAssignment
-from sbxloop.agents.definition import AgentSpec
-from sbxloop.agents.memory import MemoryService, WorkspaceChannelVisibility
-from sbxloop.agents.registry import DbAgentRegistry
-from sbxloop.config import Config
-from sbxloop.daemon.controls import ControlError, ControlService, Principal
-from sbxloop.daemon.controls.intake import IssueAdmission, WorkloadAdmission
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import _admission_key
-from sbxloop.db import ensure_schema, open_engine
-from sbxloop.db.schema import _config as alembic_config
-from sbxloop.engine.model import RunResult
-from sbxloop.events import EventBus
+from lantern.agents.assignment import AgentAssignment
+from lantern.agents.definition import AgentSpec
+from lantern.agents.memory import MemoryService, WorkspaceChannelVisibility
+from lantern.agents.registry import DbAgentRegistry
+from lantern.config import Config
+from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.controls.intake import IssueAdmission, WorkloadAdmission
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import _admission_key
+from lantern.db import ensure_schema, open_engine
+from lantern.db.schema import _config as alembic_config
+from lantern.engine.model import RunResult
+from lantern.events import EventBus
 from tests.unit.test_daemon_loop import Harness, gh_item
 
 CLIENT = Principal(
@@ -50,7 +50,7 @@ BUILTIN_ROLES = {
     "critic": "critic",
     "operator": "operator",
 }
-ANGIE = "concierge"
+LANTERN = "concierge"
 
 
 def _config(tmp_path: Path) -> Config:
@@ -184,7 +184,7 @@ class TestDispatch:
         (dispatched,) = harness.dispatched
         planned = _assignment(dispatched)
         assert dict(planned.roles) == {**BUILTIN_ROLES, "planner": "scout"}
-        assert planned.lead == ANGIE
+        assert planned.lead == LANTERN
         assert planned.channel_id == "chn_brief"
         stored = harness.dstore.get(item.item_id)
         assert stored is not None and stored.assignment_json == dispatched.assignment_json
@@ -262,7 +262,7 @@ class TestDispatch:
         (dispatched,) = harness.dispatched
         planned = _assignment(dispatched)
         assert planned.is_default()
-        assert dict(planned.roles) == BUILTIN_ROLES and planned.lead == ANGIE
+        assert dict(planned.roles) == BUILTIN_ROLES and planned.lead == LANTERN
         assert dispatched.lead_agent is None and dispatched.channel_id is None
         assert dispatched.chain_depth == 0
 
@@ -274,7 +274,7 @@ class TestDispatch:
         harness.source.items = [gh_item("7", repo="o/r")]
         harness.outcomes = ["blocked"]
         harness.loop.tick()
-        assert _assignment(harness.dispatched[0]).lead == ANGIE
+        assert _assignment(harness.dispatched[0]).lead == LANTERN
 
         def admit(repo: str, number: str, kind: Any) -> WorkItem:
             return gh_item(number, repo=repo, kind=kind)
@@ -357,7 +357,7 @@ class TestDispatch:
             engine = Engine()
 
         harness.loop._live_run = lambda run_id: Handle()  # type: ignore[method-assign,assignment,return-value]
-        planned = AgentAssignment(lead=ANGIE, roles={"planner": "planner"}, agents={})
+        planned = AgentAssignment(lead=LANTERN, roles={"planner": "planner"}, agents={})
         item = gh_item("5", assignment_json=planned.to_json())
         harness.loop._default_runner(item, harness.config, "r1", EventBus(), False)
         (kwargs,) = started

@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.engine import LoopEngine, Pipeline
-from sbxloop.engine.store import StateStore
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
+from lantern.config import Config
+from lantern.engine.engine import LoopEngine, Pipeline
+from lantern.engine.store import StateStore
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
 
 
 def engine(tmp_path: Path, **landing: Any) -> tuple[LoopEngine, Pipeline, list[float]]:

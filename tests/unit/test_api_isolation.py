@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.sbx.provision import (
+from lantern.config import Config
+from lantern.sbx.provision import (
     agent_policy_allows,
     github_policy_allows,
     service_policy_allows,

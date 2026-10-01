@@ -5,11 +5,11 @@ from importlib import resources
 
 import pytest
 
-from sbxloop import toolchains
-from sbxloop.engine import prompts
-from sbxloop.engine.prompts import _strip_contract_header, bullet_list, render
-from sbxloop.policy import BASELINE_REGISTRY_DOMAINS, WELL_KNOWN_REGISTRY_DOMAINS
-from sbxloop.verifylint import config_override_example
+from lantern import toolchains
+from lantern.engine import prompts
+from lantern.engine.prompts import _strip_contract_header, bullet_list, render
+from lantern.policy import BASELINE_REGISTRY_DOMAINS, WELL_KNOWN_REGISTRY_DOMAINS
+from lantern.verifylint import config_override_example
 
 # The engine renders the config-override example for the run's resolved
 # toolchains (#634); tests that only care about the rest of a template take
@@ -55,7 +55,7 @@ def test_decompose_carries_the_repositorys_pr_conventions_only_when_given() -> N
     """#678: the title lint and the template are a paragraph rendered from
     the workspace (deliver.pr_conventions); the template itself teaches
     neither, so a repository without them is not told it has them."""
-    from sbxloop.deliver import pr_conventions
+    from lantern.deliver import pr_conventions
 
     bare = render("decompose", outcome="o", max_tasks="5", project_gate="- gate", **EXAMPLE)
     assert "conventional commits" not in bare and "pr-body" not in bare
@@ -275,11 +275,11 @@ RENDER_CONTEXTS: dict[str, dict[str, str]] = {
         "command_prefix": "!sbx",
         "repo": "owner/repo",
         "model": "auto",
-        "repos": "- owner/repo — enabled, base main, trigger label `sbxloop:run`",
+        "repos": "- owner/repo — enabled, base main, trigger label `lantern:run`",
         "tool_notes": "- `sbx_control` — run a verb",
         "daemon_notes": "- poll interval 60s",
-        "trigger_label": "sbxloop:run",
-        "workload_label": "sbxloop:workload",
+        "trigger_label": "lantern:run",
+        "workload_label": "lantern:workload",
         "workloads": "- `research`: sinks chat, issue",
     },
     # The one phase that edits the exam rather than the work.
@@ -376,7 +376,7 @@ def test_concierge_prompt_carries_contract() -> None:
     name its tools, keep steering in the run thread, and forbid claiming
     actions it did not perform (see the template header)."""
     text = render("concierge", **RENDER_CONTEXTS["concierge"])
-    assert text.startswith("# You are the sbxloop concierge")
+    assert text.startswith("# You are the Lantern concierge")
     assert "`sbx_control`" in text and "`create_issue`" in text
     assert "`agent_rate_limits` with no arguments" in text
     for evidence in (
@@ -407,7 +407,7 @@ def test_concierge_prompt_carries_contract() -> None:
         "restart begins once your reply is posted" in text and "never reach for\n  `stop`" in text
     )
     # intake is one hop: the issue is filed with the trigger label and runs
-    assert "`sbxloop:run`" in text
+    assert "`lantern:run`" in text
     assert "`create_issue`, **one call, no confirmation**" in text
     assert "`label_issue_for_run`" in text and "`list_issues`" in text
     assert "queue only what\n  the person names" in text
@@ -441,7 +441,7 @@ def test_concierge_prompt_carries_contract() -> None:
     assert "owner/repo — enabled, base main" in text and "`list_repos`" in text
     # drift: the concierge reports versions, a human does the upgrading
     assert "`version_status`" in text and "**You cannot upgrade\n  anything**" in text
-    # #638: no claim that the user's repository publishes sbxloop on merge,
+    # #638: no claim that the user's repository publishes lantern on merge,
     # and no guessed upgrade command — the report names it or nobody does
     assert "publishes a release" not in text and "pip install" not in text
     assert "operator's step" in text and "do\n  not guess a command" in text
@@ -619,7 +619,7 @@ def test_every_ecosystem_has_its_own_override_story() -> None:
 
 DOMAIN_ANCHORS: tuple[str, ...] = (
     # paths and build files of the loop's own repository
-    "packages/sbxloop",
+    "packages/lantern",
     "hatch_build",
     "hatchling",
     # the loop's chat bridge, and the field failure that used to be the example
@@ -634,7 +634,7 @@ DOMAIN_ANCHORS: tuple[str, ...] = (
 # What only the pipeline templates may not say: the concierge is the loop's
 # own front desk and legitimately names its item ids and sandboxes.
 PIPELINE_ANCHORS: tuple[str, ...] = (
-    "sbxloop",
+    "lantern",
     "resume-pending",
     "gh:issue",
     "gh:7",

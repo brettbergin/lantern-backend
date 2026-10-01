@@ -1,7 +1,7 @@
 """The published contract is the committed one (#1041): ``docs/openapi.json``
 is what ``/v1/openapi.json`` serves, version aside. A route or model that
 changes the document changes the file in the same change — regenerate it
-with ``sbxloop api openapi --snapshot --write docs/openapi.json``."""
+with ``lantern api openapi --snapshot --write docs/openapi.json``."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from sbxloop.api.app import SNAPSHOT_VERSION, openapi_document
-from sbxloop.cli.api import api_app
+from lantern.api.app import SNAPSHOT_VERSION, openapi_document
+from lantern.cli.api import api_app
 from tests.api.conftest import Api
 
 SNAPSHOT = Path(__file__).resolve().parents[2] / "docs" / "openapi.json"
-REGENERATE = "regenerate it: uv run sbxloop api openapi --snapshot --write docs/openapi.json"
+REGENERATE = "regenerate it: uv run lantern api openapi --snapshot --write docs/openapi.json"
 
 
 def _normalised(document: dict[str, object]) -> str:
@@ -31,7 +31,7 @@ def test_the_committed_contract_is_what_the_listener_serves(api: Api) -> None:
 
 def test_the_document_builds_without_a_daemon_and_the_cli_prints_it(tmp_path: Path) -> None:
     document = openapi_document(snapshot=True)
-    assert document["info"] == {"title": "sbxloop", "version": SNAPSHOT_VERSION}
+    assert document["info"] == {"title": "lantern", "version": SNAPSHOT_VERSION}
     assert "/v1/status" in document["paths"] and "/v1/ws" not in document["paths"]
     result = CliRunner().invoke(api_app, ["openapi", "--snapshot"])
     assert result.exit_code == 0, result.output

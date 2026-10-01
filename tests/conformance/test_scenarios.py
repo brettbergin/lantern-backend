@@ -12,7 +12,7 @@ import base64
 
 import pytest
 
-from sbxloop.vcs.model import (
+from lantern.vcs.model import (
     BaseRequirements,
     ChecksVerdict,
     FailedCheck,
@@ -24,7 +24,7 @@ from sbxloop.vcs.model import (
     ReviewThread,
     SubmittedReview,
 )
-from sbxloop.vcs.protocol import CAPABILITIES, ROLES, Capability, VcsOps
+from lantern.vcs.protocol import CAPABILITIES, ROLES, Capability, VcsOps
 from tests.conformance.conftest import Subject
 
 
@@ -50,18 +50,18 @@ class TestRepository:
         ops, repo = subject.ops, subject.repo
         sha = ops.ref_lookup(repo, f"heads/{subject.base}")
         assert isinstance(sha, str) and sha
-        assert ops.ref_lookup(repo, "heads/sbxloop/never-delivered") is None
+        assert ops.ref_lookup(repo, "heads/lantern/never-delivered") is None
 
 
 class TestIssues:
     def test_lifecycle_with_labels(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.issue_create(repo, "the checks never run", "body", labels=["sbxloop:run"])
+        ref = ops.issue_create(repo, "the checks never run", "body", labels=["lantern:run"])
         assert isinstance(ref, IssueRef) and ref.number > 0 and ref.url
         issue = ops.issue_get(repo, ref.number)
         assert issue["state"] == "open"
-        ops.issue_labels_add(repo, ref.number, ["sbxloop:in-progress"])
-        ops.issue_label_remove(repo, ref.number, "sbxloop:run")
+        ops.issue_labels_add(repo, ref.number, ["lantern:in-progress"])
+        ops.issue_label_remove(repo, ref.number, "lantern:run")
         ops.issue_label_remove(repo, ref.number, "never-there")  # absent is not an error
         url = ops.issue_comment(repo, ref.number, "claimed")
         assert isinstance(url, str) and url
@@ -69,8 +69,8 @@ class TestIssues:
         assert ops.issue_get(repo, ref.number)["state"] == "closed"
 
     def test_listing_by_label_finds_a_seeded_issue(self, subject: Subject) -> None:
-        number = subject.seeds.existing_issue("queued work", ["sbxloop:run"])
-        listed = subject.ops.issues_list(subject.repo, labels=["sbxloop:run"])
+        number = subject.seeds.existing_issue("queued work", ["lantern:run"])
+        listed = subject.ops.issues_list(subject.repo, labels=["lantern:run"])
         assert any(entry.get("number") == number for entry in listed)
         assert all("pull_request" not in entry for entry in listed if isinstance(entry, dict))
 
@@ -86,7 +86,7 @@ class TestIssues:
         assert issue["title"] == "the settled title" and issue["body"] == "only the body"
 
     def test_a_managed_checklist_rewrites_only_its_block(self, subject: Subject) -> None:
-        from sbxloop.vcs.checklist import (
+        from lantern.vcs.checklist import (
             ChecklistEntry,
             add_child,
             parse_checklist,
@@ -135,7 +135,7 @@ class TestChange:
     @pytest.mark.needs("draft_changes")
     def test_create_as_draft_then_ready_then_merge(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it", draft=True)
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it", draft=True)
         assert isinstance(ref, PrRef) and ref.number > 0
         change = ops.pr_get(repo, ref.number)
         assert change["draft"] is True
@@ -147,9 +147,9 @@ class TestChange:
 
     def test_the_open_change_for_a_branch(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        assert ops.pr_list_open(repo, head="sbxloop/r1") == []
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it")
-        (found,) = ops.pr_list_open(repo, head="sbxloop/r1")
+        assert ops.pr_list_open(repo, head="lantern/r1") == []
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it")
+        (found,) = ops.pr_list_open(repo, head="lantern/r1")
         assert found["number"] == ref.number
 
 
@@ -157,7 +157,7 @@ class TestReview:
     @pytest.mark.needs("review_threads")
     def test_submit_reply_and_resolve(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it")
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it")
         finding = ReviewComment(path="a.py", line=3, body="[major] this leaks")
         review = ops.pr_review_create(repo, ref.number, "REQUEST_CHANGES", "one leak", [finding])
         # GitLab discovers this licensed feature on the MR during submission.
@@ -186,7 +186,7 @@ class TestReview:
 
     def test_a_change_level_comment(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it")
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it")
         url = ops.pr_issue_comment(repo, ref.number, "the review could not be posted")
         assert isinstance(url, str) and url
 
@@ -194,7 +194,7 @@ class TestReview:
 class TestChecks:
     def test_a_green_head_and_a_red_head_with_its_log(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it")
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it")
         head = str(ops.pr_get(repo, ref.number)["head"]["sha"])
         verdict = ops.pr_checks(repo, head)
         assert isinstance(verdict, ChecksVerdict) and verdict.state == "green"
@@ -207,7 +207,7 @@ class TestChecks:
 
     def test_a_pending_head_is_not_green(self, subject: Subject) -> None:
         ops, repo = subject.ops, subject.repo
-        ref = ops.pr_create(repo, subject.base, "sbxloop/r1", "sbxloop: ship it")
+        ref = ops.pr_create(repo, subject.base, "lantern/r1", "lantern: ship it")
         head = str(ops.pr_get(repo, ref.number)["head"]["sha"])
         subject.seeds.pending_check("ci")
         verdict = ops.pr_checks(repo, head)
@@ -252,12 +252,12 @@ class TestContent:
             ],
         )
         commit = ops.commit_create(
-            repo, message="sbxloop run r1: deliver", tree=str(tree["sha"]), parents=[base_sha]
+            repo, message="lantern run r1: deliver", tree=str(tree["sha"]), parents=[base_sha]
         )
-        ops.ref_create(repo, "refs/heads/sbxloop/r2", str(commit["sha"]))
-        assert ops.ref_lookup(repo, "heads/sbxloop/r2") == commit["sha"]
-        ops.ref_force_update(repo, "sbxloop/r2", str(commit["sha"]))
-        assert ops.ref_lookup(repo, "heads/sbxloop/r2") == commit["sha"]
+        ops.ref_create(repo, "refs/heads/lantern/r2", str(commit["sha"]))
+        assert ops.ref_lookup(repo, "heads/lantern/r2") == commit["sha"]
+        ops.ref_force_update(repo, "lantern/r2", str(commit["sha"]))
+        assert ops.ref_lookup(repo, "heads/lantern/r2") == commit["sha"]
         # A fix round: the same branch carries a second commit of the base
         # plus a changed file, however the forge moves a branch.
         again = base64.b64encode(b"hello again\n").decode()
@@ -270,10 +270,10 @@ class TestContent:
             ],
         )
         second = ops.commit_create(
-            repo, message="sbxloop run r1: deliver again", tree=str(tree["sha"]), parents=[base_sha]
+            repo, message="lantern run r1: deliver again", tree=str(tree["sha"]), parents=[base_sha]
         )
-        ops.ref_force_update(repo, "sbxloop/r2", str(second["sha"]))
-        head = ops.ref_lookup(repo, "heads/sbxloop/r2")
+        ops.ref_force_update(repo, "lantern/r2", str(second["sha"]))
+        head = ops.ref_lookup(repo, "heads/lantern/r2")
         assert head and head != commit["sha"]
         assert ops.commit_get(repo, head)["tree"]["sha"]
 
@@ -284,7 +284,7 @@ class TestContent:
             "README.md",
             message="initialize",
             content_b64=base64.b64encode(b"# r\n").decode(),
-            branch="sbxloop/r1",
+            branch="lantern/r1",
         )
         assert written
         replaced = subject.ops.contents_put(
@@ -292,6 +292,6 @@ class TestContent:
             "README.md",
             message="initialize again",
             content_b64=base64.b64encode(b"# r again\n").decode(),
-            branch="sbxloop/r1",
+            branch="lantern/r1",
         )
         assert replaced

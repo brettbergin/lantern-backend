@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import hostgit
-from sbxloop.errors import ProvisionError
-from sbxloop.safegit import read_repo
+from lantern import hostgit
+from lantern.errors import ProvisionError
+from lantern.safegit import read_repo
 from tests.unit.test_hostgit import git, make_repo, make_run_clone, push_upstream_commit
 
 

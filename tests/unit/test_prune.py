@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.cli.app import app
-from sbxloop.engine.store import StateStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxInfo, SandboxSpec
-from sbxloop.sbx.prune import classify_sandboxes, format_age
+from lantern.cli.app import app
+from lantern.engine.store import StateStore
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxInfo, SandboxSpec
+from lantern.sbx.prune import classify_sandboxes, format_age
 from tests.conftest import FakeSbx
 
 runner = CliRunner()
@@ -37,15 +37,15 @@ def info(name: str) -> SandboxInfo:
 
 
 class TestClassification:
-    def test_non_sbxloop_sandboxes_ignored(self, store: StateStore) -> None:
+    def test_non_lantern_sandboxes_ignored(self, store: StateStore) -> None:
         verdicts = classify_sandboxes([info("my-own-box"), info("sbx-other")], store)
         assert verdicts == []
 
-    def test_unrecognized_sbxloop_name_never_orphaned(self, store: StateStore) -> None:
+    def test_unrecognized_lantern_name_never_orphaned(self, store: StateStore) -> None:
         # Future taxonomies (warm-pool standby etc.) must be safe from day
         # one: prefix-matching but unparseable names are reported, not pruned.
         verdicts = classify_sandboxes(
-            [info("sbxloop-pool-agent"), info("sbxloop-oddball")], store, min_age_s=0.0
+            [info("lantern-pool-agent"), info("lantern-oddball")], store, min_age_s=0.0
         )
         assert [v.orphan for v in verdicts] == [False, False]
         assert all("unrecognized" in v.reason for v in verdicts)
@@ -53,10 +53,10 @@ class TestClassification:
     def test_daemon_owned_names_are_reported_not_pruned(self, store: StateStore) -> None:
         verdicts = classify_sandboxes(
             [
-                info("sbxloop-daemon-github-0badf00d"),
-                info("sbxloop-daemon-gitlab-0badf00d"),
-                info("sbxloop-daemon-gitlab-0badf00d-g2"),  # a later generation of the box
-                info("sbxloop-concierge-0badf00d"),
+                info("lantern-daemon-github-0badf00d"),
+                info("lantern-daemon-gitlab-0badf00d"),
+                info("lantern-daemon-gitlab-0badf00d-g2"),  # a later generation of the box
+                info("lantern-concierge-0badf00d"),
             ],
             store,
             min_age_s=0.0,
@@ -70,14 +70,14 @@ class TestClassification:
         now = store.get_run("rabc12345").updated_at
 
         (verdict,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-gitlab")], store, min_age_s=0.0, now=now
+            [info("lantern-rabc12345-gitlab")], store, min_age_s=0.0, now=now
         )
 
         assert verdict.orphan
         assert verdict.role == "github"
 
     def test_unknown_run_is_kept_when_owner_cannot_be_proven(self, store: StateStore) -> None:
-        (verdict,) = classify_sandboxes([info("sbxloop-rabc12345-agent")], store)
+        (verdict,) = classify_sandboxes([info("lantern-rabc12345-agent")], store)
         assert not verdict.orphan
         assert verdict.run_id == "rabc12345"
         assert verdict.role == "agent"
@@ -86,14 +86,14 @@ class TestClassification:
         assert "this state DB" in verdict.reason
 
     def test_another_homes_run_is_never_pruned(self, store: StateStore, tmp_path: Path) -> None:
-        from sbxloop.paths import SbxloopHome
-        from sbxloop.sbx.naming import run_name
+        from lantern.paths import LanternHome
+        from lantern.sbx.naming import run_name
 
-        foreign = run_name(SbxloopHome(tmp_path / "other"), "rabc12345", "agent")
+        foreign = run_name(LanternHome(tmp_path / "other"), "rabc12345", "agent")
         store.create_run("rabc12345", "x")
         store.set_run_state("rabc12345", "completed")
         (verdict,) = classify_sandboxes(
-            [info(foreign)], store, min_age_s=0, home=SbxloopHome(tmp_path / "own")
+            [info(foreign)], store, min_age_s=0, home=LanternHome(tmp_path / "own")
         )
         assert not verdict.orphan
         assert "another" in verdict.reason
@@ -104,13 +104,13 @@ class TestClassification:
         now = store.get_run("rabc12345").updated_at
 
         (recent,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")], store, min_age_s=HOUR, now=now + 60
+            [info("lantern-rabc12345-agent")], store, min_age_s=HOUR, now=now + 60
         )
         assert not recent.orphan
         assert "younger than --min-age" in recent.reason
 
         (old,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")], store, min_age_s=HOUR, now=now + 2 * HOUR
+            [info("lantern-rabc12345-agent")], store, min_age_s=HOUR, now=now + 2 * HOUR
         )
         assert old.orphan
         assert old.run_state == "completed"
@@ -121,7 +121,7 @@ class TestClassification:
         store.set_run_state("rabc12345", state)  # type: ignore[arg-type]
         now = store.get_run("rabc12345").updated_at
         (verdict,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-github")], store, min_age_s=HOUR, now=now + 2 * HOUR
+            [info("lantern-rabc12345-github")], store, min_age_s=HOUR, now=now + 2 * HOUR
         )
         assert verdict.orphan
 
@@ -130,7 +130,7 @@ class TestClassification:
         store.set_run_state("rabc12345", "building")
         now = store.get_run("rabc12345").updated_at
         (verdict,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")], store, min_age_s=HOUR, now=now + 2 * HOUR
+            [info("lantern-rabc12345-agent")], store, min_age_s=HOUR, now=now + 2 * HOUR
         )
         assert verdict.orphan
         assert "silent" in verdict.reason
@@ -138,14 +138,14 @@ class TestClassification:
     def test_recent_events_keep_a_non_terminal_run_alive(self, store: StateStore) -> None:
         """A long phase does not bump runs.updated_at — liveness must come
         from the persisted event stream (heartbeats included)."""
-        from sbxloop_worker.protocol import Event
+        from lantern_worker.protocol import Event
 
         store.create_run("rabc12345", "x")
         store.set_run_state("rabc12345", "building")
         now = store.get_run("rabc12345").updated_at + 2 * HOUR
         store.append_event(Event(ts=now - 60, run_id="rabc12345", type="worker.heartbeat", data={}))
         (verdict,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")], store, min_age_s=HOUR, now=now
+            [info("lantern-rabc12345-agent")], store, min_age_s=HOUR, now=now
         )
         assert not verdict.orphan
         assert "possibly live" in verdict.reason
@@ -157,13 +157,13 @@ class TestClassification:
         now = store.get_run("rabc12345").updated_at + 2 * HOUR
 
         (kept,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")], store, min_age_s=HOUR, now=now
+            [info("lantern-rabc12345-agent")], store, min_age_s=HOUR, now=now
         )
         assert not kept.orphan
         assert "kept (debug)" in kept.reason
 
         (included,) = classify_sandboxes(
-            [info("sbxloop-rabc12345-agent")],
+            [info("lantern-rabc12345-agent")],
             store,
             min_age_s=HOUR,
             now=now,
@@ -181,13 +181,13 @@ class TestClassification:
 
 class TestPruneCommand:
     def seed(self, workdir: Path, fake_sbx: FakeSbx, run_id: str, state: str) -> StateStore:
-        store = StateStore(SbxloopHome(workdir / ".sbxloop").state_db)
+        store = StateStore(LanternHome(workdir / ".lantern").state_db)
         store.create_run(run_id, "an outcome")
         store.set_run_state(run_id, state)  # type: ignore[arg-type]
         cli = SbxCLI(binary=str(fake_sbx.binary))
         for role in ("agent", "github"):
             cli.create(
-                SandboxSpec(name=f"sbxloop-{run_id}-{role}", role="agent", workspace=workdir)
+                SandboxSpec(name=f"lantern-{run_id}-{role}", role="agent", workspace=workdir)
             )
         return store
 
@@ -223,9 +223,9 @@ class TestPruneCommand:
             host="api.github.com",
             env="COPILOT_GITHUB_TOKEN",
             value="ghp_x",
-            sandbox="sbxloop-rabc12345-agent",
+            sandbox="lantern-rabc12345-agent",
         )
-        cli.secret_set("github", sandbox="sbxloop-rabc12345-github", token="ghp_y")
+        cli.secret_set("github", sandbox="lantern-rabc12345-github", token="ghp_y")
         result = runner.invoke(app, ["sandbox", "prune", "--min-age", "0", "--force"])
         assert result.exit_code == 0, result.output
         assert cli.ls() == []
@@ -234,9 +234,9 @@ class TestPruneCommand:
             host="api.github.com",
             env="COPILOT_GITHUB_TOKEN",
             value="ghp_x",
-            sandbox="sbxloop-rabc12345-agent",
+            sandbox="lantern-rabc12345-agent",
         )
-        cli.secret_set("github", sandbox="sbxloop-rabc12345-github", token="ghp_y")
+        cli.secret_set("github", sandbox="lantern-rabc12345-github", token="ghp_y")
 
     def test_recent_run_not_pruned(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         self.seed(workdir, fake_sbx, "rabc12345", "failed")
@@ -263,11 +263,11 @@ class TestPruneCommand:
         assert store.get_run("rabc12345").kept_reason is None
 
     def test_unknown_sandbox_pruned_with_caveat(self, workdir: Path, fake_sbx: FakeSbx) -> None:
-        StateStore(SbxloopHome(workdir / ".sbxloop").state_db)  # empty DB
+        StateStore(LanternHome(workdir / ".lantern").state_db)  # empty DB
         cli = SbxCLI(binary=str(fake_sbx.binary))
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.naming import run_name
 
-        name = run_name(SbxloopHome(workdir / ".sbxloop"), "rzzzzzzzz", "agent")
+        name = run_name(LanternHome(workdir / ".lantern"), "rzzzzzzzz", "agent")
         cli.create(SandboxSpec(name=name, role="agent", workspace=workdir))
         result = runner.invoke(app, ["sandbox", "prune"])
         assert result.exit_code == 0, result.output
@@ -279,7 +279,7 @@ class TestPruneCommand:
     def test_no_sandboxes(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         result = runner.invoke(app, ["sandbox", "prune"])
         assert result.exit_code == 0, result.output
-        assert "no sbxloop sandboxes" in result.output
+        assert "no lantern sandboxes" in result.output
 
     def test_rm_failure_reported_and_exit_1(self, workdir: Path, fake_sbx: FakeSbx) -> None:
         self.seed(workdir, fake_sbx, "rabc12345", "failed")
@@ -294,12 +294,12 @@ class TestDoctorOrphans:
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", "tok")
-        StateStore(SbxloopHome(workdir / ".sbxloop").state_db)  # empty DB → unknown sandbox
-        from sbxloop.sbx.naming import run_name
+        StateStore(LanternHome(workdir / ".lantern").state_db)  # empty DB → unknown sandbox
+        from lantern.sbx.naming import run_name
 
         SbxCLI(binary=str(fake_sbx.binary)).create(
             SandboxSpec(
-                name=run_name(SbxloopHome(workdir / ".sbxloop"), "rzzzzzzzz", "agent"),
+                name=run_name(LanternHome(workdir / ".lantern"), "rzzzzzzzz", "agent"),
                 role="agent",
                 workspace=workdir,
             )
@@ -323,7 +323,7 @@ class TestFreshRunAge:
     def test_just_created_run_is_young(self, store: StateStore) -> None:
         # A run created moments ago must read as young with real wall time.
         store.create_run("rabc12345", "x")
-        (verdict,) = classify_sandboxes([info("sbxloop-rabc12345-agent")], store)
+        (verdict,) = classify_sandboxes([info("lantern-rabc12345-agent")], store)
         assert not verdict.orphan
         assert verdict.age_s is not None
         assert verdict.age_s < 60

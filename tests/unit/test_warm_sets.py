@@ -13,15 +13,15 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.ids import new_run_id
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxInfo
-from sbxloop.sbx.naming import is_managed_name
-from sbxloop.sbx.prune import classify_sandboxes
-from sbxloop.sbx.warm import Warmer, WarmRegistry, warm_fingerprint
-from sbxloop.worker.client import WorkerClient
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.ids import new_run_id
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxInfo
+from lantern.sbx.naming import is_managed_name
+from lantern.sbx.prune import classify_sandboxes
+from lantern.sbx.warm import Warmer, WarmRegistry, warm_fingerprint
+from lantern.worker.client import WorkerClient
 from tests.conftest import FakeSbx
 from tests.unit.test_daemon_loop import Harness, gh_item
 from tests.unit.test_provision import GITHUB_ENABLED, TOKENS
@@ -58,7 +58,7 @@ class TestFilling:
         w = warmer(fake_sbx, config(tmp_path))
         warm = w.fill_one()
         assert warm is not None and warm.state == "ready"
-        from sbxloop.sbx.naming import run_name
+        from lantern.sbx.naming import run_name
 
         assert warm.names == [
             run_name(w.config.paths, warm.run_id, "agent"),
@@ -78,7 +78,7 @@ class TestFilling:
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         cfg = config(tmp_path)
-        cfg.sandbox.template = "sbxloop-baked:latest"
+        cfg.sandbox.template = "lantern-baked:latest"
         installs: list[tuple[str | None, dict[str, Any]]] = []
 
         def install(self: WorkerClient, **kwargs: Any) -> None:
@@ -128,7 +128,7 @@ class TestClaiming:
         w = warmer(fake_sbx, config(tmp_path))
         assert w.fill_one() is not None
         later = config(tmp_path)
-        later.sandbox.template = "sbxloop-baked:v2"
+        later.sandbox.template = "lantern-baked:v2"
         assert warm_fingerprint(later) != warm_fingerprint(w.config)
         assert warmer(fake_sbx, later).claim() is None
 
@@ -153,7 +153,7 @@ class TestUpkeep:
         warm = w.fill_one()
         assert warm is not None
         later = config(tmp_path)
-        later.sandbox.template = "sbxloop-baked:v2"
+        later.sandbox.template = "lantern-baked:v2"
         warmer(fake_sbx, later).reconcile()
         assert warmer(fake_sbx, later).sets() == []
         assert not any(info.name in warm.names for info in w.cli.ls())
@@ -237,8 +237,8 @@ class TestEngine:
     def test_a_warm_run_reuses_its_sandboxes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.engine.engine import LoopEngine
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.engine.engine import LoopEngine
+        from lantern.sbx.provision import Provisioner
 
         seen: list[dict[str, Any]] = []
 
@@ -261,12 +261,12 @@ class TestEngine:
 
 class TestPrune:
     def test_a_warm_set_is_not_an_orphan(self, tmp_path: Path) -> None:
-        from sbxloop.engine.store import StateStore
-        from sbxloop.paths import SbxloopHome
-        from sbxloop.sbx.naming import run_name
+        from lantern.engine.store import StateStore
+        from lantern.paths import LanternHome
+        from lantern.sbx.naming import run_name
 
         warm_id, cold_id = new_run_id(), new_run_id()
-        home = SbxloopHome(tmp_path)
+        home = LanternHome(tmp_path)
         store = StateStore(tmp_path / "state.db")
         try:
             infos = [

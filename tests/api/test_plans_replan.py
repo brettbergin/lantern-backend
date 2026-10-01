@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.engine.planning import PlanReplan
-from sbxloop.plans.render import marked, marker, parse_sections
+from lantern.engine.planning import PlanReplan
+from lantern.plans.render import marked, marker, parse_sections
 from tests.api.conftest import Api
 from tests.api.test_plans_publish import DRAFT, _events, _node
 from tests.api.test_plans_reconcile import _number, _published, _writes
@@ -260,7 +260,7 @@ class TestApprovingAChange:
     ) -> None:
         """The change goes through the direct edit's write, which reads the
         issue itself: an edit the reconcile did not see still refuses it."""
-        from sbxloop.plans import service
+        from lantern.plans import service
 
         fake, plan, headers = _published(api)
         a = _node(plan, "A")
@@ -354,7 +354,7 @@ class TestRefusals:
         assert unknown.status_code == 422 and "rpe_elsewhere" in unknown.json()["detail"]
 
     def test_an_addition_past_the_cap_is_refused_before_the_forge(self, api: Api) -> None:
-        from sbxloop.config import PlanningConfig
+        from lantern.config import PlanningConfig
 
         fake, plan, headers = _published(api)
         plan = _propose(api, plan, add=[_task("C")])

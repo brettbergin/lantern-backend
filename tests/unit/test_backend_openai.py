@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop_worker.backends import BackendUnavailableError, get_backend, openai as openai_backend
-from sbxloop_worker.backends.openai import (
+from lantern_worker.backends import BackendUnavailableError, get_backend, openai as openai_backend
+from lantern_worker.backends.openai import (
     CODING_AGENT_PRESET,
     JSON_REASK,
     SESSION_DIR_ENV,
@@ -28,8 +28,8 @@ from sbxloop_worker.backends.openai import (
     endpoint_settings,
     parse_tool_arguments,
 )
-from sbxloop_worker.hosttools import response_path
-from sbxloop_worker.protocol import (
+from lantern_worker.hosttools import response_path
+from lantern_worker.protocol import (
     OPENAI_API_ENV,
     OPENAI_BASE_URL_ENV,
     OPENAI_KEY_NAME_ENV,
@@ -555,7 +555,7 @@ def test_endpoint_settings_fail_by_name(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_ensure_available_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "openai", None)
-    with pytest.raises(BackendUnavailableError, match=r"sbxloop-worker\[openai\]"):
+    with pytest.raises(BackendUnavailableError, match=r"lantern-worker\[openai\]"):
         OpenAIBackend().ensure_available()
 
 
@@ -984,7 +984,7 @@ def test_the_field_400_reaches_the_host_as_a_job_error_without_a_provider_failur
     """The worker's result for the field failure: an error the phase fails
     on (``error.provider`` unset), never the provider hold that parked the
     run with "reset unknown"; genuine outages keep their provider failure."""
-    from sbxloop_worker.runner import JobRunner
+    from lantern_worker.runner import JobRunner
 
     def result_for(reply: Exception) -> Any:
         transport = FakeTransport([reply])

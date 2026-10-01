@@ -20,14 +20,14 @@ from typing import Any
 import pytest
 from sqlalchemy import insert, update
 
-from sbxloop.agents.posts import ArtifactRef, ChannelPost, ChannelPoster, RunPostLedger
-from sbxloop.config import Config
-from sbxloop.daemon.concierge import ConciergeReply
-from sbxloop.daemon.model import WorkItem
-from sbxloop.db.api_models import ArtifactRow
-from sbxloop.db.collaboration_models import ChannelRow, MessageRow
-from sbxloop.ghids import chat_item_id, issue_item_id
-from sbxloop_worker.protocol import Event
+from lantern.agents.posts import ArtifactRef, ChannelPost, ChannelPoster, RunPostLedger
+from lantern.config import Config
+from lantern.daemon.concierge import ConciergeReply
+from lantern.daemon.model import WorkItem
+from lantern.db.api_models import ArtifactRow
+from lantern.db.collaboration_models import ChannelRow, MessageRow
+from lantern.ghids import chat_item_id, issue_item_id
+from lantern_worker.protocol import Event
 from tests.api.test_channel_access import _channel, _people
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
@@ -303,7 +303,7 @@ def test_a_silenced_channel_drops_progress_and_keeps_delivery(api: Any) -> None:
         return api.ctx.poster.post(
             ChannelPost(
                 channel_id=channel,
-                author_agent="angie",
+                author_agent="lantern",
                 kind=kind,  # type: ignore[arg-type]
                 text=text,
                 run_id="r1",
@@ -425,7 +425,7 @@ def test_a_post_into_a_channel_that_is_gone_is_dropped(api: Any) -> None:
         api.ctx.poster.post(
             ChannelPost(
                 channel_id=channel,
-                author_agent="angie",
+                author_agent="lantern",
                 kind="delivery",
                 text="Here is the bread list",
                 run_id="r1",
@@ -573,7 +573,7 @@ def test_a_post_keeps_its_files_in_a_channel_with_no_turn(api: Any) -> None:
     api.ctx.poster.post(
         ChannelPost(
             channel_id=channel,
-            author_agent="angie",
+            author_agent="lantern",
             kind="delivery",
             text="Here is the bread list",
             run_id="r1",
@@ -622,13 +622,13 @@ def test_a_channel_that_cannot_be_written_to_does_not_fail_the_run(
         raise RuntimeError("the store is having a day")
 
     monkeypatch.setattr(type(api.ctx.collaboration), "post_agent_update", _boom)
-    monkeypatch.setattr("sbxloop.api.channel_posts.channel_for_item", _boom)
+    monkeypatch.setattr("lantern.api.channel_posts.channel_for_item", _boom)
 
     assert (
         api.ctx.poster.post(
             ChannelPost(
                 channel_id=channel,
-                author_agent="angie",
+                author_agent="lantern",
                 kind="delivery",
                 text="Here is the bread list",
                 run_id="r1",

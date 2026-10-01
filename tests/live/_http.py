@@ -112,7 +112,7 @@ class Client:
             method=method,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "sbxloop-live-harness",
+                "User-Agent": "lantern-live-harness",
                 **({"Content-Type": "application/json"} if data is not None else {}),
                 **self.auth,
                 **(headers or {}),

@@ -1,4 +1,4 @@
-"""``sbxloop config migrate``: the legacy repository spelling rewritten in
+"""``lantern config migrate``: the legacy repository spelling rewritten in
 place, every comment kept (#2255, PR 2).
 
 The contract: ``[[github.repos]]`` entries and their ``[github.repos.*]``
@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import load_config
-from sbxloop.configedit.toml import ConfigWriteError, migrate_repos
+from lantern.config import load_config
+from lantern.configedit.toml import ConfigWriteError, migrate_repos
 
 LEGACY = """\
 # operator note at the top
@@ -59,7 +59,7 @@ class TestMigrateRepos:
             'bot_login = "loop[bot]"',
         ):
             assert kept in text, kept
-        (tmp_path / "sbxloop.toml").write_text(text)
+        (tmp_path / "lantern.toml").write_text(text)
         cfg = load_config(cwd=tmp_path, env={})
         assert [r.repo for r in cfg.vcs.repos] == ["group/one", "group/two"]
         assert cfg.vcs.repos[0].deliver_base == "main"
@@ -79,7 +79,7 @@ class TestMigrateRepos:
         text, moved = migrate_repos(legacy)
         assert moved == ["acme/app"]
         assert "[[vcs.repos]]" in text
-        (tmp_path / "sbxloop.toml").write_text(text)
+        (tmp_path / "lantern.toml").write_text(text)
         cfg = load_config(cwd=tmp_path, env={})
         assert [r.repo for r in cfg.vcs.repos] == ["acme/app"]
         assert cfg.vcs.repos[0].deliver_base == "develop"
@@ -109,43 +109,43 @@ class TestMigrateRepos:
 
 
 class TestCommand:
-    """``sbxloop config migrate`` on the home's file."""
+    """``lantern config migrate`` on the home's file."""
 
     def test_rewrites_the_file_with_a_backup_and_says_what_moved(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from typer.testing import CliRunner
 
-        from sbxloop.cli.app import app
-        from sbxloop.paths import SbxloopHome
+        from lantern.cli.app import app
+        from lantern.paths import LanternHome
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("SBXLOOP_HOME", str(tmp_path / ".sbxloop"))
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        monkeypatch.setenv("LANTERN_HOME", str(tmp_path / ".lantern"))
+        home = LanternHome(tmp_path / ".lantern")
         home.ensure_tree()
         home.config_toml.write_text(LEGACY)
         result = CliRunner().invoke(app, ["config", "migrate"])
         assert result.exit_code == 0, result.output
         assert "group/one" in result.output and "group/two" in result.output
         assert "[[vcs.repos]]" in home.config_toml.read_text()
-        backups = list(home.config_toml.parent.glob("sbxloop.toml.bak-*"))
+        backups = list(home.config_toml.parent.glob("lantern.toml.bak-*"))
         assert len(backups) == 1 and backups[0].read_text() == LEGACY
         again = CliRunner().invoke(app, ["config", "migrate"])
         assert again.exit_code == 0, again.output
         assert "nothing to migrate" in again.output
-        assert len(list(home.config_toml.parent.glob("sbxloop.toml.bak-*"))) == 1
+        assert len(list(home.config_toml.parent.glob("lantern.toml.bak-*"))) == 1
 
     def test_a_file_with_both_spellings_is_refused_and_untouched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from typer.testing import CliRunner
 
-        from sbxloop.cli.app import app
-        from sbxloop.paths import SbxloopHome
+        from lantern.cli.app import app
+        from lantern.paths import LanternHome
 
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("SBXLOOP_HOME", str(tmp_path / ".sbxloop"))
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        monkeypatch.setenv("LANTERN_HOME", str(tmp_path / ".lantern"))
+        home = LanternHome(tmp_path / ".lantern")
         home.ensure_tree()
         both = LEGACY + '\n[[vcs.repos]]\nrepo = "group/three"\n'
         home.config_toml.write_text(both)
@@ -160,10 +160,10 @@ class TestEditorWritesTheCurrentSpelling:
     loader reads it instead of appending an empty second list."""
 
     def test_a_repo_key_edit_migrates_a_legacy_file(self, tmp_path: Path) -> None:
-        from sbxloop.configedit import ConfigEditor
-        from sbxloop.paths import SbxloopHome
+        from lantern.configedit import ConfigEditor
+        from lantern.paths import LanternHome
 
-        home = SbxloopHome(tmp_path / ".sbxloop")
+        home = LanternHome(tmp_path / ".lantern")
         home.ensure_tree()
         home.config_toml.write_text(
             '[[github.repos]]\nrepo = "o/r"\n\n[[github.repos]]\nrepo = "o/s"\n'

@@ -11,38 +11,38 @@ from typing import Any
 import pytest
 from textual.widgets import Input, OptionList, Select, TabbedContent, TabPane, TextArea
 
-from sbxloop.backends import backend_named
-from sbxloop.cli.policyview import policy_view
-from sbxloop.config import Config
-from sbxloop.configedit import keys as configkeys, toml as configtoml
-from sbxloop.configedit.edit import (
+from lantern.backends import backend_named
+from lantern.cli.policyview import policy_view
+from lantern.config import Config
+from lantern.configedit import keys as configkeys, toml as configtoml
+from lantern.configedit.edit import (
     FILE_LAYER,
     config_path,
     read_text,
     save_text,
     validate_text,
 )
-from sbxloop.modelcatalog import save_catalog
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.config import ConfigScreen, flatten_config
-from sbxloop.tui.screens.configvalue import ValueScreen
-from sbxloop.tui.screens.modals import ConfirmScreen, TextPromptScreen
-from sbxloop.tui.widgets.panel import TextPanel
-from sbxloop.tui.widgets.tables import ConsoleTable
+from lantern.modelcatalog import save_catalog
+from lantern.paths import LanternHome
+from lantern.tui.screens.config import ConfigScreen, flatten_config
+from lantern.tui.screens.configvalue import ValueScreen
+from lantern.tui.screens.modals import ConfirmScreen, TextPromptScreen
+from lantern.tui.widgets.panel import TextPanel
+from lantern.tui.widgets.tables import ConsoleTable
 from tests.unit.test_modelcatalog import row
 from tests.unit.tui.conftest import FakeCtl, FakeRunner, drive, live_status, make_app, until
 
 REFRESH: dict[str, Any] = {"refresh_s": 3.0}
 
 
-def _seed_config(home: SbxloopHome, text: str) -> None:
+def _seed_config(home: LanternHome, text: str) -> None:
     """Write the operator config where the loader reads it: the home's
-    ``config/sbxloop.toml``, not a file in some working directory."""
+    ``config/lantern.toml``, not a file in some working directory."""
     home.config_toml.parent.mkdir(parents=True, exist_ok=True)
     home.config_toml.write_text(text)
 
 
-def _config_text(home: SbxloopHome) -> str:
+def _config_text(home: LanternHome) -> str:
     return home.config_toml.read_text()
 
 
@@ -72,7 +72,7 @@ async def _open_key(pilot: Any, screen: ConfigScreen, key: str) -> None:
     table.move_cursor(row=table.get_row_index(key))
 
 
-def test_model_setting_opens_a_picker(seeded: SbxloopHome, hermetic: None) -> None:
+def test_model_setting_opens_a_picker(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(seeded, '[agent.models]\nbuild = "first"\n')
 
     async def scenario() -> None:
@@ -95,16 +95,16 @@ def test_model_setting_opens_a_picker(seeded: SbxloopHome, hermetic: None) -> No
 def hermetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # No user config layer from the developer's own ~/.config.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
-    monkeypatch.delenv("SBXLOOP_DAEMON__POLL_INTERVAL_S", raising=False)
+    monkeypatch.delenv("LANTERN_DAEMON__POLL_INTERVAL_S", raising=False)
 
 
 def test_configedit_edits_the_homes_operator_config(tmp_path: Path, hermetic: None) -> None:
-    """The file is the home's `config/sbxloop.toml` — what init writes and
-    the loader reads from any directory — never a `sbxloop.toml` in
+    """The file is the home's `config/lantern.toml` — what init writes and
+    the loader reads from any directory — never a `lantern.toml` in
     whatever directory something happened to be started in."""
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     path = config_path(home)
-    assert path == home.root / "config" / "sbxloop.toml"
+    assert path == home.root / "config" / "lantern.toml"
     assert "[daemon]" in read_text(path)[0], "no file yet: the commented example"
     env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg-config"), "HOME": str(tmp_path)}
     assert validate_text("[daemon]\npoll_interval_s = 7.0\n", home=home, env=env).ok
@@ -118,7 +118,7 @@ def test_configedit_edits_the_homes_operator_config(tmp_path: Path, hermetic: No
     assert "[daemon]" in text and note is not None and "could not read" in note
     assert save_text(path, "[tui]\nemoji = false\n", now=1_700_000_000.0) is None
     backup = save_text(path, "[tui]\nemoji = true\n", now=1_700_000_000.0)
-    assert backup is not None and backup.name.startswith("sbxloop.toml.bak-")
+    assert backup is not None and backup.name.startswith("lantern.toml.bak-")
     assert backup.read_text() == "[tui]\nemoji = false\n"
     assert path.read_text() == "[tui]\nemoji = true\n"
 
@@ -127,16 +127,16 @@ def test_a_draft_is_validated_as_the_homes_own_layer(tmp_path: Path, hermetic: N
     """The draft stands in for the home config layer, so what it says is
     what the verdict resolves — and the home it is validated against is the
     console's, never whichever one the ambient environment names."""
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     home.config_toml.parent.mkdir(parents=True)
     home.config_toml.write_text('model = "on-disk"\n')
     other = tmp_path / "elsewhere"
     (other / "config").mkdir(parents=True)
-    (other / "config" / "sbxloop.toml").write_text('model = "the-wrong-home"\n')
+    (other / "config" / "lantern.toml").write_text('model = "the-wrong-home"\n')
     env = {"XDG_CONFIG_HOME": str(tmp_path / "xdg-config"), "HOME": str(tmp_path)}
 
     verdict = validate_text(
-        'model = "drafted"\n', home=home, env={**env, "SBXLOOP_HOME": str(other)}
+        'model = "drafted"\n', home=home, env={**env, "LANTERN_HOME": str(other)}
     )
     assert verdict.ok and verdict.config is not None
     assert verdict.config.model == "drafted", "the draft replaces the file, unread"
@@ -156,7 +156,7 @@ def test_flatten_and_policy_view_are_the_cli_folds() -> None:
 
 
 def test_config_screen_resolves_filters_and_shows_the_policy(
-    seeded: SbxloopHome, hermetic: None
+    seeded: LanternHome, hermetic: None
 ) -> None:
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
 
@@ -191,7 +191,7 @@ def test_config_screen_resolves_filters_and_shows_the_policy(
 
 
 def test_the_repository_pane_keys_entries_by_their_current_spelling(
-    seeded: SbxloopHome, hermetic: None
+    seeded: LanternHome, hermetic: None
 ) -> None:
     """A repository row is addressed as `vcs.repos[i]` (#2255), whichever
     spelling the file used, so an edit from the pane lands on the current key."""
@@ -211,12 +211,12 @@ def test_the_repository_pane_keys_entries_by_their_current_spelling(
     drive(scenario)
 
 
-def test_config_screen_shows_the_workload_profiles(seeded: SbxloopHome, hermetic: None) -> None:
+def test_config_screen_shows_the_workload_profiles(seeded: LanternHome, hermetic: None) -> None:
     """#804: the bounds decide what a workload can do, and the console is
     where an operator looks first — each profile as a card, the stored
     schedules under the profile they name, never a credential's value."""
-    from sbxloop.config import ScheduleConfig
-    from sbxloop.daemon.store import DaemonStore
+    from lantern.config import ScheduleConfig
+    from lantern.daemon.store import DaemonStore
 
     _seed_config(
         seeded,
@@ -255,7 +255,7 @@ def test_config_screen_shows_the_workload_profiles(seeded: SbxloopHome, hermetic
     drive(scenario)
 
 
-def test_the_console_has_no_file_editor(seeded: SbxloopHome, hermetic: None) -> None:
+def test_the_console_has_no_file_editor(seeded: LanternHome, hermetic: None) -> None:
     """Handing the operator a file to find a line in is the thing this
     screen replaced: there is no draft buffer, no `$EDITOR` hand-off and no
     whole-file save, and the keys that drove them do nothing."""
@@ -288,7 +288,7 @@ def test_the_console_has_no_file_editor(seeded: SbxloopHome, hermetic: None) -> 
 
 
 def test_a_save_that_cannot_be_written_offers_no_restart(
-    seeded: SbxloopHome, hermetic: None
+    seeded: LanternHome, hermetic: None
 ) -> None:
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
 
@@ -304,7 +304,7 @@ def test_a_save_that_cannot_be_written_offers_no_restart(
                 raise OSError("read-only file system")
 
             with pytest.MonkeyPatch.context() as mp:
-                mp.setattr("sbxloop.tui.actions.save_text", refuse)
+                mp.setattr("lantern.tui.actions.save_text", refuse)
                 await _open_key(pilot, screen, "daemon.poll_interval_s")
                 await pilot.press("enter")
                 await until(pilot, lambda: isinstance(app.screen, ValueScreen))
@@ -318,7 +318,7 @@ def test_a_save_that_cannot_be_written_offers_no_restart(
     drive(scenario)
 
 
-def test_a_saved_key_keeps_a_backup(seeded: SbxloopHome, hermetic: None) -> None:
+def test_a_saved_key_keeps_a_backup(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
 
     async def scenario() -> None:
@@ -336,7 +336,7 @@ def test_a_saved_key_keeps_a_backup(seeded: SbxloopHome, hermetic: None) -> None
             await pilot.press("enter")
             await pilot.pause(2.0)
             assert _config_text(seeded) == "[daemon]\npoll_interval_s = 9.0\n"
-            backups = list(seeded.config.glob("sbxloop.toml.bak-*"))
+            backups = list(seeded.config.glob("lantern.toml.bak-*"))
             assert len(backups) == 1 and "7.0" in backups[0].read_text()
             assert isinstance(app.screen, ConfirmScreen)
             await pilot.press("n")
@@ -348,16 +348,16 @@ def test_a_saved_key_keeps_a_backup(seeded: SbxloopHome, hermetic: None) -> None
 
 
 def test_the_editor_is_the_homes_config_wherever_the_console_ran(
-    seeded: SbxloopHome, hermetic: None, tmp_path: Path
+    seeded: LanternHome, hermetic: None, tmp_path: Path
 ) -> None:
-    """A console started in a checkout that carries its own sbxloop.toml
+    """A console started in a checkout that carries its own lantern.toml
     still edits — and still resolves — the home's operator config. The two
     used to disagree: the editor followed the daemon's directory while the
     resolved view followed the console's, so a save landed in a file this
     screen never read (#818)."""
     elsewhere = tmp_path / "a-checkout"
     elsewhere.mkdir()
-    (elsewhere / "sbxloop.toml").write_text('[sandbox]\ngate_command = "make check"\n')
+    (elsewhere / "lantern.toml").write_text('[sandbox]\ngate_command = "make check"\n')
     _seed_config(seeded, "[daemon]\npoll_interval_s = 3.0\n")
 
     async def scenario() -> None:
@@ -375,20 +375,20 @@ def test_the_editor_is_the_homes_config_wherever_the_console_ran(
             assert str(seeded.config_toml) in status
             assert screen.flat["daemon.poll_interval_s"] == 3.0
             assert screen.flat["sandbox.gate_command"] is None, (
-                "the checkout's own sbxloop.toml is project config, not the operator's"
+                "the checkout's own lantern.toml is project config, not the operator's"
             )
 
     drive(scenario)
 
 
-def test_a_sbxloop_toml_in_the_home_is_named_as_shadowing(
-    seeded: SbxloopHome, hermetic: None
+def test_a_lantern_toml_in_the_home_is_named_as_shadowing(
+    seeded: LanternHome, hermetic: None
 ) -> None:
-    """Consoles before this fix wrote edits into `<home>/sbxloop.toml`,
+    """Consoles before this fix wrote edits into `<home>/lantern.toml`,
     which the loader applies *over* the operator config. The screen names
     that file so the split brain is visible instead of silent."""
     _seed_config(seeded, "[daemon]\npoll_interval_s = 3.0\n")
-    (seeded.root / "sbxloop.toml").write_text("[daemon]\npoll_interval_s = 99.0\n")
+    (seeded.root / "lantern.toml").write_text("[daemon]\npoll_interval_s = 99.0\n")
 
     async def scenario() -> None:
         app = make_app(seeded, **REFRESH)
@@ -398,7 +398,7 @@ def test_a_sbxloop_toml_in_the_home_is_named_as_shadowing(
             screen = app.screen
             assert isinstance(screen, ConfigScreen)
             status = screen.query_one("#file-status", TextPanel).content_text
-            assert "sbxloop.toml sits in the home" in status
+            assert "lantern.toml sits in the home" in status
             # And an edit to a key it holds is written, then flagged.
             await _open_key(pilot, screen, "daemon.poll_interval_s")
             await pilot.press("enter")
@@ -444,8 +444,8 @@ def test_flatten_walks_arrays_of_tables_and_sources_follow(hermetic: None) -> No
     assert flat["github.repos[1].reviewers"] == ["ada"]
     assert "github.repos" not in flat, "the array itself is walked, not printed"
     # The loader attributes `github.repos` as a whole; its leaves say so.
-    sources = {"github.repos": "sbxloop.toml", "daemon.poll_interval_s": "env"}
-    assert configkeys.source_for("github.repos[1].repo", sources) == "sbxloop.toml"
+    sources = {"github.repos": "lantern.toml", "daemon.poll_interval_s": "env"}
+    assert configkeys.source_for("github.repos[1].repo", sources) == "lantern.toml"
     assert configkeys.source_for("daemon.poll_interval_s", sources) == "env"
     assert configkeys.source_for("landing.merge_method", sources) == "default"
 
@@ -532,7 +532,7 @@ def test_writing_one_key_keeps_every_other_line() -> None:
         configtoml.set_value("[daemon\n", parts, 1.0)
 
 
-def test_model_edit_applies_without_offering_restart(seeded: SbxloopHome, hermetic: None) -> None:
+def test_model_edit_applies_without_offering_restart(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(seeded, '[agent.models]\nbuild = "first"\n')
     save_catalog(seeded, backend_named("copilot"), [row("first"), row("second")])
 
@@ -556,7 +556,7 @@ def test_model_edit_applies_without_offering_restart(seeded: SbxloopHome, hermet
     drive(scenario)
 
 
-def test_a_key_is_edited_from_the_resolved_view(seeded: SbxloopHome, hermetic: None) -> None:
+def test_a_key_is_edited_from_the_resolved_view(seeded: LanternHome, hermetic: None) -> None:
     """The point of the tab: pick the row, type the value, done — the file
     keeps every comment it had, and the restart is offered as always."""
     _seed_config(seeded, "# why the loop looks so often\n[daemon]\npoll_interval_s = 7.0\n")
@@ -615,7 +615,7 @@ def test_a_key_is_edited_from_the_resolved_view(seeded: SbxloopHome, hermetic: N
     drive(scenario)
 
 
-def test_a_repo_entry_is_addressable_key_by_key(seeded: SbxloopHome, hermetic: None) -> None:
+def test_a_repo_entry_is_addressable_key_by_key(seeded: LanternHome, hermetic: None) -> None:
     """`[[github.repos]]` used to print as one blob. Enter on a repository
     narrows the view to its keys, and each one edits on its own."""
     _seed_config(seeded, '[[github.repos]]\nrepo = "o/r"\n\n[[github.repos]]\nrepo = "o/s"\n')
@@ -665,7 +665,7 @@ def test_a_repo_entry_is_addressable_key_by_key(seeded: SbxloopHome, hermetic: N
     drive(scenario)
 
 
-def test_unsetting_a_key_says_what_answers_instead(seeded: SbxloopHome, hermetic: None) -> None:
+def test_unsetting_a_key_says_what_answers_instead(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(seeded, '[sandbox]\ntemplate = "custom"\n')
 
     async def scenario() -> None:
@@ -692,11 +692,11 @@ def test_unsetting_a_key_says_what_answers_instead(seeded: SbxloopHome, hermetic
 
 
 def test_a_key_the_environment_also_sets_is_written_and_flagged(
-    seeded: SbxloopHome, hermetic: None, monkeypatch: pytest.MonkeyPatch
+    seeded: LanternHome, hermetic: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The file is written — the operator asked — but a value the
     environment overrides must not look applied when it is not."""
-    monkeypatch.setenv("SBXLOOP_DAEMON__POLL_INTERVAL_S", "5.0")
+    monkeypatch.setenv("LANTERN_DAEMON__POLL_INTERVAL_S", "5.0")
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
 
     async def scenario() -> None:
@@ -724,7 +724,7 @@ def test_a_key_the_environment_also_sets_is_written_and_flagged(
     drive(scenario)
 
 
-def test_a_key_can_be_added_by_path(seeded: SbxloopHome, hermetic: None) -> None:
+def test_a_key_can_be_added_by_path(seeded: LanternHome, hermetic: None) -> None:
     """Nothing to select for a key the config has never had: `a` takes the
     dotted path, and the same dialog takes the value."""
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
@@ -758,7 +758,7 @@ def test_a_key_can_be_added_by_path(seeded: SbxloopHome, hermetic: None) -> None
     drive(scenario)
 
 
-def test_read_only_console_cannot_edit_a_key(seeded: SbxloopHome, hermetic: None) -> None:
+def test_read_only_console_cannot_edit_a_key(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
 
     async def scenario() -> None:
@@ -780,7 +780,7 @@ def test_read_only_console_cannot_edit_a_key(seeded: SbxloopHome, hermetic: None
     drive(scenario)
 
 
-def test_a_key_the_environment_owns_is_refused(seeded: SbxloopHome, hermetic: None) -> None:
+def test_a_key_the_environment_owns_is_refused(seeded: LanternHome, hermetic: None) -> None:
     """`home` is resolved after every layer: a file that sets it changes
     nothing, so the dialog says so instead of writing a dead line."""
     _seed_config(seeded, "[daemon]\npoll_interval_s = 7.0\n")
@@ -802,7 +802,7 @@ def test_a_key_the_environment_owns_is_refused(seeded: SbxloopHome, hermetic: No
 
 
 def test_an_edit_shows_up_in_the_resolved_view_at_once(
-    seeded: SbxloopHome, hermetic: None, tmp_path: Path
+    seeded: LanternHome, hermetic: None, tmp_path: Path
 ) -> None:
     """The bug this fixes (#818). The editor was anchored to the daemon's
     directory while the resolved view resolved from the console's, so on a
@@ -841,7 +841,7 @@ def test_an_edit_shows_up_in_the_resolved_view_at_once(
 
             # The file the daemon reads carries it …
             assert 'model = "claude-haiku-4-5-20251001"' in _config_text(seeded)
-            assert not (seeded.root / "sbxloop.toml").exists(), "nothing written beside the home"
+            assert not (seeded.root / "lantern.toml").exists(), "nothing written beside the home"
             # … and the row says so without another keystroke.
             assert isinstance(app.screen, ConfigScreen)
             assert await until(pilot, lambda: _cell(screen, "model") == "claude-haiku-4-5-20251001")
@@ -863,7 +863,7 @@ def test_values_read_as_an_operator_writes_them() -> None:
     # Strings lose their quotes — the point of the row is the value.
     assert d("claude") == "claude"
     assert d("owner/name") == "owner/name"
-    assert d("sbxloop: {title}") == "sbxloop: {title}"
+    assert d("lantern: {title}") == "lantern: {title}"
     # …except where a bare string would read as another type.
     assert d("60") == '"60"' and d("true") == '"true"' and d("none") == '"none"'
     assert d("") == '""', "an empty string is not an empty cell"
@@ -880,7 +880,7 @@ def test_values_read_as_an_operator_writes_them() -> None:
     assert d("a\n\nb") == "a b"
 
 
-def test_the_resolved_table_shows_values_not_reprs(seeded: SbxloopHome, hermetic: None) -> None:
+def test_the_resolved_table_shows_values_not_reprs(seeded: LanternHome, hermetic: None) -> None:
     _seed_config(
         seeded,
         "[daemon]\npoll_interval_s = 60.0\n\n"

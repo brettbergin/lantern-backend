@@ -1,5 +1,8 @@
 # Expose sbxloop through a remote operations and collaboration API
 
+> **Renamed.** sbxloop is now Lantern and Angie is the Lantern web app. This record
+> keeps the names it was written with.
+
 Status: spike and design proposal, 2026-09-12. No API, configuration keys,
 database migrations, hosting service, or mobile application are implemented
 by this document. Endpoint names and component choices are recommendations

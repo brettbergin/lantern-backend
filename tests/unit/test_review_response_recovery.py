@@ -8,13 +8,13 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config, load_config
-from sbxloop.engine.phases import PhaseRunner, clip_diff
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import InvalidOutputTwice
-from sbxloop.events import EventBus
-from sbxloop.provider import ProviderHeldError, ProviderRecovery
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.config import Config, load_config
+from lantern.engine.phases import PhaseRunner, clip_diff
+from lantern.engine.store import StateStore
+from lantern.errors import InvalidOutputTwice
+from lantern.events import EventBus
+from lantern.provider import ProviderHeldError, ProviderRecovery
+from lantern_worker.protocol import JobRequest, JobResult
 from tests.unit.test_review_response_repair import (
     MAJOR,
     ScriptedAgent,
@@ -77,7 +77,7 @@ def throttled() -> dict[str, Any]:
 def test_cooldown_resumes_the_same_repair_after_reopening_store(
     tmp_path: Path, held_attempt: int, change_model: bool
 ) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('model = "fallback"\n[agent.models]\nreview = "first"\n')
     config = load_config(tmp_path, env={})
     database = tmp_path / "state.db"
@@ -175,7 +175,7 @@ def test_unparseable_correction_stays_spent_after_provider_recovery(tmp_path: Pa
 def test_restart_keeps_checkpoint_model_and_session_after_config_edit(
     tmp_path: Path, completed_responses: int, legacy: bool
 ) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('model = "first"\n' if legacy else '[agent.models]\nreview = "first"\n')
     config = load_config(tmp_path, env={})
     invalid = verdict({**MAJOR, "category": "unsupported"})

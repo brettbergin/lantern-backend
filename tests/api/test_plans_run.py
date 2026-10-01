@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from sbxloop.daemon.controls.operations import OperationSpec, reconcile_operations
-from sbxloop.daemon.controls.principal import Capability
-from sbxloop.daemon.sources import GitHubIssueSource
+from lantern.daemon.controls.operations import OperationSpec, reconcile_operations
+from lantern.daemon.controls.principal import Capability
+from lantern.daemon.sources import GitHubIssueSource
 from tests.api.conftest import Api
 from tests.api.test_plans_publish import (
     DRAFT,
@@ -172,7 +172,7 @@ class TestAdvertised:
         assert "planning" in features and "planning.run" in features
 
     def test_a_run_the_daemon_died_during_is_settled_from_the_record(self, api: Api) -> None:
-        from sbxloop.daemon.controls.principal import Principal
+        from lantern.daemon.controls.principal import Principal
 
         store = api.loop.operations
         op, _ = store.accept(
@@ -333,7 +333,7 @@ class TestControlGuards:
         assert _events(api, "plan.run.paused") == []
 
     def test_a_control_the_daemon_died_during_is_settled_from_the_record(self, api: Api) -> None:
-        from sbxloop.daemon.controls.principal import Principal
+        from lantern.daemon.controls.principal import Principal
 
         _, _, plan, _ = _started(api)
         store = api.loop.operations
@@ -364,7 +364,7 @@ class TestControlGuards:
         assert settled[ops[1]].error_code == "interrupted_before_effect"
 
     def test_a_retry_that_requeued_the_item_before_dying_is_settled_done(self, api: Api) -> None:
-        from sbxloop.daemon.controls.principal import Principal
+        from lantern.daemon.controls.principal import Principal
 
         _, _, plan, run = _started(api)
         a = _node(plan, "A")["id"]

@@ -12,8 +12,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import (
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import (
     GithubOps,
     PaginationError,
     PostedFinding,
@@ -41,7 +41,7 @@ def thread_node(node_id: str, path: str, line: int | None, comment_id: int) -> d
                 {
                     "databaseId": comment_id,
                     "body": f"[major] on {path}",
-                    "author": {"login": "sbxloop-bot"},
+                    "author": {"login": "lantern-bot"},
                 }
             ]
         },
@@ -361,7 +361,7 @@ class TestReviewThreadListing:
             {
                 "databaseId": 202,
                 "body": "addressed in abc123 [run=r1 round=1]",
-                "author": {"login": "sbxloop-bot"},
+                "author": {"login": "lantern-bot"},
             }
         )
         ops = RawOps({("POST", "/graphql"): payload})
@@ -373,9 +373,9 @@ class TestReviewThreadListing:
         assert thread.anchor == "a.py:10"
         assert thread.root_comment_id == 101
         assert thread.is_resolved is False
-        assert thread.has_reply_from("sbxloop-bot") is True
-        assert thread.has_reply_marked("run=r1 round=1", "sbxloop-bot") is True
-        assert thread.has_reply_marked("run=r1 round=2", "sbxloop-bot") is False
+        assert thread.has_reply_from("lantern-bot") is True
+        assert thread.has_reply_marked("run=r1 round=1", "lantern-bot") is True
+        assert thread.has_reply_marked("run=r1 round=2", "lantern-bot") is False
         assert thread.has_reply_marked("run=r1 round=1", "someone-else") is False, "#618"
         body = ops.calls[0][2]
         assert body is not None
@@ -384,7 +384,7 @@ class TestReviewThreadListing:
     def test_thread_without_reply_is_not_reconciled(self) -> None:
         ops = RawOps({("POST", "/graphql"): threads_payload(thread_node("PRRT_1", "a.py", 1, 5))})
         thread = ops.pr_review_threads(REPO, PR)[0]
-        assert thread.has_reply_from("sbxloop-bot") is False
+        assert thread.has_reply_from("lantern-bot") is False
 
     def test_pr_review_threads_raises_on_graphql_errors(self) -> None:
         ops = RawOps({("POST", "/graphql"): {"errors": [{"message": "boom"}]}})

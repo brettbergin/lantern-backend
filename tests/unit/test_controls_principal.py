@@ -5,20 +5,20 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.daemon.controls import ALL_CAPABILITIES, CAPABILITIES, WORKSPACE_ID, Principal
-from sbxloop.daemon.controls.results import ControlError
-from sbxloop.daemon.controls.service import require
+from lantern.daemon.controls import ALL_CAPABILITIES, CAPABILITIES, WORKSPACE_ID, Principal
+from lantern.daemon.controls.results import ControlError
+from lantern.daemon.controls.service import require
 
 
 class TestTrusted:
     @pytest.mark.parametrize(
         ("by", "via"),
         [
-            ("brett via sbxloop daemon ctl", "ctl"),
+            ("brett via lantern daemon ctl", "ctl"),
             ("discord user `brett`", "discord"),
             ("slack user `U1`", "slack"),
             ("mattermost user `m`", "mattermost"),
-            ("brett via sbxloop tui", "local"),
+            ("brett via lantern tui", "local"),
             ("ops", "concierge"),
         ],
     )

@@ -10,16 +10,16 @@ from typing import Any
 
 import pytest
 
-from sbxloop.api.chronology import (
+from lantern.api.chronology import (
     PRUNED_KEY,
     WATERMARK_KEY,
     Chronology,
     event_id,
     parse_event_id,
 )
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop_worker.protocol import Event
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern_worker.protocol import Event
 
 
 @pytest.fixture

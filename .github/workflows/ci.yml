@@ -57,7 +57,7 @@ jobs:
         if: ${{ !cancelled() }}
       - run: uv run --no-sync python scripts/check_self_references.py
         if: ${{ !cancelled() }}
-      - run: uv run --no-sync bandit -c pyproject.toml -r packages/sbxloop/src packages/sbxloop-worker/src
+      - run: uv run --no-sync bandit -c pyproject.toml -r packages/lantern/src packages/lantern-worker/src
         if: ${{ !cancelled() }}
 
   typecheck:
@@ -133,7 +133,7 @@ jobs:
       - run: uv sync --locked --all-packages
       - run: uv run --no-sync pytest -n0 tests/unit/test_playwright_preset_runtime.py
         env:
-          SBXLOOP_TEST_PLAYWRIGHT: "1"
+          LANTERN_TEST_PLAYWRIGHT: "1"
 
   # Five mixed shards per interpreter share the entire test workload. The
   # former two-fast/three-slow split left fast runners on the critical path
@@ -158,7 +158,7 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --locked --all-packages --python ${{ matrix.python-version }}
-      - run: uv run --no-sync --python ${{ matrix.python-version }} pytest --shard ${{ matrix.shard }}/5 --cov=sbxloop --cov=sbxloop_worker --cov-report= --durations=25 --junitxml=reports/junit-${{ matrix.python-version }}-${{ matrix.shard }}.xml
+      - run: uv run --no-sync --python ${{ matrix.python-version }} pytest --shard ${{ matrix.shard }}/5 --cov=lantern --cov=lantern_worker --cov-report= --durations=25 --junitxml=reports/junit-${{ matrix.python-version }}-${{ matrix.shard }}.xml
         env:
           COVERAGE_FILE: .coverage.${{ matrix.shard }}
       - uses: actions/upload-artifact@v4
@@ -203,16 +203,16 @@ jobs:
       - name: Native install smoke test
         shell: pwsh
         env:
-          SBXLOOP_HOME: ${{ runner.temp }}\sbxloop-home
+          LANTERN_HOME: ${{ runner.temp }}\lantern-home
         run: |
-          uv build --package sbxloop-worker -o dist
-          uv build --package sbxloop -o dist
-          uv run --no-sync --python 3.13 sbxloop init --no-systemd --wheels dist
-          if ($LASTEXITCODE -ne 0) { throw "sbxloop init failed" }
+          uv build --package lantern-worker -o dist
+          uv build --package lantern-backend -o dist
+          uv run --no-sync --python 3.13 lantern init --no-systemd --wheels dist
+          if ($LASTEXITCODE -ne 0) { throw "lantern init failed" }
           & "$env:LOCALAPPDATA\DockerSandboxes\bin\sbx.exe" version
           if ($LASTEXITCODE -ne 0) { throw "sbx version failed" }
-          if (!(Test-Path "$env:SBXLOOP_HOME\sbx\VERSION")) { throw "init did not verify sbx" }
-          if (!(Test-Path "$env:SBXLOOP_HOME\home.json")) { throw "init did not record the home" }
+          if (!(Test-Path "$env:LANTERN_HOME\sbx\VERSION")) { throw "init did not verify sbx" }
+          if (!(Test-Path "$env:LANTERN_HOME\home.json")) { throw "init did not record the home" }
 
   test:
     needs: [pytest, codex-sdk, openai-sdk, playwright-preset]
@@ -282,11 +282,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv build --package sbxloop-worker -o dist
-      - run: uv build --package sbxloop -o dist
+      - run: uv build --package lantern-worker -o dist
+      - run: uv build --package lantern-backend -o dist
       - name: Assert worker wheel is vendored inside the host wheel
         run: |
-          unzip -l dist/sbxloop-*.whl | grep 'sbxloop/_vendor/sbxloop_worker-.*\.whl'
+          unzip -l dist/lantern_backend-*.whl | grep 'lantern/_vendor/lantern_worker-.*\.whl'
       - name: List artifacts
         run: ls -l dist
       - uses: actions/upload-artifact@v4

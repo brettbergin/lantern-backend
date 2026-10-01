@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import GithubConfig, load_config
-from sbxloop.errors import ConfigError
+from lantern.config import GithubConfig, load_config
+from lantern.errors import ConfigError
 
 
 def _write(tmp_path: Path, body: str) -> Path:
-    (tmp_path / "sbxloop.toml").write_text(body)
+    (tmp_path / "lantern.toml").write_text(body)
     return tmp_path
 
 
@@ -42,7 +42,7 @@ def test_multi_repo_parses_with_per_repo_settings(tmp_path: Path) -> None:
         'deliver_base = "develop"\n'
         "enabled = false\n"
         'token_env = "GH_TOKEN_TWO"\n'
-        'trigger_label = "sbxloop:go"\n'
+        'trigger_label = "lantern:go"\n'
         'labels = ["team:core"]\n',
     )
     cfg = load_config(cwd=tmp_path, env={})
@@ -50,7 +50,7 @@ def test_multi_repo_parses_with_per_repo_settings(tmp_path: Path) -> None:
     assert [r.repo for r in repos] == ["o/one", "o/two"]
     assert repos[1].enabled is False
     assert repos[1].token_env == "GH_TOKEN_TWO"
-    assert repos[1].trigger_label == "sbxloop:go"
+    assert repos[1].trigger_label == "lantern:go"
     assert repos[1].labels == ["team:core"]
     assert [r.repo for r in cfg.github.enabled_repos()] == ["o/one"]
     assert cfg.github.enabled
@@ -130,10 +130,10 @@ class TestNaming:
 
     def test_defaults_are_what_the_loop_always_wrote(self, tmp_path: Path) -> None:
         cfg = load_config(cwd=tmp_path, env={})
-        assert cfg.github.pr_title_template == "sbxloop: {title}"
-        assert cfg.github.branch_prefix == "sbxloop/"
-        assert cfg.github.commit_message_template.startswith("sbxloop run {run_id}")
-        assert cfg.github.branch_prefix_for("o/r") == "sbxloop/"
+        assert cfg.github.pr_title_template == "lantern: {title}"
+        assert cfg.github.branch_prefix == "lantern/"
+        assert cfg.github.commit_message_template.startswith("lantern run {run_id}")
+        assert cfg.github.branch_prefix_for("o/r") == "lantern/"
 
     def test_per_repo_overrides_fold_into_the_effective_entry(self, tmp_path: Path) -> None:
         _write(

@@ -13,8 +13,8 @@ from typing import get_args
 
 import pytest
 
-from sbxloop.vcs.github.ops import fold_queue_entry
-from sbxloop.vcs.model import (
+from lantern.vcs.github.ops import fold_queue_entry
+from lantern.vcs.model import (
     BLOCKER_WORDING,
     GENERIC_WORDING,
     BaseRequirements,

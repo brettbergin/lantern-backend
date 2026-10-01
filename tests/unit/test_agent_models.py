@@ -11,13 +11,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.agentmodels import model_for_phase, refreshed_models
-from sbxloop.config import AgentModels, Config, load_config
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import AGENT_NAMES, PhaseRunner
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import ConfigError
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.agentmodels import model_for_phase, refreshed_models
+from lantern.config import AgentModels, Config, load_config
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import AGENT_NAMES, PhaseRunner
+from lantern.engine.store import StateStore
+from lantern.errors import ConfigError
+from lantern_worker.protocol import JobRequest, JobResult
 
 
 def config(**extra: Any) -> Config:
@@ -88,9 +88,9 @@ def test_unknown_role_fails_in_configuration_and_dispatch() -> None:
 
 
 def test_live_reload_preserves_non_model_settings_and_env_precedence(tmp_path) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('model = "old"\n[budgets]\nmax_tasks = 2\n')
-    cfg = load_config(tmp_path, env={"SBXLOOP_AGENT__MODELS__BUILD": "env-build"})
+    cfg = load_config(tmp_path, env={"LANTERN_AGENT__MODELS__BUILD": "env-build"})
     path.write_text(
         'model = "new"\n[budgets]\nmax_tasks = 9\n[agent.models]\nreview = "new-review"\n'
     )
@@ -103,7 +103,7 @@ def test_live_reload_preserves_non_model_settings_and_env_precedence(tmp_path) -
 
 
 def test_live_reload_rejects_backend_changes_and_broken_config(tmp_path) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('model = "old"\n')
     cfg = load_config(tmp_path, env={})
     path.write_text('[agent]\nbackend = "claude"\n')
@@ -143,7 +143,7 @@ def test_each_phase_submits_its_selected_model(phase: str) -> None:
 
 
 def test_json_repair_keeps_model_but_next_phase_rereads(tmp_path) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[agent.models]\nsteer = "first"\n')
     agent = RecordingAgent()
     agent.outputs = [{"invalid": True}, {"reply": "ok", "action": "continue"}] * 2
@@ -155,7 +155,7 @@ def test_json_repair_keeps_model_but_next_phase_rereads(tmp_path) -> None:
 
 
 def test_changed_model_discards_session_but_preserves_request_context(tmp_path) -> None:
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[agent.models]\nbuild = "first"\n')
     agent = RecordingAgent()
     runner = PhaseRunner(agent, load_config(tmp_path, env={}), "r1", "task")  # type: ignore[arg-type]
@@ -183,7 +183,7 @@ def test_changed_model_discards_session_but_preserves_request_context(tmp_path) 
 
 @pytest.mark.parametrize(("phase", "method"), [("build", "build"), ("operator_execute", "execute")])
 def test_revision_after_model_change_keeps_workspace_and_reports(tmp_path, phase, method):
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text(f'[agent.models]\n{phase} = "first"\n')
     agent = RecordingAgent()
     runner = PhaseRunner(agent, load_config(tmp_path, env={}), "r1", "task", workdir="/work")
@@ -203,7 +203,7 @@ def test_revision_after_model_change_keeps_workspace_and_reports(tmp_path, phase
 
 
 def test_repository_model_edits_stay_isolated_and_sparse(tmp_path):
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text(
         'model = "fallback"\n[[github.repos]]\nrepo = "org/one"\n'
         '[[github.repos]]\nrepo = "org/two"\n'
@@ -232,21 +232,21 @@ def test_repository_model_edits_stay_isolated_and_sparse(tmp_path):
 
 @pytest.mark.parametrize("forced", [None, "forced"])
 def test_resume_refreshes_original_directory_with_current_env_and_pinned_override(tmp_path, forced):
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.engine.engine import LoopEngine
 
     original = tmp_path / "original"
     original.mkdir()
-    path = original / "sbxloop.toml"
+    path = original / "lantern.toml"
     path.write_text('model = "old"\n[budgets]\nmax_tasks = 2\n')
-    env = {"SBXLOOP_HOME": str(tmp_path / "home")}
+    env = {"LANTERN_HOME": str(tmp_path / "home")}
     initial = load_config(original, env=env).model_copy(update={"run_model_override": forced})
     with closing(StateStore(initial.paths.state_db)) as store:
         store.create_run("r1", "the task", initial.model_dump_json())
     path.write_text('model = "live"\n[budgets]\nmax_tasks = 9\n')
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    (elsewhere / "sbxloop.toml").write_text('model = "wrong-directory"\n')
-    current = load_config(elsewhere, env=env | {"SBXLOOP_AGENT__MODELS__REVIEW": "env-review"})
+    (elsewhere / "lantern.toml").write_text('model = "wrong-directory"\n')
+    current = load_config(elsewhere, env=env | {"LANTERN_AGENT__MODELS__REVIEW": "env-review"})
     engine = LoopEngine(current)
     try:
         engine._rehydrate_config("r1")
@@ -294,7 +294,7 @@ def test_persisted_session_identity_restores_only_known_matching_sessions(tmp_pa
 
 
 def test_tui_nested_keys_can_be_set_and_unset_without_losing_other_roles():
-    from sbxloop.configedit import keys as configkeys, toml as configtoml
+    from lantern.configedit import keys as configkeys, toml as configtoml
 
     text = 'model = "fallback"\n[[github.repos]]\nrepo = "org/one"\n'
     for name in ["agent.models.build", "github.repos[0].agent_models.review"]:
@@ -313,10 +313,10 @@ def test_tui_nested_keys_can_be_set_and_unset_without_losing_other_roles():
 
 
 def test_cli_force_model_does_not_replace_concierge_fallback(tmp_path, monkeypatch):
-    from sbxloop.cli.app import _config_with_overrides
+    from lantern.cli.app import _config_with_overrides
 
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "sbxloop.toml").write_text('model = "fallback"\n[agent.models]\nbuild = "strong"\n')
+    (tmp_path / "lantern.toml").write_text('model = "fallback"\n[agent.models]\nbuild = "strong"\n')
     cfg = _config_with_overrides(model="forced")
     assert cfg.run_model_override == "forced"
     assert model_for_phase(cfg, "build").model == "forced"
@@ -326,7 +326,7 @@ def test_cli_force_model_does_not_replace_concierge_fallback(tmp_path, monkeypat
 def test_concierge_refresh_rotates_only_when_its_model_changes(tmp_path):
     from tests.unit.test_daemon_concierge import make, turn
 
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[concierge]\nmodel = "first"\n')
     concierge, client, _, _, _ = make(
         tmp_path, [{"session_id": "s1"}] * 3, config={"model_source_dir": str(tmp_path)}
@@ -345,12 +345,12 @@ def test_concierge_refresh_rotates_only_when_its_model_changes(tmp_path):
 
 
 def test_concierge_model_edit_waits_for_original_provider_recovery(tmp_path, monkeypatch):
-    from sbxloop.provider import ProviderRecovery
-    from sbxloop.worker.client import WorkerClient
+    from lantern.provider import ProviderRecovery
+    from lantern.worker.client import WorkerClient
     from tests.unit.test_daemon_concierge import make, turn
     from tests.unit.test_provider_recovery import rejected
 
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[agent]\nbackend = "claude"\n[concierge]\nmodel = "first"\n')
     concierge, _, host, _, _ = make(
         tmp_path, [], config={"agent": {"backend": "claude"}, "model_source_dir": str(tmp_path)}
@@ -389,8 +389,8 @@ def test_concierge_model_edit_waits_for_original_provider_recovery(tmp_path, mon
 
 
 def test_usage_attributes_shared_operator_persona_to_each_phase_and_reported_model(tmp_path):
-    from sbxloop.daemon.usage import usage_for_run, usage_lines
-    from sbxloop_worker.protocol import Event, EventTypes
+    from lantern.daemon.usage import usage_for_run, usage_lines
+    from lantern_worker.protocol import Event, EventTypes
 
     with closing(StateStore(tmp_path / "state.db")) as store:
         store.create_run("r1", "workload")
@@ -428,10 +428,10 @@ def test_status_reports_model_policy_with_source_and_snapshot_scope(
 ):
     from typer.testing import CliRunner
 
-    from sbxloop.cli.app import app
+    from lantern.cli.app import app
 
     monkeypatch.chdir(tmp_path)
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text('[agent.models]\nbuild = "initial"\n')
     cfg = load_config()
     with closing(StateStore(cfg.paths.state_db)) as store:
@@ -453,12 +453,12 @@ def test_status_reports_model_policy_with_source_and_snapshot_scope(
 def test_list_models_names_repository_and_concierge_choices(tmp_path, monkeypatch):
     from typer.testing import CliRunner
 
-    from sbxloop.cli.app import app
+    from lantern.cli.app import app
     from tests.unit.test_list_models_cli import SAMPLE_MODELS, install_stub_sdk
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "300")
-    (tmp_path / "sbxloop.toml").write_text(
+    (tmp_path / "lantern.toml").write_text(
         '[agent.models]\nbuild = "gpt-5-mini"\n[concierge]\nmodel = "small-alias"\n'
         '[[github.repos]]\nrepo = "org/one"\n[github.repos.agent_models]\nreview = "review-alias"\n'
     )
@@ -474,7 +474,7 @@ def test_list_models_names_repository_and_concierge_choices(tmp_path, monkeypatc
 
 
 def test_run_headline_never_labels_a_multi_model_run_with_one_model():
-    from sbxloop.daemon.discord_format import agent_ident_from_config_json
+    from lantern.daemon.discord_format import agent_ident_from_config_json
 
     assert "initial fallback" in agent_ident_from_config_json(config().model_dump_json())["model"]
     assert (
@@ -486,8 +486,8 @@ def test_run_headline_never_labels_a_multi_model_run_with_one_model():
 
 @pytest.mark.parametrize("kind,repo", [("workload", None), ("workload", "org/one"), ("code", None)])
 def test_run_creation_pins_explicit_workload_repo_for_models(tmp_path, monkeypatch, kind, repo):
-    from sbxloop.agentmodels import run_model_repo
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.agentmodels import run_model_repo
+    from lantern.engine.engine import LoopEngine
 
     cfg = config(home=tmp_path)
     engine = LoopEngine(cfg)
@@ -502,9 +502,9 @@ def test_run_creation_pins_explicit_workload_repo_for_models(tmp_path, monkeypat
 
 @pytest.mark.parametrize("forced", [None, "forced"])
 def test_dependency_preparation_uses_builder_policy(tmp_path, monkeypatch, forced):
-    from sbxloop.engine.engine import LoopEngine
-    from sbxloop.worker.client import WorkerClient
-    from sbxloop_worker.protocol import HostToolSpec
+    from lantern.engine.engine import LoopEngine
+    from lantern.worker.client import WorkerClient
+    from lantern_worker.protocol import HostToolSpec
 
     cfg = config(home=tmp_path, run_model_override=forced)
     engine = LoopEngine(cfg)
@@ -537,7 +537,7 @@ def test_dependency_preparation_uses_builder_policy(tmp_path, monkeypatch, force
 
 
 def test_run_bookkeeping_is_not_operator_config_drift(tmp_path):
-    from sbxloop.engine.engine import LoopEngine
+    from lantern.engine.engine import LoopEngine
 
     cfg = config()
     saved = cfg.model_copy(
@@ -548,7 +548,7 @@ def test_run_bookkeeping_is_not_operator_config_drift(tmp_path):
 
 @pytest.mark.parametrize("key", ["run_model_override", "run_model_repo", "model_source_dir"])
 def test_operator_cannot_set_run_bookkeeping(tmp_path, key):
-    (tmp_path / "sbxloop.toml").write_text(f'{key} = "injected"\n')
+    (tmp_path / "lantern.toml").write_text(f'{key} = "injected"\n')
     with pytest.raises(ConfigError, match="bookkeeping"):
         load_config(tmp_path, env={})
 
@@ -558,7 +558,7 @@ def test_operator_cannot_set_run_bookkeeping(tmp_path, key):
 def test_copilot_forwards_explicit_model_and_omits_auto(model, resumed):
     import asyncio
 
-    from sbxloop_worker.backends.copilot import CopilotBackend
+    from lantern_worker.backends.copilot import CopilotBackend
 
     captured = []
 

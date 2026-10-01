@@ -28,7 +28,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sbxloop.agents.definition import AgentSpec
+from lantern.agents.definition import AgentSpec
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 

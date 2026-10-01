@@ -7,8 +7,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.protection import BaseRequirements, read_base_requirements, with_pr_rollup
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.protection import BaseRequirements, read_base_requirements, with_pr_rollup
 
 UNPROTECTED = GithubOpsError("no protection", http_status=404)
 FORBIDDEN = GithubOpsError("admin only", http_status=403)

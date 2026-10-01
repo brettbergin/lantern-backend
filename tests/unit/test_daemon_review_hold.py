@@ -18,10 +18,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.control import dispatch
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.vcs.github.ops import GithubOpsError
+from lantern.config import Config
+from lantern.daemon.control import dispatch
+from lantern.daemon.store import DaemonStore
+from lantern.vcs.github.ops import GithubOpsError
 from tests.fakes.fake_github import BLOCKED_405, FakeGithub, human_review
 from tests.unit.test_daemon_loop import PR_URL, Harness, RecordingFrontend, gh_item
 from tests.unit.test_daemon_merge_gate import FakeDaemonGithub
@@ -66,7 +66,7 @@ def landed(h: Harness, run_id: str) -> Any:
     import threading
 
     deadline = time.time() + 10
-    name = f"sbxloop-review-{run_id}"
+    name = f"lantern-review-{run_id}"
     while time.time() < deadline:
         threads = [t for t in threading.enumerate() if t.name == name]
         if not threads:
@@ -96,7 +96,7 @@ class TestPark:
         assert hold is not None and hold.state == "open"
         assert hold.pr_number == 9 and hold.pr_url == PR_URL
         assert hold.approvals_required == 2, "from the run's own record of the park"
-        assert hold.login == "sbxloop-bot", "the loop's identity, resolved once"
+        assert hold.login == "lantern-bot", "the loop's identity, resolved once"
         assert h.loop.status()["breaker_open"] is False
         assert h.store.get_run(run_id).state == "awaiting_review"
 
@@ -197,7 +197,7 @@ class TestPoll:
         h, fake, run_id = self.parked(tmp_path)
         fake.reviews_payload = [
             human_review("alice", "APPROVED", "lgtm", id=1),
-            human_review("sbxloop-bot", "APPROVED", "own", id=2),
+            human_review("lantern-bot", "APPROVED", "own", id=2),
             human_review("ci[bot]", "APPROVED", "", id=3, bot=True),
         ]
         h.clock.t += 600

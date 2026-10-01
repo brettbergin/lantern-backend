@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.discord_format import (
+from lantern.daemon.discord_format import (
     COLOR_FAIL,
     COLOR_OK,
     COLOR_RUNNING,
@@ -42,9 +42,9 @@ from sbxloop.daemon.discord_format import (
     summary_embed,
     summary_text,
 )
-from sbxloop.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
-from sbxloop.engine.model import Published
-from sbxloop.events import Event
+from lantern.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
+from lantern.engine.model import Published
+from lantern.events import Event
 
 
 def ev(type: str, **data: Any) -> Event:
@@ -292,9 +292,9 @@ class TestFormat:
         ) == ["📦 created repository [o/r](https://ghe.example.com/o/r)"]
         assert texts(
             format_for_discord(
-                ev("sandbox.workspace_clone", branch="sbxloop/r1", source="/p", target="/t")
+                ev("sandbox.workspace_clone", branch="lantern/r1", source="/p", target="/t")
             )
-        ) == ["🌿 branch `sbxloop/r1` · clone of `/p`"]
+        ) == ["🌿 branch `lantern/r1` · clone of `/p`"]
         assert texts(
             format_for_discord(
                 ev("sandbox.workspace_clone", branch="b", source="/p", target="/t", reused=True)
@@ -603,7 +603,7 @@ class TestToolBatcher:
     def test_run_path_prefix_collapses(self) -> None:
         b = ToolBatcher()
         args = (
-            "cd /home/x/.local/state/sbxloop/sbxloop-work/runs/rfxm7ad23/workspace"
+            "cd /home/x/.local/state/lantern/lantern-work/runs/rfxm7ad23/workspace"
             " && git diff -- README.md"
         )
         b.add_start("bash", args, "c1")
@@ -749,7 +749,7 @@ class TestEmbeds:
         item = WorkItem(item_id="gh:issue:4", source_key="4", title="Fix login", url="https://x/4")
         running = headline_embed(item, "r1", hostname="db")
         assert running.title == "Fix login" and running.url == "https://x/4"
-        assert running.color == COLOR_RUNNING and running.footer == "sbxloop · db"
+        assert running.color == COLOR_RUNNING and running.footer == "lantern · db"
         assert {n: v for n, v, _ in running.fields} == {
             "Source": "[issue #4](https://x/4)",
             "Item": "`gh:issue:4`",
@@ -760,7 +760,7 @@ class TestEmbeds:
             item,
             "r1",
             "completed",
-            branch="sbxloop/r1",
+            branch="lantern/r1",
             pr=(34, "https://x/pull/34"),
             summary="3/3 tasks done",
             requested_by="4242",
@@ -927,7 +927,7 @@ class TestEmbeds:
         )
         card = finish_embed(item, report, "completed")
         assert {n: v for n, v, _ in card.fields}["Published"].splitlines() == [
-            "📤 artifact: 3 files — `sbxloop artifacts r1`",
+            "📤 artifact: 3 files — `lantern artifacts r1`",
             "📤 issue: [https://github.com/o/r/issues/9](https://github.com/o/r/issues/9)",
             "📣 chat: posted above",
         ]
@@ -948,11 +948,11 @@ class TestEmbeds:
         item = WorkItem(item_id="gh:issue:8", source_key="8", title="Demo")
         report = RunReport("r1", "cancelled", "1/3 tasks done", cancelled_by="Discord user `b`")
         text = finish_text("cancelled", report)
-        assert "cancelled by Discord user `b`" in text and "`sbxloop resume r1`" in text
+        assert "cancelled by Discord user `b`" in text and "`lantern resume r1`" in text
         card = finish_embed(item, report, "cancelled")
         assert card.title == "⏹ finished: cancelled"
         assert card.fields[0][0] == "Cancelled"
-        assert "`sbxloop resume r1`" in card.fields[0][1]
+        assert "`lantern resume r1`" in card.fields[0][1]
         assert "!sbx retry gh:issue:8" in card.fields[0][1]
         requeued = finish_embed(item, report._replace(requeued=True), "cancelled")
         assert "re-queued" in requeued.fields[0][1] and "resume" not in requeued.fields[0][1]
@@ -1093,13 +1093,13 @@ class TestEmbeds:
                 key="workloads.research.egress",
                 message=(
                     "task t1 needs host `other.example.org` — outside profile 'research'; "
-                    "`workloads.research.egress` in sbxloop.toml would allow it"
+                    "`workloads.research.egress` in lantern.toml would allow it"
                 ),
             )
         )
         assert texts(refused) == [
             "🚫 need refused: task t1 needs host `other.example.org` — outside profile "
-            "'research'; `workloads.research.egress` in sbxloop.toml would allow it"
+            "'research'; `workloads.research.egress` in lantern.toml would allow it"
         ]
         assert refused[0].flush
         reconciled = format_for_discord(
@@ -1352,7 +1352,7 @@ class TestRunSummary:
 
 def test_embed_converter_roundtrip() -> None:
     pytest.importorskip("discord")
-    from sbxloop.daemon.discord import _allowed_mentions_none, _to_embed
+    from lantern.daemon.discord import _allowed_mentions_none, _to_embed
 
     spec = EmbedSpec(
         title="T",
@@ -1418,10 +1418,10 @@ class TestOutputExcerpt:
         assert "elided" not in chunk.text
 
     def test_failure_surfaces_stderr_and_exit_status(self) -> None:
-        chunk = output_excerpt("bash", 2, "ModuleNotFoundError: sbxloop", success=False)
+        chunk = output_excerpt("bash", 2, "ModuleNotFoundError: lantern", success=False)
         assert chunk is not None
         assert "✗" in chunk.text and "(exit 2)" in chunk.text
-        assert "ModuleNotFoundError: sbxloop" in chunk.text
+        assert "ModuleNotFoundError: lantern" in chunk.text
 
     def test_success_budget_is_smaller_than_failure(self) -> None:
         detail = "\n".join(f"L{i}" for i in range(50))
@@ -1475,7 +1475,7 @@ class TestOutputExcerpt:
         assert chunk is not None and "boom" in chunk.text
 
     def test_config_defaults_match_constants(self) -> None:
-        from sbxloop.config import DiscordConfig
+        from lantern.config import DiscordConfig
 
         cfg = DiscordConfig()
         assert cfg.tool_output_lines == TOOL_OUTPUT_LINES_DEFAULT
@@ -1543,7 +1543,7 @@ class TestRenderRedaction:
         _assert_clean(chunk.text)
 
     def test_redaction_is_idempotent_and_preserves_upstream_marker(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         once = redact_text(SECRET_TEXT)
         assert redact_text(once) == once

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from sqlalchemy import inspect
 
-from sbxloop.db import open_engine
+from lantern.db import open_engine
 from tests.unit.test_channel_membership_migration import _query, _stamp, _upgrade_to
 
 BEFORE = "0025"

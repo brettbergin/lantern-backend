@@ -6,8 +6,8 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import (
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import (
     MAX_PAGES,
     FailedCheck,
     GithubOps,
@@ -17,7 +17,7 @@ from sbxloop.vcs.github.ops import (
     fold_review_verdicts,
     raw_pages,
 )
-from sbxloop_worker.protocol import ErrorInfo, JobRequest, JobResult, TransportSpec
+from lantern_worker.protocol import ErrorInfo, JobRequest, JobResult, TransportSpec
 from tests.fakes.github_errors import worker_error
 
 
@@ -66,12 +66,12 @@ def make_ops(responses: dict[str, Any]) -> tuple[GithubOps, StubWorkerClient]:
 class TestGithubOpsFacade:
     def test_issue_create_typed(self) -> None:
         ops, client = make_ops({"issue.create": {"number": 5, "url": "https://x/5"}})
-        ref = ops.issue_create("o/r", "Title", body="Body", labels=["sbxloop"])
+        ref = ops.issue_create("o/r", "Title", body="Body", labels=["lantern"])
         assert ref == IssueRef(number=5, url="https://x/5")
         job = client.jobs[0]
         assert job.kind == "vcs.op"
         assert job.run_id == "r1"
-        assert job.params["labels"] == ["sbxloop"]
+        assert job.params["labels"] == ["lantern"]
 
     def test_pr_create_and_comment(self) -> None:
         ops, client = make_ops(
@@ -140,24 +140,24 @@ class TestGithubOpsFacade:
     def test_label_lookup(self) -> None:
         """#556: the follow-up label probe asks for the miss as data, so a
         repository that lacks the label does not pay an error event."""
-        ops, client = make_ops({"label.get": {"name": "sbxloop:follow-up", "color": "c5def5"}})
-        assert ops.label_lookup("o/r", "sbxloop:follow-up") == {
-            "name": "sbxloop:follow-up",
+        ops, client = make_ops({"label.get": {"name": "lantern:follow-up", "color": "c5def5"}})
+        assert ops.label_lookup("o/r", "lantern:follow-up") == {
+            "name": "lantern:follow-up",
             "color": "c5def5",
         }
         assert client.jobs[0].params == {
             "repo": "o/r",
-            "name": "sbxloop:follow-up",
+            "name": "lantern:follow-up",
             "allow_missing": True,
         }
 
         ops, _ = make_ops({"label.get": {"missing": True, "http_status": 404}})
-        assert ops.label_lookup("o/r", "sbxloop:follow-up") is None
+        assert ops.label_lookup("o/r", "lantern:follow-up") is None
 
         # a real failure (403 from a token without repo scope) still raises
         ops, _ = make_ops({"label.get": "FAIL"})
         with pytest.raises(GithubOpsError, match="HTTP 403"):
-            ops.label_lookup("o/r", "sbxloop:follow-up")
+            ops.label_lookup("o/r", "lantern:follow-up")
 
     def test_error_result_raises(self) -> None:
         ops, _ = make_ops({"issue.create": "FAIL"})
@@ -478,15 +478,15 @@ class TestPrReviewFeedback:
     def test_excludes_the_loops_own_identity(self) -> None:
         ops, _ = make_feedback_ops(
             [
-                review("sbxloop-bot", "CHANGES_REQUESTED", "my own review"),
+                review("lantern-bot", "CHANGES_REQUESTED", "my own review"),
                 review("alice", "CHANGES_REQUESTED", "a human objection"),
             ],
             [
-                inline("sbxloop-bot", "my own inline", path="a.py", line=1),
+                inline("lantern-bot", "my own inline", path="a.py", line=1),
                 inline("alice", "human inline", path="b.py", line=2),
             ],
         )
-        out = ops.pr_review_feedback("o/r", 7, exclude_login="sbxloop-bot")
+        out = ops.pr_review_feedback("o/r", 7, exclude_login="lantern-bot")
         assert out == "a human objection\n\n- `b.py:2`: human inline"
 
     def test_clips(self) -> None:
@@ -528,8 +528,8 @@ class TestReviewVerdicts:
         ]
 
     def test_the_loops_own_review_is_excluded(self) -> None:
-        payload = [review("sbxloop-bot", "APPROVED"), review("alice", "APPROVED")]
-        assert [v.login for v in fold_review_verdicts(payload, exclude=("sbxloop-bot", False))] == [
+        payload = [review("lantern-bot", "APPROVED"), review("alice", "APPROVED")]
+        assert [v.login for v in fold_review_verdicts(payload, exclude=("lantern-bot", False))] == [
             "alice"
         ]
         assert fold_review_verdicts("not a list") == ()
@@ -691,12 +691,12 @@ class TestLanding:
         """The merge already happened; a branch a repo setting removed first
         must not be reported as a failure of it."""
         ops, _ = make_ops({"raw.api": Fails("ref_missing_404")})
-        ops.branch_delete("o/r", "sbxloop/r42")  # must not raise
+        ops.branch_delete("o/r", "lantern/r42")  # must not raise
 
     def test_branch_delete_reraises_anything_else(self) -> None:
         ops, _ = make_ops({"raw.api": "FAIL"})
         with pytest.raises(GithubOpsError):
-            ops.branch_delete("o/r", "sbxloop/r42")
+            ops.branch_delete("o/r", "lantern/r42")
 
 
 class TestTransportDescriptor:
@@ -704,7 +704,7 @@ class TestTransportDescriptor:
     reaches the forge — and says it with names, never a token value."""
 
     def test_a_backend_built_with_a_descriptor_sends_it_on_every_job(self) -> None:
-        from sbxloop.vcs.github.ops import github_transport
+        from lantern.vcs.github.ops import github_transport
 
         client = StubWorkerClient({"repo.get": {"default_branch": "main"}})
         ops = GithubOps(client, "r1", transport=github_transport("https://ghe.example.com/api/v3"))
@@ -729,9 +729,9 @@ class TestTransportDescriptor:
         assert job.kind == "vcs.op" and "transport" not in job.params
 
     def test_the_daemon_and_the_engine_derive_it_from_the_configuration(self) -> None:
-        from sbxloop.config import Config
-        from sbxloop.engine.engine import LoopEngine
-        from sbxloop.vcs.github.ops import github_transport
+        from lantern.config import Config
+        from lantern.engine.engine import LoopEngine
+        from lantern.vcs.github.ops import github_transport
 
         config = Config.model_validate(
             {"github": {"repo": "o/r", "api_url": "https://ghe.example.com/api/v3"}}

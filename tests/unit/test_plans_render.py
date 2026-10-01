@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from sbxloop.plans.model import ForgeRef, PlanNode
-from sbxloop.plans.render import (
+from lantern.plans.model import ForgeRef, PlanNode
+from lantern.plans.render import (
     drop_reference,
     free_text,
     issue_reference,
@@ -24,7 +24,7 @@ from sbxloop.plans.render import (
     rewrite_sections,
     section_blocks,
 )
-from sbxloop.vcs.checklist import ChecklistEntry, render_checklist
+from lantern.vcs.checklist import ChecklistEntry, render_checklist
 
 
 def _task(**fields: Any) -> PlanNode:
@@ -175,7 +175,7 @@ class TestReadingABodyBack:
         body = "## Acceptance criteria\n\n- [x] stored\n- [ ] refused\n  when stale\n"
         assert parse_sections(body)["acceptance_criteria"] == ("stored", "refused when stale")
 
-    def test_free_text_leaves_out_what_sbxloop_manages(self) -> None:
+    def test_free_text_leaves_out_what_lantern_manages(self) -> None:
         body = (
             "Please do the thing.\n\n"
             + render_checklist([ChecklistEntry("o/r#3", "A child")])
@@ -194,7 +194,7 @@ class TestRewritingSections:
         return (
             "A person's preface.\n\n"
             + rendered.replace("- [ ] stored", "- [x] stored").replace(
-                "## Context", "## Team notes\n\nours, not sbxloop's\n\n## Context"
+                "## Context", "## Team notes\n\nours, not lantern's\n\n## Context"
             )
             + "\n"
             + render_checklist([ChecklistEntry("o/r#3", "Child")])
@@ -209,7 +209,7 @@ class TestRewritingSections:
         # Untouched: the preface, the ticked criterion, the notes, the
         # context, the marker and the checklist.
         assert out.startswith("A person's preface.\n\n## Goal\n\nKeep plans, and their history.")
-        for kept in ("- [x] stored", "## Team notes\n\nours, not sbxloop's", "A db."):
+        for kept in ("- [x] stored", "## Team notes\n\nours, not lantern's", "A db."):
             assert kept in out
         assert marked(out, "plan_p", "node_t") and "<!-- sbx-plan:children -->" in out
         assert "Keep plans.\n" not in out

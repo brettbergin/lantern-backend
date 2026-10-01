@@ -1,4 +1,4 @@
-"""A scripted stand-in for :class:`sbxloop.vcs.gitlab.ops.GitlabOps`.
+"""A scripted stand-in for :class:`lantern.vcs.gitlab.ops.GitlabOps`.
 
 The GitLab every GitLab test runs against (#1017), at the fidelity
 ``fake_github.py`` gives the first backend: the real backend class with
@@ -9,7 +9,7 @@ named operation on the backend reaches this fake's ``raw`` with the path
 the real one would send, so a test pins the request and the fold at once.
 
 State is a project ``acme/widgets`` (id 1) with ``main`` at ``base123``,
-a Developer token for ``sbxloop-bot``, and the knobs below:
+a Developer token for ``lantern-bot``, and the knobs below:
 
 - ``settings``: the project payload's merge settings (pipeline must
   succeed, discussions resolved, merge method, squash option), the
@@ -42,10 +42,10 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import parse_qs, unquote
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.gitlab.content import blob_sha
-from sbxloop.vcs.gitlab.ops import GitlabOps, gitlab_transport
-from sbxloop.vcs.model import ChecksVerdict, FailedCheck
+from lantern.errors import GithubOpsError
+from lantern.vcs.gitlab.content import blob_sha
+from lantern.vcs.gitlab.ops import GitlabOps, gitlab_transport
+from lantern.vcs.model import ChecksVerdict, FailedCheck
 
 WEB = "https://gitlab.example"
 PROJECT_ID = 1
@@ -83,10 +83,10 @@ class FakeGitlab(GitlabOps):
         self._listings: dict[tuple[str, str, str], Any] = {}
         self.repo = repo
         self.groups: dict[str, int] = {"acme": 10}
-        self.user_login = "sbxloop-bot"
+        self.user_login = "lantern-bot"
         self.user_id = 2
         self.users: dict[int, dict[str, Any]] = {
-            2: {"id": 2, "username": "sbxloop-bot", "name": "sbxloop bot", "bot": False},
+            2: {"id": 2, "username": "lantern-bot", "name": "lantern bot", "bot": False},
             3: {"id": 3, "username": "rev-bob", "name": "rev-bob", "bot": False},
             4: {"id": 4, "username": "project_1_bot_05b4", "name": "ci-bot", "bot": True},
         }
@@ -130,7 +130,7 @@ class FakeGitlab(GitlabOps):
         self.pipelines: list[dict[str, Any]] = []
         self.token_self: dict[str, Any] | None = {
             "id": 2,
-            "name": "sbxloop",
+            "name": "lantern",
             "scopes": ["api"],
             "active": True,
             "revoked": False,
@@ -493,8 +493,8 @@ class FakeGitlab(GitlabOps):
         self,
         iid: int,
         *,
-        source_branch: str = "sbxloop/r1",
-        title: str = "sbxloop: ship it",
+        source_branch: str = "lantern/r1",
+        title: str = "lantern: ship it",
         head_sha: str | None = None,
         state: str = "opened",
         author_id: int | None = None,

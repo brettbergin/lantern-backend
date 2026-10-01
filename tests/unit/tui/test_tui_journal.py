@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sbxloop.tui.system import JOURNAL_LINES, UnitState, journal_argv, journal_source
+from lantern.tui.system import JOURNAL_LINES, UnitState, journal_argv, journal_source
 
 
 def unit(loaded: bool) -> UnitState:
-    return UnitState("sbxloop-daemon", True, loaded, "active", "running", 1, 0, "", "")
+    return UnitState("lantern-daemon", True, loaded, "active", "running", 1, 0, "", "")
 
 
 def test_unit_journal_wins(tmp_path: Path) -> None:
@@ -17,12 +17,12 @@ def test_unit_journal_wins(tmp_path: Path) -> None:
     daemon_log.write_text("x\n")
     source = journal_source(
         unit(True),
-        "sbxloop-daemon",
+        "lantern-daemon",
         daemon_log=daemon_log,
         console_log=tmp_path / "c.log",
         spawned=False,
     )
-    assert source == journal_argv("sbxloop-daemon")
+    assert source == journal_argv("lantern-daemon")
 
 
 def test_the_homes_log_file_when_there_is_no_unit(tmp_path: Path) -> None:
@@ -32,7 +32,7 @@ def test_the_homes_log_file_when_there_is_no_unit(tmp_path: Path) -> None:
     for state in (None, unit(False)):
         source = journal_source(
             state,
-            "sbxloop-daemon",
+            "lantern-daemon",
             daemon_log=daemon_log,
             console_log=tmp_path / "c.log",
             spawned=False,

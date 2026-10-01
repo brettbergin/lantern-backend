@@ -1,10 +1,10 @@
 """Host preparation, preflighted before the unattended services (#898).
 
-An account that can create the sbxloop home may still be unable to boot a
+An account that can create the lantern home may still be unable to boot a
 sandbox or keep a daemon alive after logout, and the two failures look
 nothing alike: one is a kernel device an administrator has to grant, the
 other a per-user service manager this session never reached. Before this,
-`sbxloop init` invoked `systemctl --user` without establishing that the
+`lantern init` invoked `systemctl --user` without establishing that the
 manager was there, and recorded the systemd step as done with a failed
 `loginctl enable-linger` appended to its notes — an unattended deployment
 told its daemon persists when nothing had established that it does.
@@ -23,9 +23,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.homeinit import HomeInit, InitError, InitOptions
-from sbxloop.hostprep import DENIED, MISSING, READY, UNKNOWN, Capability, HostPrep
-from sbxloop.paths import SbxloopHome
+from lantern.homeinit import HomeInit, InitError, InitOptions
+from lantern.hostprep import DENIED, MISSING, READY, UNKNOWN, Capability, HostPrep
+from lantern.paths import LanternHome
 from tests.fakes.fake_host import MANAGER_DEGRADED, MANAGER_OFFLINE, fake_prep
 
 
@@ -88,7 +88,7 @@ class TestFilesystemTools:
         assert "sbx installer refuses" in capability.remedy
 
     def test_a_tool_only_under_sbin_is_ready_and_says_so(self) -> None:
-        """Debian keeps /usr/sbin off a non-root PATH and sbxloop adds it
+        """Debian keeps /usr/sbin off a non-root PATH and lantern adds it
         back for Docker's installer — a host like that is ready, and a
         preflight that faulted it would be wrong."""
         capability = fake_prep(mkfs="/usr/sbin/mkfs.ext4").filesystem_tools()
@@ -213,7 +213,7 @@ class TestMessage:
 
 
 def init_on(tmp_path: Path, host: HostPrep, **overrides: Any) -> tuple[HomeInit, list[list[str]]]:
-    """`sbxloop init` against a synthetic host, with every command it would
+    """`lantern init` against a synthetic host, with every command it would
     run recorded instead of run.
 
     The interpreter step is already satisfied — init runs from the home's
@@ -225,7 +225,7 @@ def init_on(tmp_path: Path, host: HostPrep, **overrides: Any) -> tuple[HomeInit,
         calls.append([str(a) for a in argv])
         return subprocess.CompletedProcess([str(a) for a in argv], 0, "", "")
 
-    home = SbxloopHome(tmp_path / "home")
+    home = LanternHome(tmp_path / "home")
     home.venv.mkdir(parents=True)
     init = HomeInit(
         home,
@@ -380,7 +380,7 @@ def on_host(monkeypatch: pytest.MonkeyPatch) -> Any:
 
     def use(**host: Any) -> None:
         monkeypatch.setattr(
-            "sbxloop.hostprep.HostPrep", lambda **_kwargs: fake_prep(**host), raising=True
+            "lantern.hostprep.HostPrep", lambda **_kwargs: fake_prep(**host), raising=True
         )
 
     return use
@@ -388,7 +388,7 @@ def on_host(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 class TestDoctorRows:
     def test_an_unprepared_device_is_a_row_that_says_who_fixes_it(self, on_host: Any) -> None:
-        from sbxloop.cli.doctor import host_prep_checks
+        from lantern.cli.doctor import host_prep_checks
 
         on_host(kvm="denied")
         rows = {check.name: check for check in host_prep_checks({})}
@@ -398,13 +398,13 @@ class TestDoctorRows:
         assert rows["host kvm"].hard is False  # a diagnosis, not a gate
 
     def test_a_prepared_linux_host_passes_both_rows(self, on_host: Any) -> None:
-        from sbxloop.cli.doctor import host_prep_checks
+        from lantern.cli.doctor import host_prep_checks
 
         on_host()
         assert all(check.ok for check in host_prep_checks({}))
 
     def test_no_linux_rows_off_linux(self, on_host: Any) -> None:
-        from sbxloop.cli.doctor import host_prep_checks
+        from lantern.cli.doctor import host_prep_checks
 
         on_host(system="Darwin", kvm="absent", mkfs=None)
         assert host_prep_checks({}) == []
@@ -414,13 +414,13 @@ class TestDoctorRows:
     ) -> None:
         """A `--no-systemd` home has no units, so judging it against a user
         manager and lingering would fail a supported mode."""
-        from sbxloop.cli.doctor import home_checks
-        from sbxloop.homeinit import UNIT_NAMES
+        from lantern.cli.doctor import home_checks
+        from lantern.homeinit import UNIT_NAMES
 
         on_host(manager=MANAGER_OFFLINE, linger="no")
-        home = SbxloopHome(tmp_path / "home")
+        home = LanternHome(tmp_path / "home")
         home.ensure_tree()
-        home.write_record(sbxloop_version="1.2.3", created_by="test")
+        home.write_record(lantern_version="1.2.3", created_by="test")
         env = {"HOME": str(tmp_path), "PATH": "/usr/bin", "USER": "bergs"}
 
         named = {check.name for check in home_checks(home, env)}
@@ -435,13 +435,13 @@ class TestDoctorRows:
         assert "stop at logout" in rows["unattended persistence"].detail
 
     def test_lingering_that_is_on_reads_as_persistence(self, tmp_path: Path, on_host: Any) -> None:
-        from sbxloop.cli.doctor import home_checks
-        from sbxloop.homeinit import UNIT_NAMES
+        from lantern.cli.doctor import home_checks
+        from lantern.homeinit import UNIT_NAMES
 
         on_host(linger="yes")
-        home = SbxloopHome(tmp_path / "home")
+        home = LanternHome(tmp_path / "home")
         home.ensure_tree()
-        home.write_record(sbxloop_version="1.2.3", created_by="test")
+        home.write_record(lantern_version="1.2.3", created_by="test")
         for name in UNIT_NAMES:
             home.unit(name).write_text("[Unit]\n")
 

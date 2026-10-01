@@ -10,12 +10,12 @@ import jwt
 import pytest
 from sqlalchemy import delete, update
 
-from sbxloop.api.auth import oidc
-from sbxloop.api.auth.store import ApiAuthStore
-from sbxloop.api.auth.tokens import mint_access
-from sbxloop.config import Config
-from sbxloop.db.api_models import OidcSessionRow
-from sbxloop.db.collaboration_models import LocalUserRow
+from lantern.api.auth import oidc
+from lantern.api.auth.store import ApiAuthStore
+from lantern.api.auth.tokens import mint_access
+from lantern.config import Config
+from lantern.db.api_models import OidcSessionRow
+from lantern.db.collaboration_models import LocalUserRow
 from tests.api.conftest import Api, build
 from tests.api.test_auth_oidc import (
     CLIENT_ID,
@@ -40,7 +40,7 @@ EVENT = "http://schemas.openid.net/event/backchannel-logout"
 def idp(monkeypatch: pytest.MonkeyPatch) -> FakeIdP:
     fake = FakeIdP(clock=Clock())
     monkeypatch.setattr(oidc, "http_request", fake)
-    monkeypatch.setenv("SBXLOOP_OIDC_CLIENT_SECRET", SECRET)
+    monkeypatch.setenv("LANTERN_OIDC_CLIENT_SECRET", SECRET)
     return fake
 
 
@@ -120,7 +120,7 @@ def test_provider_outage_never_reenables_local_auth(served: Api, idp: FakeIdP) -
         "local": False,
         "oidc": None,
         "policy_version": 1,
-        "assistant_name": "Angie",
+        "assistant_name": "Lantern",
         "oidc_session_max_age_s": 600,
     }
 

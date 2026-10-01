@@ -1,11 +1,17 @@
 ## [Unreleased]
 
-**sbxloop becomes Lantern.** This is the last release published to PyPI as
-`sbxloop` and `sbxloop-worker`; the project continues as Lantern backend at
-<https://github.com/brettbergin/lantern-backend>, released through GitHub
-Releases. The next release renames the package, CLI, module, environment
-prefix and home directory to `lantern`, `LANTERN_*` and `~/.lantern`, with no
-compatibility aliases.
+**sbxloop is now Lantern.** The package, CLI, module, environment prefix,
+config file, unit and home are renamed with no compatibility aliases:
+`lantern-backend` and `lantern-worker` (installed from GitHub Releases, no
+longer PyPI), the `lantern` command and module, `LANTERN_*`, `lantern.toml`,
+`lantern-daemon` and `~/.lantern`. The product agent is Lantern too, addressed
+as `@lantern`; `@angie` no longer resolves. Labels, branches and comment
+markers the daemon writes say `lantern`, so an issue labelled `sbxloop:run`
+needs `lantern:run` to be picked up. A host on the sbxloop home moves with
+`lantern init --from-sbxloop ~/.sbxloop` (config, secrets, App key and
+workspaces carried and renamed; state starts fresh) — on a self-deployed host,
+the **Cut over from sbxloop** workflow does it under a drain, with rollback
+(docs/self-deploy.md).
 
 **Releases come from GitHub only, and our packages are never installed by
 name from an index.** Release publishes the smoked, staged GitHub Release and

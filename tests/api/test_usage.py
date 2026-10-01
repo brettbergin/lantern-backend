@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from sbxloop_worker.protocol import Event, Usage
+from lantern_worker.protocol import Event, Usage
 from tests.api.conftest import Api, build
 from tests.unit.test_daemon_loop import gh_item
 

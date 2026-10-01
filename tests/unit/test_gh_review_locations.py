@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import MAX_PAGES, PAGE_SIZE, PaginationError
-from sbxloop.vcs.github.review_locations import right_side_ranges
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import MAX_PAGES, PAGE_SIZE, PaginationError
+from lantern.vcs.github.review_locations import right_side_ranges
 from tests.fakes.fake_github import FakeGithub
 
 

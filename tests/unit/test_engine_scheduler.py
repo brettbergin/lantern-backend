@@ -21,12 +21,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.engine import LoopEngine, Pipeline
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.store import StateStore
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
+from lantern.config import Config
+from lantern.engine.engine import LoopEngine, Pipeline
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.store import StateStore
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
 
 # Long enough that a scheduler which refuses to overlap fails the test rather
 # than hanging it; short enough that the failure is quick.
@@ -325,9 +325,9 @@ class TestDefaultAssignment:
     ) -> None:
         """The scheduler under the default assignment: the same lane order and
         the same task events, with no agent credited on any of them."""
-        from sbxloop.agents.assignment import plan_assignment
-        from sbxloop.agents.registry import ConfigAgentRegistry
-        from sbxloop.events import HostEventTypes
+        from lantern.agents.assignment import plan_assignment
+        from lantern.agents.registry import ConfigAgentRegistry
+        from lantern.events import HostEventTypes
 
         sched = Scheduler(tmp_path, [spec("t1"), spec("t2", deps=["t1"])], lanes=1)
         if assigned:

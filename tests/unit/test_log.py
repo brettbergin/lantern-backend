@@ -12,7 +12,7 @@ from typing import TextIO
 
 import pytest
 
-from sbxloop.log import (
+from lantern.log import (
     LOG_BUFFER_MAXLEN,
     REDACTED,
     THIRD_PARTY_LOGGERS,
@@ -63,7 +63,7 @@ class TestConfigure:
         try:
             configure_logging("INFO")
             configure_logging("INFO")
-            ours = [h for h in root.handlers if getattr(h, "_sbxloop_log_handler", False)]
+            ours = [h for h in root.handlers if getattr(h, "_lantern_log_handler", False)]
             assert len(ours) == 2  # one stderr handler + one ring buffer handler
             assert len([h for h in ours if isinstance(h, _RingBufferHandler)]) == 1
             assert foreign in root.handlers
@@ -73,19 +73,19 @@ class TestConfigure:
     def test_console_renders_event_and_fields(self, restore_logging: None) -> None:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        get_logger("sbxloop.test").info("run.dispatch", item="gh:issue:12", run="r1")
+        get_logger("lantern.test").info("run.dispatch", item="gh:issue:12", run="r1")
         line = stream.getvalue()
         assert "run.dispatch" in line
         assert "item=gh:issue:12" in line
         assert "run=r1" in line
-        assert "[sbxloop.test]" in line
+        assert "[lantern.test]" in line
 
     def test_none_valued_fields_are_dropped(self, restore_logging: None) -> None:
         """Field: `worker.job_done … error=None exit_code=None cwd=None` on
         every line — an absent optional fact must not render at all."""
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        get_logger("sbxloop.test").info(
+        get_logger("lantern.test").info(
             "worker.job_done", job="j1", error=None, exit_code=None, status="ok"
         )
         line = stream.getvalue()
@@ -94,15 +94,15 @@ class TestConfigure:
         # JSON output drops them too (absence is the record)
         stream2 = io.StringIO()
         configure_logging("INFO", fmt="json", stream=stream2)
-        get_logger("sbxloop.test").info("x", cwd=None, keep=0)
+        get_logger("lantern.test").info("x", cwd=None, keep=0)
         record = json.loads(stream2.getvalue().strip().splitlines()[-1])
         assert "cwd" not in record and record["keep"] == 0
 
     def test_json_renders_one_object_per_line(self, restore_logging: None) -> None:
         stream = io.StringIO()
         configure_logging("INFO", fmt="json", stream=stream)
-        get_logger("sbxloop.test").info("run.dispatch", item="gh:issue:12")
-        get_logger("sbxloop.test").warning("run.failed", reason="boom")
+        get_logger("lantern.test").info("run.dispatch", item="gh:issue:12")
+        get_logger("lantern.test").warning("run.failed", reason="boom")
         lines = stream.getvalue().strip().splitlines()
         assert len(lines) == 2
         first, second = (json.loads(line) for line in lines)
@@ -122,7 +122,7 @@ class TestConfigure:
     def test_positional_args_still_format(self, restore_logging: None) -> None:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        get_logger("sbxloop.test").info("old %s style", "percent")
+        get_logger("lantern.test").info("old %s style", "percent")
         assert "old percent style" in stream.getvalue()
 
     def test_exc_info_renders_traceback(self, restore_logging: None) -> None:
@@ -131,7 +131,7 @@ class TestConfigure:
         try:
             raise RuntimeError("kaboom")
         except RuntimeError:
-            get_logger("sbxloop.test").warning("thing.failed", exc_info=True)
+            get_logger("lantern.test").warning("thing.failed", exc_info=True)
         assert "RuntimeError: kaboom" in stream.getvalue()
 
 
@@ -155,7 +155,7 @@ class TestRedaction:
     def test_masks_end_to_end(self, restore_logging: None) -> None:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        get_logger("sbxloop.test").info("secret.set", copilot_token="ghu_abc123")
+        get_logger("lantern.test").info("secret.set", copilot_token="ghu_abc123")
         assert "ghu_abc123" not in stream.getvalue()
         assert f"copilot_token={REDACTED}" in stream.getvalue()
 
@@ -164,7 +164,7 @@ class TestContext:
     def test_bind_run_stamps_every_record_until_cleared(self, restore_logging: None) -> None:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        log = get_logger("sbxloop.test")
+        log = get_logger("lantern.test")
         bind_run("r1", "gh:issue:12", source="github")
         log.info("first")
         clear_run()
@@ -179,7 +179,7 @@ class TestContext:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
         bind_run("r1", "gh:12")
-        get_logger("sbxloop.test").info("run.dispatch")
+        get_logger("lantern.test").info("run.dispatch")
         clear_run()
         line = stream.getvalue()
         assert "item=gh:issue:12" in line
@@ -189,7 +189,7 @@ class TestContext:
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
         bind_run("r1", "inbox:todo.md")
-        get_logger("sbxloop.test").info("run.dispatch")
+        get_logger("lantern.test").info("run.dispatch")
         clear_run()
         assert "item=inbox:todo.md" in stream.getvalue()
 
@@ -201,7 +201,7 @@ class TestContext:
         bind_run("r-main")
 
         def other() -> None:
-            get_logger("sbxloop.test").info("from.thread")
+            get_logger("lantern.test").info("from.thread")
 
         thread = threading.Thread(target=other)
         thread.start()
@@ -218,12 +218,12 @@ class TestLogBuffer:
 
     def test_records_land_in_buffer(self, restore_logging: None) -> None:
         configure_logging("DEBUG")
-        get_logger("sbxloop.test").info("x.event", foo=1)
+        get_logger("lantern.test").info("x.event", foo=1)
         records = log_buffer().tail(10)
         assert records
         last = records[-1]
         assert last.level == "INFO"
-        assert last.logger == "sbxloop.test"
+        assert last.logger == "lantern.test"
         assert "x.event" in last.line and "foo=1" in last.line
         assert "\x1b[" not in last.line
 
@@ -275,13 +275,13 @@ class TestLogBuffer:
                 raise RuntimeError("nope")
 
         ring[0].setFormatter(Boom())
-        get_logger("sbxloop.test").info("still.fine")
+        get_logger("lantern.test").info("still.fine")
         assert log_buffer().tail(10) == []
 
     def test_level_filter_end_to_end(self, restore_logging: None) -> None:
         configure_logging("DEBUG")
         log_buffer().clear()
-        log = get_logger("sbxloop.test")
+        log = get_logger("lantern.test")
         log.debug("x.debug")
         log.info("x.info")
         log.warning("x.warn")
@@ -295,7 +295,7 @@ class TestLogBuffer:
     def test_grep_matches_metacharacters_literally(self, restore_logging: None) -> None:
         configure_logging("DEBUG")
         log_buffer().clear()
-        get_logger("sbxloop.test").info("daemon.idle", reason="a.b")
+        get_logger("lantern.test").info("daemon.idle", reason="a.b")
         assert log_buffer().tail(grep="a.b")
         assert log_buffer().tail(grep="a[.]b") == []
         assert log_buffer().tail(grep="a.*b") == []
@@ -304,7 +304,7 @@ class TestLogBuffer:
         configure_logging("DEBUG")
         configure_logging("DEBUG")
         log_buffer().clear()
-        get_logger("sbxloop.test").info("dup.check", marker="once")
+        get_logger("lantern.test").info("dup.check", marker="once")
         assert len(log_buffer().tail(50, grep="dup.check")) == 1
 
     def test_configure_twice_installs_one_ring_handler(self, restore_logging: None) -> None:
@@ -329,7 +329,7 @@ class TestRedactText:
     JWT = "eyJhbGciOiJIUzI1NiJ9.payload.signature"
 
     def test_github_token_shapes_masked(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         for token in (self.PAT, self.FINE, "gho_" + "z" * 30, "ghs_" + "q" * 24):
             out = redact_text(f"gh auth login --with-token {token} now")
@@ -337,7 +337,7 @@ class TestRedactText:
             assert "***" in out
 
     def test_authorization_header_masked_but_named(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         out = redact_text(f"curl -H 'Authorization: Bearer {self.JWT}' https://api")
         assert self.JWT not in out
@@ -345,7 +345,7 @@ class TestRedactText:
         assert "https://api" in out
 
     def test_assignments_and_flags_masked(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         out = redact_text("env API_KEY=sk-live-abc123 PASSWORD: hunter2 --token=t0psecret")
         for literal in ("sk-live-abc123", "hunter2", "t0psecret"):
@@ -353,7 +353,7 @@ class TestRedactText:
         assert out.count("***") == 3
 
     def test_ordinary_text_untouched(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         for text in (
             "uv run pytest -q tests/unit",
@@ -366,7 +366,7 @@ class TestRedactText:
     def test_credential_word_must_be_a_whole_name_segment(self) -> None:
         # `pat` inside PATH/patch/compat is not a credential; masking these
         # made rendered commands unreadable (PR #420 review).
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         for text in (
             "PATH=/usr/local/bin:/usr/bin",
@@ -380,7 +380,7 @@ class TestRedactText:
             assert redact_text(text) == text
 
     def test_delimited_credential_segments_still_masked(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         for text, literal in (
             ("GITHUB_PAT=ghx-abc123", "ghx-abc123"),
@@ -394,7 +394,7 @@ class TestRedactText:
             assert "***" in out
 
     def test_idempotent_and_never_raises(self) -> None:
-        from sbxloop.log import redact_text
+        from lantern.log import redact_text
 
         once = redact_text(f"API_KEY=abc {self.PAT} Authorization: Bearer {self.JWT}")
         assert redact_text(once) == once
@@ -416,12 +416,12 @@ class TestDaemonLogFile:
     ) -> None:
         import logging
 
-        from sbxloop.log import configure_logging, get_logger
+        from lantern.log import configure_logging, get_logger
 
         path = tmp_path / "logs" / "daemon.log"
         configure_logging("INFO", file=path, file_max_bytes=400, file_backups=2)
         try:
-            log = get_logger("sbxloop.test.file")
+            log = get_logger("lantern.test.file")
             for i in range(40):
                 log.info("daemon.tick", n=i, token="hunter2")
             for handler in logging.getLogger().handlers:
@@ -442,12 +442,12 @@ class TestDaemonLogFile:
         import json
         import logging
 
-        from sbxloop.log import configure_logging, get_logger
+        from lantern.log import configure_logging, get_logger
 
         path = tmp_path / "daemon.log"
         configure_logging("INFO", fmt="json", file=path)
         try:
-            get_logger("sbxloop.test.file").info("daemon.starting", home=str(tmp_path))
+            get_logger("lantern.test.file").info("daemon.starting", home=str(tmp_path))
             for handler in logging.getLogger().handlers:
                 handler.flush()
             (line,) = path.read_text().splitlines()
@@ -492,7 +492,7 @@ class TestJournaldTimestamp:
     ) -> None:
         with self._journal_stream(tmp_path, monkeypatch) as stream:
             configure_logging("INFO", stream=stream, file=tmp_path / "daemon.log")
-            get_logger("sbxloop.test").info("daemon.tick", n=1)
+            get_logger("lantern.test").info("daemon.tick", n=1)
             configure_logging("WARNING")  # close the file handler
             line = self._read(stream)
         assert "daemon.tick" in line and "n=1" in line
@@ -508,7 +508,7 @@ class TestJournaldTimestamp:
         """An inherited JOURNAL_STREAM with stderr redirected elsewhere."""
         with self._journal_stream(tmp_path, monkeypatch, matching=False) as stream:
             configure_logging("INFO", stream=stream)
-            get_logger("sbxloop.test").info("daemon.tick")
+            get_logger("lantern.test").info("daemon.tick")
             line = self._read(stream)
         assert _ISO_STAMP.search(line)
 
@@ -518,7 +518,7 @@ class TestJournaldTimestamp:
         monkeypatch.delenv("JOURNAL_STREAM", raising=False)
         stream = io.StringIO()
         configure_logging("INFO", stream=stream)
-        get_logger("sbxloop.test").info("daemon.tick")
+        get_logger("lantern.test").info("daemon.tick")
         assert _ISO_STAMP.search(stream.getvalue())
 
     def test_json_to_the_journal_keeps_its_timestamp_field(
@@ -526,7 +526,7 @@ class TestJournaldTimestamp:
     ) -> None:
         with self._journal_stream(tmp_path, monkeypatch) as stream:
             configure_logging("INFO", fmt="json", stream=stream)
-            get_logger("sbxloop.test").info("daemon.tick")
+            get_logger("lantern.test").info("daemon.tick")
             (line,) = self._read(stream).splitlines()
         assert "timestamp" in json.loads(line)
 
@@ -596,7 +596,7 @@ def test_a_level_another_library_registered_is_still_unknown() -> None:
     levels are a closed set, so an operator asking for it is still told."""
     import logging
 
-    from sbxloop.log import LogBuffer, LogRecordLine
+    from lantern.log import LogBuffer, LogRecordLine
 
     logging.addLevelName(5, "TRACE")
     buffer = LogBuffer()

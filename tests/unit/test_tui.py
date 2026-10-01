@@ -8,10 +8,10 @@ import os
 import pytest
 from rich.console import Console
 
-from sbxloop.cli.tui import ChatInput, Dashboard, format_event, render_event
-from sbxloop.events import HostEventTypes
-from sbxloop.excerpt import TOOL_EXCERPT_LINE_CLIP, TOOL_FAIL_OUTPUT_LINES_DEFAULT
-from sbxloop_worker.protocol import Event, EventTypes
+from lantern.cli.tui import ChatInput, Dashboard, format_event, render_event
+from lantern.events import HostEventTypes
+from lantern.excerpt import TOOL_EXCERPT_LINE_CLIP, TOOL_FAIL_OUTPUT_LINES_DEFAULT
+from lantern_worker.protocol import Event, EventTypes
 
 
 def make_event(type: str, **data: object) -> Event:

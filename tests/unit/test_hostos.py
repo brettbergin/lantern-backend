@@ -1,12 +1,12 @@
-"""Which hosts sbxloop runs on (#596): the verdict, the refusal at the
+"""Which hosts lantern runs on (#596): the verdict, the refusal at the
 sandbox-needing commands, and the doctor row."""
 
 from __future__ import annotations
 
 import pytest
 
-from sbxloop.cli.doctor import host_check
-from sbxloop.hostos import host_support
+from lantern.cli.doctor import host_check
+from lantern.hostos import host_support
 
 
 class TestVerdict:

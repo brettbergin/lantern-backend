@@ -1,5 +1,8 @@
 # Spike: a configurable version-control backend (GitHub, GitLab, Gitea)
 
+> **Renamed.** sbxloop is now Lantern and Angie is the Lantern web app. This record
+> keeps the names it was written with.
+
 Status: **tracked as an epic; the forge-agnostic steps have landed, the
 field questions are answered, and the GitLab backend is landing in
 steps.** The epic is

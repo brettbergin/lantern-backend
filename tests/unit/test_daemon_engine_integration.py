@@ -11,11 +11,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.sbx.cli import SbxCLI
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.sbx.cli import SbxCLI
 from tests.conftest import FakeSbx
 from tests.unit.test_daemon_loop import FakeSource, gh_item
 from tests.unit.test_engine import BUILD, Harness, task, taskgraph

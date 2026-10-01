@@ -13,8 +13,8 @@ from pathlib import Path
 
 from alembic import command
 
-from sbxloop.db import ensure_schema, open_engine
-from sbxloop.db.schema import _config
+from lantern.db import ensure_schema, open_engine
+from lantern.db.schema import _config
 
 OWNER = "usr_owner"
 CHANNEL = "chn_one"
@@ -70,7 +70,7 @@ def _seed(path: Path) -> None:
         rows = [
             # id, role, kind, agent_slug
             ("msg_user", "user", "message", None),
-            ("msg_angie", "assistant", "message", None),
+            ("msg_lantern", "assistant", "message", None),
             ("msg_planner", "assistant", "agent_result", "planner"),
             ("msg_handoff", "assistant", "agent_handoff", "critic"),
             ("msg_error", "assistant", "turn_error", None),
@@ -119,7 +119,7 @@ def test_every_existing_message_gets_the_author_it_always_had(tmp_path: Path) ->
     }
     assert authors == {
         "msg_user": ("human", OWNER),
-        "msg_angie": ("agent", "concierge"),
+        "msg_lantern": ("agent", "concierge"),
         "msg_planner": ("agent", "planner"),
         "msg_handoff": ("agent", "critic"),
         "msg_error": ("system", None),

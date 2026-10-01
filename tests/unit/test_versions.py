@@ -14,9 +14,9 @@ from typing import Any
 
 import pytest
 
-import sbxloop
-from sbxloop.daemon import versions
-from sbxloop.daemon.versions import (
+import lantern
+from lantern.daemon import versions
+from lantern.daemon.versions import (
     LATEST_TTL_S,
     MAX_BYTES,
     UNBUILT,
@@ -26,7 +26,7 @@ from sbxloop.daemon.versions import (
     fetch_latest,
     start_drift_check,
 )
-from sbxloop.errors import SbxError, SbxNotFoundError
+from lantern.errors import SbxError, SbxNotFoundError
 
 
 class TestCompare:
@@ -105,13 +105,16 @@ class TestFetchLatest:
             return FakeResponse(release("v0.7.15", assets=[]))
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
-        assert fetch_latest("sbxloop") == "0.7.15"
-        assert fetch_latest("sbxloop-worker") == "0.7.15"  # one release carries both
-        assert captured["url"] == "https://api.github.com/repos/brettbergin/sbxloop/releases/latest"
+        assert fetch_latest("lantern") == "0.7.15"
+        assert fetch_latest("lantern-worker") == "0.7.15"  # one release carries both
+        assert (
+            captured["url"]
+            == "https://api.github.com/repos/brettbergin/lantern-backend/releases/latest"
+        )
         assert "pypi.org" not in captured["url"]
         assert captured["url"].startswith("https://")
         assert captured["auth"] is None  # unauthenticated: no credential leaves the host
-        assert sbxloop.__version__ in captured["agent"]
+        assert lantern.__version__ in captured["agent"]
         assert captured["timeout"] == versions.LATEST_TIMEOUT_S
 
     @pytest.mark.parametrize(
@@ -133,7 +136,7 @@ class TestFetchLatest:
         monkeypatch.setattr(
             versions.urllib.request, "urlopen", lambda request, timeout=0: FakeResponse(body)
         )
-        assert fetch_latest("sbxloop") is None
+        assert fetch_latest("lantern") is None
 
     @pytest.mark.parametrize(
         "boom",
@@ -151,7 +154,7 @@ class TestFetchLatest:
             raise boom
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", fake_urlopen)
-        assert fetch_latest("sbxloop") is None
+        assert fetch_latest("lantern") is None
 
     def test_unparseable_and_oversized_bodies_are_misses(
         self, monkeypatch: pytest.MonkeyPatch
@@ -160,20 +163,20 @@ class TestFetchLatest:
             return FakeResponse(b"<html>not json</html>")
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", garbage)
-        assert fetch_latest("sbxloop") is None
+        assert fetch_latest("lantern") is None
 
         def huge(request: Any, timeout: float = 0) -> FakeResponse:
             return FakeResponse(b"x" * (MAX_BYTES + 1))
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", huge)
-        assert fetch_latest("sbxloop") is None
+        assert fetch_latest("lantern") is None
 
     def test_missing_tag_is_a_miss(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def no_tag(request: Any, timeout: float = 0) -> FakeResponse:
             return FakeResponse(b'{"draft": false, "prerelease": false}')
 
         monkeypatch.setattr(versions.urllib.request, "urlopen", no_tag)
-        assert fetch_latest("sbxloop") is None
+        assert fetch_latest("lantern") is None
 
 
 class FakeSbx:
@@ -219,8 +222,8 @@ class TestProbe:
         sbx = FakeSbx("0.38.1")
         p, _ = probe({}, sbx=sbx)
         installed = p.installed()
-        assert installed.sbxloop == sbxloop.__version__
-        assert installed.worker == sbxloop.__version__  # lockstep, see test_version.py
+        assert installed.lantern == lantern.__version__
+        assert installed.worker == lantern.__version__  # lockstep, see test_version.py
         assert installed.sbx == "0.38.1"
         # a latency budget, not the CLI's 120s default
         assert sbx.timeouts == [5.0]
@@ -238,7 +241,7 @@ class TestProbe:
     ) -> None:
         """A wedged Docker daemon is not a missing binary; the prose says so,
         and either way the release rows — the actual point — still render."""
-        p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, sbx=FakeSbx(raises=boom))
+        p, _ = probe({"lantern": "0.7.15", "lantern-worker": "0.7.15"}, sbx=FakeSbx(raises=boom))
         assert p.installed().sbx is None
         text = p.summary()
         assert reads in text
@@ -251,40 +254,40 @@ class TestProbe:
 
     def test_latest_memoises_successes_until_the_ttl_expires(self) -> None:
         now = [1000.0]
-        p, calls = probe({"sbxloop": "0.7.15"}, now=now)
-        assert p.latest("sbxloop") == "0.7.15"
-        assert p.latest("sbxloop") == "0.7.15"
-        assert calls == ["sbxloop"]  # one network call, not two
+        p, calls = probe({"lantern": "0.7.15"}, now=now)
+        assert p.latest("lantern") == "0.7.15"
+        assert p.latest("lantern") == "0.7.15"
+        assert calls == ["lantern"]  # one network call, not two
         now[0] += LATEST_TTL_S - 1
-        p.latest("sbxloop")
-        assert calls == ["sbxloop"]
+        p.latest("lantern")
+        assert calls == ["lantern"]
         now[0] += 2
-        p.latest("sbxloop")
-        assert calls == ["sbxloop", "sbxloop"]
+        p.latest("lantern")
+        assert calls == ["lantern", "lantern"]
 
     def test_a_failed_lookup_is_not_cached(self) -> None:
         """Caching a blip would leave the tool useless for five minutes."""
-        p, calls = probe({"sbxloop": None})
-        assert p.latest("sbxloop") is None
-        assert p.latest("sbxloop") is None
-        assert calls == ["sbxloop", "sbxloop"]
+        p, calls = probe({"lantern": None})
+        assert p.latest("lantern") is None
+        assert p.latest("lantern") is None
+        assert calls == ["lantern", "lantern"]
 
 
 class TestSummary:
     def test_behind_names_the_gap_and_who_must_act(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.12")
-        p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, sbx=FakeSbx("0.38.1"))
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        monkeypatch.setattr(versions.lantern_worker, "__version__", "0.7.12")
+        p, _ = probe({"lantern": "0.7.15", "lantern-worker": "0.7.15"}, sbx=FakeSbx("0.38.1"))
         text = p.summary()
         assert (
-            "sbxloop         0.7.12 installed · 0.7.15 released · BEHIND by 3 patch releases"
+            "lantern         0.7.12 installed · 0.7.15 released · BEHIND by 3 patch releases"
             in text
         )
-        assert "sbxloop-worker  0.7.12 installed · 0.7.15 released · BEHIND" in text
+        assert "lantern-worker  0.7.12 installed · 0.7.15 released · BEHIND" in text
         assert "sbx CLI         0.38.1" in text
         # #638: no install method is guessed — pip is one of several.
         assert "pip install --upgrade" not in text
-        assert "depends on how sbxloop was installed" in text
+        assert "depends on how lantern was installed" in text
         assert "operator's step on the daemon host" in text
         assert "You cannot do it from here" in text
 
@@ -292,44 +295,44 @@ class TestSummary:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # #638/#641: `[daemon] upgrade_command` is what the advice says to run.
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.12")
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        monkeypatch.setattr(versions.lantern_worker, "__version__", "0.7.12")
         p, _ = probe(
-            {"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"},
-            upgrade_command="pipx upgrade sbxloop",
+            {"lantern": "0.7.15", "lantern-worker": "0.7.15"},
+            upgrade_command="pipx upgrade lantern",
         )
         text = p.summary()
-        assert "run `pipx upgrade sbxloop`, then restart the daemon" in text
-        assert "depends on how sbxloop was installed" not in text
+        assert "run `pipx upgrade lantern`, then restart the daemon" in text
+        assert "depends on how lantern was installed" not in text
 
     def test_check_off_asks_nothing_and_advises_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # #641: `[daemon] version_check = false` — zero outbound HTTP, the
         # installed half still answers, and no upgrade is inferred.
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.12")
-        p, calls = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"}, check_releases=False)
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        monkeypatch.setattr(versions.lantern_worker, "__version__", "0.7.12")
+        p, calls = probe({"lantern": "0.7.15", "lantern-worker": "0.7.15"}, check_releases=False)
         text = p.summary()
         assert calls == []
-        assert "sbxloop         0.7.12 installed · latest release not checked" in text
+        assert "lantern         0.7.12 installed · latest release not checked" in text
         assert "[daemon] version_check = false" in text
         assert "could not reach GitHub Releases" not in text
         assert "BEHIND" not in text and "depends on how" not in text
         assert p.drift_notice() is None and calls == []
 
     def test_current_says_so_without_an_upgrade_hint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.15")
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.15")
-        p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.15")
+        monkeypatch.setattr(versions.lantern_worker, "__version__", "0.7.15")
+        p, _ = probe({"lantern": "0.7.15", "lantern-worker": "0.7.15"})
         text = p.summary()
         assert "up to date" in text
         assert "operator's step" not in text
 
     def test_a_dev_build_never_advises_an_upgrade(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12.dev0")
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", "0.7.12.dev0")
-        p, _ = probe({"sbxloop": "0.7.12", "sbxloop-worker": "0.7.12"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.12.dev0")
+        monkeypatch.setattr(versions.lantern_worker, "__version__", "0.7.12.dev0")
+        p, _ = probe({"lantern": "0.7.12", "lantern-worker": "0.7.12"})
         text = p.summary()
         assert "a development build, not a release" in text
         assert "operator's step" not in text
@@ -338,7 +341,7 @@ class TestSummary:
     def test_unreachable_releases_keep_the_installed_half(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
         p, _ = probe({})
         text = p.summary()
         assert "0.7.12 installed · could not reach GitHub Releases" in text
@@ -346,9 +349,9 @@ class TestSummary:
         assert "operator's step" not in text
 
     def test_an_unbuilt_tree_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", UNBUILT)
-        monkeypatch.setattr(versions.sbxloop_worker, "__version__", UNBUILT)
-        p, _ = probe({"sbxloop": "0.7.15", "sbxloop-worker": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", UNBUILT)
+        monkeypatch.setattr(versions.lantern_worker, "__version__", UNBUILT)
+        p, _ = probe({"lantern": "0.7.15", "lantern-worker": "0.7.15"})
         text = p.summary()
         assert "never built" in text
         assert "operator's step" not in text
@@ -356,24 +359,24 @@ class TestSummary:
 
 class TestDriftNotice:
     def test_only_a_behind_host_gets_a_notice(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        p, _ = probe({"sbxloop": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        p, _ = probe({"lantern": "0.7.15"})
         notice = p.drift_notice()
         assert notice is not None
         assert "0.7.12" in notice and "the latest release is 0.7.15" in notice
         assert "PyPI" not in notice
         assert "3 patch releases behind" in notice
         assert "pip install --upgrade" not in notice
-        assert "depends on how sbxloop was installed" in notice
+        assert "depends on how lantern was installed" in notice
 
     def test_the_notice_names_the_configured_upgrade_command(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        p, _ = probe({"sbxloop": "0.7.15"}, upgrade_command="~/bin/upgrade-sbxloop")
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        p, _ = probe({"lantern": "0.7.15"}, upgrade_command="~/bin/upgrade-lantern")
         notice = p.drift_notice()
         assert notice is not None
-        assert "run `~/bin/upgrade-sbxloop`" in notice
+        assert "run `~/bin/upgrade-lantern`" in notice
 
     @pytest.mark.parametrize(
         ("installed", "latest"),
@@ -383,22 +386,22 @@ class TestDriftNotice:
     def test_quiet_otherwise(
         self, monkeypatch: pytest.MonkeyPatch, installed: str, latest: str | None
     ) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", installed)
-        p, _ = probe({"sbxloop": latest})
+        monkeypatch.setattr(lantern, "__version__", installed)
+        p, _ = probe({"lantern": latest})
         assert p.drift_notice() is None
 
 
 class TestStartDriftCheck:
     def test_notifies_once_when_behind(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        p, _ = probe({"sbxloop": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        p, _ = probe({"lantern": "0.7.15"})
         seen: list[str] = []
         start_drift_check(p, seen.append).join(timeout=5)
         assert len(seen) == 1 and "0.7.15" in seen[0]
 
     def test_says_nothing_when_current(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.15")
-        p, _ = probe({"sbxloop": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.15")
+        p, _ = probe({"lantern": "0.7.15"})
         seen: list[str] = []
         start_drift_check(p, seen.append).join(timeout=5)
         assert seen == []
@@ -416,12 +419,12 @@ class TestStartDriftCheck:
         assert not thread.is_alive() and seen == []
 
     def test_runs_without_a_frontend(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(sbxloop, "__version__", "0.7.12")
-        p, _ = probe({"sbxloop": "0.7.15"})
+        monkeypatch.setattr(lantern, "__version__", "0.7.12")
+        p, _ = probe({"lantern": "0.7.15"})
         start_drift_check(p, None).join(timeout=5)  # logs only; must not raise
 
     def test_the_thread_is_a_daemon_so_shutdown_never_waits(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        p, _ = probe({"sbxloop": "0.7.15"})
+        p, _ = probe({"lantern": "0.7.15"})
         assert start_drift_check(p, None).daemon is True

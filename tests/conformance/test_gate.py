@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.vcs.protocol import CAPABILITIES, Capability
+from lantern.vcs.protocol import CAPABILITIES, Capability
 from tests.conformance.backends import BACKENDS
 from tests.conformance.gate import check_needs
 
@@ -41,17 +41,17 @@ def test_a_need_no_backend_reports_is_the_scenarios_mistake() -> None:
 
 
 LIVE_VARS = (
-    "SBXLOOP_LIVE_ENV_FILE",
-    "SBXLOOP_LIVE_GITLAB_URL",
+    "LANTERN_LIVE_ENV_FILE",
+    "LANTERN_LIVE_GITLAB_URL",
     "GITLAB_TOKEN",
-    "SBXLOOP_LIVE_GITEA_URL",
+    "LANTERN_LIVE_GITEA_URL",
     "GITEA_TOKEN",
 )
 
 
 @pytest.mark.parametrize(
     ("name", "url_var"),
-    [("gitlab-live", "SBXLOOP_LIVE_GITLAB_URL"), ("gitea-live", "SBXLOOP_LIVE_GITEA_URL")],
+    [("gitlab-live", "LANTERN_LIVE_GITLAB_URL"), ("gitea-live", "LANTERN_LIVE_GITEA_URL")],
 )
 def test_an_unconfigured_live_forge_is_unavailable_naming_what_is_missing(
     monkeypatch: pytest.MonkeyPatch, name: str, url_var: str
@@ -67,7 +67,7 @@ def test_a_configured_live_forge_that_does_not_answer_is_unavailable(
 ) -> None:
     for var in LIVE_VARS:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("SBXLOOP_LIVE_GITLAB_URL", "https://127.0.0.1:9/api/v4")
+    monkeypatch.setenv("LANTERN_LIVE_GITLAB_URL", "https://127.0.0.1:9/api/v4")
     monkeypatch.setenv("GITLAB_TOKEN", "not-a-token")
     reason = BACKENDS["gitlab-live"].unavailable()
     assert reason is not None and "not answering" in reason

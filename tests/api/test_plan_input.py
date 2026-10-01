@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.engine.planning import PlanProposal, proposal_problems
-from sbxloop.plans.service import PlanRefusal
+from lantern.engine.planning import PlanProposal, proposal_problems
+from lantern.plans.service import PlanRefusal
 from tests.api.conftest import Api
 from tests.api.test_plans import DRAFT, _create
 
@@ -104,7 +104,7 @@ def test_an_old_inference_result_cannot_overwrite_a_new_brief(api: Api) -> None:
 
 
 def test_a_legacy_full_level_can_generate_its_parent_without_more_children(api: Api) -> None:
-    from sbxloop.config import PlanningConfig
+    from lantern.config import PlanningConfig
 
     api.loop.config.planning = PlanningConfig(max_epics_per_initiative=1)
     plan = _create(api, api.bearer(DRAFT))

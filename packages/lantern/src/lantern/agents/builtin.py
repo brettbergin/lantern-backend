@@ -1,0 +1,333 @@
+"""The agents lantern ships: Lantern and the four run roles, plus the legacy names.
+
+The catalogue and its persona text are what the collaboration API served
+before agents became configurable; changing either changes every chat turn,
+so both are pinned by tests.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+from lantern.agents.definition import AgentDefinition, AgentSpec
+
+if TYPE_CHECKING:
+    from lantern.engine.harness import Role
+
+__all__ = [
+    "BUILTIN_AGENTS",
+    "BUILTIN_BY_SLUG",
+    "CONCIERGE_ALIASES",
+    "CONCIERGE_NAME",
+    "LANTERN_MENTIONED",
+    "LANTERN_PERSONA",
+    "LANTERN_SLUG",
+    "LEGACY_BUILTINS",
+    "PRIMARY_BUILTINS",
+    "builtin_display_name",
+    "chat_persona",
+    "chat_role",
+    "concierge_handle",
+    "concierge_name",
+    "mentioned_persona",
+    "product_persona",
+    "run_persona",
+]
+
+#: The native agent that speaks as the product itself.
+LANTERN_SLUG = "concierge"
+#: The name and aliases it ships with. An operator renames it with a
+#: ``[[agents]]`` entry for ``concierge``; the slug never changes.
+CONCIERGE_NAME = "Lantern"
+CONCIERGE_ALIASES: tuple[str, ...] = ("lantern",)
+
+_PERSONA = """
+
+## Product persona
+
+You are {name}, a concise personal assistant backed by lantern. Answer the
+person in the current channel and preserve context only within that channel.
+Treat conversation as conversation. Do not claim that a person approved an
+action, and explain any lantern operation you actually perform.
+"""
+
+_MENTIONED = """
+The person addressed you as `@concierge`{aliases}, which is how they let
+you use your lantern tools in this turn. You are still {name}: speak as
+yourself, never as a separate "Concierge" agent, and say what you did.
+"""
+
+
+def product_persona(name: str = CONCIERGE_NAME) -> str:
+    """The persona of the agent that speaks as the product, under ``name``."""
+    return _PERSONA.format(name=name)
+
+
+def mentioned_persona(
+    name: str = CONCIERGE_NAME, aliases: Sequence[str] = CONCIERGE_ALIASES
+) -> str:
+    """What the product agent is told when a person addressed it by name."""
+    also = " or ".join(f"`@{alias}`" for alias in aliases)
+    return _MENTIONED.format(name=name, aliases=f" (or {also})" if also else "")
+
+
+LANTERN_PERSONA = product_persona()
+
+LANTERN_MENTIONED = mentioned_persona()
+
+
+def concierge_name(agent: AgentDefinition | None) -> str:
+    """The name the product agent answers to: ``agent``'s (the resolved
+    ``concierge``), or the shipped one when it has none."""
+    return (agent.spec.name if agent is not None else "") or CONCIERGE_NAME
+
+
+def concierge_handle(agent: AgentDefinition | None) -> str:
+    """How a person addresses the product agent in prose: its first alias,
+    or its slug when it has none."""
+    aliases = CONCIERGE_ALIASES if agent is None else tuple(agent.spec.aliases)
+    return aliases[0] if aliases else LANTERN_SLUG
+
+
+_PRIMARY_CATEGORY = "Lantern Agents"
+
+
+def _primary(
+    slug: str,
+    name: str,
+    description: str,
+    capabilities: tuple[str, ...],
+    instructions: str,
+    *,
+    role: str,
+    color: str,
+    avatar: str,
+    aliases: tuple[str, ...] = (),
+) -> AgentDefinition:
+    spec = AgentSpec.model_validate(
+        {
+            "slug": slug,
+            "name": name,
+            "description": description,
+            "instructions": instructions,
+            "roles": [role],
+            "color": color,
+            "avatar": avatar,
+            "aliases": list(aliases),
+        }
+    )
+    return AgentDefinition(spec, "builtin", category=_PRIMARY_CATEGORY, capabilities=capabilities)
+
+
+def _legacy(
+    slug: str,
+    name: str,
+    description: str,
+    category: str,
+    capabilities: tuple[str, ...],
+    instructions: str,
+) -> AgentDefinition:
+    spec = AgentSpec(slug=slug, name=name, description=description, instructions=instructions)
+    return AgentDefinition(
+        spec, "builtin", legacy=True, category=category, capabilities=capabilities
+    )
+
+
+#: Lantern and the run roles, in the order clients list them.
+PRIMARY_BUILTINS: tuple[AgentDefinition, ...] = (
+    _primary(
+        LANTERN_SLUG,
+        CONCIERGE_NAME,
+        "Chat with lantern and direct its managed runs.",
+        ("chat", "run controls", "coordination"),
+        "Help the person direct the loop through the available tools.",
+        role="lead",
+        color="#84cc16",
+        avatar="A",
+        aliases=CONCIERGE_ALIASES,
+    ),
+    _primary(
+        "planner",
+        "Planner",
+        "Scope work and prepare a plan for the builder.",
+        ("planning", "decomposition", "handoffs"),
+        "Plan within the ask. Use earlier team replies as context. "
+        "Do not claim to have built the result.",
+        role="planner",
+        color="#d97706",
+        avatar="P",
+    ),
+    _primary(
+        "builder",
+        "Builder",
+        "Discuss implementation and dispatch code work through lantern.",
+        ("implementation", "verification", "code runs"),
+        "Help implement the ask through lantern's managed code runs. "
+        "This chat session has no checkout, editor or shell; actual file changes "
+        "and verification occur in a managed run. Report its status honestly.",
+        role="builder",
+        color="#ea580c",
+        avatar="B",
+    ),
+    _primary(
+        "critic",
+        "Critic",
+        "Review plans, results, and evidence without changing work.",
+        ("review", "evidence", "read only"),
+        "Inspect and judge the evidence and prior team replies. This role is read-only. "
+        "Never modify work or dispatch a run. State any evidence you cannot access.",
+        role="critic",
+        color="#e11d48",
+        avatar="C",
+    ),
+    _primary(
+        "operator",
+        "Operator",
+        "Discuss and dispatch research, data, and document workloads.",
+        ("research", "workloads", "deliverables"),
+        "Use managed workload runs for execution and deliverables. "
+        "This chat session has host tools but no editor or shell. Report what the run "
+        "actually did and distinguish it from advice.",
+        role="operator",
+        color="#0284c7",
+        avatar="O",
+    ),
+)
+
+#: Names that existing saved teams and API clients may still address. They
+#: resolve by slug but are not listed.
+LEGACY_BUILTINS: tuple[AgentDefinition, ...] = (
+    _legacy(
+        "cron",
+        "Cron Manager",
+        "Create, delete, and list scheduled tasks.",
+        "System Agents",
+        ("cron", "schedule", "recurring", "scheduled task"),
+        "Focus on schedules, timing, recurrence, and the exact behavior that will run.",
+    ),
+    _legacy(
+        "task-manager",
+        "Task Manager",
+        "List, cancel, retry, and explain Lantern tasks.",
+        "System Agents",
+        ("task", "cancel task", "retry task", "list tasks"),
+        "Focus on work status, supported controls, blockers, and concrete next steps.",
+    ),
+    _legacy(
+        "workflow-manager",
+        "Workflow Manager",
+        "Manage and trigger reusable workflows.",
+        "System Agents",
+        ("workflow", "run workflow", "trigger workflow"),
+        "Focus on reusable procedures and make inputs and expected outcomes explicit.",
+    ),
+    _legacy(
+        "event-manager",
+        "Event Manager",
+        "Query, filter, and explain lantern events.",
+        "System Agents",
+        ("event", "list events", "event history"),
+        "Use the durable chronology to explain what occurred and distinguish facts from summaries.",
+    ),
+    _legacy(
+        "github",
+        "GitHub Agent",
+        "GitHub repository, issue, and pull request operations.",
+        "Developer Agents",
+        ("github", "repository", "issue", "pull request", "code review"),
+        "Focus on repository work and use lantern's typed operations rather than raw credentials.",
+    ),
+    _legacy(
+        "software-dev",
+        "Software Developer",
+        "Plan, implement, verify, and deliver software changes through lantern.",
+        "Developer Agents",
+        ("code", "develop", "debug", "test", "pull request"),
+        "Turn an explicit implementation request into a bounded lantern run when appropriate.",
+    ),
+    _legacy(
+        "web",
+        "Web Agent",
+        "Research and synthesize information from configured tools and services.",
+        "Productivity",
+        ("web", "research", "search", "summarize"),
+        "Focus on research quality, source attribution, and the limits of available evidence.",
+    ),
+    _legacy(
+        "weather",
+        "Weather Agent",
+        "Weather conditions, forecasts, and severe weather guidance.",
+        "Lifestyle Agents",
+        ("weather", "forecast", "temperature", "alerts"),
+        "Focus on the requested location and time window and identify stale or unavailable data.",
+    ),
+)
+
+BUILTIN_AGENTS: tuple[AgentDefinition, ...] = (*PRIMARY_BUILTINS, *LEGACY_BUILTINS)
+BUILTIN_BY_SLUG: dict[str, AgentDefinition] = {a.slug: a for a in BUILTIN_AGENTS}
+
+#: The name the collaboration API has always listed the product agent under.
+_API_NAMES = {LANTERN_SLUG: "Concierge"}
+
+
+def builtin_display_name(agent: AgentDefinition) -> str:
+    """The name the pre-registry API listed ``agent`` under. The product
+    agent keeps its old listing while it has the shipped name, and is
+    listed under the name an operator gave it otherwise."""
+    if agent.slug == LANTERN_SLUG and concierge_name(agent) != CONCIERGE_NAME:
+        return concierge_name(agent)
+    return _API_NAMES.get(agent.slug, agent.spec.name)
+
+
+_CHAT_ROLES: dict[str, Role] = {
+    "planner": "planner",
+    "builder": "builder",
+    "critic": "critic",
+    "operator": "operator",
+}
+
+
+def chat_role(agent: AgentDefinition) -> Role:
+    """The chat session role a turn by ``agent`` runs under."""
+    for role in agent.spec.roles:
+        chat = _CHAT_ROLES.get(role)
+        if chat is not None:
+            return chat
+    return "concierge"
+
+
+def _builtin_instructions(agent: AgentDefinition) -> str | None:
+    shipped = BUILTIN_BY_SLUG.get(agent.slug)
+    return None if shipped is None else shipped.spec.instructions
+
+
+def chat_persona(agent: AgentDefinition, product: str = CONCIERGE_NAME) -> str:
+    """The chat persona of ``agent``; ``product`` is the name the product
+    agent answers to, which the other roles respond within."""
+    if agent.slug == LANTERN_SLUG:
+        # The lead is the product agent itself: a mention is how the person
+        # lets it act, not a hand-off to a separate agent.
+        name = concierge_name(agent)
+        persona = product_persona(name) + mentioned_persona(name, agent.spec.aliases)
+        instructions = agent.spec.instructions.strip()
+        if instructions and instructions != _builtin_instructions(agent):
+            persona += f"\n{instructions}\n"
+        return persona
+    instructions = agent.spec.instructions.strip()
+    name = agent.spec.name or agent.slug
+    return (
+        "\n\n## Collaboration role\n\n"
+        f"You are lantern's **{name}**, responding in {product} as `@{agent.slug}`. "
+        + (f"{instructions} " if instructions else "")
+        + "Keep the answer useful in a shared chat, state any "
+        "action you took, and never imply that another agent or person approved it."
+    )
+
+
+def run_persona(agent: AgentDefinition) -> str:
+    instructions = agent.spec.instructions.strip()
+    if not instructions or instructions == _builtin_instructions(agent):
+        return ""
+    name = agent.spec.name or agent.slug
+    return f"\n\n## Agent persona\n\nYou are **{name}** (`@{agent.slug}`). {instructions}\n"

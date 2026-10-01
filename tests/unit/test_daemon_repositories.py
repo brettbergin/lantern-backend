@@ -9,10 +9,10 @@ from typing import Any
 
 import pytest
 
-from sbxloop.cli.doctor import apply_registry, stored_repositories
-from sbxloop.config import Config, RepoConfig
-from sbxloop.daemon.repositories import RepositoryRegistry, merge
-from sbxloop.daemon.store import DaemonStore, StoredRepository
+from lantern.cli.doctor import apply_registry, stored_repositories
+from lantern.config import Config, RepoConfig
+from lantern.daemon.repositories import RepositoryRegistry, merge
+from lantern.daemon.store import DaemonStore, StoredRepository
 
 T0 = 1_000_000.0
 

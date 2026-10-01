@@ -8,15 +8,15 @@ from typing import ClassVar
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.errors import ProvisionError
-from sbxloop.events import Event, EventBus
-from sbxloop.paths import SbxloopHome
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.models import SandboxRole
-from sbxloop.sbx.naming import run_name
-from sbxloop.sbx.provision import Provisioner
-from sbxloop.sbx.sandbox import WORK_DIR
+from lantern.config import Config
+from lantern.errors import ProvisionError
+from lantern.events import Event, EventBus
+from lantern.paths import LanternHome
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.models import SandboxRole
+from lantern.sbx.naming import run_name
+from lantern.sbx.provision import Provisioner
+from lantern.sbx.sandbox import WORK_DIR
 from tests.conftest import FakeSbx
 
 TOKENS = {"COPILOT_GITHUB_TOKEN": "github_pat_copilot", "GH_TOKEN": "github_pat_user"}
@@ -53,7 +53,7 @@ def make_provisioner(
 
 
 def run_box(fake_sbx: FakeSbx, run_id: str, role: SandboxRole) -> str:
-    return run_name(SbxloopHome(fake_sbx.state.parent / "state"), run_id, role)
+    return run_name(LanternHome(fake_sbx.state.parent / "state"), run_id, role)
 
 
 class TestSpecs:
@@ -108,7 +108,7 @@ class TestSpecs:
         agent, _github = provisioner.build_specs("r1", tmp_path)
         assert "pypi.org" not in agent.policy_allows
         assert "archive.ubuntu.com" not in agent.policy_allows
-        # ...while the rest of the baseline, and sbxloop's own control
+        # ...while the rest of the baseline, and lantern's own control
         # plane, are untouched.
         assert "files.pythonhosted.org" in agent.policy_allows
         assert "deb.debian.org" in agent.policy_allows
@@ -292,9 +292,9 @@ class TestEnsurePair:
             # worker dirs created in both sandboxes
             for name in (pair.agent.name, pair.github.name):
                 fs = fake_sbx.sandbox_fs(name)
-                assert (fs / "home/agent/.sbxloop/jobs").is_dir()
-                assert (fs / "home/agent/.sbxloop/results").is_dir()
-                assert (fs / "home/agent/.sbxloop/events").is_dir()
+                assert (fs / "home/agent/.lantern/jobs").is_dir()
+                assert (fs / "home/agent/.lantern/results").is_dir()
+                assert (fs / "home/agent/.lantern/events").is_dir()
 
             # workspace created under state dir
             assert (tmp_path / "state/runs/r1/workspace").is_dir()
@@ -350,10 +350,10 @@ class TestEnsurePair:
         pair = provisioner.ensure_pair("r1")
         try:
             agent_env = (
-                fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.lantern/env.sh"
             ).read_text()
             github_env = (
-                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.lantern/env.sh"
             ).read_text()
             assert "export COPILOT_GITHUB_TOKEN=github_pat_copilot" in agent_env
             assert "GH_TOKEN" not in agent_env
@@ -451,7 +451,7 @@ class TestEnsurePair:
         # r1's agent probe cached "invisible-under-exec"; clear it so r2
         # takes the registration path whose no-recovery property this
         # asserts (the cached path is covered by TestCachedProxyVerdictSkip).
-        shutil.rmtree(SbxloopHome(tmp_path / "state").conformance)
+        shutil.rmtree(LanternHome(tmp_path / "state").conformance)
         rm_calls_before = len(fake_sbx.invocations("secret rm"))
         pair = provisioner.ensure_pair("r2")
         assert len(fake_sbx.invocations("secret rm")) == rm_calls_before
@@ -496,11 +496,11 @@ class TestGithubOnly:
 
     def test_creates_one_github_sandbox_by_name(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
         provisioner = make_provisioner(fake_sbx, tmp_path)
-        sandbox = provisioner.ensure_github_only("sbxloop-daemon-github", tmp_path / "ws")
+        sandbox = provisioner.ensure_github_only("lantern-daemon-github", tmp_path / "ws")
         try:
-            assert sandbox.name == "sbxloop-daemon-github"
+            assert sandbox.name == "lantern-daemon-github"
             created = [c[1].removeprefix("--name=") for c in fake_sbx.invocations("create")]
-            assert created == ["sbxloop-daemon-github"]
+            assert created == ["lantern-daemon-github"]
             assert fake_sbx.meta(sandbox.name)["workspace"] == str((tmp_path / "ws").resolve())
             allows = fake_sbx.policies()
             assert any("uploads.github.com" in c for c in allows)
@@ -511,14 +511,14 @@ class TestGithubOnly:
     def test_missing_gh_token_fails_before_create(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
         provisioner = make_provisioner(fake_sbx, tmp_path, env={"COPILOT_GITHUB_TOKEN": "x"})
         with pytest.raises(ProvisionError, match="GH_TOKEN"):
-            provisioner.ensure_github_only("sbxloop-daemon-github", tmp_path / "ws")
+            provisioner.ensure_github_only("lantern-daemon-github", tmp_path / "ws")
         assert fake_sbx.invocations("create") == []
 
     def test_failure_after_create_rolls_back(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
         provisioner = make_provisioner(fake_sbx, tmp_path)
         fake_sbx.fail_next("policy allow", returncode=1, stderr="policy exploded")
         with pytest.raises(ProvisionError):
-            provisioner.ensure_github_only("sbxloop-daemon-github", tmp_path / "ws")
+            provisioner.ensure_github_only("lantern-daemon-github", tmp_path / "ws")
         assert fake_sbx.invocations("rm") != []
 
     def test_post_create_failure_rolls_back_sandbox_and_secrets(
@@ -534,11 +534,11 @@ class TestGithubOnly:
 
         with pytest.raises(ProvisionError, match="worker install exploded"):
             provisioner.ensure_github_only(
-                "sbxloop-daemon-github", tmp_path / "ws", post_create=boom
+                "lantern-daemon-github", tmp_path / "ws", post_create=boom
             )
         assert fake_sbx.invocations("rm") != []
         # secrets registered for the sandbox were unregistered again
-        assert not any("sbxloop-daemon-github" in s for s in fake_sbx.secrets())
+        assert not any("lantern-daemon-github" in s for s in fake_sbx.secrets())
 
 
 class TestAgentOnly:
@@ -550,11 +550,11 @@ class TestAgentOnly:
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
         provisioner = make_provisioner(fake_sbx, tmp_path)
-        sandbox = provisioner.ensure_agent_only("sbxloop-concierge-abcd1234", tmp_path / "ws")
+        sandbox = provisioner.ensure_agent_only("lantern-concierge-abcd1234", tmp_path / "ws")
         try:
-            assert sandbox.name == "sbxloop-concierge-abcd1234"
+            assert sandbox.name == "lantern-concierge-abcd1234"
             created = [c[1].removeprefix("--name=") for c in fake_sbx.invocations("create")]
-            assert created == ["sbxloop-concierge-abcd1234"]
+            assert created == ["lantern-concierge-abcd1234"]
             allows = fake_sbx.policies()
             assert any("api.githubcopilot.com" in c for c in allows)
             assert any("pypi.org" in c for c in allows)
@@ -564,7 +564,7 @@ class TestAgentOnly:
             assert not any("set github" in a or "--service" in a for a in secret_args)
             # The host-tool response directory exists from the start.
             fs = fake_sbx.sandbox_fs(sandbox.name)
-            assert (fs / "home/agent/.sbxloop/tools").is_dir()
+            assert (fs / "home/agent/.lantern/tools").is_dir()
         finally:
             sandbox.rm()
 
@@ -573,7 +573,7 @@ class TestAgentOnly:
     ) -> None:
         provisioner = make_provisioner(fake_sbx, tmp_path, env={"GH_TOKEN": "x"})
         with pytest.raises(ProvisionError, match="COPILOT_GITHUB_TOKEN"):
-            provisioner.ensure_agent_only("sbxloop-concierge-abcd1234", tmp_path / "ws")
+            provisioner.ensure_agent_only("lantern-concierge-abcd1234", tmp_path / "ws")
         assert fake_sbx.invocations("create") == []
 
     def test_post_create_failure_rolls_back_sandbox_and_secrets(
@@ -586,7 +586,7 @@ class TestAgentOnly:
 
         with pytest.raises(ProvisionError, match="worker install exploded"):
             provisioner.ensure_agent_only(
-                "sbxloop-concierge-abcd1234", tmp_path / "ws", post_create=boom
+                "lantern-concierge-abcd1234", tmp_path / "ws", post_create=boom
             )
         assert fake_sbx.invocations("rm") != []
         # secrets registered for the sandbox were unregistered again
@@ -629,14 +629,14 @@ class TestWorkspaceIsolation:
             assert (clone_dir / ".git").is_dir()
             assert (clone_dir / "hello.txt").read_text() == "hi\n"
             head = (clone_dir / ".git" / "HEAD").read_text().strip()
-            assert head.endswith("refs/heads/sbxloop/r1")
+            assert head.endswith("refs/heads/lantern/r1")
             assert fake_sbx.meta(pair.agent.name)["workspace"] == str(clone_dir)
             # the source checkout is untouched
-            assert not (source / ".git" / "refs" / "heads" / "sbxloop").exists()
+            assert not (source / ".git" / "refs" / "heads" / "lantern").exists()
             (event,) = clone_events(events)
             assert event.data["source"] == str(source.resolve())
             assert event.data["target"] == str(clone_dir)
-            assert event.data["branch"] == "sbxloop/r1"
+            assert event.data["branch"] == "lantern/r1"
             assert event.data["dirty"] is False
             assert event.data["reused"] is False
             assert len(str(event.data["commit"])) == 40
@@ -646,14 +646,14 @@ class TestWorkspaceIsolation:
     def test_stray_state_dirs_do_not_trip_the_dirty_refusal(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        """A ``.sbxloop`` inside the checkout — the agent's scratch, or a
+        """A ``.lantern`` inside the checkout — the agent's scratch, or a
         leftover of the former relative state dir — is the tool's own and
         must be invisible to isolation (field failure r5a1d9m9c)."""
         from tests.unit.test_hostgit import make_repo
 
         source = make_repo(tmp_path)
-        (source / ".sbxloop").mkdir()
-        (source / ".sbxloop" / "state.db").write_text("db\n")
+        (source / ".lantern").mkdir()
+        (source / ".lantern" / "state.db").write_text("db\n")
         provisioner, events = make_isolation_provisioner(fake_sbx, tmp_path, source)
         pair = provisioner.ensure_pair("r1")
         try:
@@ -823,7 +823,7 @@ class TestWorkspaceIsolation:
     def test_auto_without_git_binary_falls_back_in_place(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import sbxloop.hostgit as hostgit_mod
+        import lantern.hostgit as hostgit_mod
         from tests.unit.test_hostgit import make_repo
 
         source = make_repo(tmp_path)
@@ -875,7 +875,7 @@ class TestSecretIdempotency:
         provisioner.ensure_pair("r1").cleanup()
         # r1's probe cached "invisible-under-exec"; clear it so r2 takes the
         # registration path whose collision recovery this test exercises.
-        shutil.rmtree(SbxloopHome(tmp_path / "state").conformance)
+        shutil.rmtree(LanternHome(tmp_path / "state").conformance)
         pair = provisioner.ensure_pair("r2")  # must not raise
         try:
             state = self.secret_state(fake_sbx)
@@ -906,7 +906,7 @@ class TestSecretIdempotency:
         # resume straight to the env file (see TestCachedProxyVerdictSkip's
         # rotation test); clear it so this test keeps exercising the
         # registration-collision replacement an unknown sbx version takes.
-        shutil.rmtree(SbxloopHome(tmp_path / "state").conformance)
+        shutil.rmtree(LanternHome(tmp_path / "state").conformance)
         rotated = dict(TOKENS, GH_TOKEN="github_pat_rotated")
         provisioner2 = make_provisioner(fake_sbx, tmp_path, env=rotated)
         pair = provisioner2.ensure_pair("r1")
@@ -931,7 +931,7 @@ class TestSecretIdempotency:
         first.cleanup()
         # r1's probe cached "invisible-under-exec"; clear it so r2 takes the
         # registration path this test exists to exercise.
-        shutil.rmtree(SbxloopHome(tmp_path / "state").conformance)
+        shutil.rmtree(LanternHome(tmp_path / "state").conformance)
         import logging
 
         with caplog.at_level(logging.WARNING):
@@ -975,10 +975,10 @@ class TestSecretEnvVerification:
             assert len(fallback[0].data["message"]) < 160
             # the in-VM env file now carries the tokens the worker will load
             agent_env = (
-                fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.lantern/env.sh"
             ).read_text()
             github_env = (
-                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.lantern/env.sh"
             ).read_text()
             assert "export COPILOT_GITHUB_TOKEN=github_pat_copilot" in agent_env
             assert "export GH_TOKEN=github_pat_user" in github_env
@@ -1089,9 +1089,9 @@ class TestSecretEnvVerification:
             assert fallback, "a sentinel must trigger the in-VM env-file fallback"
             assert "sentinel" in fallback[0].data["message"]
             assert not [e for e in events if e.type == "sandbox.secret_probe_error"]
-            from sbxloop.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
+            from lantern.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
 
-            cached = load_verdicts(SbxloopHome(tmp_path / "state"), "0.38.0")
+            cached = load_verdicts(LanternHome(tmp_path / "state"), "0.38.0")
             assert cached[PROBE_SECRET_ENV_VISIBILITY].verdict == "sentinel-under-exec"
         finally:
             pair.cleanup()
@@ -1110,9 +1110,9 @@ class TestSecretEnvVerification:
         pair = provisioner.ensure_pair("r1")
         try:
             assert not [e for e in events if e.type == "sandbox.secret_env_fallback"]
-            from sbxloop.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
+            from lantern.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
 
-            cached = load_verdicts(SbxloopHome(tmp_path / "state"), "0.38.0")
+            cached = load_verdicts(LanternHome(tmp_path / "state"), "0.38.0")
             assert cached[PROBE_SECRET_ENV_VISIBILITY].verdict == "visible-under-exec"
         finally:
             pair.cleanup()
@@ -1166,7 +1166,7 @@ class TestMountDiscovery:
             (Path(pair.agent_workdir) / "probe.txt").write_text("via mount")
             assert (pair.workspace / "probe.txt").read_text() == "via mount"
             # nonce marker cleaned up
-            assert not list(pair.workspace.glob(".sbxloop-mount-*"))
+            assert not list(pair.workspace.glob(".lantern-mount-*"))
             mount_events = [e for e in events if e.type == "sandbox.workspace_mount"]
             assert [e.data["mounted"] for e in mount_events] == [True]
             assert mount_events[0].data["path"] == pair.agent_workdir
@@ -1187,7 +1187,7 @@ class TestMountDiscovery:
             assert pair.agent_workdir == WORK_DIR
             # fallback work dir created inside the VM
             assert (fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/work").is_dir()
-            assert not list(pair.workspace.glob(".sbxloop-mount-*"))
+            assert not list(pair.workspace.glob(".lantern-mount-*"))
             mount_events = [e for e in events if e.type == "sandbox.workspace_mount"]
             assert [e.data["mounted"] for e in mount_events] == [False]
             # a clean negative answer, distinguishable from a broken probe
@@ -1198,7 +1198,7 @@ class TestMountDiscovery:
     def test_discovery_exec_error_is_non_fatal_but_distinguishable(
         self, fake_sbx: FakeSbx, tmp_path: Path
     ) -> None:
-        from sbxloop.sbx.conformance import PROBE_WORKSPACE_MOUNT, load_verdicts
+        from lantern.sbx.conformance import PROBE_WORKSPACE_MOUNT, load_verdicts
 
         # sbx-level failure of the find probe must degrade, not abort the run
         fake_sbx.script(
@@ -1221,7 +1221,7 @@ class TestMountDiscovery:
             # and the infra failure did not clobber the conformance cache
             # with a bogus "not-found" verdict
             assert PROBE_WORKSPACE_MOUNT not in load_verdicts(
-                SbxloopHome(tmp_path / "state"), "0.38.0"
+                LanternHome(tmp_path / "state"), "0.38.0"
             )
         finally:
             pair.cleanup()
@@ -1257,7 +1257,7 @@ class TestMountExpected:
             in message
         )
         assert "found no marker under any candidate root" in message
-        assert "sbxloop doctor" in message
+        assert "lantern doctor" in message
         # The pair is torn down: nothing is left for `sandbox prune`.
         boxes = fake_sbx.state / "sandboxes"
         assert not boxes.is_dir() or not any(boxes.iterdir())
@@ -1350,7 +1350,7 @@ class TestConformanceRecording:
     def test_ensure_pair_records_field_verdicts(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx.conformance import (
+        from lantern.sbx.conformance import (
             PROBE_SECRET_ENV_VISIBILITY,
             PROBE_WORKSPACE_MOUNT,
             load_verdicts,
@@ -1365,7 +1365,7 @@ class TestConformanceRecording:
         provisioner = make_provisioner(fake_sbx, tmp_path)
         pair = provisioner.ensure_pair("r1")
         try:
-            cached = load_verdicts(SbxloopHome(tmp_path / "state"), "0.38.0")
+            cached = load_verdicts(LanternHome(tmp_path / "state"), "0.38.0")
             assert cached[PROBE_SECRET_ENV_VISIBILITY].verdict == "invisible-under-exec"
             assert cached[PROBE_SECRET_ENV_VISIBILITY].source == "provision"
             assert cached[PROBE_WORKSPACE_MOUNT].verdict == "discoverable"
@@ -1376,7 +1376,7 @@ class TestConformanceRecording:
     def test_recording_failure_never_breaks_provisioning(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.sbx import provision as provision_module
+        from lantern.sbx import provision as provision_module
 
         def boom(*args: object, **kwargs: object) -> None:
             raise OSError("disk full")
@@ -1409,7 +1409,7 @@ class TestGithubAppAuth:
         """Never mint over the network in unit tests."""
         import time as _time
 
-        from sbxloop.vcs.github import appauth
+        from lantern.vcs.github import appauth
 
         minted: list[str] = []
 
@@ -1421,7 +1421,7 @@ class TestGithubAppAuth:
         return minted
 
     def github_env_sh(self, fake_sbx: FakeSbx, name: str) -> str:
-        return (fake_sbx.sandbox_fs(name) / "home/agent/.sbxloop/env.sh").read_text()
+        return (fake_sbx.sandbox_fs(name) / "home/agent/.lantern/env.sh").read_text()
 
     def test_app_mode_writes_env_file_and_registers_no_service_secret(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1480,7 +1480,7 @@ class TestGithubAppAuth:
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A [[github.repos]] token_env wins over ambient App credentials."""
-        from sbxloop.sbx.provision import GhPat
+        from lantern.sbx.provision import GhPat
 
         config = Config.model_validate(
             {
@@ -1502,7 +1502,7 @@ class TestGithubAppAuth:
     ) -> None:
         import time as _time
 
-        from sbxloop.vcs.github.appauth import InstallationToken
+        from lantern.vcs.github.appauth import InstallationToken
 
         minted = self.stub_mint(monkeypatch)
         provisioner = make_provisioner(fake_sbx, tmp_path, env=self.APP_ENV)
@@ -1540,10 +1540,10 @@ class TestCachedProxyVerdictSkip:
     probe, no per-run warning (#568)."""
 
     def seed_broken_verdict(self, tmp_path: Path, verdict: str = "invisible-under-exec") -> None:
-        from sbxloop.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, record_field_verdict
+        from lantern.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, record_field_verdict
 
         record_field_verdict(
-            SbxloopHome(tmp_path / "state"), "0.38.0", PROBE_SECRET_ENV_VISIBILITY, verdict
+            LanternHome(tmp_path / "state"), "0.38.0", PROBE_SECRET_ENV_VISIBILITY, verdict
         )
 
     def test_cached_broken_verdict_skips_registration_and_probe(
@@ -1561,7 +1561,7 @@ class TestCachedProxyVerdictSkip:
             sets = [s for s in fake_sbx.secrets() if s["args"][0] in ("set", "set-custom")]
             assert sets == []
             for name in (pair.agent.name, pair.github.name):
-                env_sh = (fake_sbx.sandbox_fs(name) / "home/agent/.sbxloop/env.sh").read_text()
+                env_sh = (fake_sbx.sandbox_fs(name) / "home/agent/.lantern/env.sh").read_text()
                 assert "export" in env_sh
             fallback = [e for e in events if e.type == "sandbox.secret_env_fallback"]
             assert len(fallback) == 2
@@ -1582,7 +1582,7 @@ class TestCachedProxyVerdictSkip:
         pair = make_provisioner(fake_sbx, tmp_path, env=rotated).ensure_pair("r1")
         try:
             env_sh = (
-                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.lantern/env.sh"
             ).read_text()
             assert "github_pat_rotated" in env_sh
             # no new registrations (r1 cleanup's best-effort rm calls are fine)
@@ -1616,40 +1616,40 @@ class TestGhCredentialStatus:
     """The advisory twin of gh_credential, used by doctor rows."""
 
     def test_pat(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         status = gh_credential_status({"GH_TOKEN": "github_pat_x"})
         assert (status.ok, status.mode) == (True, "pat")
 
     def test_app(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         status = gh_credential_status(TestGithubAppAuth.APP_ENV)
         assert (status.ok, status.mode) == (True, "app")
         assert "12345" in status.detail
 
     def test_conflict(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         status = gh_credential_status({**TestGithubAppAuth.APP_ENV, "GH_TOKEN": "github_pat_x"})
         assert not status.ok
         assert "both" in status.detail
 
     def test_partial_app_set(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         status = gh_credential_status({"GITHUB_APP_ID": "12345"})
         assert not status.ok
         assert "incomplete" in status.detail
 
     def test_neither(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         status = gh_credential_status({})
         assert (status.ok, status.mode) == (False, "none")
 
     def test_token_env_wins(self) -> None:
-        from sbxloop.sbx.provision import gh_credential_status
+        from lantern.sbx.provision import gh_credential_status
 
         env = {**TestGithubAppAuth.APP_ENV, "GH_TOKEN_TWO": "github_pat_two"}
         status = gh_credential_status(env, token_env="GH_TOKEN_TWO")
@@ -1761,7 +1761,7 @@ class TestMimicSentinels:
         sentinel outcome — fall back to the env file and cache
         sentinel-under-exec, never 'visible' (db cached the wrong verdict
         for 18h on exactly this)."""
-        from sbxloop.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
+        from lantern.sbx.conformance import PROBE_SECRET_ENV_VISIBILITY, load_verdicts
 
         monkeypatch.setenv("GH_TOKEN", self.MIMIC)
         monkeypatch.setenv("COPILOT_GITHUB_TOKEN", self.MIMIC)
@@ -1773,7 +1773,7 @@ class TestMimicSentinels:
         try:
             fallback = [e for e in events if e.type == "sandbox.secret_env_fallback"]
             assert fallback, "mimic sentinel must trigger the env-file fallback"
-            cached = load_verdicts(SbxloopHome(tmp_path / "state"), "0.38.0")
+            cached = load_verdicts(LanternHome(tmp_path / "state"), "0.38.0")
             assert cached[PROBE_SECRET_ENV_VISIBILITY].verdict == "sentinel-under-exec"
         finally:
             pair.cleanup()
@@ -1801,19 +1801,19 @@ class TestBotLoginResolution:
     def test_app_mode_answers_the_bot_login(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.vcs.github import appauth
+        from lantern.vcs.github import appauth
 
-        monkeypatch.setattr(appauth, "fetch_app_slug", lambda creds, **kw: "sbxloop-app")
+        monkeypatch.setattr(appauth, "fetch_app_slug", lambda creds, **kw: "lantern-app")
         provisioner = make_provisioner(fake_sbx, tmp_path, env=TestGithubAppAuth.APP_ENV)
-        assert provisioner.gh_bot_login(None) == "sbxloop-app[bot]"
+        assert provisioner.gh_bot_login(None) == "lantern-app[bot]"
         # cached on the shared source: a second ask fetches nothing new
-        assert provisioner.gh_bot_login(None) == "sbxloop-app[bot]"
+        assert provisioner.gh_bot_login(None) == "lantern-app[bot]"
 
     def test_a_failed_slug_lookup_degrades_to_none(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.errors import GithubOpsError
-        from sbxloop.vcs.github import appauth
+        from lantern.errors import GithubOpsError
+        from lantern.vcs.github import appauth
 
         def boom(creds: object, **kw: object) -> str:
             raise GithubOpsError("nope")
@@ -1857,7 +1857,7 @@ class TestAppPermissionsResolution:
     def test_app_mode_reports_the_mint_permissions(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.vcs.github import appauth
+        from lantern.vcs.github import appauth
 
         minted: list[int] = []
 
@@ -1876,8 +1876,8 @@ class TestAppPermissionsResolution:
     def test_a_failed_mint_answers_none_not_raise(
         self, fake_sbx: FakeSbx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop.errors import GithubOpsError
-        from sbxloop.vcs.github import appauth
+        from lantern.errors import GithubOpsError
+        from lantern.vcs.github import appauth
 
         def boom(creds: object, **kwargs: object) -> appauth.InstallationToken:
             raise GithubOpsError("refused")
@@ -1921,7 +1921,7 @@ class TestStdinEnvDelivery:
 
     def _env_files(self, fake_sbx: FakeSbx) -> list[Path]:
         return [
-            fake_sbx.sandbox_fs(name) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(name) / "home/agent/.lantern/env.sh"
             for name in (run_box(fake_sbx, "r1", "agent"), run_box(fake_sbx, "r1", "github"))
         ]
 
@@ -1941,9 +1941,9 @@ class TestStdinEnvDelivery:
                 content = env_file.read_text()
                 assert all(token not in content for token in TOKENS.values())
         # the verdict is cached for this sbx version
-        from sbxloop.sbx.conformance import PROBE_EXEC_STDIN_ENV, load_verdicts
+        from lantern.sbx.conformance import PROBE_EXEC_STDIN_ENV, load_verdicts
 
-        record = load_verdicts(SbxloopHome(tmp_path / "state"), "0.38.0").get(PROBE_EXEC_STDIN_ENV)
+        record = load_verdicts(LanternHome(tmp_path / "state"), "0.38.0").get(PROBE_EXEC_STDIN_ENV)
         assert record is not None and record.verdict == "delivers"
 
     def test_fallback_writes_env_file_when_probe_fails(
@@ -1996,8 +1996,8 @@ class TestStdinEnvDelivery:
     ) -> None:
         """App mode + stdin delivery: nothing in the VM to refresh — the
         job_env provider re-mints per job through the token source."""
-        from sbxloop.sbx.conformance import VERDICT_STDIN_DELIVERS
-        from sbxloop.sbx.sandbox import Sandbox as _Sandbox
+        from lantern.sbx.conformance import VERDICT_STDIN_DELIVERS
+        from lantern.sbx.sandbox import Sandbox as _Sandbox
 
         provisioner = make_provisioner(fake_sbx, tmp_path, env=TestGithubAppAuth.APP_ENV)
         monkeypatch.setattr(provisioner, "_cached_verdict", lambda probe_id: VERDICT_STDIN_DELIVERS)
@@ -2029,7 +2029,7 @@ class TestClaudeAgentBackend:
             ("api.anthropic.com", "ANTHROPIC_API_KEY")
         ]
         assert "api.anthropic.com" in agent.policy_allows
-        assert agent.persistent_env["SBXLOOP_WORKER_BACKEND"] == "claude"
+        assert agent.persistent_env["LANTERN_WORKER_BACKEND"] == "claude"
         assert agent.persistent_env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
 
     def test_copilot_default_is_unchanged(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
@@ -2039,7 +2039,7 @@ class TestClaudeAgentBackend:
             ("api.github.com", "COPILOT_GITHUB_TOKEN")
         ]
         assert "api.anthropic.com" not in agent.policy_allows
-        assert "SBXLOOP_WORKER_BACKEND" not in agent.persistent_env
+        assert "LANTERN_WORKER_BACKEND" not in agent.persistent_env
 
     def test_missing_anthropic_key_fails_fast(self, fake_sbx: FakeSbx, tmp_path: Path) -> None:
         provisioner = self._provisioner(fake_sbx, tmp_path, env={"GH_TOKEN": "github_pat_user"})
@@ -2102,7 +2102,7 @@ class TestClaudeAgentBackend:
         assert provider is not None
         exports = provider()
         assert exports["ANTHROPIC_API_KEY"] == "sk-ant-claude-agent-key"
-        assert exports["SBXLOOP_WORKER_BACKEND"] == "claude"
+        assert exports["LANTERN_WORKER_BACKEND"] == "claude"
 
     def test_env_file_fallback_writes_anthropic_key(
         self, fake_sbx: FakeSbx, tmp_path: Path
@@ -2110,11 +2110,11 @@ class TestClaudeAgentBackend:
         provisioner = self._provisioner(fake_sbx, tmp_path)
         provisioner.ensure_pair("r1")
         env_file = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/env.sh"
         )
         content = env_file.read_text()
         assert "ANTHROPIC_API_KEY=sk-ant-claude-agent-key" in content
-        assert "SBXLOOP_WORKER_BACKEND=claude" in content
+        assert "LANTERN_WORKER_BACKEND=claude" in content
         assert "COPILOT_GITHUB_TOKEN" not in content
 
 
@@ -2162,12 +2162,12 @@ class TestOperatorSandboxEnv:
         provisioner = self._provisioner(fake_sbx, tmp_path)
         provisioner.ensure_pair("r1", repo="owner/repo")
         env_sh = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/env.sh"
         ).read_text()
         assert "export RAILS_ENV=test\n" in env_sh
         assert "export GREETING='hello world'\n" in env_sh
         github_sh = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "github")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "github")) / "home/agent/.lantern/env.sh"
         )
         if github_sh.exists():
             assert "RAILS_ENV" not in github_sh.read_text()
@@ -2179,7 +2179,7 @@ class TestOperatorSandboxEnv:
         provisioner = self._provisioner(fake_sbx, tmp_path)
         provisioner.ensure_pair("r1", repo="owner/repo")
         env_sh = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/env.sh"
         )
         assert "export RAILS_ENV=test\n" in env_sh.read_text()
         provider = provisioner.job_env("agent", "owner/repo")
@@ -2199,7 +2199,7 @@ class TestOperatorSandboxEnv:
         assert agent.persistent_env == {"GOFLAGS": "-mod=vendor"}
         provisioner.ensure_pair("r1", repo="owner/repo")
         env_sh = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/env.sh"
         ).read_text()
         assert "GOFLAGS=-mod=vendor" in env_sh
         assert "RAILS_ENV" not in env_sh
@@ -2314,9 +2314,9 @@ class TestPrivateRegistries:
         service_home = fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "service")) / "home/agent"
         assert not (service_home / ".npmrc").exists()
         assert not (service_home / ".netrc").exists()
-        service_sh = (service_home / ".sbxloop/env.sh").read_text()
+        service_sh = (service_home / ".lantern/env.sh").read_text()
         assert f"export NPM_TOKEN={self.SECRET}\n" in service_sh
-        assert "SBXLOOP_REGISTRIES=" in service_sh
+        assert "LANTERN_REGISTRIES=" in service_sh
         assert "https://artifactory.example.com/api/pypi/pypi-virtual/simple" in service_sh
         assert "PIP_INDEX_URL" not in service_sh
         assert "npm_config_cache" not in service_sh
@@ -2328,7 +2328,7 @@ class TestPrivateRegistries:
         agent_home = fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent"
         assert not (agent_home / ".npmrc").exists()
         assert not (agent_home / ".netrc").exists()
-        agent_sh = (agent_home / ".sbxloop/env.sh").read_text()
+        agent_sh = (agent_home / ".lantern/env.sh").read_text()
         assert "NPM_TOKEN" not in agent_sh
         assert "PIP_INDEX_URL" not in agent_sh
         assert "artifactory.example.com" not in agent_sh
@@ -2336,8 +2336,8 @@ class TestPrivateRegistries:
         # The agent prepares and consumes its own offline cache.
         assert "export npm_config_offline=true\n" in agent_sh
         assert "export PIP_NO_INDEX=1\n" in agent_sh
-        assert "export PIP_FIND_LINKS=/home/agent/.sbxloop/deps/pypi\n" in agent_sh
-        assert "export npm_config_cache=/home/agent/.sbxloop/deps/npm\n" in agent_sh
+        assert "export PIP_FIND_LINKS=/home/agent/.lantern/deps/pypi\n" in agent_sh
+        assert "export npm_config_cache=/home/agent/.lantern/deps/npm\n" in agent_sh
 
         for call in fake_sbx.invocations():
             assert all(self.SECRET not in arg for arg in call), call
@@ -2357,16 +2357,16 @@ class TestPrivateRegistries:
         provisioner = self._provisioner(fake_sbx, tmp_path, bus=bus)
         workspace = self._workspace(tmp_path)
         pair = provisioner.ensure_pair("r1", workspace, repo="owner/repo")
-        cache = workspace / ".sbxloop" / "deps"
+        cache = workspace / ".lantern" / "deps"
         assert cache.is_dir()
-        link = fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/deps"
+        link = fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/deps"
         assert link.is_symlink()
         assert Path(link.readlink()).resolve() == cache.resolve()
         service_link = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "service")) / "home/agent/.sbxloop/deps"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "service")) / "home/agent/.lantern/deps"
         )
         assert not service_link.exists() and not service_link.is_symlink()
-        assert ".sbxloop/" in (workspace / ".git/info/exclude").read_text().splitlines()
+        assert ".lantern/" in (workspace / ".git/info/exclude").read_text().splitlines()
         (event,) = [e for e in events if e.type == "sandbox.deps_cache"]
         assert event.data["name"] == run_box(fake_sbx, "r1", "agent")
         assert event.data["workdir"] == pair.agent_workdir
@@ -2413,7 +2413,7 @@ class TestPrivateRegistries:
         created = {c[1].removeprefix("--name=") for c in fake_sbx.invocations("create")}
         assert created == {run_box(fake_sbx, "r1", "agent"), run_box(fake_sbx, "r1", "github")}
         agent_sh = (
-            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.sbxloop/env.sh"
+            fake_sbx.sandbox_fs(run_box(fake_sbx, "r1", "agent")) / "home/agent/.lantern/env.sh"
         ).read_text()
         assert "export GOPRIVATE=github.example.com\n" in agent_sh
         assert "GOPROXY=off" not in agent_sh

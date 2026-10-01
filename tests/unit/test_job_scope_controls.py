@@ -5,9 +5,9 @@ from typing import Any
 
 import pytest
 
-from sbxloop.daemon.controls.results import ControlError
-from sbxloop.db.event_scope import admission_channel_for_item, channel_for_item, channel_for_run
-from sbxloop.db.job_models import ExternalItemRow, ExternalRunRow
+from lantern.daemon.controls.results import ControlError
+from lantern.db.event_scope import admission_channel_for_item, channel_for_item, channel_for_run
+from lantern.db.job_models import ExternalItemRow, ExternalRunRow
 from tests.unit.test_daemon_loop import Harness, gh_item
 from tests.unit.test_steering_by_mention import (
     MEMBER,

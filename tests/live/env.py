@@ -1,7 +1,7 @@
 """Where a live forge is, if one is configured.
 
 A live forge is configured by environment variables, or by the env file
-the seed scripts write when ``SBXLOOP_LIVE_ENV_FILE`` names it (the
+the seed scripts write when ``LANTERN_LIVE_ENV_FILE`` names it (the
 environment wins over the file). Nothing is read from ``.state/`` unless
 it is named: a machine that once ran the harness does not start reaching
 for containers on every test run.
@@ -19,13 +19,13 @@ from pathlib import Path
 
 from tests.live._http import Client, read_env_file
 
-ENV_FILE_VAR = "SBXLOOP_LIVE_ENV_FILE"
-CA_FILE_VAR = "SBXLOOP_LIVE_CA_FILE"
+ENV_FILE_VAR = "LANTERN_LIVE_ENV_FILE"
+CA_FILE_VAR = "LANTERN_LIVE_CA_FILE"
 
 # kind -> (API root variable, token variable, how the token rides)
 FORGES: dict[str, tuple[str, str, str]] = {
-    "gitlab": ("SBXLOOP_LIVE_GITLAB_URL", "GITLAB_TOKEN", "private-token"),
-    "gitea": ("SBXLOOP_LIVE_GITEA_URL", "GITEA_TOKEN", "token"),
+    "gitlab": ("LANTERN_LIVE_GITLAB_URL", "GITLAB_TOKEN", "private-token"),
+    "gitea": ("LANTERN_LIVE_GITEA_URL", "GITEA_TOKEN", "token"),
 }
 
 
@@ -36,7 +36,7 @@ def live_values() -> dict[str, str]:
         {
             k: v
             for k, v in os.environ.items()
-            if k.startswith(("SBXLOOP_LIVE_", "GITLAB_", "GITEA_"))
+            if k.startswith(("LANTERN_LIVE_", "GITLAB_", "GITEA_"))
         }
     )
     return values
@@ -65,7 +65,7 @@ class LiveForge:
 
     @property
     def prefix(self) -> str:
-        return f"SBXLOOP_LIVE_{self.kind.upper()}_"
+        return f"LANTERN_LIVE_{self.kind.upper()}_"
 
     @property
     def repo(self) -> str:

@@ -1,4 +1,4 @@
-"""Every persisted-state shape a released sbxloop wrote still opens (#524).
+"""Every persisted-state shape a released lantern wrote still opens (#524).
 
 `tests/fakes/legacy_db.py` freezes the schemas; this module is the sweep
 that proves each one migrates in place and that *every* row state and id
@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.ghids import normalize_item_id
+from lantern.daemon.store import DaemonStore
+from lantern.engine.store import StateStore
+from lantern.ghids import normalize_item_id
 from tests.fakes.legacy_db import (
     DAEMON_ITEM_STATES,
     DAEMON_SHAPES,

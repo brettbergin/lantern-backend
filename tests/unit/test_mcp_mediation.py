@@ -9,12 +9,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.errors import WorkerError
-from sbxloop.worker.mcp import McpBroker
-from sbxloop_worker.mcpops import CATALOGUE_ENV, McpOpError, _sse, execute
-from sbxloop_worker.protocol import HostToolCall, JobRequest, JobResult, McpServerSpec
-from sbxloop_worker.serviceops import FAKE_ENV
+from lantern.config import Config
+from lantern.errors import WorkerError
+from lantern.worker.mcp import McpBroker
+from lantern_worker.mcpops import CATALOGUE_ENV, McpOpError, _sse, execute
+from lantern_worker.protocol import HostToolCall, JobRequest, JobResult, McpServerSpec
+from lantern_worker.serviceops import FAKE_ENV
 
 SECRET = "synthetic-mcp-secret"
 SESSION = "synthetic-remote-session"
@@ -27,7 +27,7 @@ def environment(tmp_path: Path, responses: list[dict[str, Any]]) -> dict[str, st
         CATALOGUE_ENV: json.dumps(
             [{"name": "weather", "url": "https://weather.example/mcp", "credential": "weather"}]
         ),
-        "SBXLOOP_SERVICE_CREDENTIALS": json.dumps(
+        "LANTERN_SERVICE_CREDENTIALS": json.dumps(
             [
                 {
                     "name": "weather",

@@ -9,10 +9,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sbxloop.config import Config
-from sbxloop.engine.model import TaskRecord, TaskSpec
-from sbxloop.engine.phases import PhaseRunner, clip_diff
-from sbxloop_worker.protocol import JobRequest, JobResult
+from lantern.config import Config
+from lantern.engine.model import TaskRecord, TaskSpec
+from lantern.engine.phases import PhaseRunner, clip_diff
+from lantern_worker.protocol import JobRequest, JobResult
 
 VERDICT = {"verdict": "approve", "summary": "fine", "findings": []}
 TASK = TaskRecord(spec=TaskSpec(id="t1", title="Do it"))

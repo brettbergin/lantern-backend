@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from sbxloop.provider import ProviderRecovery
+from lantern.provider import ProviderRecovery
 from tests.unit.test_engine import BUILD, Harness, task, taskgraph
 from tests.unit.test_engine_workload import PASS
 

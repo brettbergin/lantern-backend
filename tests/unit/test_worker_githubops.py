@@ -20,8 +20,8 @@ from typing import Any, ClassVar
 
 import pytest
 
-from sbxloop_worker import githubops
-from sbxloop_worker.githubops import (
+from lantern_worker import githubops
+from lantern_worker.githubops import (
     GhCliTransport,
     GithubOpError,
     JsonValue,
@@ -29,8 +29,8 @@ from sbxloop_worker.githubops import (
     execute_op,
     parse_gh_http_status,
 )
-from sbxloop_worker.protocol import JobRequest
-from sbxloop_worker.runner import JobRunner
+from lantern_worker.protocol import JobRequest
+from lantern_worker.runner import JobRunner
 
 
 class TestParseGhHttpStatus:
@@ -169,13 +169,13 @@ class TestLabelGet:
     answer to an existence question, so with ``allow_missing`` a 404 comes
     back as data; a 403/5xx is a real failure and still raises."""
 
-    PATH = "/repos/o/r/labels/sbxloop%3Afollow-up"
-    PARAMS: ClassVar[dict[str, Any]] = {"repo": "o/r", "name": "sbxloop:follow-up"}
+    PATH = "/repos/o/r/labels/lantern%3Afollow-up"
+    PARAMS: ClassVar[dict[str, Any]] = {"repo": "o/r", "name": "lantern:follow-up"}
 
     def test_present_label_passes_through(self) -> None:
-        t = ScriptedTransport({self.PATH: {"name": "sbxloop:follow-up", "color": "c5def5"}})
+        t = ScriptedTransport({self.PATH: {"name": "lantern:follow-up", "color": "c5def5"}})
         assert execute_op("label.get", {**self.PARAMS, "allow_missing": True}, transport=t) == {
-            "name": "sbxloop:follow-up",
+            "name": "lantern:follow-up",
             "color": "c5def5",
         }
         assert t.calls == [("GET", self.PATH)]
@@ -235,7 +235,7 @@ class TestLabelProbeEmitsNoErrorEvent:
         result, events = self._run(
             tmp_path,
             "label.get",
-            {"repo": "o/r", "name": "sbxloop:follow-up", "allow_missing": True},
+            {"repo": "o/r", "name": "lantern:follow-up", "allow_missing": True},
         )
         assert result.status == "ok"
         assert result.output_json == {"missing": True, "http_status": 404}
@@ -245,7 +245,7 @@ class TestLabelProbeEmitsNoErrorEvent:
         """The old shape, pinned: a bare GET for an absent label is exactly
         the ``worker.error`` panel this change removes."""
         result, events = self._run(
-            tmp_path, "label.get", {"repo": "o/r", "name": "sbxloop:follow-up"}
+            tmp_path, "label.get", {"repo": "o/r", "name": "lantern:follow-up"}
         )
         assert result.status == "error"
         assert result.error is not None and result.error.type == "GithubOpError"
@@ -360,9 +360,9 @@ class TestGithubOpsSandboxScoping:
 
     @staticmethod
     def _provisioner(tmp_path: Path, repos: list[dict[str, Any]], env: dict[str, str]):
-        from sbxloop.config import Config
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.config import Config
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.provision import Provisioner
 
         config = Config.model_validate(
             {"home": str(tmp_path / "state"), "github": {"repos": repos}}
@@ -390,7 +390,7 @@ class TestGithubOpsSandboxScoping:
         assert provisioner.gh_token("o/b") == "global"
 
     def test_missing_per_repo_token_names_the_variable(self, tmp_path: Path) -> None:
-        from sbxloop.errors import ProvisionError
+        from lantern.errors import ProvisionError
 
         provisioner = self._provisioner(
             tmp_path, [{"repo": "o/a", "token_env": "TOKEN_A"}], {"GH_TOKEN": "global"}
@@ -405,7 +405,7 @@ class TestGithubOpsSandboxScoping:
             {"COPILOT_GITHUB_TOKEN": "copilot", "GH_TOKEN": "global"},
         )
         agent, github = provisioner.build_specs("r1", tmp_path, "o/b")
-        assert github.persistent_env["SBXLOOP_GITHUB_REPO"] == "o/b"
+        assert github.persistent_env["LANTERN_GITHUB_REPO"] == "o/b"
         assert github.persistent_env["GH_REPO"] == "o/b"
         # The isolation invariant: the agent sandbox carries no GitHub
         # credential and no GitHub remote configuration — only the Copilot
@@ -429,9 +429,9 @@ class TestGithubOpsSandboxScoping:
     def test_enterprise_host_is_exported_to_the_github_sandbox(self, tmp_path: Path) -> None:
         """Both worker transports read what the host derived from
         [github] api_url (#623): GH_HOST for gh, the API URL for stdlib."""
-        from sbxloop.config import Config
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.config import Config
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.provision import Provisioner
 
         config = Config.model_validate(
             {
@@ -442,9 +442,9 @@ class TestGithubOpsSandboxScoping:
         provisioner = Provisioner(SbxCLI(binary="/bin/true"), config, env={"GH_TOKEN": "t"})
         assert provisioner.github_repo_env("o/a") == {
             "GH_HOST": "ghe.example.com",
-            "SBXLOOP_GITHUB_API_URL": "https://ghe.example.com/api/v3",
+            "LANTERN_GITHUB_API_URL": "https://ghe.example.com/api/v3",
             "GH_REPO": "o/a",
-            "SBXLOOP_GITHUB_REPO": "o/a",
+            "LANTERN_GITHUB_REPO": "o/a",
         }
         agent, github = provisioner.build_specs("r1", tmp_path, "o/a")
         # The github sandbox reaches the enterprise host and nothing on
@@ -471,7 +471,7 @@ class TestGithubOpsSandboxScoping:
         provisioner = self._provisioner(
             tmp_path, [{"repo": "o/only", "token_env": "TOKEN_ONLY"}], {"TOKEN_ONLY": "tok"}
         )
-        assert provisioner.github_repo_env(None)["SBXLOOP_GITHUB_REPO"] == "o/only"
+        assert provisioner.github_repo_env(None)["LANTERN_GITHUB_REPO"] == "o/only"
         assert provisioner.gh_token(None) == "tok"
 
 
@@ -480,9 +480,9 @@ class TestGithubOpsSandboxProvisioning:
     that repo's token and remote, the agent box gets neither."""
 
     def test_pair_is_scoped_to_the_runs_repository(self, fake_sbx: Any, tmp_path: Path) -> None:
-        from sbxloop.config import Config
-        from sbxloop.sbx.cli import SbxCLI
-        from sbxloop.sbx.provision import Provisioner
+        from lantern.config import Config
+        from lantern.sbx.cli import SbxCLI
+        from lantern.sbx.provision import Provisioner
 
         config = Config.model_validate(
             {
@@ -508,9 +508,9 @@ class TestGithubOpsSandboxProvisioning:
         pair = provisioner.ensure_pair("r1", tmp_path / "ws", "o/b")
         try:
             github_env = (
-                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.sbxloop/env.sh"
+                fake_sbx.sandbox_fs(pair.github.name) / "home/agent/.lantern/env.sh"
             ).read_text()
-            assert "export SBXLOOP_GITHUB_REPO=o/b" in github_env
+            assert "export LANTERN_GITHUB_REPO=o/b" in github_env
             assert "export GH_REPO=o/b" in github_env
             # ...and the repo's own token, not the daemon-wide one and not
             # the other repository's.
@@ -526,7 +526,7 @@ class TestGithubOpsSandboxProvisioning:
                     assert "tok-a" not in entry
                     assert "tok-b" not in entry
                     assert "global-token" not in entry
-            agent_env_file = fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.sbxloop/env.sh"
+            agent_env_file = fake_sbx.sandbox_fs(pair.agent.name) / "home/agent/.lantern/env.sh"
             agent_env = agent_env_file.read_text() if agent_env_file.exists() else ""
             # Only the Copilot token, under its own name: no GH_TOKEN /
             # GITHUB_TOKEN export and none of the GitHub token values.

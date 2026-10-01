@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop_worker import registryops
-from sbxloop_worker.protocol import JobRequest
-from sbxloop_worker.registryops import CATALOGUE_ENV, RegistryFetchError, execute_fetch
-from sbxloop_worker.runner import JobRunner
-from sbxloop_worker.serviceops import FAKE_ENV
+from lantern_worker import registryops
+from lantern_worker.protocol import JobRequest
+from lantern_worker.registryops import CATALOGUE_ENV, RegistryFetchError, execute_fetch
+from lantern_worker.runner import JobRunner
+from lantern_worker.serviceops import FAKE_ENV
 
 TOKEN = "TEST_ONLY_ARTIFACT_CREDENTIAL_183a"
 
@@ -128,7 +128,7 @@ def test_response_cannot_copy_a_credential_back_even_across_chunks(
 
 def test_other_workload_credentials_are_also_kept_out_of_artifacts(tmp_path: Path) -> None:
     env = scripted_env(tmp_path, b"other-workload-secret")
-    env["SBXLOOP_SERVICE_CREDENTIALS"] = json.dumps([{"env": "WORKLOAD_TOKEN"}])
+    env["LANTERN_SERVICE_CREDENTIALS"] = json.dumps([{"env": "WORKLOAD_TOKEN"}])
     env["WORKLOAD_TOKEN"] = "other-workload-secret"
     with pytest.raises(RegistryFetchError, match="contained a service credential"):
         execute_fetch(

@@ -13,37 +13,37 @@ from typing import Any
 
 import pytest
 
-from sbxloop.agents.definition import AgentDefinition, AgentSpec
-from sbxloop.agents.registry import (
+from lantern.agents.definition import AgentDefinition, AgentSpec
+from lantern.agents.registry import (
     AgentInvalid,
     AgentRegistryReadOnly,
     ConfigAgentRegistry,
     DbAgentRegistry,
     default_registry,
 )
-from sbxloop.agents.tools import TOOL_CATALOG
-from sbxloop.config import DEFAULT_CONFIG_LOCKED, Config
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.collaboration_models import AgentRow
+from lantern.agents.tools import TOOL_CATALOG
+from lantern.config import DEFAULT_CONFIG_LOCKED, Config
+from lantern.daemon.store import DaemonStore
+from lantern.db.collaboration_models import AgentRow
 
-ANGIE_TEXT = """
+LANTERN_TEXT = """
 
 ## Product persona
 
-You are Angie, a concise personal assistant backed by sbxloop. Answer the
+You are Lantern, a concise personal assistant backed by lantern. Answer the
 person in the current channel and preserve context only within that channel.
 Treat conversation as conversation. Do not claim that a person approved an
-action, and explain any sbxloop operation you actually perform.
+action, and explain any lantern operation you actually perform.
 
-The person addressed you as `@concierge` (or `@angie`), which is how they let
-you use your sbxloop tools in this turn. You are still Angie: speak as
+The person addressed you as `@concierge` (or `@lantern`), which is how they let
+you use your lantern tools in this turn. You are still Lantern: speak as
 yourself, never as a separate "Concierge" agent, and say what you did.
 """
 
 INSTRUCTIONS = {
     "planner": "Plan within the ask. Use earlier team replies as context. "
     "Do not claim to have built the result.",
-    "builder": "Help implement the ask through sbxloop's managed code runs. "
+    "builder": "Help implement the ask through lantern's managed code runs. "
     "This chat session has no checkout, editor or shell; actual file changes "
     "and verification occur in a managed run. Report its status honestly.",
     "critic": "Inspect and judge the evidence and prior team replies. This role is read-only. "
@@ -57,7 +57,7 @@ INSTRUCTIONS = {
 def _role_persona(name: str, slug: str) -> str:
     return (
         "\n\n## Collaboration role\n\n"
-        f"You are sbxloop's **{name}**, responding in Angie as `@{slug}`. "
+        f"You are lantern's **{name}**, responding in Lantern as `@{slug}`. "
         f"{INSTRUCTIONS[slug]} Keep the answer useful in a shared chat, state any "
         "action you took, and never imply that another agent or person approved it."
     )
@@ -92,7 +92,7 @@ class TestBuiltins:
     @pytest.mark.parametrize(
         ("slug", "name", "color", "avatar", "roles"),
         [
-            ("concierge", "Angie", "#84cc16", "A", ["lead"]),
+            ("concierge", "Lantern", "#84cc16", "A", ["lead"]),
             ("planner", "Planner", "#d97706", "P", ["planner"]),
             ("builder", "Builder", "#ea580c", "B", ["builder"]),
             ("critic", "Critic", "#e11d48", "C", ["critic"]),
@@ -116,9 +116,9 @@ class TestBuiltins:
     def test_descriptions_and_instructions_are_todays(self) -> None:
         registry = ConfigAgentRegistry(Config())
         descriptions = {
-            "concierge": "Chat with sbxloop and direct its managed runs.",
+            "concierge": "Chat with lantern and direct its managed runs.",
             "planner": "Scope work and prepare a plan for the builder.",
-            "builder": "Discuss implementation and dispatch code work through sbxloop.",
+            "builder": "Discuss implementation and dispatch code work through lantern.",
             "critic": "Review plans, results, and evidence without changing work.",
             "operator": "Discuss and dispatch research, data, and document workloads.",
         }
@@ -138,7 +138,7 @@ class TestBuiltins:
     def test_chat_persona_is_byte_identical_to_today(self) -> None:
         registry = ConfigAgentRegistry(Config())
         concierge = registry.get("concierge")
-        assert concierge is not None and concierge.chat_persona() == ANGIE_TEXT
+        assert concierge is not None and concierge.chat_persona() == LANTERN_TEXT
         for slug, name in (
             ("planner", "Planner"),
             ("builder", "Builder"),
@@ -153,9 +153,9 @@ class TestBuiltins:
         for agent in ConfigAgentRegistry(Config()).list():
             assert agent.run_persona() == ""
 
-    def test_angie_alias_and_case_resolve_to_concierge(self) -> None:
+    def test_lantern_alias_and_case_resolve_to_concierge(self) -> None:
         registry = ConfigAgentRegistry(Config())
-        for selector in ("angie", "Angie", "CONCIERGE"):
+        for selector in ("lantern", "Lantern", "CONCIERGE"):
             agent = registry.get(selector)
             assert agent is not None and agent.slug == "concierge"
         assert registry.get("nobody") is None
@@ -189,17 +189,17 @@ class TestBuiltins:
 
 
 class TestApiShims:
-    """`sbxloop.api.agents` keeps its exports, now derived from the registry."""
+    """`lantern.api.agents` keeps its exports, now derived from the registry."""
 
     def test_shim_catalogue_is_todays(self) -> None:
-        from sbxloop.api.agents import AGENTS, AGENTS_BY_SLUG, LEGACY_AGENTS
+        from lantern.api.agents import AGENTS, AGENTS_BY_SLUG, LEGACY_AGENTS
 
         assert [(a.slug, a.name, a.role, a.category) for a in AGENTS] == [
-            ("concierge", "Concierge", "concierge", "SBXLOOP Agents"),
-            ("planner", "Planner", "planner", "SBXLOOP Agents"),
-            ("builder", "Builder", "builder", "SBXLOOP Agents"),
-            ("critic", "Critic", "critic", "SBXLOOP Agents"),
-            ("operator", "Operator", "operator", "SBXLOOP Agents"),
+            ("concierge", "Concierge", "concierge", "Lantern Agents"),
+            ("planner", "Planner", "planner", "Lantern Agents"),
+            ("builder", "Builder", "builder", "Lantern Agents"),
+            ("critic", "Critic", "critic", "Lantern Agents"),
+            ("operator", "Operator", "operator", "Lantern Agents"),
         ]
         assert AGENTS_BY_SLUG["critic"].capabilities == ("review", "evidence", "read only")
         assert AGENTS_BY_SLUG["planner"].phase == "decompose"
@@ -219,11 +219,11 @@ class TestApiShims:
             "temperature",
             "alerts",
         )
-        assert AGENTS_BY_SLUG["concierge"].persona == ANGIE_TEXT
+        assert AGENTS_BY_SLUG["concierge"].persona == LANTERN_TEXT
         assert AGENTS_BY_SLUG["operator"].persona == _role_persona("Operator", "operator")
 
     def test_api_context_exposes_the_registry(self, tmp_path: Path) -> None:
-        from sbxloop.api.context import ApiContext
+        from lantern.api.context import ApiContext
 
         config = _config([{"slug": "scout", "name": "Scout"}], home=str(tmp_path))
         ctx = ApiContext(config, loop=None, auth=None, keys=None)  # type: ignore[arg-type]
@@ -237,9 +237,9 @@ class TestApiShims:
 
 class TestConfigAgents:
     def test_toml_agent_is_added_and_resolves_by_alias(self, tmp_path: Path) -> None:
-        from sbxloop.config import load_config
+        from lantern.config import load_config
 
-        (tmp_path / "sbxloop.toml").write_text(
+        (tmp_path / "lantern.toml").write_text(
             "[[agents]]\n"
             'slug = "scout"\n'
             'name = "Scout"\n'
@@ -389,10 +389,10 @@ class TestConfigAgents:
     def test_alias_may_not_shadow_an_agent(self) -> None:
         with pytest.raises(ValueError, match=r"alias.*planner"):
             _config([{"slug": "scout", "name": "Scout", "aliases": ["planner"]}])
-        with pytest.raises(ValueError, match=r"alias.*angie"):
-            _config([{"slug": "scout", "name": "Scout", "aliases": ["angie"]}])
-        with pytest.raises(ValueError, match="angie"):
-            _config([{"slug": "angie", "name": "Imposter"}])
+        with pytest.raises(ValueError, match=r"alias.*lantern"):
+            _config([{"slug": "scout", "name": "Scout", "aliases": ["lantern"]}])
+        with pytest.raises(ValueError, match="lantern"):
+            _config([{"slug": "lantern", "name": "Imposter"}])
 
     def test_a_new_agent_needs_a_name(self) -> None:
         with pytest.raises(ValueError, match="name"):
@@ -417,7 +417,7 @@ class TestConfigAgents:
         assert "agents" in Config().concierge.config_locked
 
     def test_agents_are_not_run_config_drift(self) -> None:
-        from sbxloop.engine.engine import LoopEngine
+        from lantern.engine.engine import LoopEngine
 
         stored = Config()
         current = _config([{"slug": "scout", "name": "Scout"}])
@@ -483,9 +483,9 @@ class TestToolCatalog:
         assert {"memory", "start_run", "file_issue"} <= TOOL_CATALOG
 
     def test_run_host_tools_are_in_the_catalog(self) -> None:
-        from sbxloop.engine.issue_lookup import TOOL_NAME as LOOKUP
-        from sbxloop.engine.service import FETCH_TOOL_NAME, TOOL_NAME
-        from sbxloop.engine.skilltools import SKILL_TOOL_NAME
+        from lantern.engine.issue_lookup import TOOL_NAME as LOOKUP
+        from lantern.engine.service import FETCH_TOOL_NAME, TOOL_NAME
+        from lantern.engine.skilltools import SKILL_TOOL_NAME
 
         assert {LOOKUP, FETCH_TOOL_NAME, TOOL_NAME, SKILL_TOOL_NAME} <= TOOL_CATALOG
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.engine.model import (
+from lantern.engine.model import (
     DEFAULT_ARTIFACT_EXCLUDES,
     GITIGNORED,
     MAX_SUMMARY_CHARS,
@@ -28,7 +28,7 @@ from sbxloop.engine.model import (
     scan_artifacts,
     workload_summary,
 )
-from sbxloop.paths import SbxloopHome
+from lantern.paths import LanternHome
 
 
 def spec(id: str, deps: list[str] | None = None) -> dict[str, object]:
@@ -142,13 +142,13 @@ class TestArtifactFiles:
         assert scan.excluded == {".git": 3}
         assert all(".git" not in p.parts for p in scan.files)
 
-    def test_sbxloop_state_dir_excluded_by_default(self, tmp_path: Path) -> None:
+    def test_lantern_state_dir_excluded_by_default(self, tmp_path: Path) -> None:
         root = self.make_workspace(tmp_path)
-        (root / ".sbxloop").mkdir()
-        (root / ".sbxloop" / "state.db").write_text("db\n")
+        (root / ".lantern").mkdir()
+        (root / ".lantern" / "state.db").write_text("db\n")
         scan = scan_artifacts(root)
-        assert scan.excluded == {".git": 2, ".sbxloop": 1}
-        assert scan.excluded_note == "3 file(s) excluded (.git, .sbxloop)"
+        assert scan.excluded == {".git": 2, ".lantern": 1}
+        assert scan.excluded_note == "3 file(s) excluded (.git, .lantern)"
 
     def test_custom_exclude_list(self, tmp_path: Path) -> None:
         root = self.make_workspace(tmp_path)
@@ -207,7 +207,7 @@ class TestArtifactFiles:
     def test_config_default_mirrors_model_default(self) -> None:
         # config.py keeps a literal copy (importing engine.model there would
         # be circular); this pins the two against drift.
-        from sbxloop.config import ArtifactsConfig
+        from lantern.config import ArtifactsConfig
 
         assert tuple(ArtifactsConfig().exclude) == DEFAULT_ARTIFACT_EXCLUDES
 
@@ -215,7 +215,7 @@ class TestArtifactFiles:
         """Every default entry must survive the [artifacts] exclude validator
         — a default the user cannot re-type into their own config would be a
         latent trap."""
-        from sbxloop.config import ArtifactsConfig
+        from lantern.config import ArtifactsConfig
 
         assert len(set(DEFAULT_ARTIFACT_EXCLUDES)) == len(DEFAULT_ARTIFACT_EXCLUDES)
         # Round-trips through validation unchanged.
@@ -316,7 +316,7 @@ class TestDefaultBuildOutputExcludes:
 
     def test_exclusions_are_surfaced_not_silent(self, tmp_path: Path) -> None:
         """A dropped 100k-file node_modules must be visible in the note that
-        run summaries, `sbxloop artifacts` and delivery PR bodies print."""
+        run summaries, `lantern artifacts` and delivery PR bodies print."""
         root = self.make_workspace(
             tmp_path, ["app.py", "node_modules/a/i.js", "target/debug/x", ".git/HEAD"]
         )
@@ -394,7 +394,7 @@ class TestGitignoreAwareScan:
     def test_tree_without_gitignore_never_probes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import hostgit
+        from lantern import hostgit
 
         def boom(root: Path) -> frozenset[str]:
             raise AssertionError("probe must not run")
@@ -408,7 +408,7 @@ class TestGitignoreAwareScan:
     def test_failed_probe_degrades_to_name_based_scan(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from sbxloop import hostgit
+        from lantern import hostgit
 
         monkeypatch.setattr(hostgit, "gitignored_files", lambda root: None)
         root = self.make_tree(tmp_path)
@@ -426,7 +426,7 @@ class TestArtifactsDir:
             workspace=Path("/tmp/ws"),
             mounted=True,
         )
-        assert artifacts_dir(record, SbxloopHome(Path("/state"))) == Path("/tmp/ws")
+        assert artifacts_dir(record, LanternHome(Path("/state"))) == Path("/tmp/ws")
 
     def test_unmounted_run_uses_harvest_dir(self) -> None:
         record = RunRecord(
@@ -438,7 +438,7 @@ class TestArtifactsDir:
             workspace=Path("/tmp/ws"),
             mounted=False,
         )
-        assert artifacts_dir(record, SbxloopHome(Path("/state"))) == Path(
+        assert artifacts_dir(record, LanternHome(Path("/state"))) == Path(
             "/state/runs/r1/artifacts"
         )
 
@@ -446,7 +446,7 @@ class TestArtifactsDir:
         record = RunRecord(
             run_id="r1", outcome="x", state="created", created_at=1.0, updated_at=1.0
         )
-        assert artifacts_dir(record, SbxloopHome(Path("/state"))) is None
+        assert artifacts_dir(record, LanternHome(Path("/state"))) is None
 
 
 class TestSteerVerdict:

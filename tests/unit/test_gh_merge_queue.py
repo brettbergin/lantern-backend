@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError
-from sbxloop.vcs.github.ops import (
+from lantern.errors import GithubOpsError
+from lantern.vcs.github.ops import (
     GithubOps,
     QueueEntry,
     QueueState,

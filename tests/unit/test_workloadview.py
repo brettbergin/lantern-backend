@@ -3,13 +3,13 @@ spelled out for the console and the doctor row."""
 
 from __future__ import annotations
 
-from sbxloop.cli.workloadview import (
+from lantern.cli.workloadview import (
     NO_EGRESS,
     profile_summary,
     profile_view,
     profile_views,
 )
-from sbxloop.config import Config, ScheduleConfig
+from lantern.config import Config, ScheduleConfig
 
 
 def config(**over: object) -> Config:

@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.app import SbxloopTui
-from sbxloop.tui.data import ConsoleState, ItemsSnapshot
-from sbxloop.tui.screens.base import ConsoleScreen
-from sbxloop.tui.screens.overview import OverviewScreen
-from sbxloop.tui.screens.runs import RunsScreen
-from sbxloop.tui.widgets.navrail import (
+from lantern.daemon.model import WorkItem
+from lantern.paths import LanternHome
+from lantern.tui.app import LanternTui
+from lantern.tui.data import ConsoleState, ItemsSnapshot
+from lantern.tui.screens.base import ConsoleScreen
+from lantern.tui.screens.overview import OverviewScreen
+from lantern.tui.screens.runs import RunsScreen
+from lantern.tui.widgets.navrail import (
     NAV,
     NavButton,
     NavRail,
@@ -50,15 +50,15 @@ def test_nav_is_the_single_source_of_the_consoles_shape() -> None:
     """Every screen in the rail is a mode with a binding, and every mode is
     in the rail — a screen cannot be reachable by key and missing from the
     map, or listed and unreachable."""
-    modes = set(SbxloopTui.MODES)
+    modes = set(LanternTui.MODES)
     assert {item.mode for item in NAV} == modes
-    bound = {b.key for b in SbxloopTui.BINDINGS}
+    bound = {b.key for b in LanternTui.BINDINGS}
     for item in NAV:
         key = "question_mark" if item.key == "?" else item.key
         assert key in bound, f"{item.mode} is in the rail with no binding"
     # The nav keys are the rail's job now; the footer keeps its row for the
     # verbs of whichever screen is up.
-    shown = {b.key for b in SbxloopTui.BINDINGS if b.show}
+    shown = {b.key for b in LanternTui.BINDINGS if b.show}
     assert shown == {"r", "q"}
 
 
@@ -74,7 +74,7 @@ def test_badges_name_what_wants_attention() -> None:
 
 
 def test_the_rail_is_on_every_screen_and_follows_the_mode(
-    seeded: SbxloopHome, tmp_path: Path
+    seeded: LanternHome, tmp_path: Path
 ) -> None:
     async def scenario() -> None:
         app = make_app(seeded, **REFRESH)
@@ -107,7 +107,7 @@ def test_the_rail_is_on_every_screen_and_follows_the_mode(
     drive(scenario)
 
 
-def test_a_queued_item_badges_the_queue_row(seeded: SbxloopHome) -> None:
+def test_a_queued_item_badges_the_queue_row(seeded: LanternHome) -> None:
     """The rail is how a screen you are not on says it wants you."""
 
     async def scenario() -> None:
@@ -125,7 +125,7 @@ def test_a_queued_item_badges_the_queue_row(seeded: SbxloopHome) -> None:
     drive(scenario)
 
 
-def test_a_narrow_terminal_hides_the_rail_but_keeps_the_keys(seeded: SbxloopHome) -> None:
+def test_a_narrow_terminal_hides_the_rail_but_keeps_the_keys(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, **REFRESH)
         async with app.run_test(size=(70, 24)) as pilot:
@@ -142,7 +142,7 @@ def test_a_narrow_terminal_hides_the_rail_but_keeps_the_keys(seeded: SbxloopHome
     drive(scenario)
 
 
-def test_a_wide_terminal_shows_the_rail(seeded: SbxloopHome) -> None:
+def test_a_wide_terminal_shows_the_rail(seeded: LanternHome) -> None:
     async def scenario() -> None:
         app = make_app(seeded, **REFRESH)
         async with app.run_test(size=(120, 30)) as pilot:
@@ -156,7 +156,7 @@ def test_a_wide_terminal_shows_the_rail(seeded: SbxloopHome) -> None:
 
 
 @pytest.mark.parametrize("key,mode", [(i.key, i.mode) for i in NAV if i.key != "?"])
-def test_every_rail_row_reaches_its_screen(seeded: SbxloopHome, key: str, mode: str) -> None:
+def test_every_rail_row_reaches_its_screen(seeded: LanternHome, key: str, mode: str) -> None:
     async def scenario() -> None:
         app = make_app(seeded, **REFRESH)
         async with app.run_test(size=(120, 30)) as pilot:

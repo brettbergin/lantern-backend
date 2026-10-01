@@ -32,21 +32,21 @@ command line.
 ## Run against them
 
 ```bash
-SBXLOOP_LIVE_ENV_FILE=tests/live/.state/live.env uv run pytest -n0 tests/live tests/conformance
+LANTERN_LIVE_ENV_FILE=tests/live/.state/live.env uv run pytest -n0 tests/live tests/conformance
 ```
 
-`SBXLOOP_LIVE_ENV_FILE` names the env file; variables already in the
+`LANTERN_LIVE_ENV_FILE` names the env file; variables already in the
 environment win over it. A forge is live when its API root
-(`SBXLOOP_LIVE_GITLAB_URL`, `SBXLOOP_LIVE_GITEA_URL`) and its token
+(`LANTERN_LIVE_GITLAB_URL`, `LANTERN_LIVE_GITEA_URL`) and its token
 (`GITLAB_TOKEN`, `GITEA_TOKEN`) are set and `/version` answers with that
-token; `SBXLOOP_LIVE_CA_FILE` names the CA to trust.
+token; `LANTERN_LIVE_CA_FILE` names the CA to trust.
 
 `tests/live/test_field_verify.py` asks the questions again and holds each
 forge to the answers the spike records. To regenerate the evidence
 transcripts the spike quotes:
 
 ```bash
-SBXLOOP_LIVE_ENV_FILE=tests/live/.state/live.env uv run python -m tests.live.fieldverify --out tests/live/.state/evidence
+LANTERN_LIVE_ENV_FILE=tests/live/.state/live.env uv run python -m tests.live.fieldverify --out tests/live/.state/evidence
 ```
 
 Probes that write work on a fresh branch each run and never move `main`.

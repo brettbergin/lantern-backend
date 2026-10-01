@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.api.channel_access import ChannelAccess
-from sbxloop.api.collaboration import CollaborationError, Member
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.db.collaboration_models import ChannelMemberRow, ChannelRow
+from lantern.api.channel_access import ChannelAccess
+from lantern.api.collaboration import CollaborationError, Member
+from lantern.db.api_models import ApiEventRow
+from lantern.db.collaboration_models import ChannelMemberRow, ChannelRow
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 

@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from sqlalchemy.exc import OperationalError
 
-from sbxloop.api.auth.deps import resolve_token
-from sbxloop.api.errors import Problem
+from lantern.api.auth.deps import resolve_token
+from lantern.api.errors import Problem
 
 
 def _register(api: Any, **extra: Any) -> dict[str, Any]:
@@ -116,7 +116,7 @@ def test_a_failed_last_seen_write_never_fails_the_request(
 
     monkeypatch.setattr(store, "touch_last_seen", busy)
 
-    with caplog.at_level(logging.DEBUG, logger="sbxloop.api.auth.deps"):
+    with caplog.at_level(logging.DEBUG, logger="lantern.api.auth.deps"):
         me = api.client.get("/v1/users/me", headers=_bearer(token))
         # A stream's periodic access re-check resolves the token the same way.
         auth = resolve_token(api.ctx, token["access_token"])

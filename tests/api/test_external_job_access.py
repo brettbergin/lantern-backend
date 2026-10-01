@@ -1,6 +1,6 @@
 """Workspace access follows the durable job binding across every surface."""
 
-from sbxloop_worker.protocol import Event
+from lantern_worker.protocol import Event
 from tests.api.conftest import Api
 from tests.api.test_artifacts import _artifacts_root, _finish
 from tests.api.test_channel_access import _invite

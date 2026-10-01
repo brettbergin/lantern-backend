@@ -17,12 +17,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from sbxloop.config import Config
-from sbxloop.daemon.loop import day_window
-from sbxloop.daemon.usagepool import Admission, UsagePool
-from sbxloop.engine.model import RunResult
-from sbxloop.events import EventBus
-from sbxloop_worker.protocol import Usage
+from lantern.config import Config
+from lantern.daemon.loop import day_window
+from lantern.daemon.usagepool import Admission, UsagePool
+from lantern.engine.model import RunResult
+from lantern.events import EventBus
+from lantern_worker.protocol import Usage
 from tests.unit.test_daemon_concierge import make as make_concierge
 from tests.unit.test_daemon_concurrent_dispatch import Gate, _harness, _item, _release_all, _tick
 from tests.unit.test_daemon_loop import Harness, RecordingFrontend, gh_item

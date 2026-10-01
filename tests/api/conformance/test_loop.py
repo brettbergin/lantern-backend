@@ -29,7 +29,7 @@ class TestCodeRun:
         assert admitted.status_code == 201, admitted.text
         item = admitted.json()["item"]
         assert item["state"] == "queued" and item["kind"] == "code"
-        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["sbxloop:run"]
+        assert [lb["name"] for lb in ops.issues["4"]["labels"]] == ["lantern:run"]
         queue = operator.get("/v1/queue").json()
         assert [entry["item"]["id"] for entry in queue["data"]] == [item["id"]]
         # The daemon works: one tick, one merged run.

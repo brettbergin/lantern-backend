@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sbxloop.daemon.concierge import ConciergeReply
+from lantern.daemon.concierge import ConciergeReply
 from tests.api.conftest import build
 from tests.api.test_channel_access import _invite
 from tests.api.test_collaboration import FakeConcierge, bearer, register
@@ -582,8 +582,8 @@ def test_a_refused_mention_does_not_add_the_agent_to_the_roster(tmp_path: Any) -
 def test_a_roster_failure_drops_only_that_mention() -> None:
     """Joining one named agent fails; the others named in the same reply
     are still queued, and the one that failed is neither joined nor queued."""
-    from sbxloop.api.mentions import MentionRouter
-    from sbxloop.daemon.usagepool import Admission
+    from lantern.api.mentions import MentionRouter
+    from lantern.daemon.usagepool import Admission
 
     joined: list[str] = []
     queued: list[str] = []

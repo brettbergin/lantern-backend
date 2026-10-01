@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import DaemonStore
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import DaemonStore
 
 
 def store(tmp_path: Path, name: str = "d.sqlite3") -> DaemonStore:

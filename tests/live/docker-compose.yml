@@ -3,12 +3,12 @@
 # which writes the TLS material and the compose env file under `.state/`
 # first; see README.md. Both forges serve HTTPS only, from a throwaway CA the
 # harness mints, because the worker transport refuses a plain-http API root.
-name: sbxloop-live
+name: lantern-live
 
 services:
   gitea:
     image: gitea/gitea:1.24.7
-    container_name: sbxloop-live-gitea
+    container_name: lantern-live-gitea
     environment:
       USER_UID: "1000"
       USER_GID: "1000"
@@ -38,7 +38,7 @@ services:
 
   gitlab:
     image: gitlab/gitlab-ce:19.3.2-ce.0
-    container_name: sbxloop-live-gitlab
+    container_name: lantern-live-gitlab
     hostname: localhost
     shm_size: 256m
     environment:

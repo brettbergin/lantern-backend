@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from sbxloop_worker.backends.copilot_errors import (
+from lantern_worker.backends.copilot_errors import (
     MAX_RETRY_AFTER_S,
     ProviderFailed,
     failure_from_envelope,

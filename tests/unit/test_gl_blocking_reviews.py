@@ -2,7 +2,7 @@
 
 import pytest
 
-from sbxloop.vcs.protocol import Capability
+from lantern.vcs.protocol import Capability
 from tests.fakes.fake_gitlab import FakeGitlab, gitlab_error
 
 

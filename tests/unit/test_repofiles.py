@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import repofiles
+from lantern import repofiles
 
 
 @pytest.mark.parametrize("absolute", [False, True])

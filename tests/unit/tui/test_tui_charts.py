@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.paths import SbxloopHome
-from sbxloop.tui.screens.overview import OverviewScreen, hm
-from sbxloop.tui.widgets.band import BAD_COLOUR, IDLE_COLOUR, OK_COLOUR, Band, Segment
-from sbxloop.tui.widgets.chart import (
+from lantern.daemon.store import DaemonStore
+from lantern.paths import LanternHome
+from lantern.tui.screens.overview import OverviewScreen, hm
+from lantern.tui.widgets.band import BAD_COLOUR, IDLE_COLOUR, OK_COLOUR, Band, Segment
+from lantern.tui.widgets.chart import (
     MIN_POINTS,
     Chart,
     bars,
@@ -153,7 +153,7 @@ def test_too_few_points_is_not_a_shape() -> None:
     assert enough([1.0] * MIN_POINTS)
 
 
-def test_spread_draws_the_distributions_once_there_are_enough_runs(seeded: SbxloopHome) -> None:
+def test_spread_draws_the_distributions_once_there_are_enough_runs(seeded: LanternHome) -> None:
     seed_many(seeded, count=40)
 
     async def scenario() -> None:
@@ -177,7 +177,7 @@ def test_spread_draws_the_distributions_once_there_are_enough_runs(seeded: Sbxlo
 def test_spread_falls_back_to_the_sentence_on_thin_data(tmp_path: Path) -> None:
     """Four runs make a histogram of ones. The median-and-p90 sentence says
     more, so the page says that instead of drawing a shape that is noise."""
-    home = SbxloopHome(tmp_path / "state")
+    home = LanternHome(tmp_path / "state")
     home.ensure_tree()
     DaemonStore(home.state_db).close()
     seed_many(home, count=MIN_POINTS - 4)
@@ -196,7 +196,7 @@ def test_spread_falls_back_to_the_sentence_on_thin_data(tmp_path: Path) -> None:
     drive(scenario)
 
 
-def test_summary_draws_every_proportion_and_the_week(seeded: SbxloopHome) -> None:
+def test_summary_draws_every_proportion_and_the_week(seeded: LanternHome) -> None:
     """Summary's shares and its trend are all plots now. The headings and
     the keys stay: a plot the reader cannot name is not an improvement."""
     seed_many(seeded, count=40)
@@ -229,7 +229,7 @@ def test_a_share_of_nothing_stays_a_band() -> None:
     assert any(isinstance(w, Chart) for w in real), "a real share was not plotted"
 
 
-def test_cost_plots_the_trend_against_a_scale(seeded: SbxloopHome) -> None:
+def test_cost_plots_the_trend_against_a_scale(seeded: LanternHome) -> None:
     """The sparkline this replaced drew the shape but named no value on
     it, so a quiet week and a heavy one looked identical."""
     seed_many(seeded, count=40)
@@ -248,7 +248,7 @@ def test_cost_plots_the_trend_against_a_scale(seeded: SbxloopHome) -> None:
             assert time.strftime("%a", time.localtime()) in built, "the days are named"
 
 
-def test_every_page_draws_rather_than_paints_a_row(seeded: SbxloopHome) -> None:
+def test_every_page_draws_rather_than_paints_a_row(seeded: LanternHome) -> None:
     """No page still reports a share as a one-row band. A band paints with
     background colour and no glyph, which on a low-contrast terminal is a
     stripe you have to hunt for and carries no scale to read."""

@@ -4,7 +4,7 @@ When an ask is too big for one run, the concierge offers a plan instead of
 admitting one oversized run. On the person's explicit yes, ``draft_plan``
 creates a DRAFT plan pre-filled from the conversation through the plan
 service, as the person who asked (``plans:create``, exactly as ``POST
-/v1/plans`` requires), and answers with the link Angie and Lantern open:
+/v1/plans`` requires), and answers with the link the Lantern web and iOS apps open:
 ``/plans/<plan_id>``. It never publishes, approves, breaks a node down or
 starts an epic run: nothing reaches the forge and nothing is queued.
 """
@@ -18,11 +18,11 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.daemon.controls.principal import ROLE_CAPABILITIES, Principal
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.plans.model import Plan
-from sbxloop.plans.store import PlanStore
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Principal
+from lantern.daemon.store import DaemonStore
+from lantern.db.api_models import ApiEventRow
+from lantern.plans.model import Plan
+from lantern.plans.store import PlanStore
 from tests.unit.test_daemon_concierge import FakeGithub, make
 
 #: What the concierge pre-fills from the conversation.
@@ -137,7 +137,7 @@ class TestADraftOnTheAskersYes:
             assert plan.input[key] == DRAFT[key]
         # A draft alone: no children proposed, nothing approved or published.
         assert plan.nodes == (root,)
-        # The link Angie and Lantern open, and the plan's own words.
+        # The link Lantern and Lantern open, and the plan's own words.
         assert f"[{DRAFT['title']}](/plans/{plan.id})" in text, text
         assert plan.id in text and "draft" in text
         _nothing_else_happened(dstore, github)
@@ -270,8 +270,8 @@ def test_the_sections_are_bounded_as_the_api_bounds_them() -> None:
     API's, read from the request model so the two cannot drift."""
     from annotated_types import MaxLen
 
-    from sbxloop.api.plan_schemas import PlanSections
-    from sbxloop.daemon.concierge import _PLAN_CRITERIA_MAX, _PLAN_TEXT_LIMITS
+    from lantern.api.plan_schemas import PlanSections
+    from lantern.daemon.concierge import _PLAN_CRITERIA_MAX, _PLAN_TEXT_LIMITS
 
     def bound(name: str) -> int:
         (limit,) = [

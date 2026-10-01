@@ -7,9 +7,9 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from sbxloop.db.collaboration_models import ChannelMemberRow, ChannelRow, MessageRow
-from sbxloop.db.daemon_models import WorkItemRow
-from sbxloop.db.job_models import ExternalJobRow
+from lantern.db.collaboration_models import ChannelMemberRow, ChannelRow, MessageRow
+from lantern.db.daemon_models import WorkItemRow
+from lantern.db.job_models import ExternalJobRow
 from tests.api.test_channel_access import _channel, _people, _user_id
 from tests.api.test_external_work import _run, external_item
 

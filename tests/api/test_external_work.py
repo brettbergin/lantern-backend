@@ -6,13 +6,13 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.usagepool import fairness_key
-from sbxloop.db.collaboration_models import ChannelRow, MessageRow, TurnRow
-from sbxloop.db.daemon_models import WorkItemRow
-from sbxloop.db.engine_models import Run
-from sbxloop.db.job_models import ExternalJobRow, ExternalPendingRow, ExternalRunRow
-from sbxloop_worker.protocol import Event
+from lantern.daemon.model import WorkItem
+from lantern.daemon.usagepool import fairness_key
+from lantern.db.collaboration_models import ChannelRow, MessageRow, TurnRow
+from lantern.db.daemon_models import WorkItemRow
+from lantern.db.engine_models import Run
+from lantern.db.job_models import ExternalJobRow, ExternalPendingRow, ExternalRunRow
+from lantern_worker.protocol import Event
 from tests.api.test_collaboration import bearer, register
 
 
@@ -34,7 +34,7 @@ def channels(api: Any) -> list[Any]:
         return list(session.scalars(select(ChannelRow)).all())
 
 
-def test_external_work_contract_is_advertised_to_angie(api: Any) -> None:
+def test_external_work_contract_is_advertised_to_lantern(api: Any) -> None:
     headers = bearer(register(api))
     response = api.client.get("/v1/capabilities", headers=headers)
     assert response.status_code == 200, response.text
@@ -135,7 +135,7 @@ def test_initial_history_is_bounded_quiet_and_keeps_action_waits(api: Any) -> No
         assert bound == {"recent", "waiting"}
         jobs = list(session.scalars(select(ExternalJobRow)))
         assert all(job.historical and job.read_baseline == 2 for job in jobs)
-    from sbxloop.db.api_models import ApiEventRow
+    from lantern.db.api_models import ApiEventRow
 
     with api.harness.dstore.read() as session:
         assert (
@@ -166,7 +166,7 @@ def test_history_window_uses_finish_not_creation_and_preserves_timestamp(api: An
 
 
 def test_same_issue_retry_keeps_attempts_and_tombstone(api: Any) -> None:
-    from sbxloop.api.external_work import jobs
+    from lantern.api.external_work import jobs
 
     item = external_item(api)
     _run(api, "first", "failed", api.clock(), item)
@@ -269,7 +269,7 @@ def test_replay_progress_is_durable_and_live_messages_are_not_historical(api: An
 
 
 def test_old_public_attempt_never_leaks_later_private_admission(api: Any) -> None:
-    from sbxloop.api.external_work import jobs
+    from lantern.api.external_work import jobs
 
     headers = bearer(register(api))
     item = external_item(api)
@@ -308,7 +308,7 @@ def test_old_public_attempt_never_leaks_later_private_admission(api: Any) -> Non
 
 
 def test_completed_backfill_uses_dirty_queue_without_rescanning_history(api: Any) -> None:
-    from sbxloop.api.external_work import reconcile
+    from lantern.api.external_work import reconcile
 
     _run(api, "queued", "building", api.clock())
     for _ in range(6):
@@ -347,7 +347,7 @@ def test_no_turn_existing_private_channel_gets_truthful_delivery(api: Any) -> No
 
 
 def test_no_run_failure_is_visible_and_alerts_only_once(api: Any) -> None:
-    from sbxloop.db.api_models import ApiEventRow
+    from lantern.db.api_models import ApiEventRow
 
     api.ctx.project_work()
     api.clock.t += 1
@@ -401,7 +401,7 @@ def test_pending_code_stays_in_additive_jobs_before_discovery(api: Any) -> None:
 
 
 def test_existing_no_turn_live_chronicle_and_replay_share_a_ledger(api: Any) -> None:
-    from sbxloop.agents.chronicle import RunChronicle
+    from lantern.agents.chronicle import RunChronicle
 
     headers = bearer(register(api))
     for number, live_first in ((21, True), (22, False)):
@@ -433,7 +433,7 @@ def test_existing_no_turn_live_chronicle_and_replay_share_a_ledger(api: Any) -> 
 def test_resume_during_artifact_read_never_posts_old_result_as_new_transition(
     api: Any, monkeypatch: Any
 ) -> None:
-    from sbxloop.api import external_work
+    from lantern.api import external_work
 
     _run(api, "racy", "completed", api.clock())
     changed = False

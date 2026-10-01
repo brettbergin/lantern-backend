@@ -1,8 +1,8 @@
 """The workspace-membership contract names are public exports of
-``sbxloop.api.collaboration``.
+``lantern.api.collaboration``.
 
 The type checker runs strict, so a name that the module only imports is not
-exported: ``from sbxloop.api.collaboration import Role`` fails type checking
+exported: ``from lantern.api.collaboration import Role`` fails type checking
 unless the module defines the name, re-imports it as ``Role as Role``, or
 lists it in ``__all__``. This test applies the same rule to the module's
 source so consumers of the contract keep type checking.
@@ -15,7 +15,7 @@ import inspect
 
 import pytest
 
-import sbxloop.api.collaboration as collaboration
+import lantern.api.collaboration as collaboration
 
 CONTRACT_NAMES = ("Member", "Role", "ROLES", "ROLE_CAPABILITIES")
 

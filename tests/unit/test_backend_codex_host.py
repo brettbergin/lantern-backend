@@ -8,17 +8,17 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from sbxloop.backends import backend_for, backend_named
-from sbxloop.cli import doctor
-from sbxloop.cli.app import app
-from sbxloop.config import Config
-from sbxloop.daemon.discord_format import agent_model_label
-from sbxloop.errors import ProvisionError
-from sbxloop.log import redact_text
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.naming import run_name
-from sbxloop.sbx.provision import Provisioner, agent_policy_allows
-from sbxloop.sbx.secretstate import tracked_custom_secrets
+from lantern.backends import backend_for, backend_named
+from lantern.cli import doctor
+from lantern.cli.app import app
+from lantern.config import Config
+from lantern.daemon.discord_format import agent_model_label
+from lantern.errors import ProvisionError
+from lantern.log import redact_text
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.naming import run_name
+from lantern.sbx.provision import Provisioner, agent_policy_allows
+from lantern.sbx.secretstate import tracked_custom_secrets
 from tests.conftest import FakeSbx
 
 
@@ -31,7 +31,7 @@ def configured_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pat
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COLUMNS", "300")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    (tmp_path / "sbxloop.toml").write_text('[agent]\nbackend = "codex"\n')
+    (tmp_path / "lantern.toml").write_text('[agent]\nbackend = "codex"\n')
     return tmp_path
 
 
@@ -67,7 +67,7 @@ def test_codex_spec_keeps_the_inference_key_on_the_agent(tmp_path: Path) -> None
     assert "api.openai.com" in agent.policy_allows
     assert "api.anthropic.com" not in agent.policy_allows
     assert len(agent.policy_allows) == len(set(agent.policy_allows))
-    assert agent.persistent_env == {"SBXLOOP_WORKER_BACKEND": "codex"}
+    assert agent.persistent_env == {"LANTERN_WORKER_BACKEND": "codex"}
     assert "api.openai.com" not in github.policy_allows
     assert "OPENAI_API_KEY" not in github.persistent_env
     assert all(secret.env != "OPENAI_API_KEY" for secret in github.secrets)
@@ -107,7 +107,7 @@ def test_openai_egress_is_only_added_for_codex(tmp_path: Path) -> None:
 def test_openai_key_cannot_be_overridden_by_sandbox_or_registry_config(
     data: dict[str, object],
 ) -> None:
-    with pytest.raises(ValueError, match="OPENAI_API_KEY is delivered by sbxloop itself"):
+    with pytest.raises(ValueError, match="OPENAI_API_KEY is delivered by lantern itself"):
         Config.model_validate(data)
 
 
@@ -167,15 +167,15 @@ def test_codex_key_and_selector_reach_the_worker_without_credentials_in_argv(
         assert provider is not None
         exports = provider()
         assert exports["OPENAI_API_KEY"] == token
-        assert exports["SBXLOOP_WORKER_BACKEND"] == "codex"
+        assert exports["LANTERN_WORKER_BACKEND"] == "codex"
     else:
         env_file = (
             fake_sbx.sandbox_fs(run_name(config.paths, "r1", "agent"))
-            / "home/agent/.sbxloop/env.sh"
+            / "home/agent/.lantern/env.sh"
         )
         content = env_file.read_text()
         assert f"OPENAI_API_KEY={token}" in content
-        assert "SBXLOOP_WORKER_BACKEND=codex" in content
+        assert "LANTERN_WORKER_BACKEND=codex" in content
         assert "COPILOT_GITHUB_TOKEN" not in content
     assert token not in json.dumps(fake_sbx.invocations())
 

@@ -6,7 +6,7 @@ The field failure this closes (#526): a daemon configured with two
 a clone of the first repo's tree. Nothing between config parsing and
 provisioning noticed.
 
-These tests wire the real pieces — a parsed ``sbxloop.toml``, the real
+These tests wire the real pieces — a parsed ``lantern.toml``, the real
 :class:`DaemonLoop` over the real GitHub source and fake ops, and the real
 :class:`Provisioner` workspace resolution — over two local git fixtures, and
 assert on the one property that was violated in the field: the ``origin`` of
@@ -22,18 +22,18 @@ from typing import Any, cast
 import pytest
 from git import Repo
 
-from sbxloop import hostgit
-from sbxloop.config import Config
-from sbxloop.daemon.loop import DaemonLoop
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.sources import GitHubLabels, build_github_source
-from sbxloop.daemon.store import DaemonStore
-from sbxloop.engine.model import RunResult
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import ProvisionError
-from sbxloop.events import EventBus
-from sbxloop.sbx.cli import SbxCLI
-from sbxloop.sbx.provision import Provisioner
+from lantern import hostgit
+from lantern.config import Config
+from lantern.daemon.loop import DaemonLoop
+from lantern.daemon.model import WorkItem
+from lantern.daemon.sources import GitHubLabels, build_github_source
+from lantern.daemon.store import DaemonStore
+from lantern.engine.model import RunResult
+from lantern.engine.store import StateStore
+from lantern.errors import ProvisionError
+from lantern.events import EventBus
+from lantern.sbx.cli import SbxCLI
+from lantern.sbx.provision import Provisioner
 from tests.conftest import FakeSbx
 
 from .test_daemon_loop import PR_URL, RecordingFrontend
@@ -41,7 +41,7 @@ from .test_daemon_sources import RecordingOps, issue
 from .test_daemon_sources_multirepo import RouterOps
 from .test_provision import TOKENS
 
-LABELS = GitHubLabels("sbxloop:run", "sbxloop:in-progress", "sbxloop:failed")
+LABELS = GitHubLabels("lantern:run", "lantern:in-progress", "lantern:failed")
 
 # Two repositories, each pointed at its own host checkout: the shape the
 # migration note in the README asks operators to move to.
@@ -87,7 +87,7 @@ def _checkout(path: Path, repo: str) -> Path:
 def _config(tmp_path: Path, template: str) -> Config:
     a = _checkout(tmp_path / "trees" / "a", "o/a")
     b = _checkout(tmp_path / "trees" / "b", "o/b")
-    path = tmp_path / "sbxloop.toml"
+    path = tmp_path / "lantern.toml"
     path.write_text(template.format(a=a.as_posix(), b=b.as_posix()))
     return Config.model_validate(
         {**tomllib.loads(path.read_text()), "home": (tmp_path / "state").as_posix()}
@@ -120,7 +120,7 @@ class ProvisioningRunner:
             self.store.set_run_state(run_id, "failed")
             return RunResult(run_id=run_id, state="failed")
         self.store.set_run_pr(
-            run_id, number=9, url=PR_URL, branch=f"sbxloop/{run_id}", head_sha="abc"
+            run_id, number=9, url=PR_URL, branch=f"lantern/{run_id}", head_sha="abc"
         )
         self.store.set_run_state(run_id, "merged")
         return RunResult(run_id=run_id, state="merged", pr_number=9, pr_url=PR_URL)
@@ -131,8 +131,8 @@ class Wiring:
         self.config = config
         self.router = RouterOps(
             {
-                "o/a": RecordingOps({"4": issue(4, "sbxloop:run")}),
-                "o/b": RecordingOps({"7": issue(7, "sbxloop:run")}),
+                "o/a": RecordingOps({"4": issue(4, "lantern:run")}),
+                "o/b": RecordingOps({"7": issue(7, "lantern:run")}),
             }
         )
         self.store = StateStore(config.paths.state_db)
@@ -240,7 +240,7 @@ class TestFieldConfigurationIsRefused:
         assert len(cloned) <= 1
 
     def test_doctor_and_daemon_start_fail_on_the_same_configuration(self, field: Wiring) -> None:
-        from sbxloop.cli.doctor import workspace_origin_checks, workspace_origin_mismatches
+        from lantern.cli.doctor import workspace_origin_checks, workspace_origin_mismatches
 
         mismatches = workspace_origin_mismatches(field.config)
         assert [m.repo for m in mismatches] == ["o/b"]

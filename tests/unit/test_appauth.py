@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from sbxloop.errors import GithubOpsError, ProvisionError
-from sbxloop.vcs.github.appauth import (
+from lantern.errors import GithubOpsError, ProvisionError
+from lantern.vcs.github.appauth import (
     APP_ID_ENV,
     APP_INSTALLATION_ID_ENV,
     APP_KEY_ENV,
@@ -249,7 +249,7 @@ class TestMint:
         lines = [
             r.getMessage()
             for r in caplog.records
-            if r.name == "sbxloop.vcs.github.appauth" and "app_token_minted" in r.getMessage()
+            if r.name == "lantern.vcs.github.appauth" and "app_token_minted" in r.getMessage()
         ]
         assert len(lines) == 1
         assert "'expires_at': '2026-09-04T21:53:40+00:00'" in lines[0]
@@ -364,10 +364,10 @@ class TestBotLogin:
             seen["url"] = request.full_url
             seen["auth"] = request.get_header("Authorization")
             seen["method"] = request.get_method()
-            return _Resp({"slug": "sbxloop-app"})
+            return _Resp({"slug": "lantern-app"})
 
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-        assert fetch_app_slug(self.creds(rsa_key), now=1000.0) == "sbxloop-app"
+        assert fetch_app_slug(self.creds(rsa_key), now=1000.0) == "lantern-app"
         assert seen["url"].endswith("/app")
         assert seen["method"] == "GET"
         assert str(seen["auth"]).startswith("Bearer ")
@@ -395,13 +395,13 @@ class TestBotLogin:
 
         def fetch(creds: AppCredentials) -> str:
             fetched.append(1)
-            return "sbxloop-app"
+            return "lantern-app"
 
         source = AppTokenSource(
             AppCredentials("1", "2", "-----BEGIN PRIVATE KEY-----"), fetch=fetch
         )
-        assert source.bot_login() == "sbxloop-app[bot]"
-        assert source.bot_login() == "sbxloop-app[bot]"
+        assert source.bot_login() == "lantern-app[bot]"
+        assert source.bot_login() == "lantern-app[bot]"
         assert fetched == [1]
 
     def test_a_failed_lookup_is_cached_none(self) -> None:

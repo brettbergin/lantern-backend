@@ -1,6 +1,6 @@
-# sbxloop architecture
+# Lantern architecture
 
-sbxloop orchestrates agentic loops on top of [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)
+Lantern orchestrates agentic loops on top of [Docker Sandboxes](https://docs.docker.com/ai/sandboxes/)
 (the `sbx` CLI). This document describes the system layers, the security
 model, and the run lifecycle.
 
@@ -8,7 +8,7 @@ model, and the run lifecycle.
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│ CLI (typer + rich)         sbxloop run/resume/status/logs/doctor  │
+│ CLI (typer + rich)         lantern run/resume/status/logs/doctor  │
 ├───────────────────────────────────────────────────────────────────┤
 │ Engine                     LoopEngine + PhaseRunner + StateStore  │
 │                            (state machine, budgets, checkpoints)  │
@@ -22,18 +22,18 @@ model, and the run lifecycle.
 │ Docker Sandboxes (sbx)     microVMs, network policy, secret proxy │
 └───────────────────────────────────────────────────────────────────┘
 
-            inside each sandbox: sbxloop-worker
+            inside each sandbox: lantern-worker
             (JobRunner + agent backends + githubops executor)
 ```
 
 Two distributions ship from this repo in lockstep versions:
 
-- **`sbxloop`** — everything above the line: the host orchestrator.
-- **`sbxloop-worker`** — the in-sandbox runtime. The host package embeds the
-  worker wheel (`sbxloop/_vendor/`) at build time so sandboxes can be
-  provisioned with no package index involved for sbxloop's own code. Both
+- **`lantern`** — everything above the line: the host orchestrator.
+- **`lantern-worker`** — the in-sandbox runtime. The host package embeds the
+  worker wheel (`lantern/_vendor/`) at build time so sandboxes can be
+  provisioned with no package index involved for lantern's own code. Both
   ship as GitHub Release wheels with a SHA-256 manifest and are never
-  installed by name from an index (`sbxloop/releases.py`).
+  installed by name from an index (`lantern/releases.py`).
   `github-copilot-sdk` sits behind the worker's `[copilot]` extra, so the
   host never installs the Copilot runtime.
 
@@ -43,7 +43,7 @@ The host never talks to a forge directly: every read and write is a named
 operation on a backend object, and the operation runs inside the sandbox
 that holds the credential (the [credential split](#the-credential-split-in-one-picture)).
 What those operations are, and what they answer in, is fixed in two
-forge-neutral modules under `sbxloop/vcs/`; a backend package beside them
+forge-neutral modules under `lantern/vcs/`; a backend package beside them
 (`vcs/github/`, and `vcs/gitlab/` for the read paths) implements them
 against its own API, and `vcs/backends.py` is the registry that turns a
 `[vcs] kind` into a backend object over a worker client, with the transport
@@ -130,7 +130,7 @@ descriptor the worker needs.
 - **An operation a backend has not landed yet raises `RoleNotImplemented`.**
   A backend lists such operations in `UNIMPLEMENTED_OPERATIONS`; each
   raises a typed error naming the backend, the role and the operation, so
-  a run on that forge fails closed at the first of them, and `sbxloop doctor` lists the same operations before any run starts. The conformance
+  a run on that forge fails closed at the first of them, and `lantern doctor` lists the same operations before any run starts. The conformance
   suite reads that error as a skip naming the operation, the way an
   `UNSUPPORTED` capability skips with its name. The GitLab backend's list
   is empty since #1020; the mechanism stays for the next backend.
@@ -176,7 +176,7 @@ descriptor the worker needs.
 
 `[vcs] kind` (and a `[[vcs.repos]]` entry's own `kind`) names the forge;
 `Config.vcs_kind_for` resolves it per repository, `Config.vcs_api_url_for`
-the API root a backend of that kind speaks to, and `sbxloop doctor` prints
+the API root a backend of that kind speaks to, and `lantern doctor` prints
 one `vcs backend <kind>` row per forge with each capability's state, or a
 failing row for a kind no backend answers yet. A repository is declared
 under `[[vcs.repos]]`, whatever forge it lives on (#2255); `[github]` keeps
@@ -209,7 +209,7 @@ each one into the box that needs it — never into the other.
 flowchart LR
     operator["operator<br/>chat, or a labelled issue"]
 
-    host["<b>Host — sbxloop daemon</b><br/>holds both token sources, injects each<br/>into one box only · harvests the agent's tree<br/>· speaks typed vcs.op jobs · mediates<br/>every hop, no VM can address another"]
+    host["<b>Host — lantern daemon</b><br/>holds both token sources, injects each<br/>into one box only · harvests the agent's tree<br/>· speaks typed vcs.op jobs · mediates<br/>every hop, no VM can address another"]
 
     subgraph green["Agent plane — the model runs here, and there is no GitHub token in it"]
         conc["concierge sandbox<br/>long-lived, chat's agent"]
@@ -263,7 +263,7 @@ Read three things off it:
 
 ## Design principles
 
-Two properties are the load-bearing walls of sbxloop's security model. They are
+Two properties are the load-bearing walls of lantern's security model. They are
 stated here as **invariants** — design principles that hold by construction —
 rather than as consequences a reader is expected to reconstruct from the rest of
 this document and [the worker protocol](worker-protocol.md).
@@ -341,7 +341,7 @@ from the current operator config, while other run rules stay pinned to the
 snapshot. The ordinary config-drift event explains this exception.
 
 Provisioning writes the requested allocation to a host receipt under
-`SbxloopHome.sandbox_allocations`, paired with a random nonce in the VM.
+`LanternHome.sandbox_allocations`, paired with a random nonce in the VM.
 Before reusing a run pair or concierge VM, it checks both the requested
 allocation and the nonce. Unknown or changed allocations fail closed before
 mutating the existing VMs; operators preserve any needed state and recreate
@@ -425,7 +425,7 @@ allowed by it, configured under `[github]`, and the data directory mounted,
 then `Provisioner.clone_repo_into_data_dir` cuts a single-branch checkout at
 `<data dir>/<name>` (reused on resume). Any refusal fails the run closed with
 every refusal emitted as `run.needs_refused` (need, value, task, the
-sbxloop.toml key that would allow it) and nothing granted; a grant emits
+lantern.toml key that would allow it) and nothing granted; a grant emits
 `run.needs_granted`. A credential grant cannot be added to a running pair (the
 service box is stamped at creation), so the grant step raises `_Reprovision`:
 `_drive` tears the pair down (even under `keep_sandboxes`) and re-enters
@@ -470,7 +470,7 @@ stages instead: `_hold_before_publish` stamps the stage `publishing`, emits
 liveness (the pair is freed, nothing kept) and resumable, because the release
 *is* `resume` at the publishing stage: `_workload_stages` only asks the
 profile at the judging→publishing transition, so a run re-entering at
-`publishing` never holds again. From the CLI that is `sbxloop resume <run>`.
+`publishing` never holds again. From the CLI that is `lantern resume <run>`.
 The daemon's `_settle_held` is the merge gate's shape with no PR: a
 `daemon_merge_gates` row of `kind = 'publish'` (`pr_number` 0), the item in
 `gated` owing a `held` report (the issue gets a how-to-release comment, no
@@ -494,7 +494,7 @@ persisted on the run row so a resume re-provisions the same box; no `code`
 run is granted any today). The box holds exactly the granted values, delivered
 the way `GH_TOKEN` is on the non-proxy road (per-job stdin, else the 0600 env
 file; never an `sbx` argument), plus the non-secret catalogue in
-`SBXLOOP_SERVICE_CREDENTIALS`; its allowlist is the credentials' hosts and
+`LANTERN_SERVICE_CREDENTIALS`; its allowlist is the credentials' hosts and
 nothing else; it runs only `service.http` jobs — one request to
 `https://<catalogue host><path>` with the named credential attached,
 redirects not followed, the credential's own header un-overridable. The agent
@@ -506,7 +506,7 @@ method, path, status, duration; never a body or a header. The agent sandbox's
 allowlist does not carry the credential hosts: the agent never speaks to them.
 
 The same box downloads private dependency **data**. Credentialed registries
-are a host-authored `SBXLOOP_REGISTRIES` catalogue containing each registry's
+are a host-authored `LANTERN_REGISTRIES` catalogue containing each registry's
 name, ecosystem, HTTPS authority and credential environment name. The fixed
 `service.fetch` operation accepts a catalogue name and absolute URL path,
 plus an optional expected SHA-256. It streams bytes into a private artifact
@@ -527,8 +527,8 @@ host path, and no listener, proxy, socket or VM-to-VM channel is involved.
 
 The agent resolves dependencies, reads downloaded metadata, extracts
 packages and runs all package managers and build hooks. Its offline cache
-remains `<workspace>/.sbxloop/deps`, excluded from Git and linked at
-`~/.sbxloop/deps` in the agent only. Before setup commands, one dependency
+remains `<workspace>/.lantern/deps`, excluded from Git and linked at
+`~/.lantern/deps` in the agent only. Before setup commands, one dependency
 preparation session receives the `fetch_dependencies` tool, the target's
 conventions and the commands the host will verify offline. Its usage is
 recorded under the `dependencies` phase. A missing preparation result or a
@@ -547,8 +547,8 @@ against those registries; tests cover the isolation and transfer contracts.
 
 What the agent credential *is* — its env var, the host sbx binds it to, the
 hosts it must reach, how doctor names it when missing, where its model ids
-are listed — lives on one descriptor per backend in `sbxloop.backends`
-(#617); provisioning, doctor, `sbxloop secrets`, `sbxloop list-models` and
+are listed — lives on one descriptor per backend in `lantern.backends`
+(#617); provisioning, doctor, `lantern secrets`, `lantern list-models` and
 sandbox pruning read it rather than assuming Copilot.
 
 The `codex` descriptor selects the Python `openai-codex` SDK and
@@ -574,7 +574,7 @@ one answers from `[agent.openai]` and a repository's own override. **A
 model endpoint is operator config, not plan-declared egress**: it is
 infrastructure the run needs before any plan exists, allowed on the agent
 sandbox at provision time and bound to the credential there, never granted
-late from a plan's `egress`. That is why `sbxloop.endpoint` accepts a
+late from a plan's `egress`. That is why `lantern.endpoint` accepts a
 single-label hostname, an address literal and an explicit port for the
 configured endpoint alone, while the rule for what a plan may declare is
 unchanged. The client is not an agent harness, so the worker owns the loop
@@ -584,7 +584,7 @@ so a session is a worker-held transcript. See
 including what stays **field-unverified** about sbx's handling of those
 host shapes and a real served endpoint.
 
-Under the default `proxy` secret strategy, sbxloop first attempts sbx's
+Under the default `proxy` secret strategy, Lantern first attempts sbx's
 keychain-backed injection, where **token values never enter the VM**.
 Field reality (sbx 0.35): that injection feeds only the interactive agent
 sessions sbx launches — never `sbx exec` processes — so provisioning
@@ -604,7 +604,7 @@ Non-proxy delivery itself has two tiers, chosen by a second field probe
   (so a stamped stale sentinel loses) and the credential transits worker
   process memory only, never the sandbox filesystem or any argv. The
   fallback event carries `delivery: "stdin"`.
-- **in-VM env file** (last resort): `~/.sbxloop/env.sh`, chmod 600,
+- **in-VM env file** (last resort): `~/.lantern/env.sh`, chmod 600,
   exactly the pre-#592 behavior (`delivery: "env-file"`). Here the token
   value is visible at rest inside its own microVM, but the credential
   *split* still holds (each sandbox only ever receives its own token) and
@@ -676,7 +676,7 @@ Worker venv repair probes the running sandbox `python3` and installs its
 matching `python3.X-venv` package, since the distro's `python3-venv`
 metapackage may target a different minor version. An unknown interpreter or
 failed apt repair is logged before ordinary provisioning falls back to a
-user-site install. `sbxloop bake` requires the isolated worker interpreter
+user-site install. `lantern bake` requires the isolated worker interpreter
 and refuses to save a template or bake record after that fallback, so a
 missing venv prerequisite cannot be persisted as a successful bake.
 
@@ -731,7 +731,7 @@ stripped) and the allowlist from it; the host-side REST transport, App-auth
 minting, the credential-free remote clone and PR links all read those.
 The sandboxes learn the host through the environment the provisioner
 exports only when it is not dotcom — `GH_HOST` for `gh`, and
-`SBXLOOP_GITHUB_API_URL` for the worker's stdlib transport — so a dotcom
+`LANTERN_GITHUB_API_URL` for the worker's stdlib transport — so a dotcom
 deployment's environment is byte-identical to before. A `GH_HOST` already
 set in the daemon's environment that disagrees with `api_url` is refused at
 config load rather than letting `gh` and the REST transport talk to two
@@ -743,7 +743,7 @@ FIELD-UNVERIFIED — no GHES was available to test against.
 
 Both sandboxes run under sbx's **balanced** network policy (default-deny plus
 a curated allowlist), with per-sandbox allow rules added for exactly the
-hosts each role needs. By default sbxloop shares the user's normal sbx
+hosts each role needs. By default Lantern shares the user's normal sbx
 application state (so `sbx login` and `sbx policy init balanced` apply
 directly); setting `app_name` in config opts into isolated sbx state, which
 then needs its own `sbx --app-name <name> login` and policy init. The `plain-env` strategy skips the experimental
@@ -754,10 +754,10 @@ file), for hosts where the proxying is unavailable.
 Beyond the static baseline, egress is **task-declared and grant-late**: the
 DECOMPOSE phase may declare extra domains a task needs during BUILD (each with
 a justification), validated against operator bounds (`[policy] allow` /
-`[policy] deny` in sbxloop.toml — out-of-bounds requests fail graph
+`[policy] deny` in lantern.toml — out-of-bounds requests fail graph
 validation) and applied via `sbx policy allow network <domain> --sandbox <agent>` only at BUILD entry. Every grant and refusal is emitted as a
 `policy.allow` / `policy.deny` run event, so the persisted event log doubles
-as an egress audit trail (`sbxloop logs RUN --type policy.`); `sbxloop config policy` renders the effective per-phase policy. sbx 0.35 has no
+as an egress audit trail (`lantern logs RUN --type policy.`); `lantern config policy` renders the effective per-phase policy. sbx 0.35 has no
 revocation primitive, so grants persist for the sandbox's lifetime
 (VERIFY, the gate and the review inherit them) but never outlive a run — sandboxes are
 removed at run end and `resume` provisions fresh ones.
@@ -767,20 +767,20 @@ registry hooked into `atexit` and SIGINT/SIGTERM; signal-triggered teardown
 first runs a driver-set quiesce callback (the TUI signals the engine's
 cancel flag and briefly joins its thread) so cleanup never races an engine
 mid-`sbx exec`. Aborted runs do not leak microVMs: the CLI's first Ctrl+C
-removes the run's sandboxes and exits 130 with a `sbxloop resume` hint
+removes the run's sandboxes and exits 130 with a `lantern resume` hint
 (interrupted runs stay resumable), a second force-quits and defers to
-`sbxloop sandbox prune`. Sandboxes are **cattle** — `resume` always
+`lantern sandbox prune`. Sandboxes are **cattle** — `resume` always
 provisions a fresh pair.
 
 ### The daemon's own sandboxes
 
 The eight-character `<instance>` is the SHA-256 prefix of the resolved
-`SBXLOOP_HOME` path. It separates homes sharing an sbx app state; the run ID
+`LANTERN_HOME` path. It separates homes sharing an sbx app state; the run ID
 and trailing purpose identify each run sandbox. Names from earlier releases
 remain discoverable for cleanup. A home moved to another path gets a new
 instance ID, while its earlier sandboxes retain their old names.
 
-`sbxloop daemon` owns two long-lived sandboxes outside any run's pair, both
+`lantern daemon` owns two long-lived sandboxes outside any run's pair, both
 named per state dir (`sbxl-<instance>-daemon-vcs-<forge>`,
 `sbxl-<instance>-daemon-chat-concierge`) and both reported-but-never-pruned by
 `sandbox prune`:
@@ -825,7 +825,7 @@ named per state dir (`sbxl-<instance>-daemon-vcs-<forge>`,
   have fired the notice has already passed and reload drops the stale
   watch instead of reviving it.
   `daemon_log` is served from a ring-buffer handler `configure_logging`
-  installs in `sbxloop/log.py` — a `deque` with a `maxlen`, so a long-lived
+  installs in `lantern/log.py` — a `deque` with a `maxlen`, so a long-lived
   daemon's memory is bounded; the append is one atomic deque operation with
   no locks or I/O, keeping it off the hot path, and it stores the line the
   stderr handler already rendered and redacted.
@@ -919,7 +919,7 @@ outcome ─▶ DECOMPOSE (task DAG) ─▶ per task, dependency order:
   fix round, `ci-only` skips it. A run with no
   repository declared (no `[[vcs.repos]]` entry) ends `completed` here, its
   work in the workspace.
-- **DELIVER** — the tree becomes one commit on `sbxloop/<run>` (the
+- **DELIVER** — the tree becomes one commit on `lantern/<run>` (the
   prefix, the PR title and the commit message are `[github]` templates)
   and a draft PR (see [Delivery](#delivery)); every later round re-delivers
   onto the same branch, so one run is one PR. A checkout delivers its git
@@ -932,13 +932,13 @@ outcome ─▶ DECOMPOSE (task DAG) ─▶ per task, dependency order:
   reads them from disk. The repository's own
   conventions shape the PR (#678): `deliver.pr_template` opens the body
   with the repository's pull request template, the agent's
-  `.sbxloop/pr-body` (read from the workspace by `exec`, like
-  `.sbxloop/pr-title`, and taken away) replaces the body outright — on
+  `.lantern/pr-body` (read from the workspace by `exec`, like
+  `.lantern/pr-title`, and taken away) replaces the body outright — on
   the create, or by `PATCH` on a re-delivery — and
   `deliver.conventional_titles` detects a commitlint / semantic-PR title
   lint from the tree, on which a default `pr_title_template` renders the
   bare conventional title (`deliver.conventional_title`) instead of
-  `sbxloop: {title}`. The decompose prompt's `$pr_conventions`
+  `lantern: {title}`. The decompose prompt's `$pr_conventions`
   (`deliver.pr_conventions`) tells the planner both, and only when the
   workspace declares them.
 - **REVIEW** — a fresh read-only session reads the PR's whole diff
@@ -992,7 +992,7 @@ outcome ─▶ DECOMPOSE (task DAG) ─▶ per task, dependency order:
   cost no fix round) and the fix rounds' `deferred:` findings are candidates
   for follow-up issues on the repository (#517): `engine/followups.py` merges
   duplicates across rounds by title, each issue carries a
-  `<!-- sbxloop-followup run=… key=… -->` marker and is recorded as a
+  `<!-- lantern-followup run=… key=… -->` marker and is recorded as a
   `followup` phase row before the next is filed (a resume between filing
   and recording finds it on the repository by marker), the count is capped
   by `[landing] max_followups_per_run`, and the label is
@@ -1123,8 +1123,8 @@ One knob remains:
 
 ### Prompt templates
 
-Each phase's prompt lives in `packages/sbxloop/src/sbxloop/engine/prompts/*.md`
-and is rendered by `sbxloop.engine.prompts.render` as a Python
+Each phase's prompt lives in `packages/lantern/src/lantern/engine/prompts/*.md`
+and is rendered by `lantern.engine.prompts.render` as a Python
 `string.Template`: `$name` placeholders are substituted strictly (a missing
 variable raises), braces need no escaping so JSON examples are pasted verbatim,
 and the registry tiers (`$baseline_registries`, `$declarable_registries`) are
@@ -1155,7 +1155,7 @@ cannot be mistaken for instructions. Examples are domain-neutral (#634): a
 worked example is the anchor the model pattern-matches against, and a story
 about this repository is the wrong anchor for every other one, so no prompt
 body names an issue or PR number, a path, state name or product term from
-sbxloop itself (`test_prompt_bodies_stay_domain_neutral`; the concierge, being
+Lantern itself (`test_prompt_bodies_stay_domain_neutral`; the concierge, being
 the loop's own front desk, keeps its item ids and sandboxes). A workload
 run (#756) renders three more: operator_plan.md (the plan, with each
 task's `needs` declared by name — "never its value" — and the criteria as
@@ -1229,7 +1229,7 @@ no toolchain, no incident — and the pull-request framing appears only when
 a declared repository makes delivery real.
 
 Procedures the agent needs *sometimes* are skills, not prompt text.
-`sbxloop.skills` ships a tree of `<name>/SKILL.md` files — YAML frontmatter
+`lantern.skills` ships a tree of `<name>/SKILL.md` files — YAML frontmatter
 (`name`, `description`, `roles`) over a Markdown body, deliberately the
 shape a Claude-native skills directory uses, so the same tree can later be
 handed to a backend that loads it from a filesystem without a second source
@@ -1255,7 +1255,7 @@ tool, so the handler always rides along; `_tools_for` composes the run's own
 handler behind the skill one, and a run with no credentials still gets a
 working `load_skill`. The four shipped skills are `run-shape` (planner,
 builder, critic), `verify-gate` (builder, critic), `deliver-pr` (builder)
-and `operate-sbxloop` (concierge, and the one written for a human asking how
+and `operate-lantern` (concierge, and the one written for a human asking how
 to set the loop up). Bodies are gated as prompt bodies are:
 `scripts/check_self_references.py` reads `skills/*/SKILL.md` alongside
 `engine/prompts/*.md`.
@@ -1268,14 +1268,14 @@ contacts, an optional `credential` naming a `[[credentials]]` entry, and the
 because a read-only review session reaching a third-party service is a
 capability nobody asked for. `Config.mcp_specs_for(role)` resolves an entry
 into the protocol's neutral `McpServerSpec`, `JobRequest.mcp_servers`
-carries it, and `sbxloop_worker.mcp.server_configs` materialises it into
+carries it, and `lantern_worker.mcp.server_configs` materialises it into
 each SDK's dialect. The two agree on everything except the stdio token —
 `"stdio"` to the Claude Agent SDK, `"local"` to the Copilot SDK — which is
 the entire reason the protocol carries a neutral transport and the backends
 pass their own `stdio_type` (field-verified 2026-09-06 against
 github-copilot-sdk 1.0.8 and claude-agent-sdk 0.2.149). On the claude
 backend the operator's servers are merged *alongside* the in-process
-`sbxloop` host-tool server, never over it.
+`lantern` host-tool server, never over it.
 
 Credential-free servers use the native SDK transports above. Credentialed
 servers require Streamable HTTP at their credential's HTTPS host. Their
@@ -1515,15 +1515,15 @@ ask ─▶ PLAN (task DAG, needs declared) ─▶ grant needs against the profil
   task's data-directory checkout, never a run to land) need the profile to
   name them. `publish = "hold"` parks the judged result `held`, and the
   release is a resume at the publishing stage — the daemon's publish gate,
-  a *Release result* button in chat, `sbxloop resume` from the CLI.
+  a *Release result* button in chat, `lantern resume` from the CLI.
 - **Intake.** Four sources, one item shape: a `[daemon] workload_label`
   issue, a chat ask the concierge turns into a `chat:<message>` item
   through its `start_workload` tool, `[[schedules]]` ticks
   (`sched:<name>:<due minute>`) the daemon fires by itself on an `every`
   or `cron` cadence, and an ask a remote client admits through the API
-  as an `api:<key>` item (#1036). `sbxloop run --kind workload` is the same run from the
-  CLI; `sbxloop init --preset workload` writes a config with one of each
-  section, and `sbxloop doctor` lists the profiles, schedules and where
+  as an `api:<key>` item (#1036). `lantern run --kind workload` is the same run from the
+  CLI; `lantern init --preset workload` writes a config with one of each
+  section, and `lantern doctor` lists the profiles, schedules and where
   the daemon would get its work. See [The daemon](#the-daemon) for the
   label, chat and schedule paths.
 
@@ -1560,7 +1560,7 @@ fails provisioning rather than starting on an empty directory.
 
 A chat work item persists the recipe it names and the one target it was
 queued for (`recipe`, `recipe_target`, both `tool` items);
-`sbxloop/recipes.py` is the registry that turns that pair into config,
+`lantern/recipes.py` is the registry that turns that pair into config,
 inputs and tasks, so the daemon has one branch for recipes rather than one
 per recipe. The concierge's `start_entrygraph` tool is the first recipe,
 queueing one item per enabled configured repository or explicit public
@@ -1760,7 +1760,7 @@ form. The sections are the conversation's (`goal`, `acceptance_criteria`,
 the API accepts, never clipped; a replayed call finds the asker's same
 draft and links it instead of writing a second. It writes a draft and
 nothing else — no breakdown, approval, publish or run, no forge call.
-The reply links the draft as `/plans/<plan_id>`: the path Angie serves a
+The reply links the draft as `/plans/<plan_id>`: the path Lantern serves a
 plan at on its own origin, and the path Lantern opens from a message as its
 plan screen. The daemon knows no client origin, so the link is the path,
 not an absolute URL; on a chat surface where a relative link cannot open,
@@ -1768,18 +1768,18 @@ the reply also names the plan id to find in Plans.
 
 ## The home
 
-Every path sbxloop touches on a host hangs off one directory, the **home**:
-`~/.sbxloop`, or `SBXLOOP_HOME` to move the whole tree. `sbxloop.paths.SbxloopHome`
+Every path Lantern touches on a host hangs off one directory, the **home**:
+`~/.lantern`, or `LANTERN_HOME` to move the whole tree. `lantern.paths.LanternHome`
 derives all of them — `bin/` (launchers), `venv/`, `config/` (the host config, the
 secrets, the App key), `state/` (`state.db`, the conformance cache, the daemon's control
 queue and scratch workspaces), `runs/<run>/`, `workspaces/<owner>/<name>/` (the daemon's
 dedicated clones), `logs/`, `cache/`, `tmp/`, `systemd/` (the rendered units), `backups/`
 and `home.json` (what laid it out). There is no second rule: nothing resolves the working
 directory, no setting says where state lives (the former `state_dir`, `[daemon] state_dir`
-and `SBXLOOP_STATE_DIR` are refused by name), and `sbxloop doctor` fails hard on any
-leftover of the layouts the home replaced. `sbxloop init` builds it (`homeinit.py`),
+and `LANTERN_STATE_DIR` are refused by name), and `lantern doctor` fails hard on any
+leftover of the layouts the home replaced. `lantern init` builds it (`homeinit.py`),
 `init --migrate` moves a pre-home installation into it (`homemigrate.py`), and
-`sbxloop backup` snapshots what it cannot regenerate (`backup.py`).
+`lantern backup` snapshots what it cannot regenerate (`backup.py`).
 
 What the home cannot install is the *host*. `hostprep.py` answers one question per
 capability — can this account do this, on this host, right now — from probes that change
@@ -1795,21 +1795,21 @@ rows, scoped to the platform and to the mode the home was installed in.
 
 The shape is the same on every host; two details are the **host's** operating
 system, never the sandbox guest's (a guest is Linux whatever the host is, and
-`/home/agent` and friends are constants elsewhere). `SbxloopHome.os_name`
+`/home/agent` and friends are constants elsewhere). `LanternHome.os_name`
 decides where the venv keeps its entry points (`bin/` against `Scripts/`) and
 whether an executable carries a suffix, and it is the only thing in the tree
-that varies; `sbxloop.hostfiles` decides how a private file is made private —
+that varies; `lantern.hostfiles` decides how a private file is made private —
 a mode on POSIX, a discretionary ACL through `icacls` on Windows, where
 `chmod` sets no mode at all. Both answer three-valued where they must: a
 privacy check that could not read a host's access control reports *could not
 tell*, which `doctor` fails on, rather than passing a file it cannot vouch
-for. Which home is in play is settled the same way everywhere — `SBXLOOP_HOME`,
+for. Which home is in play is settled the same way everywhere — `LANTERN_HOME`,
 else `$HOME`, else Windows' `%USERPROFILE%` — so config and secrets discovery
 cannot disagree with the home the process runs out of.
 
 ## Persistence and resume
 
-`~/.sbxloop/state/state.db` (the home's `state/`, see *The home* below) is one
+`~/.lantern/state/state.db` (the home's `state/`, see *The home* below) is one
 WAL-mode SQLite database holding **twenty-six** tables, and two stores read it
 through separate connections. `StateStore` owns five — `runs`, `tasks`,
 `phase_attempts`, `reconciliations`, `events` — and `DaemonStore` the
@@ -1821,7 +1821,7 @@ operator console's mailbox, the schedules and the pause holds) plus the six
 clients, refresh tokens, revoked tokens, public ids), and `workspace_usage`,
 the budget pool's ledger of what runs and chat turns spent.
 
-Both are SQLAlchemy models under `sbxloop/db/` (#539), and Alembic owns the
+Both are SQLAlchemy models under `lantern/db/` (#539), and Alembic owns the
 upgrade path — one revision chain for the whole file, applied when a store
 opens it, so an unattended daemon still migrates itself with no operator
 step. Revision 0001 is not a schema: it is the hand-written migrator both
@@ -1835,7 +1835,7 @@ row also carries its `TaskOutput` (`tasks.output_json`, #757): the
 `## Result` section of the operator's report, its first line as the
 summary, and the names of the files the attempt left in the data directory
 — the engine marks the directory before a task's first attempt
-(`.sbxloop/task-<id>.start`) and lists what is newer after each one,
+(`.lantern/task-<id>.start`) and lists what is newer after each one,
 pruning the harvest excludes and capping the list at 200 names (the rest
 is a count). The engine's `RunResult.summary`, the daemon's `RunReport`
 and `status --json` all compose the run's closing line from those rows
@@ -1847,7 +1847,7 @@ corrupt the database. Streaming `agent.message_delta` events are *not*
 persisted — they are per-chunk UI telemetry that live surfaces (TUI,
 Discord) read off the bus, while the full `agent.message` carries the same
 text and is committed like every other event; resume never reads deltas, so
-`sbxloop logs` differs only by those chunk lines. A row is committed
+`lantern logs` differs only by those chunk lines. A row is committed
 after **every** state transition. Infrastructure failures propagate after
 persisting — a crash and a `kill -9` look identical to the store — and
 `resume`:
@@ -1867,8 +1867,8 @@ persisting — a crash and a `kill -9` look identical to the store — and
    review that never committed its verdict runs again). A phase whose
    result was never committed re-runs from its start; nothing is replayed.
 
-**Two resumes, one owner.** `sbxloop resume <run>` builds an engine in the
-calling process and continues the run there; `sbxloop daemon ctl resume <item|run>`
+**Two resumes, one owner.** `lantern resume <run>` builds an engine in the
+calling process and continues the run there; `lantern daemon ctl resume <item|run>`
 re-arms a *review wait*. A run the daemon dispatched has a third path, and it
 is the only right one while a daemon owns it: `resume-run <run>` (ctl, chat,
 the remote API) admits the pinned run to the daemon's queue
@@ -1933,7 +1933,7 @@ Model ids are provider-owned strings; catalogue misses are diagnostic rather
 than a closed validation list.
 
 `modelcatalog.py` caches successful host-side `list-models` discovery under
-`SbxloopHome.model_catalogs`, one JSON file per backend. The bounded schema
+`LanternHome.model_catalogs`, one JSON file per backend. The bounded schema
 stores only picker metadata and a timestamp; atomic replacement keeps a failed
 or empty refresh from destroying the last successful result. Agent worker
 installation and concierge readiness trigger a background refresh when the
@@ -1976,8 +1976,8 @@ transitions the run record alongside the work item, so the two cannot diverge.
 The run that is legitimately in flight is **never** reconciled: both sweeps
 skip every run executing in this process and any item queued for resume, so
 a stale run beside live ones is still closed but a live one never is. The
-persisted reason is surfaced next to the state in `sbxloop status` / `list_runs` output,
-on the `reason:` line of `sbxloop status <run>`, and in the TUI run header.
+persisted reason is surfaced next to the state in `lantern status` / `list_runs` output,
+on the `reason:` line of `lantern status <run>`, and in the TUI run header.
 
 ## Reconciling review findings on the pull request
 
@@ -2137,10 +2137,10 @@ CI, then mergeability, and only then the merge:
    permissible human touchpoint, and only here, with every other bar
    cleared: the run returns `Gated` and parks instead of merging. The
    daemon persists the gate (`daemon_merge_gates`), frees the sandboxes,
-   resets the breaker, labels the issue `sbxloop:awaiting-merge`, posts the
+   resets the breaker, labels the issue `lantern:awaiting-merge`, posts the
    approval prompt into the run's chat thread (@mentioning whoever asked
    for the work) and moves on. One approval — `!sbx merge <item>` on any
-   backend, `sbxloop daemon ctl merge <item>` headless — re-runs this same
+   backend, `lantern daemon ctl merge <item>` headless — re-runs this same
    `land()` with gh ops alone (no sandbox, no engine): update if behind,
    re-checked CI, the same reconciliation gate, so a review left during
    the park is honoured, never merged over. A failed approval puts the
@@ -2219,18 +2219,18 @@ spent are `blocked` for the same reason: nothing another round would change.
 
 ## The daemon
 
-`sbxloop daemon` is deliberately small: it claims issues carrying
-`sbxloop:run` in **every configured, enabled repository** (a label swap plus
+`lantern daemon` is deliberately small: it claims issues carrying
+`lantern:run` in **every configured, enabled repository** (a label swap plus
 a claim comment as the optimistic lock — carrying host, pid and start time so a
 claim from a dead process can be told apart and reclaimed, persisted as a
 token before it is posted and shielded from SIGTERM until it completes, and
 settled on the next start if the process died in between; a claim that is not
 ours leaves no row, never a terminal one, #530), runs each as **one** engine run, and
-reports the outcome on the issue — closed with `sbxloop:completed` when the
+reports the outcome on the issue — closed with `lantern:completed` when the
 PR merged (the PR body's `Closes #N` closes it even if the daemon is down),
-`sbxloop:failed` when the run gave up (after the per-item attempt cap and
-its backoff), `sbxloop:blocked` when GitHub would not let the loop finish. Re-adding
-`sbxloop:run` to an issue whose attempt finished re-queues it on the next
+`lantern:failed` when the run gave up (after the per-item attempt cap and
+its backoff), `lantern:blocked` when GitHub would not let the loop finish. Re-adding
+`lantern:run` to an issue whose attempt finished re-queues it on the next
 poll even if the issue text is unchanged, and the new run resumes the
 branch and PR the previous attempt pushed to origin (#600).
 The outcome a run is handed is the issue as a human would read it (#691):
@@ -2252,7 +2252,7 @@ retention.
 
 **Workload intake (#760)** rides the same machinery with a second label and
 a second source. `GitHubIssueSource.poll` runs two searches, the trigger
-label and `[daemon] workload_label` (`sbxloop:workload`, the seventh
+label and `[daemon] workload_label` (`lantern:workload`, the seventh
 lifecycle label); an issue in both is `_refuse_conflict`ed — one comment,
 both labels off, `failed` on — before it is ever a `WorkItem`, and the claim
 re-checks the live labels for the same conflict. A workload item carries
@@ -2288,10 +2288,10 @@ schedule itself (profile, ask, cadence, zone, `source` and `created_by`)
 beside its state, `DaemonStore.add_schedule` / `remove_schedule` /
 `schedules` are the whole API, and `DaemonLoop.add_schedule` (the
 concierge's `create_schedule` tool, `ctl schedules add`) makes one live from
-the next tick with no restart. A `[[schedules]]` entry in `sbxloop.toml` is
+the next tick with no restart. A `[[schedules]]` entry in `lantern.toml` is
 legacy: `DaemonLoop._import_config_schedules` stores it once at start,
 `daemon.schedules_imported` tells the operator to drop it from the file,
-and doctor's `schedules in sbxloop.toml` row says the same. The loop's
+and doctor's `schedules in lantern.toml` row says the same. The loop's
 `tick` calls `_fire_schedules` right after the poll: for each stored
 schedule it reads (creating on first sight) its row's state — `anchor`, the
 origin of an `every` grid; `last_due`, the latest due instant handled —
@@ -2315,11 +2315,11 @@ and its due. `schedules` (ctl, `!sbx`, the concierge's `sbx_control`) lists
 each schedule's cadence, last fire and next due.
 
 **Configuration from chat (#967).** The concierge's `config_keys` and
-`set_config` tools are the console's per-key editor (`sbxloop.configedit`:
+`set_config` tools are the console's per-key editor (`lantern.configedit`:
 what a key accepts from the model, the comment-keeping `tomlkit` write, the
 loader's verdict on the whole draft with every other layer applied, the
 atomic save with a timestamped backup) run in the daemon process against
-the home's `config/sbxloop.toml` as it is on disk — the sandbox never sees
+the home's `config/lantern.toml` as it is on disk — the sandbox never sees
 the file or a path. A write needs the person's own words in `confirmation`
 (the `close_issue` pattern), and nothing is written until the loader has
 accepted the draft, so a restart never fails on a file this path wrote.
@@ -2339,7 +2339,7 @@ advice after it.
 
 ### Typed controls
 
-Every operator verb — `!sbx` in chat, `sbxloop daemon ctl`, the console,
+Every operator verb — `!sbx` in chat, `lantern daemon ctl`, the console,
 the concierge's `sbx_control` tool — used to land in one prose dispatcher
 (`daemon/control.py::_dispatch`) that called the loop and composed a
 sentence, taking a free-form `by` string for the source-facing attribution.
@@ -2473,16 +2473,16 @@ The operator's and integrator's reference is [docs/api.md](api.md); the
 contract of record is the OpenAPI document the listener publishes, kept
 byte-for-byte at [docs/openapi.json](openapi.json) by
 `tests/api/test_openapi_snapshot.py` and regenerated with
-`sbxloop api openapi --snapshot --write docs/openapi.json`. The remote loop
+`lantern api openapi --snapshot --write docs/openapi.json`. The remote loop
 is proved end to end by `tests/api/conformance/` — every scenario through
 the public contract alone — and the isolation claim by
 `tests/unit/test_api_isolation.py` plus the `api-host-unreachable`
 conformance probe `doctor --deep` runs in a live sandbox.
 
-`sbxloop.api` is the one package that imports FastAPI, lazily: an install
-without the `sbxloop[api]` extra imports it fine and learns by name what it
+`lantern.api` is the one package that imports FastAPI, lazily: an install
+without the `lantern-backend[api]` extra imports it fine and learns by name what it
 lacks when `[api] enabled = true` asks for the listener. `ApiServer` runs
-uvicorn on a thread inside `sbxloop daemon` — started before `recover()` so
+uvicorn on a thread inside `lantern daemon` — started before `recover()` so
 liveness answers through recovery, told it is ready the moment the control
 queue is, closed in the daemon's shutdown sequence. uvicorn on a thread
 captures no signals, so the daemon's own handlers stand. One daemon owns
@@ -2511,7 +2511,7 @@ no host or MCP action tools. A known agent/team mention, explicit target, or
 `delegate` intent enables action tools for that role. This keeps conversation
 and delegated work visibly distinct while reusing the same concierge runtime.
 The `code` and `workload` intents are stronger product-level choices: they route
-through Angie to the existing managed runner selected by the person, and agent
+through Lantern to the existing managed runner selected by the person, and agent
 mentions remain part of the runner's ask instead of starting parallel chat
 participants. The code and workload engines retain their own planning, review,
 revision, budget, and publication contracts.
@@ -2523,10 +2523,10 @@ handoff levels admit that return path, while the per-response and per-turn caps
 bound cycles. Read-only inheritance blocks external mutations without blocking
 textual critique, revision, or synthesis.
 
-Authentication is the daemon's own. `sbxloop api client create` registers a
+Authentication is the daemon's own. `lantern api client create` registers a
 client (`api_clients`: a name, the scrypt verifier of a secret shown once,
 the capabilities granted); `POST /v1/auth/token` exchanges the secret for an
-Ed25519-signed access token (`iss=sbxloop`, `aud=sbxloop-api`, `scope`, a
+Ed25519-signed access token (`iss=lantern`, `aud=lantern-api`, `scope`, a
 `jti`; the algorithm list is exactly `EdDSA`) and a refresh token stored by
 digest in a *family* — one grant and every rotation descended from it, so a
 refresh token presented twice revokes the family and the client
@@ -2628,7 +2628,7 @@ review still parks the run awaiting one.
 built once per finished run, on the projector thread (the API frontend
 queues the run on `run_finished`; a read catalogs a terminal run itself
 when the pass has not got to it), from the same `scan_artifacts` under
-`artifacts_dir` that `sbxloop artifacts` shows, each file opened through
+`artifacts_dir` that `lantern artifacts` shows, each file opened through
 `repofiles.open_file` — relative to the run's directory, never following a
 link out of it — for its digest, so an escaping link is refused at catalog
 time and downloads take the same road. The catalog is bounded per run; a
@@ -2706,7 +2706,7 @@ its own each followed node the walk did not reach, so a node removed from
 its parent is told from a deleted one; `fold`, which is pure, compares that reading with
 the plan. A title, the sections under our rendered headings
 (`render.parse_sections`, compared as the parser reads both the forge's body
-and the body sbxloop would render, so text the parser reads imperfectly is
+and the body Lantern would render, so text the parser reads imperfectly is
 never an edit nobody made) and the open/closed state update the node; a
 child the plan does not know is adopted with `origin = forge`; a node its
 parent no longer lists, or whose issue is gone, is detached
@@ -2715,7 +2715,7 @@ recreated); a removed marker or a broken checklist is reported and the
 broken checklist's children are not judged at all. Each change is a
 `Drift` entry on the node — `before` as a person last saw it, `after` as
 the forge has it, merged until someone marks it seen — and a `plan.drift`
-event in the same transaction; a plan edited in sbxloop meanwhile is
+event in the same transaction; a plan edited in Lantern meanwhile is
 folded again from the same reading. A reading that changes nothing stamps
 `reconciled_at` without bumping the revision, so a read never makes a
 client's `expected_revision` stale. `PlanService.open` reconciles on
@@ -2731,7 +2731,7 @@ and `direct.py` holds their forge side; `PlanService.edit_published`,
 against the plan as it then is. An edit names the version of the issue
 the client read — `model.content_version`, a digest of the node's title
 and sections, not the forge's `updated_at`, which comments, labels and
-sbxloop's own checklist writes move — and the issue is read first and
+lantern's own checklist writes move — and the issue is read first and
 folded the way a reconcile folds it (`reconcile.as_forge_has_it`), so the
 two never disagree about whether it changed; a mismatch is refused with
 the forge's version and nothing is written. The write rewrites only the
@@ -2888,7 +2888,7 @@ deliver_base = "main"
 repo = "you/two"
 enabled = false              # registered but not polled
 token_env = "GH_TOKEN_TWO"   # unset uses the daemon-wide GH_TOKEN
-trigger_label = "sbxloop:go" # unset uses [daemon] trigger_label
+trigger_label = "lantern:go" # unset uses [daemon] trigger_label
 labels = ["team:core"]       # extra labels applied to issues/PRs here
 ```
 
@@ -2908,7 +2908,7 @@ The split is deliberate and worth stating plainly:
 - **Per repository** — base branch (`deliver_base`), repo creation
   (`create_repo`, `create_public`), every lifecycle label
   (`trigger_label` … `workload_label`; `Config.labels_for(repo)` folds the
-  `[daemon]` defaults in, and `sbxloop init-repo` — or the API's
+  `[daemon]` defaults in, and `lantern init-repo` — or the API's
   `POST /v1/repositories/{id}/labels/sync`, which does the same work
   through the daemon's own forge sandbox — creates them, #630; the daemon
   reads one repository's labels back per tick, so every registered
@@ -2976,9 +2976,9 @@ for repository B ended up built from repository A's tree (#526).
 Three points enforce the invariant that a run's tree belongs to its own
 repository:
 
-- `sbxloop doctor` fails a check per enabled repository whose workspace
+- `lantern doctor` fails a check per enabled repository whose workspace
   `origin` names a different repository, with both names and the fix;
-- `sbxloop daemon` refuses to start on the same condition;
+- `lantern daemon` refuses to start on the same condition;
 - `Provisioner` refuses to clone a checkout whose `origin` does not match
   the run's repository — belt and braces, so no configuration path can
   reach the wrong tree.
@@ -2997,12 +2997,12 @@ the case. There is no fallback to another repository's checkout in any of
 these paths. Migration for an existing single-repo daemon: move
 `[sandbox] workspace` into the matching `[[vcs.repos]]` entry.
 
-`sbxloop doctor` checks each configured repository on its own line
+`lantern doctor` checks each configured repository on its own line
 (reachable, token permissions), so one broken repo never masks the others'
 verdicts. The host never holds the PAT, so that check is made from a
 short-lived github-ops sandbox per repository, provisioned with exactly that
 repository's credentials. The token is judged against the permission table
-in `sbxloop.vcs.github.permissions` (`docs/permissions.md`, #696) from whichever
+in `lantern.vcs.github.permissions` (`docs/permissions.md`, #696) from whichever
 source describes it — the App installation's grant carried on the minted
 token, a classic PAT's `X-OAuth-Scopes` (the worker's `token.scopes` op), or
 for a fine-grained PAT one read per permission plus the repository payload's
@@ -3010,8 +3010,8 @@ for a fine-grained PAT one read per permission plus the repository payload's
 feature that first needs it; `workflows:write` only warns, and a `ci` row
 reports the repository's Actions workflows and latest run on the base. If no
 sandbox can be provisioned the row is a soft "reachability unverified"
-rather than a verdict against the repo. `sbxloop config repos` lists the registered repositories, and
-`sbxloop status` / `sbxloop daemon items` carry a `repo` column. From chat,
+rather than a verdict against the repo. `lantern config repos` lists the registered repositories, and
+`lantern status` / `lantern daemon items` carry a `repo` column. From chat,
 the concierge's `list_repos` tool answers "what projects are you configured
 to work on?" with each repository's enabled state, base branch and trigger
 label; its GitHub-reading tools take an optional `repo` selector and default
@@ -3032,12 +3032,12 @@ gh:<number>          legacy alias, accepted on read, means gh:issue:<number>
 gl:issue:<number>    the same grammar on GitLab; gt: on Gitea
 ```
 
-One module, `sbxloop.ghids`, owns that grammar — `format_gh_id` /
+One module, `lantern.ghids`, owns that grammar — `format_gh_id` /
 `issue_item_id` / `pr_item_id` render, `parse_gh_id` / `try_parse_gh_id` /
 `normalize_item_id` read — and nothing else slices `gh:` strings by hand.
 The rules are asymmetric on purpose:
 
-- **Rendering is strict.** Every id sbxloop newly produces is typed:
+- **Rendering is strict.** Every id Lantern newly produces is typed:
   store rows, chronology and event payloads, daemon log lines, Discord
   headline cards and thread names, concierge tool output, and the issue
   comments and PR bodies a run writes back to GitHub.
@@ -3052,7 +3052,7 @@ A workload the concierge queued is `chat:<message id>` (`ghids.chat_item_id`
 / `is_chat_id`) — the Discord or Slack message that asked for it, so the
 id is stable across a re-ask and the thread can be found from the item.
 Operator commands that take an `<item>` argument — `items`, `queue`,
-`abandon`, `retry`, `requeue`, on both `sbxloop daemon` and `!sbx` — accept
+`abandon`, `retry`, `requeue`, on both `lantern daemon` and `!sbx` — accept
 either form and always *print* the typed one.
 
 The **run cap** is a wall-clock calendar-day gate: it counts the runs whose
@@ -3069,7 +3069,7 @@ boundary. Operator strings name both the day and the zone
 ## Events
 
 Everything observable is an `Event` (versioned JSONL envelope, shared model
-in `sbxloop_worker.protocol`). Workers emit `worker.*`, `agent.*`, `gh.*`;
+in `lantern_worker.protocol`). Workers emit `worker.*`, `agent.*`, `gh.*`;
 the host adds `run.*`, `task.*`, `phase.*`, `sandbox.*`. All events flow
 through the host `EventBus` (synchronous, subscriber-exception-isolated) and
 are persisted to SQLite — the CLI TUI, `logs --follow`, the daemon's log
@@ -3097,7 +3097,7 @@ and `task.output` (#757: the task, the attempt, the one-line summary and
 how many files the attempt left), emitted after each execute attempt and
 before the judge's word on it, and `run.needs_granted` / `run.needs_refused`
 (#758: the plan's needs against the run's profile — what was granted by name,
-or each refusal with the sbxloop.toml key that would allow it — emitted
+or each refusal with the lantern.toml key that would allow it — emitted
 between the plan and the first task). `run.state` fires on every stage entry — the state *is* the
 stage. These carry no information the agent's reply did not — they exist so
 a surface can show the decision without showing the agent's JSON, which is
@@ -3108,7 +3108,7 @@ See [worker-protocol.md](worker-protocol.md) for the host↔worker contract.
 ### Chat backends
 
 The human channel is factored as one service-agnostic bridge and two thin
-transports. `sbxloop.daemon.chat.ChatBridge` owns everything a reader of a
+transports. `lantern.daemon.chat.ChatBridge` owns everything a reader of a
 run thread sees and everything an operator types — the non-blocking bus
 subscription and its pump, coalescing, the tool digest and status line edited
 in place, steer notes, run watches (persisted in `daemon_run_watches`),
@@ -3199,8 +3199,8 @@ typed-answered exchanges reach the model with identical prompts.
 ### Tool calls in a run thread
 
 A watcher reads a run thread to see what the agents are *executing*, so tool
-calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
-`sbxloop.daemon.discord_format`):
+calls get their own rendering rules (`lantern.cli.cmdfmt`,
+`lantern.daemon.discord_format`):
 
 - **Informative truncation.** A command is rendered by
   `cmdfmt.format_command`: whitespace collapses, the boilerplate
@@ -3211,7 +3211,7 @@ calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
   tokens* are elided one at a time. The leading verb therefore always
   survives, and any token that lost characters carries a literal `…`, so a
   token in the output is never a silently truncated one. This is display-only:
-  the stored event keeps the full command, so `run_events`, `sbxloop logs` and
+  the stored event keeps the full command, so `run_events`, `lantern logs` and
   resume are unaffected.
 - **One entry per call.** `ToolBatcher` records `agent.tool_start` as pending
   and emits nothing; the single line is written when `agent.tool_end` arrives:
@@ -3231,7 +3231,7 @@ calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
   (stderr); a success is quiet by default, because the batched line already
   reports it. The line-selection half of that policy — the budgets, the
   head+tail split, the per-line clip and the elision marker — lives in
-  `sbxloop.excerpt` so every renderer shares one copy: the caps are named
+  `lantern.excerpt` so every renderer shares one copy: the caps are named
   constants there, `TOOL_OUTPUT_LINES_DEFAULT` (0),
   `TOOL_FAIL_OUTPUT_LINES_DEFAULT` (20) and `TOOL_EXCERPT_LINE_CLIP` (300
   chars/line), with the two line budgets configurable as
@@ -3239,7 +3239,7 @@ calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
   character caps stay in `discord_format`: the fenced body is clipped to
   `TOOL_EXCERPT_MAX_CHARS` (1200) and the finished message to
   `DISCORD_MAX_MESSAGE`, so no input can overflow Discord's limit. The
-  `sbxloop run` transcript (and the `sbxloop tui` console) renders a failed tool call through the same shared
+  `lantern run` transcript (and the `lantern tui` console) renders a failed tool call through the same shared
   helper, so its excerpt has the same head+tail shape, per-line clip and
   elision marker rather than a plain last-N-lines tail.
 - **No link previews, ever.** The bridge posts its own embed cards (headline,
@@ -3262,10 +3262,10 @@ calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
 - **Redaction at the render seam.** The worker already redacts an event's
   output before it leaves the sandbox; because this feature *publishes* more
   of what a command printed, every rendered command and every excerpt passes
-  through `sbxloop.log.redact_text` again on the way to a thread. It is
+  through `lantern.log.redact_text` again on the way to a thread. It is
   idempotent, so text already masked upstream is unchanged. The credential
-  vocabulary is deliberately spelled twice — `sbxloop_worker.secrets` (worker
-  side; the worker cannot import sbxloop) and `sbxloop.log` (host side) — and
+  vocabulary is deliberately spelled twice — `lantern_worker.secrets` (worker
+  side; the worker cannot import Lantern) and `lantern.log` (host side) — and
   the two word lists differ slightly, so a word added to one should be
   weighed for the other. Both anchor the word to whole `_`/`.`/`-`-delimited
   name segments, so `PATH=`, `--patch`, `compat=1` or a pytest `tokens: 5`
@@ -3281,20 +3281,20 @@ calls get their own rendering rules (`sbxloop.cli.cmdfmt`,
 Events are the run's record; the **log** is the daemon's — what the process
 did between and around runs, rendered for an operator reading `journalctl`
 (or a log shipper). It is [structlog](https://www.structlog.org/) routed
-through the standard library (`sbxloop.log`), so third-party stdlib loggers
+through the standard library (`lantern.log`), so third-party stdlib loggers
 (discord.py, httpx) render in the same shape and pytest's `caplog` sees
 every record.
 
-`sbxloop daemon` configures the pipeline once from `[daemon] log_level`
-(`--log-level`, `SBXLOOP_DAEMON__LOG_LEVEL`; default `INFO`) and
+`lantern daemon` configures the pipeline once from `[daemon] log_level`
+(`--log-level`, `LANTERN_DAEMON__LOG_LEVEL`; default `INFO`) and
 `[daemon] log_format` (`console` key=value for humans and journald, `json`
 one object per line for ingestion). Third-party loggers are held at
 `WARNING` unless `DEBUG` is requested (then `INFO` — never their own DEBUG
 firehose). Other CLI commands log at `WARNING` only.
 
-**The run's events are mirrored into the log** by `sbxloop.daemon.logsink`,
-subscribed to every run's bus under the logger `sbxloop.run`
-(`journalctl … | grep sbxloop.run`), tiered by event type:
+**The run's events are mirrored into the log** by `lantern.daemon.logsink`,
+subscribed to every run's bus under the logger `lantern.run`
+(`journalctl … | grep lantern.run`), tiered by event type:
 
 - `WARNING` — the run degraded or something was refused: `worker.error`,
   `sandbox.tooling_warning`, `sandbox.resources_warning`,
@@ -3307,7 +3307,7 @@ subscribed to every run's bus under the logger `sbxloop.run`
 - `DEBUG` — everything else: individual tool calls, agent messages and
   deltas, usage, heartbeats, stdout, resource samples, policy allows.
 
-Each record carries the same summary fields `sbxloop logs` prints
+Each record carries the same summary fields `lantern logs` prints
 (`summarize_event`), plus `run=` and `job=`.
 
 House style for host code:

@@ -27,7 +27,7 @@ CA_FILE = CERTS / "ca.crt"
 COMPOSE_ENV = STATE / "compose.env"
 LIVE_ENV = STATE / "live.env"
 COMPOSE_FILE = HERE / "docker-compose.yml"
-CONTAINERS = {"gitea": "sbxloop-live-gitea", "gitlab": "sbxloop-live-gitlab"}
+CONTAINERS = {"gitea": "lantern-live-gitea", "gitlab": "lantern-live-gitlab"}
 
 
 LEAF_EXTENSIONS = """\
@@ -57,7 +57,7 @@ def ensure_certs() -> Path:
     _openssl("ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(ca_key))
     _openssl(
         "req", "-x509", "-new", "-key", str(ca_key), "-sha256", "-days", "90",
-        "-subj", "/CN=sbxloop live forge CA",
+        "-subj", "/CN=lantern live forge CA",
         "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0",
         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
         "-addext", "subjectKeyIdentifier=hash",
@@ -76,10 +76,10 @@ def ensure_certs() -> Path:
 
 
 def ssl_context() -> ssl.SSLContext:
-    """A client context that trusts the CA ``SBXLOOP_LIVE_CA_FILE`` names,
+    """A client context that trusts the CA ``LANTERN_LIVE_CA_FILE`` names,
     else the harness CA once minted, else the system's roots (a live forge
     with a real certificate)."""
-    named = os.environ.get("SBXLOOP_LIVE_CA_FILE") or (str(CA_FILE) if CA_FILE.is_file() else None)
+    named = os.environ.get("LANTERN_LIVE_CA_FILE") or (str(CA_FILE) if CA_FILE.is_file() else None)
     return ssl.create_default_context(cafile=named)
 
 

@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.daemon.chat import build_bridge
-from sbxloop.daemon.discord import DiscordBridge
-from sbxloop.daemon.discord_format import agent_model_label, format_for_discord
-from sbxloop.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
-from sbxloop.daemon.slack import (
+from lantern.config import Config
+from lantern.daemon.chat import build_bridge
+from lantern.daemon.discord import DiscordBridge
+from lantern.daemon.discord_format import agent_model_label, format_for_discord
+from lantern.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem
+from lantern.daemon.slack import (
     CHOICE_ACTION_PREFIX,
     GATE_ACTION_ID,
     SlackBridge,
@@ -28,10 +28,10 @@ from sbxloop.daemon.slack import (
     SlackTarget,
     dispatch_envelope,
 )
-from sbxloop.daemon.store import ChatThread, DaemonStore
-from sbxloop.engine.model import Published
-from sbxloop.errors import DaemonError
-from sbxloop.events import Event, EventBus
+from lantern.daemon.store import ChatThread, DaemonStore
+from lantern.engine.model import Published
+from lantern.errors import DaemonError
+from lantern.events import Event, EventBus
 from tests.unit.test_daemon_discord import (
     FakeConcierge,
     FakeEngine,
@@ -635,7 +635,7 @@ class TestSeams:
             bridge.close()
 
     def test_edit_rewrites_mrkdwn_and_card(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.discord_format import EmbedSpec
+        from lantern.daemon.discord_format import EmbedSpec
 
         bridge, client, _ = make_bridge(tmp_path)
         try:
@@ -836,7 +836,7 @@ class TestWorkloads:
 
 
 def _question() -> Any:
-    from sbxloop.daemon.chat_choices import Choice, ChoiceQuestion
+    from lantern.daemon.chat_choices import Choice, ChoiceQuestion
 
     return ChoiceQuestion(
         prompt="What do you want changed?",

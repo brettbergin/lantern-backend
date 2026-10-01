@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop_worker.mcpops import CATALOGUE_ENV, McpOpError, execute
+from lantern_worker.mcpops import CATALOGUE_ENV, McpOpError, execute
 
 
 @pytest.mark.parametrize("sse", [False, True])
@@ -75,7 +75,7 @@ def test_real_https_session_and_no_redirect_replay(
                 }
             ]
         ),
-        "SBXLOOP_SERVICE_CREDENTIALS": json.dumps(
+        "LANTERN_SERVICE_CREDENTIALS": json.dumps(
             [
                 {
                     "name": "weather",

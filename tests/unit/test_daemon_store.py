@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.daemon.model import WorkItem
-from sbxloop.daemon.store import LEGACY_SUFFIX, SCHEMA_VERSION, DaemonStore
-from sbxloop.engine.store import StateStore
-from sbxloop.errors import DaemonError
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import LEGACY_SUFFIX, SCHEMA_VERSION, DaemonStore
+from lantern.engine.store import StateStore
+from lantern.errors import DaemonError
 from tests.fakes.legacy_db import daemon_db, insert_daemon_row
 from tests.fakes.rawdb import exec_raw, query_raw
 
@@ -28,7 +28,7 @@ def item(key: str = "7", **overrides: object) -> WorkItem:
 
 
 def _pre_multirepo_db(tmp_path: Path) -> Path:
-    """A state.db in the shape sbxloop wrote before multi-repo support."""
+    """A state.db in the shape lantern wrote before multi-repo support."""
     return daemon_db(tmp_path, "pre_multirepo")
 
 
@@ -62,7 +62,7 @@ class TestUpsert:
         assert store.upsert_new(item(body="edited"), now=4.0) is True
 
     def test_unchanged_terminal_row_is_requeued_by_the_label(self, tmp_path: Path) -> None:
-        """#600: re-adding `sbxloop:run` to an unchanged issue whose last
+        """#600: re-adding `lantern:run` to an unchanged issue whose last
         attempt is finished restarts it — the label is never inert."""
         store = DaemonStore(tmp_path / "state.db")
         store.upsert_new(item(), now=1.0)
@@ -115,12 +115,12 @@ class TestUpsert:
         store = DaemonStore(tmp_path / "state.db")
         store.upsert_new(item(), now=1.0)
         store.mark_running("gh:issue:7", "r1", now=2.0)
-        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="sbxloop/gh-7", pr_number=42)
+        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="lantern/gh-7", pr_number=42)
         store.mark_cancelled("gh:issue:7", "cancelled by b", now=3.0)
         assert store.upsert_new(item(), now=4.0) is True
         prior = store.prior_attempt("gh:issue:7")
         assert prior is not None
-        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "sbxloop/gh-7", 42)
+        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "lantern/gh-7", 42)
 
     def test_discarding_the_requeued_row_keeps_the_prior_branch_and_pr(
         self, tmp_path: Path
@@ -134,7 +134,7 @@ class TestUpsert:
         repo_item = item(repo="o/r", item_id="gh:issue:7")
         store.upsert_new(repo_item, now=1.0)
         store.mark_running("gh:issue:7", "r1", now=2.0)
-        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="sbxloop/r1", pr_number=9)
+        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="lantern/r1", pr_number=9)
         store.mark_cancelled("gh:issue:7", "cancelled", now=3.0)
         assert store.upsert_new(repo_item, now=4.0) is True
 
@@ -142,7 +142,7 @@ class TestUpsert:
         assert store.upsert_new(repo_item, now=5.0) is True
         prior = store.prior_attempt("gh:issue:7")
         assert prior is not None
-        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "sbxloop/r1", 9)
+        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "lantern/r1", 9)
 
     def test_same_issue_number_in_a_second_repo_does_not_collide(self, tmp_path: Path) -> None:
         """A daemon repointed at a new repository leaves the old
@@ -226,14 +226,14 @@ class TestUpsert:
         repo-qualified; the prior attempt must survive that too (#600)."""
         store = DaemonStore(tmp_path / "state.db")
         store.upsert_new(item(), now=1.0)  # repo-less, as a legacy row is
-        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="sbxloop/r1", pr_number=9)
+        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="lantern/r1", pr_number=9)
         assert store.drop_repoless() == 1
         assert store.get("gh:issue:7") is None
 
         assert store.upsert_new(item(repo="o/r", item_id="gh:o/r:issue:7"), now=2.0) is True
         prior = store.prior_attempt("gh:o/r:issue:7")
         assert prior is not None
-        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "sbxloop/r1", 9)
+        assert (prior.run_id, prior.branch, prior.pr_number) == ("r1", "lantern/r1", 9)
 
     def test_an_edited_issue_still_continues_the_prior_branch(self, tmp_path: Path) -> None:
         """Superseding a terminal row deletes it and INSERTs a fresh one. The
@@ -242,18 +242,18 @@ class TestUpsert:
         store = DaemonStore(tmp_path / "state.db")
         repo_item = item(repo="o/r", item_id="gh:issue:7")
         store.upsert_new(repo_item, now=1.0)
-        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="sbxloop/r1", pr_number=9)
+        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="lantern/r1", pr_number=9)
         store.mark_failed("gh:issue:7", "boom", now=2.0, requeue=False)
         assert store.upsert_new(item(repo="o/r", item_id="gh:issue:7", body="edited"), 3.0) is True
         prior = store.prior_attempt("gh:issue:7")
-        assert prior is not None and prior.branch == "sbxloop/r1"
+        assert prior is not None and prior.branch == "lantern/r1"
 
     def test_a_re_created_row_for_an_untouched_issue_offers_nothing(self, tmp_path: Path) -> None:
         """No previous attempt means no offer: a first-ever claim must not
         invent one from another issue's history."""
         store = DaemonStore(tmp_path / "state.db")
         store.upsert_new(item(repo="o/r", item_id="gh:issue:7"), now=1.0)
-        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="sbxloop/r1", pr_number=9)
+        store.record_prior_attempt("gh:issue:7", run_id="r1", branch="lantern/r1", pr_number=9)
         assert store.upsert_new(item("8", repo="o/r", item_id="gh:issue:8"), now=2.0) is True
         assert store.prior_attempt("gh:issue:8") is None
 
@@ -265,14 +265,14 @@ class TestUpsert:
         b = item(repo="o/b", item_id="gh:o/b:issue:7")
         store.upsert_new(a, now=1.0)
         store.upsert_new(b, now=1.0)
-        store.record_prior_attempt("gh:o/a:issue:7", run_id="ra", branch="sbxloop/ra")
+        store.record_prior_attempt("gh:o/a:issue:7", run_id="ra", branch="lantern/ra")
         store.discard("gh:o/b:issue:7")
         assert store.upsert_new(b, now=2.0) is True
         assert store.prior_attempt("gh:o/b:issue:7") is None
         assert store.discard("gh:o/a:issue:7") is True
         assert store.upsert_new(a, now=3.0) is True
         prior = store.prior_attempt("gh:o/a:issue:7")
-        assert prior is not None and prior.branch == "sbxloop/ra"
+        assert prior is not None and prior.branch == "lantern/ra"
 
     def test_prior_attempt_is_none_without_pushed_work(self, tmp_path: Path) -> None:
         store = DaemonStore(tmp_path / "state.db")
@@ -381,7 +381,7 @@ class TestQueueAndAttempts:
         got = store.get("gh:issue:7")
         assert got is not None and got.state == "queued" and got.attempts == 0
         assert got.last_error == "re-queued by op"
-        # Cancel keeps the run for `sbxloop resume`; a re-queue runs fresh, so
+        # Cancel keeps the run for `lantern resume`; a re-queue runs fresh, so
         # the pin must go or the next tick would resume the cancelled run.
         assert got.run_id is None
         # A human's re-queue is eligible right away, no failure backoff.
@@ -821,7 +821,7 @@ class TestArchiveLegacy:
         assert StateStore(path).get_run("r1").outcome == "o"
 
     def test_opening_a_legacy_file_directly_is_refused_clearly(self, tmp_path: Path) -> None:
-        """`sbxloop daemon items` before the daemon's first 1.0 start must
+        """`lantern daemon items` before the daemon's first 1.0 start must
         say what to do, not fail on a missing column."""
         path = tmp_path / "state.db"
         self._legacy(path)
@@ -1481,7 +1481,7 @@ class TestPendingClarifications:
         assert store.resolve_open_clarifications_for("u1", None, now=60.0) == 1
 
     def test_open_rows_are_capped(self, tmp_path: Path) -> None:
-        from sbxloop.daemon.store import PENDING_CLARIFICATION_CAP
+        from lantern.daemon.store import PENDING_CLARIFICATION_CAP
 
         store = DaemonStore(tmp_path / "state.db")
         for i in range(PENDING_CLARIFICATION_CAP):
@@ -1688,7 +1688,7 @@ class TestWorkloadItems:
         it — is a row, beside its state; a name is unique; removing one
         forgets its grid; a state-only row (a pre-#818 daemon's) takes the
         spec and keeps its anchor; a row edited into nonsense fires nothing."""
-        from sbxloop.config import ScheduleConfig
+        from lantern.config import ScheduleConfig
 
         store = DaemonStore(tmp_path / "state.db")
         assert store.schedules() == [] and store.schedule("daily") is None

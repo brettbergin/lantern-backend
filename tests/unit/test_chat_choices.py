@@ -5,8 +5,8 @@ import inspect
 
 import pytest
 
-from sbxloop.daemon import chat_choices
-from sbxloop.daemon.chat_choices import (
+from lantern.daemon import chat_choices
+from lantern.daemon.chat_choices import (
     Choice,
     ChoiceQuestion,
     match_free_text,
@@ -159,7 +159,7 @@ class TestPendingFiling:
     question's fallback rides in the same reply as the question."""
 
     def test_a_well_formed_block_parses_and_is_stripped(self) -> None:
-        from sbxloop.daemon.chat_choices import parse_pending_filing
+        from lantern.daemon.chat_choices import parse_pending_filing
 
         text = (
             "What are you seeing?\n\n"
@@ -174,7 +174,7 @@ class TestPendingFiling:
         assert pending.assumption == "grey cards everywhere"
 
     def test_the_question_defaults_to_the_prose(self) -> None:
-        from sbxloop.daemon.chat_choices import parse_pending_filing
+        from lantern.daemon.chat_choices import parse_pending_filing
 
         clean, pending = parse_pending_filing(
             'Which one?\n```sbx-pending\n{"assumption": "the first"}\n```'
@@ -183,7 +183,7 @@ class TestPendingFiling:
         assert pending is not None and pending.question == "Which one?"
 
     def test_malformed_json_degrades_to_prose_and_still_strips(self) -> None:
-        from sbxloop.daemon.chat_choices import parse_pending_filing
+        from lantern.daemon.chat_choices import parse_pending_filing
 
         clean, pending = parse_pending_filing("Hm.\n```sbx-pending\nnot json\n```")
         assert clean == "Hm."
@@ -192,7 +192,7 @@ class TestPendingFiling:
     def test_an_empty_assumption_is_no_fallback(self) -> None:
         """A guess the concierge could not state is not a guess the daemon
         may file — the old free-text-only behaviour simply is not armed."""
-        from sbxloop.daemon.chat_choices import parse_pending_filing
+        from lantern.daemon.chat_choices import parse_pending_filing
 
         clean, pending = parse_pending_filing(
             'Q?\n```sbx-pending\n{"question": "Q?", "assumption": "  "}\n```'
@@ -202,7 +202,7 @@ class TestPendingFiling:
     def test_it_coexists_with_an_sbx_choices_block(self) -> None:
         """Enumerable answers send both blocks: choices for the click,
         pending for the fallback. The two parsers are independent."""
-        from sbxloop.daemon.chat_choices import parse_choice_question, parse_pending_filing
+        from lantern.daemon.chat_choices import parse_choice_question, parse_pending_filing
 
         text = (
             "Pick one.\n"
@@ -216,6 +216,6 @@ class TestPendingFiling:
         assert pending is not None and pending.assumption == "a"
 
     def test_no_block_means_no_fallback(self) -> None:
-        from sbxloop.daemon.chat_choices import parse_pending_filing
+        from lantern.daemon.chat_choices import parse_pending_filing
 
         assert parse_pending_filing("just prose") == ("just prose", None)

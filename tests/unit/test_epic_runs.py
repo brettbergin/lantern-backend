@@ -17,14 +17,14 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-from sbxloop.config import Config
-from sbxloop.daemon.model import WorkItem, is_epic_run_id
-from sbxloop.daemon.sources import GitHubIssueSource
-from sbxloop.db.api_models import ApiEventRow
-from sbxloop.plans.epicrun import EpicRun, from_item, readiness
-from sbxloop.plans.model import ForgeRef, Plan, PlanNode
-from sbxloop.plans.service import PlanRefusal
-from sbxloop.plans.store import PlanStore
+from lantern.config import Config
+from lantern.daemon.model import WorkItem, is_epic_run_id
+from lantern.daemon.sources import GitHubIssueSource
+from lantern.db.api_models import ApiEventRow
+from lantern.plans.epicrun import EpicRun, from_item, readiness
+from lantern.plans.model import ForgeRef, Plan, PlanNode
+from lantern.plans.service import PlanRefusal
+from lantern.plans.store import PlanStore
 from tests.unit.test_daemon_loop import Harness
 from tests.unit.test_daemon_sources import FIXTURE_NOW, LABELS, RecordingOps, issue, report
 
@@ -82,8 +82,8 @@ def _harness(tmp_path: Path, ops: RecordingOps, **config: Any) -> Harness:
             "home": str(tmp_path / "state"),
             "github": {"repo": "o/r"},
             "daemon": {
-                "trigger_label": "sbxloop:run",
-                "in_progress_label": "sbxloop:in-progress",
+                "trigger_label": "lantern:run",
+                "in_progress_label": "lantern:in-progress",
                 **config.pop("daemon", {}),
             },
             **config,
@@ -168,7 +168,7 @@ class TestAdmission:
         h = _harness(tmp_path, ops)
         _plan(h, _node("a", 11))
         # A person labelled the issue before the run started.
-        ops.issues["11"]["labels"].append({"name": "sbxloop:run"})
+        ops.issues["11"]["labels"].append({"name": "lantern:run"})
         h.dstore.upsert_new(h.loop.source.poll()[0], h.clock())
         run = _start(h)
         (item,) = h.dstore.items()
@@ -221,11 +221,11 @@ class TestCompletion:
         # Each issue was claimed (in progress), closed by the merge report,
         # and never wore the trigger label.
         added = _labels_added(ops)
-        assert "sbxloop:in-progress" in added and "sbxloop:completed" in added
-        assert "sbxloop:run" not in added and "sbxloop:workload" not in added
+        assert "lantern:in-progress" in added and "lantern:completed" in added
+        assert "lantern:run" not in added and "lantern:workload" not in added
         closed = {p for m, p, b in ops.raw_calls if m == "PATCH" and (b or {}).get("state")}
         assert closed == {f"/repos/o/r/issues/{n}" for n in (11, 12, 13)}
-        assert all("claimed" in body for _, body in ops.comments if "sbxloop-claim" in body)
+        assert all("claimed" in body for _, body in ops.comments if "lantern-claim" in body)
 
     def test_a_delivered_workload_task_makes_its_dependents_ready(self, tmp_path: Path) -> None:
         ops = _issues(11, 12)
@@ -257,7 +257,7 @@ class TestCompletion:
         ]
         # The workload's completed report closed its issue.
         assert ("PATCH", "/repos/o/r/issues/11") in {(m, p) for m, p, _ in ops.raw_calls}
-        assert "sbxloop:workload" not in _labels_added(ops)
+        assert "lantern:workload" not in _labels_added(ops)
 
     def test_a_failed_task_does_not_admit_its_dependents(self, tmp_path: Path) -> None:
         ops = _issues(11, 12, 13, 14)
@@ -331,7 +331,7 @@ class TestRules:
         assert source.claim(plain) is False
         mine = plain.model_copy(update={"parent_item_id": "erun_0123456789abcdef"})
         assert source.claim(mine) is True
-        assert _labels_added(ops) == {"sbxloop:in-progress"}
+        assert _labels_added(ops) == {"lantern:in-progress"}
         assert not any(m == "DELETE" and "/labels/" in p for m, p, _ in ops.raw_calls)
 
 
@@ -434,7 +434,7 @@ class TestRetry:
         assert events[0][1]["via"] == "item" and events[0][1]["by"] == "Ada"
         # The item retry told the issue who asked and cleared the failed label.
         assert any(f"Re-queued by Ada (epic run {run.id})" in b for _, b in ops.comments)
-        assert ("DELETE", "/repos/o/r/issues/11/labels/sbxloop%3Afailed") in {
+        assert ("DELETE", "/repos/o/r/issues/11/labels/lantern%3Afailed") in {
             (m, p) for m, p, _ in ops.raw_calls
         }
         _drain(h)
@@ -633,7 +633,7 @@ class TestIssueWording:
         source = h.loop.source
         item = self._epic_item(source, claimed=False)
         assert source.claim(item) is True
-        (claim,) = [b for _, b in ops.comments if "sbxloop-claim" in b]
+        (claim,) = [b for _, b in ops.comments if "lantern-claim" in b]
         assert "Started as a task of epic run `erun_0123456789abcdef`" in claim
         claimed = item.model_copy(update={"claimed": True})
         source.report_abandoned(claimed, "tests failed")
@@ -756,7 +756,7 @@ class TestClosingTheEpic:
         h.loop.epic_runs.forge = lambda: ops
         _plan(h, _node("a", 11))
         # A person started the task on its own, with the trigger label.
-        ops.issues["11"]["labels"].append({"name": "sbxloop:run"})
+        ops.issues["11"]["labels"].append({"name": "lantern:run"})
         _drain(h, 3)
         assert [(i.source_key, i.state) for i in h.dstore.items()] == [("11", "done")]
         assert h.loop.epic_runs.runs.latest("plan_1", "epic") is None

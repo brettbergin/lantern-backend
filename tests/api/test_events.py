@@ -3,7 +3,7 @@ sequence, per run or for the workspace, and pruned history refused."""
 
 from __future__ import annotations
 
-from sbxloop_worker.protocol import Event
+from lantern_worker.protocol import Event
 from tests.api.conftest import Api
 from tests.unit.test_daemon_loop import gh_item
 
@@ -56,7 +56,7 @@ class TestReplay:
         headers = api.bearer()
         # The scripted runner writes no engine events itself; write the
         # kind a run does, then read the run's chronology.
-        from sbxloop_worker.protocol import Event
+        from lantern_worker.protocol import Event
 
         api.harness.store.append_event(
             Event(ts=api.clock(), run_id=run_id, type="worker.stdout", data={"line": "hello"})

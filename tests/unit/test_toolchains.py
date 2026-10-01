@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop import toolchains
-from sbxloop.errors import ProvisionError
+from lantern import toolchains
+from lantern.errors import ProvisionError
 
 
 def test_names_and_aliases_are_unique() -> None:
@@ -462,7 +462,7 @@ def test_python_downloads_stay_on_allowlisted_github_hosts() -> None:
     # both must be settled in the baseline: the redirect host is
     # allowlisted, and uv is pointed at the canonical GitHub prefix rather
     # than needing a second vendor host reachable.
-    from sbxloop.sbx.provision import AGENT_ALLOW_DOMAINS
+    from lantern.sbx.provision import AGENT_ALLOW_DOMAINS
 
     python = toolchains.resolve(["python"])[0]
     assert python.install_script is not None

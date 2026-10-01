@@ -1,10 +1,10 @@
-"""The repositories page says whether a repository is set up for sbxloop,
+"""The repositories page says whether a repository is set up for lantern,
 and one call sets it up (#630).
 
 A repository the daemon polls needs the labels the loop applies — the
 seven lifecycle labels under its own names and the follow-up label — or
 the states a run reports are bare text on its issues. Until now only
-``sbxloop init-repo`` on the host created them, and nothing told a remote
+``lantern init-repo`` on the host created them, and nothing told a remote
 operator which repositories carried them. Every registered repository now
 carries its label state, read back by the daemon, and
 ``POST /v1/repositories/{id}/labels/sync`` creates the missing ones.
@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from sbxloop.vcs.github.labels import lifecycle_specs
+from lantern.vcs.github.labels import lifecycle_specs
 from tests.api.conftest import Api, build
 from tests.fakes.fake_github import FakeGithub
 
@@ -83,14 +83,14 @@ class TestWhatARepositoryReports:
         assert {"trigger", "completed", "followup"} <= kinds
 
     def test_a_repository_missing_labels_names_them(self, api: Api) -> None:
-        _forge(api, carries={"sbxloop:run"})
+        _forge(api, carries={"lantern:run"})
         api.loop.tick()
         (repo,) = _listed(api, api.bearer())
         labels = repo["labels"]
         assert labels["state"] == "incomplete"
-        assert "sbxloop:failed" in labels["missing"]
+        assert "lantern:failed" in labels["missing"]
         present = {label["name"]: label["present"] for label in labels["labels"]}
-        assert present["sbxloop:run"] is True and present["sbxloop:failed"] is False
+        assert present["lantern:run"] is True and present["lantern:failed"] is False
 
     def test_a_repository_keeps_its_own_label_names(self, tmp_path: Path) -> None:
         api = build(
@@ -99,7 +99,7 @@ class TestWhatARepositoryReports:
         with api.client:
             (repo,) = _listed(api, api.bearer())
             assert "go" in repo["labels"]["expected"]
-            assert "sbxloop:run" not in repo["labels"]["expected"]
+            assert "lantern:run" not in repo["labels"]["expected"]
         api.ctx.close()
 
 
@@ -107,17 +107,17 @@ class TestSyncing:
     def test_the_sync_creates_the_missing_labels_and_the_repository_turns_compliant(
         self, api: Api
     ) -> None:
-        ops = _forge(api, carries={"sbxloop:run"})
+        ops = _forge(api, carries={"lantern:run"})
         headers = api.bearer(MANAGE)
         (repo,) = _listed(api, headers)
         response = api.client.post(f"/v1/repositories/{repo['id']}/labels/sync", headers=headers)
         assert response.status_code == 200, response.text
         body = response.json()
         assert body["labels"]["state"] == "compliant"
-        assert "sbxloop:failed" in body["created"]
+        assert "lantern:failed" in body["created"]
         assert body["repository"]["labels"]["state"] == "compliant"
         assert body["operation"]["action"] == "repo.labels_sync"
-        assert set(ops.label_creates) == _every_label(api) - {"sbxloop:run"}
+        assert set(ops.label_creates) == _every_label(api) - {"lantern:run"}
         # And the listing says so too, without another forge call.
         (listed,) = _listed(api, headers)
         assert listed["labels"]["state"] == "compliant"
@@ -134,7 +134,7 @@ class TestSyncing:
         assert ops.label_creates == []
 
     def test_the_sync_is_narrated_for_the_humans_watching(self, api: Api) -> None:
-        _forge(api, carries={"sbxloop:run"})
+        _forge(api, carries={"lantern:run"})
         headers = api.bearer(MANAGE)
         (repo,) = _listed(api, headers)
         api.client.post(f"/v1/repositories/{repo['id']}/labels/sync", headers=headers)
@@ -145,7 +145,7 @@ class TestSyncing:
             if e["type"] == "daemon.notice"
             and e["data"].get("kind") == "daemon.repository_labels_synced"
         ]
-        assert len(notices) == 1 and "sbxloop:failed" in notices[0]
+        assert len(notices) == 1 and "lantern:failed" in notices[0]
 
     def test_reading_a_repository_is_not_enough_to_change_it(self, api: Api) -> None:
         _forge(api)
@@ -170,7 +170,7 @@ class TestSyncing:
         assert "init-repo o/r" in response.json()["detail"]
 
     def test_a_forge_that_will_not_answer_leaves_the_state_alone(self, api: Api) -> None:
-        from sbxloop.errors import GithubOpsError
+        from lantern.errors import GithubOpsError
 
         ops = _forge(api, carries=_every_label(api))
         api.loop.tick()
@@ -186,7 +186,7 @@ class TestSyncing:
         assert listed["labels"]["checked_at"] == repo["labels"]["checked_at"]
 
     def test_an_idempotent_sync_replays_its_operation(self, api: Api) -> None:
-        _forge(api, carries={"sbxloop:run"})
+        _forge(api, carries={"lantern:run"})
         headers = {**api.bearer(MANAGE), "Idempotency-Key": "labels-1"}
         (repo,) = _listed(api, headers)
         first = api.client.post(f"/v1/repositories/{repo['id']}/labels/sync", headers=headers)
@@ -201,7 +201,7 @@ class TestTheContract:
         assert "repositories.labels" in features
 
     def test_the_socket_takes_the_same_command(self, api: Api) -> None:
-        _forge(api, carries={"sbxloop:run"})
+        _forge(api, carries={"lantern:run"})
         headers = api.bearer(MANAGE)
         (repo,) = _listed(api, headers)
         with api.client.websocket_connect("/v1/ws", headers=headers) as ws:

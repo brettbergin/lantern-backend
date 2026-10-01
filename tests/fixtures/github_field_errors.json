@@ -34,7 +34,7 @@
       "observed": "not yet captured: repo.get against a repository that does not exist (ensure_repository create path)"
     },
     "label_missing_404": {
-      "message": "github op raw.api failed: GithubOpError: gh api DELETE /repos/o/r/issues/7/labels/sbxloop failed (rc=1): gh: Label does not exist (HTTP 404)",
+      "message": "github op raw.api failed: GithubOpError: gh api DELETE /repos/o/r/issues/7/labels/lantern failed (rc=1): gh: Label does not exist (HTTP 404)",
       "status": 404,
       "provenance": "synthetic",
       "observed": "not yet captured: removing a label an operator already removed by hand (daemon GithubIssueSource)"
@@ -43,10 +43,10 @@
       "message": "github op raw.api failed: GithubOpError: gh api POST /repos/o/r/git/refs failed (rc=1): gh: Reference already exists (HTTP 422)",
       "status": 422,
       "provenance": "synthetic",
-      "observed": "not yet captured: re-delivering a run whose sbxloop/<run> branch exists (#223; deliver.py TODO(e2e))"
+      "observed": "not yet captured: re-delivering a run whose lantern/<run> branch exists (#223; deliver.py TODO(e2e))"
     },
     "pr_exists_422": {
-      "message": "github op pr.create failed: GithubOpError: POST https://api.github.com/repos/o/r/pulls -> HTTP 422: {\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"A pull request already exists for o:sbxloop/r42.\"}]}",
+      "message": "github op pr.create failed: GithubOpError: POST https://api.github.com/repos/o/r/pulls -> HTTP 422: {\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"A pull request already exists for o:lantern/r42.\"}]}",
       "status": 422,
       "provenance": "synthetic",
       "observed": "not yet captured: re-delivering a run whose PR is already open (#223; deliver.py TODO(e2e))"
@@ -82,7 +82,7 @@
       "observed": "not yet captured: delivering a draft PR to a repository whose plan has no draft pull requests (#677; deliver._is_draft_unsupported matches the phrase)"
     },
     "pr_no_commits_422": {
-      "message": "github op pr.create failed: GithubOpError: POST https://api.github.com/repos/o/r/pulls -> HTTP 422: {\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"No commits between main and sbxloop/r42\"}]}",
+      "message": "github op pr.create failed: GithubOpError: POST https://api.github.com/repos/o/r/pulls -> HTTP 422: {\"message\":\"Validation Failed\",\"errors\":[{\"message\":\"No commits between main and lantern/r42\"}]}",
       "status": 422,
       "provenance": "synthetic",
       "observed": "not yet captured: a pr.create 422 that is neither a collision nor a draft refusal (#677; stays an error, no retry)"

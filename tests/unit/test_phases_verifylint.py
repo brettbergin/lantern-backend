@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from sbxloop.config import Config
-from sbxloop.engine.model import TaskGraph, TaskSpec, VerifyReauthor
-from sbxloop.engine.phases import PhaseRunner
+from lantern.config import Config
+from lantern.engine.model import TaskGraph, TaskSpec, VerifyReauthor
+from lantern.engine.phases import PhaseRunner
 
 
 def runner(workspace: Path | None) -> PhaseRunner:
