@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+**sbxloop becomes Lantern.** This is the last release published to PyPI as
+`sbxloop` and `sbxloop-worker`; the project continues as Lantern backend at
+<https://github.com/brettbergin/lantern-backend>, released through GitHub
+Releases. The next release renames the package, CLI, module, environment
+prefix and home directory to `lantern`, `LANTERN_*` and `~/.lantern`, with no
+compatibility aliases.
+
 **Members who registered before a capability existed now hold it.** A
 member's API client stores its capabilities, written at registration and on
 a role change, so the `plans:create` and `plans:publish` the owner, admin

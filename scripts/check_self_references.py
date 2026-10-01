@@ -57,7 +57,7 @@ SOURCE_PATH = re.compile(r"packages/sbxloop|src/sbxloop\b")
 # The maintainer's login is fine inside the project's own URL; anywhere else
 # it is a host detail leaking. `bergco` catches the deploy host's domain.
 PERSONAL = re.compile(
-    r"brettbergin(?!/sbxloop\b)|/home/bergs|\bbergs\b|bergco|project-mountain-dew"
+    r"brettbergin(?!/(?:sbxloop|lantern-backend)\b)|/home/bergs|\bbergs\b|bergco|project-mountain-dew"
 )
 
 PROMPTS = SRC / "engine" / "prompts"

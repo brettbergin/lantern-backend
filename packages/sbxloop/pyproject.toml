@@ -85,9 +85,9 @@ api = [
 sbxloop = "sbxloop.cli.app:main"
 
 [project.urls]
-Homepage = "https://github.com/brettbergin/sbxloop"
-Repository = "https://github.com/brettbergin/sbxloop"
-Issues = "https://github.com/brettbergin/sbxloop/issues"
+Homepage = "https://github.com/brettbergin/lantern-backend"
+Repository = "https://github.com/brettbergin/lantern-backend"
+Issues = "https://github.com/brettbergin/lantern-backend/issues"
 
 [tool.uv.sources]
 sbxloop-worker = { workspace = true }
