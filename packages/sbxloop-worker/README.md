@@ -1,6 +1,11 @@
 # sbxloop-worker
 
-The in-sandbox runtime for [sbxloop](https://github.com/brettbergin/sbxloop):
+> **sbxloop is now Lantern.** This project continues as **Lantern backend** at
+> <https://github.com/brettbergin/lantern-backend>. This is the final release
+> published to PyPI under this name: Lantern installs from its GitHub Releases,
+> with the `lantern` CLI, `LANTERN_*` environment and `~/.lantern` home.
+
+The in-sandbox runtime for [sbxloop](https://github.com/brettbergin/lantern-backend):
 shared host/worker protocol models, the job runner (`python -m sbxloop_worker`),
 and agent backends. Install with the `copilot` extra inside agent sandboxes:
 

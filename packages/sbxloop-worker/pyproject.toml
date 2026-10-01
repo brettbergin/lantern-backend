@@ -34,8 +34,8 @@ codex = ["openai-codex==0.147.0"]
 openai = ["openai>=1.99"]
 
 [project.urls]
-Homepage = "https://github.com/brettbergin/sbxloop"
-Repository = "https://github.com/brettbergin/sbxloop"
+Homepage = "https://github.com/brettbergin/lantern-backend"
+Repository = "https://github.com/brettbergin/lantern-backend"
 
 [build-system]
 requires = ["hatchling>=1.32.3", "hatch-vcs"]
