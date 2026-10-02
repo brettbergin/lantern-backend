@@ -10,11 +10,11 @@ def test_a_mentioned_concierge_stays_lantern() -> None:
     assert persona.startswith(LANTERN_PERSONA)
     assert "You are Lantern" in persona
     assert "@concierge" in persona and "@lantern" in persona
-    assert "Concierge**" not in persona and "lantern's **" not in persona
+    assert "Concierge**" not in persona and "Lantern's **" not in persona
 
 
 def test_other_roles_keep_their_collaboration_persona() -> None:
     persona = AGENTS_BY_SLUG["builder"].persona
-    assert "You are lantern's **Builder**" in persona
+    assert "You are **Builder**, one of Lantern's agents" in persona
     assert "@builder" in persona
     assert "You are Lantern" not in persona

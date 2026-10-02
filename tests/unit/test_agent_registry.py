@@ -43,7 +43,7 @@ yourself, never as a separate "Concierge" agent, and say what you did.
 INSTRUCTIONS = {
     "planner": "Plan within the ask. Use earlier team replies as context. "
     "Do not claim to have built the result.",
-    "builder": "Help implement the ask through lantern's managed code runs. "
+    "builder": "Help implement the ask through Lantern's managed code runs. "
     "This chat session has no checkout, editor or shell; actual file changes "
     "and verification occur in a managed run. Report its status honestly.",
     "critic": "Inspect and judge the evidence and prior team replies. This role is read-only. "
@@ -57,7 +57,7 @@ INSTRUCTIONS = {
 def _role_persona(name: str, slug: str) -> str:
     return (
         "\n\n## Collaboration role\n\n"
-        f"You are lantern's **{name}**, responding in Lantern as `@{slug}`. "
+        f"You are **{name}**, one of Lantern's agents, responding in Lantern as `@{slug}`. "
         f"{INSTRUCTIONS[slug]} Keep the answer useful in a shared chat, state any "
         "action you took, and never imply that another agent or person approved it."
     )
@@ -116,7 +116,7 @@ class TestBuiltins:
     def test_descriptions_and_instructions_are_todays(self) -> None:
         registry = ConfigAgentRegistry(Config())
         descriptions = {
-            "concierge": "Chat with lantern and direct its managed runs.",
+            "concierge": "Chat with Lantern and direct its managed runs.",
             "planner": "Scope work and prepare a plan for the builder.",
             "builder": "Discuss implementation and dispatch code work through lantern.",
             "critic": "Review plans, results, and evidence without changing work.",

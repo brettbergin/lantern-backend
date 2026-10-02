@@ -1,6 +1,6 @@
 """Installed versus latest: is this daemon running current code?
 
-lantern's own releases ship frequently (``RELEASING.md``) while upgrading a
+Lantern's own releases ship frequently (``RELEASING.md``) while upgrading a
 daemon host is an operator's step, so a long-lived daemon drifts behind
 silently. This module is the one place that knows the difference: the
 concierge's ``version_status`` tool renders :meth:`VersionProbe.summary` on

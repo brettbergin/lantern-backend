@@ -876,7 +876,7 @@
       },
       "AuthorOut": {
         "additionalProperties": false,
-        "description": "Who wrote a message: a person, an agent, or lantern itself.",
+        "description": "Who wrote a message: a person, an agent, or Lantern itself.",
         "properties": {
           "display_name": {
             "anyOf": [

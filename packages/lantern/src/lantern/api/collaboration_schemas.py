@@ -519,7 +519,7 @@ class ChannelJobOut(ApiModel):
 
 
 class AuthorOut(ApiModel):
-    """Who wrote a message: a person, an agent, or lantern itself."""
+    """Who wrote a message: a person, an agent, or Lantern itself."""
 
     kind: Literal["human", "agent", "system"]
     id: str | None = None

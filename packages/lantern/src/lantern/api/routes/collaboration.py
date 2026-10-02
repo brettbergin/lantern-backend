@@ -1028,7 +1028,7 @@ async def create_turn(
         raise Problem(
             503,
             "collaboration_runtime_unavailable",
-            "the lantern concierge is disabled or still starting",
+            "the Lantern concierge is disabled or still starting",
         )
     # The member is checked after availability, so a stopped concierge is
     # reported as such whoever asks.

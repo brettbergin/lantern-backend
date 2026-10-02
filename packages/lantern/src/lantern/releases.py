@@ -180,7 +180,7 @@ def extra_install_hint(extra: str, fallback: str) -> str:
         if ";" in line and wanted.search(line.split(";", 1)[1])
     ]
     packages = " ".join(f"'{item}'" for item in (found or [fallback]))
-    return f"install {packages} into the venv lantern runs from"
+    return f"install {packages} into the venv Lantern runs from"
 
 
 USAGE = "usage: python -m lantern.releases latest | download X.Y.Z DIR"

@@ -139,7 +139,7 @@ PRIMARY_BUILTINS: tuple[AgentDefinition, ...] = (
     _primary(
         LANTERN_SLUG,
         CONCIERGE_NAME,
-        "Chat with lantern and direct its managed runs.",
+        "Chat with Lantern and direct its managed runs.",
         ("chat", "run controls", "coordination"),
         "Help the person direct the loop through the available tools.",
         role="lead",
@@ -163,7 +163,7 @@ PRIMARY_BUILTINS: tuple[AgentDefinition, ...] = (
         "Builder",
         "Discuss implementation and dispatch code work through lantern.",
         ("implementation", "verification", "code runs"),
-        "Help implement the ask through lantern's managed code runs. "
+        "Help implement the ask through Lantern's managed code runs. "
         "This chat session has no checkout, editor or shell; actual file changes "
         "and verification occur in a managed run. Report its status honestly.",
         role="builder",
@@ -236,7 +236,7 @@ LEGACY_BUILTINS: tuple[AgentDefinition, ...] = (
         "GitHub repository, issue, and pull request operations.",
         "Developer Agents",
         ("github", "repository", "issue", "pull request", "code review"),
-        "Focus on repository work and use lantern's typed operations rather than raw credentials.",
+        "Focus on repository work and use Lantern's typed operations rather than raw credentials.",
     ),
     _legacy(
         "software-dev",
@@ -318,7 +318,8 @@ def chat_persona(agent: AgentDefinition, product: str = CONCIERGE_NAME) -> str:
     name = agent.spec.name or agent.slug
     return (
         "\n\n## Collaboration role\n\n"
-        f"You are lantern's **{name}**, responding in {product} as `@{agent.slug}`. "
+        f"You are **{name}**, one of Lantern's agents, responding in {product} "
+        f"as `@{agent.slug}`. "
         + (f"{instructions} " if instructions else "")
         + "Keep the answer useful in a shared chat, state any "
         "action you took, and never imply that another agent or person approved it."

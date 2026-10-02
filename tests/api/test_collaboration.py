@@ -267,8 +267,8 @@ def test_ordinary_conversation_cannot_use_action_tools(api: Any) -> None:
 @pytest.mark.parametrize(
     ("intent", "contract"),
     [
-        ("code", "selected lantern's Code runner"),
-        ("workload", "selected lantern's Workload runner"),
+        ("code", "selected Lantern's Code runner"),
+        ("workload", "selected Lantern's Workload runner"),
     ],
 )
 def test_explicit_runner_selection_uses_lantern_and_existing_pipeline(

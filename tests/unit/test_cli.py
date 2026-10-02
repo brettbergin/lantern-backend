@@ -2306,7 +2306,7 @@ class TestRunCommand:
         assert "github: o/r" in result.output
         assert "PR #8" in result.output and "pull/8" in result.output
         assert "review round 1: approve" in result.output
-        assert "merged by lantern" in result.output
+        assert "merged by Lantern" in result.output
 
     def test_run_repo_flag_enables_github_without_config(
         self, workdir: Path, fake_sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch

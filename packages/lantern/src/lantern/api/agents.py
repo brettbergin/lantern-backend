@@ -77,7 +77,8 @@ class AgentDefinition:
             return self.agent.chat_persona(product)
         return (
             "\n\n## Collaboration role\n\n"
-            f"You are lantern's **{self.name}**, responding in {product} as `@{self.slug}`. "
+            f"You are **{self.name}**, one of Lantern's agents, responding in {product} "
+            f"as `@{self.slug}`. "
             f"{self.instructions} Keep the answer useful in a shared chat, state any "
             "action you took, and never imply that another agent or person approved it."
         )

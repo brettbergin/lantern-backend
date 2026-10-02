@@ -465,7 +465,7 @@ class TestJobShape:
         assert job.system_message is not None
         assert "Complete your assigned work before handing it off" in job.system_message
         assert "does not replace your deliverable" in job.system_message
-        assert "Do not recreate lantern's execution pipelines" in job.system_message
+        assert "Do not recreate Lantern's execution pipelines" in job.system_message
         assert "incorporate it into revised work" in job.system_message
         assert "do not follow a fixed role order" in job.system_message
         handoff = next(tool for tool in job.host_tools if tool.name == "handoff_agent")
