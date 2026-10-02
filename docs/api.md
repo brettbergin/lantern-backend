@@ -87,13 +87,18 @@ describes below.
 A channel works one run at a time. While a run it asked for is queued or
 running:
 
-- a plain message there is direction for that run: the turn comes back with
-  `steered_run_id` and the agent's acknowledgement, exactly as a mention does
-  (`collaboration.mention_steering`), and the instruction is the same
-  recorded operation `POST /v1/runs/{id}/steering` makes. Whoever may post in
-  the channel may steer it;
-- a turn that picks a runner (`intent` `code` or `workload`) is answered with
-  a refusal naming the live run, and starts nothing;
+- a plain message there is a conversation about that run: the turn goes to
+  the model with the read tools (so "how is it going?" is answered from the
+  run's own record) and a `steer_run` tool for the live run. A message that
+  tells the run what to do differently is handed over through it, and the
+  turn comes back with `steered_run_id` as a mention steer does
+  (`collaboration.mention_steering`); the instruction is the same recorded
+  operation `POST /v1/runs/{id}/steering` makes. Whoever may post in the
+  channel may steer it;
+- a turn that picks a runner (`intent` `code` or `workload`) is answered,
+  but cannot start work: the start tools are withheld, the reply says the
+  run has to end first, and the Workload runner's binding choice queues
+  nothing while the channel is busy;
 - an admission naming the channel (`POST /v1/items` with `channel_id`) is
   refused `409 already_in_progress`, with nothing queued. Replaying the
   admission that made the live item is still a replay.

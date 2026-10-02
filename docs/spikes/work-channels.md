@@ -42,13 +42,18 @@ instead of asking whether the work should leave the channel at all.
   channel, no hand-off.
 - **What comes next happens there too.** A retry, a resume, and a new ask
   once the last run has ended all run in the same channel.
-- **One run at a time per channel.** While a run is queued or running, a
-  plain message in the channel is direction for it (`ControlService.steer`:
-  one record, one `run.steer` event, one rule), `@agent` addresses that
-  agent's lane, and `/stop` stops it. An explicit ask for *new* work — a
-  turn that picks a runner, an admission naming the channel, an agent
-  filing an issue to be run — is refused until the run has ended. The rule
-  is `controls.intake.channel_refusal`, checked wherever work is admitted.
+- **One run at a time per channel, and the channel stays a conversation.**
+  While a run is queued or running, a plain message in the channel goes to
+  the model with the read tools and a `steer_run` tool for the live run: a
+  question about the run ("how is it going?") is answered from its record,
+  and a message that tells the run what to do differently is handed over
+  (`ControlService.steer`: one record, one `run.steer` event, one rule,
+  `steered_run_id` on the turn). `@agent` addresses that agent's lane, and
+  `/stop` stops it. An explicit ask for *new* work — a turn that picks a
+  runner, an admission naming the channel, an agent filing an issue to be
+  run — cannot start until the run has ended: a turn is answered without
+  the start tools, an admission is refused. The rule for admissions is
+  `controls.intake.channel_refusal`, checked wherever work is admitted.
 - **Work nobody asked for in a channel keeps a channel of its own.** A
   labelled issue, a schedule's tick and a bare API admission have no
   conversation to live in; they get the system-created, workspace-visible
@@ -70,6 +75,11 @@ instead of asking whether the work should leave the channel at all.
   things it might mean.
 - *Treating an explicit new ask as steering.* A turn that picked a runner
   would silently become direction for a different run.
+- *Treating every plain message as steering.* The first cut of this
+  decision (2.1.48–2.1.50) did, and refused a runner turn before the model
+  was asked, so nothing could be said in the channel while its run was
+  live — not even "how is it going?". Undone: the model has the read tools
+  and `steer_run`, and decides what is a question and what is direction.
 - *Migrating the channels 2.1.44–2.1.47 made.* They and their hand-off
   messages stay readable; a job bound to one runs its next attempt in the
   channel that asks for it.
@@ -81,5 +91,7 @@ instead of asking whether the work should leave the channel at all.
 
 - lantern-backend: bind work to the asking channel, one run at a time, the
   thread link retired at the end of its run (`collaboration.channel_runs`).
-- lantern-web-app, lantern-mobile-app: the composer steers the channel's
-  live run; the hand-off card and the separate work-channel screen go.
+- lantern-web-app, lantern-mobile-app: the composer stays a conversation
+  while the channel's run is live (its hint says the run is here and what
+  the message can be), the run card keeps its own steer box, and the
+  hand-off card and the separate work-channel screen go.
