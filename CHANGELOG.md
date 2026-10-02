@@ -1,5 +1,12 @@
 ## [Unreleased]
 
+**`lantern doctor` names a systemd drop-in that overrides a rendered unit.**
+The `units` row used to say "linked from …" while a hand-written
+`~/.config/systemd/user/<unit>.d/*.conf` replaced the unit's `ExecStart=`
+with a binary that no longer existed; it now fails naming the drop-in and
+says to remove it or fold it into the rendered unit, since `lantern init
+--systemd` never removes one.
+
 **Every job has a work channel, and a bridge's run thread is that
 channel's window.** Work asked for in a chat used to live in that chat as a
 run card, next to any other run the chat asked for, while Discord, Slack,
