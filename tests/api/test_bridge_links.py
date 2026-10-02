@@ -558,3 +558,30 @@ def test_a_mapped_turn_recovered_after_a_restart_runs_for_its_author(api: Any) -
     assert recovered[turn.id].id == member_id
     kept = store.get_turn(None, channel_id, turn.id)
     assert kept is not None and kept.status == "accepted"
+
+
+def test_the_consoles_run_thread_link_lists_like_any_other(api: Any) -> None:
+    """The daemon links the console's run thread (backend ``local``) to the
+    run's work channel (docs/spikes/work-channels.md); the listing serves
+    it rather than refusing the page it is on."""
+    owner = bearer(register(api))
+    channel_id = _channel(api, owner)
+    api.ctx.collaboration.create_channel_link(
+        None,
+        channel_id,
+        backend="local",
+        surface_id="thread:20",
+        thread_id=None,
+        allow_guests=True,
+        created_by=None,
+        now=api.clock(),
+    )
+    listed = api.client.get(f"/v1/channels/{channel_id}/links", headers=owner)
+    assert listed.status_code == 200, listed.text
+    (link,) = listed.json()["data"]
+    assert (link["backend"], link["surface_id"], link["allow_guests"], link["created_by"]) == (
+        "local",
+        "thread:20",
+        True,
+        None,
+    )
