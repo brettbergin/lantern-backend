@@ -78,6 +78,12 @@ jobs:
           rm -f "${HOME}/.config/systemd/user/${OLD_UNIT}"
           systemctl --user daemon-reload
           rm -rf -- "${OLD_HOME}"
+          # What failed cutover attempts moved aside (each a whole home, workspaces included).
+          for failed in "${LANTERN_HOME}".failed-*; do
+            [ -d "${failed}" ] || continue
+            rm -rf -- "${failed}"
+            echo "removed ${failed}"
+          done
           echo "::notice::removed ${OLD_HOME} and ${OLD_UNIT}"
 
       - name: Check the starting point
