@@ -34,10 +34,17 @@ from pathlib import Path
 from lantern.errors import LanternError
 from lantern.hostfiles import make_private
 from lantern.paths import LanternHome
+from lantern.releases import REPOSITORY
 
 #: Files whose content names the old product and is rewritten.
 TEXT_SUFFIXES = frozenset({".toml", ".env", ".sh", ".example"})
 _PRIVATE_SUFFIXES = frozenset({".env", ".pem", ".key"})
+#: Repositories that moved with the rename. A config naming one (and the
+#: workspace checkout of it) follows it; everything else keeps its name.
+REPOSITORIES = {f"{REPOSITORY.split('/')[0]}/sbxloop": REPOSITORY}
+_REPOSITORY = re.compile(
+    "|".join(rf"(?<![\w.-]){re.escape(old)}(?![\w-])" for old in REPOSITORIES), re.IGNORECASE
+)
 _REWRITES = (
     (re.compile(r"SBXLOOP"), "LANTERN"),
     (re.compile(r"Sbxloop"), "Lantern"),
@@ -72,8 +79,14 @@ def _rewrite_line(line: str) -> str:
     return rewrite(line)
 
 
+def rename_repositories(text: str) -> str:
+    """Every mention of a repository that moved, under its new name."""
+    return _REPOSITORY.sub(lambda m: REPOSITORIES[m.group(0).lower()], text)
+
+
 def rewrite(text: str) -> str:
     """The old product's names in a config or secrets file, renamed."""
+    text = rename_repositories(text)
     for pattern, replacement in _REWRITES:
         text = pattern.sub(replacement, text)
     return text
@@ -136,14 +149,40 @@ def carry(home: LanternHome, source: Path) -> CarryReport:
     if workspaces.is_dir():
         for owner in sorted(p for p in workspaces.iterdir() if p.is_dir()):
             for repo in sorted(p for p in owner.iterdir() if p.is_dir()):
-                target = home.workspaces / owner.name / repo.name
+                target = home.workspaces / rename_repositories(f"{owner.name}/{repo.name}")
                 if target.exists():
                     report.kept.append(str(target))
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(repo, target, symlinks=True)
+                _follow_origin(target)
                 report.carried.append(f"{repo} -> {target}")
     return report
+
+
+def _follow_origin(checkout: Path) -> None:
+    """Point a carried checkout's origin at its repository's new name, so the
+    daemon's workspace-origin check matches the renamed config."""
+    if not (checkout / ".git").exists():
+        return
+    git = ["git", "-C", str(checkout)]
+    try:
+        url = subprocess.run(  # nosec B603 - fixed argv
+            [*git, "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return
+    renamed = rename_repositories(url.removesuffix(".git")) + (
+        ".git" if url.endswith(".git") else ""
+    )
+    if renamed != url:
+        subprocess.run(  # nosec B603 - fixed argv
+            [*git, "remote", "set-url", "origin", renamed], check=True, timeout=30
+        )
 
 
 _SBX_VERSION = re.compile(r"\d+\.\d+\.\d+")
