@@ -325,10 +325,9 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     its repository, a breakdown's level must have room — and against a
     breakdown of it already queued or running. A node on the forge with
     children there is re-planned: its run proposes a diff (#2346)."""
-    from lantern.plans.service import PlanRefusal, PlanService
-    from lantern.plans.store import PlanStore
+    from lantern.plans.service import PlanRefusal
 
-    service = PlanService(PlanStore(loop.dstore), lambda: loop.config)
+    service = loop.plans
     try:
         plan, node = service.breakdown_target(
             request.plan_id, request.node_id, expected_revision=request.expected_revision

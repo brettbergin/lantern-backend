@@ -43,6 +43,8 @@ from lantern.engine.model import TaskSpec
 from lantern.engine.store import StateStore
 from lantern.errors import DaemonError, GithubOpsError, WorkerError, WorkerTimeoutError
 from lantern.events import EventBus
+from lantern.plans import PlanService
+from lantern.plans.store import PlanStore
 from lantern_worker.protocol import (
     ErrorInfo,
     HostToolCall,
@@ -206,11 +208,21 @@ class FakeVersions:
 class LoopWithRuns(FakeLoop):
     """FakeLoop plus the report/current surface the concierge's tools use."""
 
-    def __init__(self, dstore: DaemonStore) -> None:
+    def __init__(self, dstore: DaemonStore, config: Config | None = None) -> None:
         super().__init__(dstore)
         self.reports: dict[str, RunReport] = {}
         self.current = None
         self.runs: list[Any] = []
+        self.config = config
+        self._plans: PlanService | None = None
+
+    @property
+    def plans(self) -> PlanService:
+        """The one plan service the daemon owns, as the real loop has it."""
+        if self._plans is None:
+            assert self.config is not None
+            self._plans = PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self._plans
 
     def report_for(self, run_id: str) -> RunReport:
         return self.reports.get(run_id, RunReport(run_id, "completed", "1/1 tasks done"))
@@ -240,7 +252,7 @@ def make(
         raw["github"].pop("repo", None)
     cfg = Config.model_validate(raw)
     dstore = DaemonStore(cfg.paths.state_db)
-    loop = LoopWithRuns(dstore)
+    loop = LoopWithRuns(dstore, cfg)
     client = FakeClient(scripts)
     host = FakeHost(client)
     concierge = Concierge(
