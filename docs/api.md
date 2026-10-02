@@ -254,7 +254,12 @@ lantern's managed runners explicitly. Lantern coordinates that turn without
 seeding agent mentions as parallel chat participants: the code runner owns its
 decompose/build/review/fix/CI/merge lifecycle, and the workload runner owns its
 plan/execute/judge/revise/publish lifecycle. Explicit runner intents cannot be
-combined with `target_slugs`.
+combined with `target_slugs`. `intent=workload` is binding: a turn the model
+answers inline without queueing a workload is queued by the daemon anyway,
+with the turn's content as the ask under the default profile, and the reply is
+the queue acknowledgement rather than the inline answer. (`intent=code` stays
+with the model, which may need an intake fact — the repository, say — before
+it can file the issue.)
 
 A mention is a request to reply. It records the agent as a target and joins it
 to the channel, but it no longer rewrites the turn's `intent`: a turn sent as a

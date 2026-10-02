@@ -1173,6 +1173,12 @@ class ApiContext:
                     channel_tools=channel_tools,
                     work_lead=work_lead,
                     work_roles=turn_roles,
+                    # Picking the Workload runner is binding: a turn the
+                    # model answers inline is still queued, in the
+                    # person's words.
+                    must_start_workload=(
+                        intent == "workload" and source_agent is None and target is None
+                    ),
                 )
                 reply = future.result()
                 if reply.ok and (reply.text or reply.work_products):

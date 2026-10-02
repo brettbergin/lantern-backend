@@ -91,3 +91,51 @@ def test_code_work_leaves_a_note_the_polled_issue_carries(tmp_path: Path) -> Non
         assert item.channel_id == "chn_code"
         assert item.assignment_json is not None
         assert json.loads(item.assignment_json)["roles"] == {"builder": "smith"}
+
+
+def test_picking_the_workload_runner_queues_one_even_when_the_model_answers_inline(
+    tmp_path: Path,
+) -> None:
+    """The runner choice is binding: a workload-intent turn the model
+    answers inline (no `start_workload` call) is queued by the daemon with
+    the person's own words, and the reply is the queue acknowledgement,
+    not the inline answer the person did not ask for."""
+    concierge, _, _, _, dstore = make(
+        tmp_path, [{"calls": [], "text": "Here is a short note on bread: flour, water, salt."}]
+    )
+    reply = concierge.submit_turn(
+        "Research the history of bread and deliver a note here.",
+        author="ana",
+        message_id="m4",
+        channel_id="chn_kitchen",
+        principal=Principal(
+            kind="client",
+            id="u-ana",
+            display="ana",
+            via="collaboration",
+            capabilities=ROLE_CAPABILITIES["member"],
+        ),
+        must_start_workload=True,
+    ).result(timeout=10)
+    item = dstore.get("chat:m4")
+    assert item is not None
+    assert item.kind == "workload" and item.channel_id == "chn_kitchen"
+    assert item.body == "Research the history of bread and deliver a note here."
+    assert "queued workload `chat:m4`" in reply.text
+    assert "flour" not in reply.text
+
+
+def test_a_workload_the_model_queued_itself_is_queued_once(tmp_path: Path) -> None:
+    concierge, _, _, _, dstore = make(
+        tmp_path, [{"calls": [("start_workload", {"ask": "Bake bread"})], "text": "queued"}]
+    )
+    reply = concierge.submit_turn(
+        "bake",
+        author="ana",
+        message_id="m5",
+        principal=Principal.trusted("ana", "discord"),
+        must_start_workload=True,
+    ).result(timeout=10)
+    assert dstore.get("chat:m5") is not None
+    assert reply.text == "queued"
+    assert len([i for i in dstore.items() if i.kind == "workload"]) == 1
