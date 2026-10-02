@@ -28,8 +28,10 @@ from lantern.daemon.controls.intake import (
     AdmitRequest,
     IssueAdmission,
     PlanAdmission,
+    WorkloadAdmission,
     admit_issue,
     build_item,
+    channel_refusal,
     plan_item,
     resolve_assignment_request,
     target_key,
@@ -651,6 +653,12 @@ class ControlService:
             # Checked before the source is touched: a refused agent must
             # not leave a labelled issue behind.
             lead, roles = resolve_assignment_request(self._agents(), request)
+            if isinstance(request, IssueAdmission | WorkloadAdmission):
+                # Also before the source is touched: a channel works one
+                # run at a time, and a refused ask must leave nothing queued.
+                busy = channel_refusal(loop, request.channel_id, item_id=key)
+                if busy is not None:
+                    raise ControlError("already_in_progress", busy, channel_id=request.channel_id)
             if isinstance(request, IssueAdmission):
                 item = admit_issue(loop, request)
             elif isinstance(request, PlanAdmission):

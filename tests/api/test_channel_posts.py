@@ -322,11 +322,8 @@ def test_a_silenced_channel_drops_progress_and_keeps_delivery(api: Any) -> None:
     ]
 
 
-def test_the_channel_of_an_item_is_its_work_channel(api: Any) -> None:
-    """A job's work channel (docs/spikes/work-channels.md), bound on first
-    sight: a chat that asked for the work keeps a hand-off on its turn, and
-    the work channel takes the chat's visibility and people."""
-    headers, channel, item = _channel_with_work(api)
+def test_the_channel_of_an_item_is_the_one_it_was_admitted_with(api: Any) -> None:
+    _headers, channel, item = _channel_with_work(api)
     detached = WorkItem(
         item_id="api:detached",
         source_key="api:detached",
@@ -337,24 +334,9 @@ def test_the_channel_of_an_item_is_its_work_channel(api: Any) -> None:
     )
     api.harness.dstore.upsert_new(detached, api.clock())
 
-    work = api.ctx.poster.channel_for_item(item.item_id)
-    other = api.ctx.poster.channel_for_item(detached.item_id)
-    assert work is not None and other is not None
-    assert work != channel and other != channel and work != other
+    assert api.ctx.poster.channel_for_item(item.item_id) == channel
+    assert api.ctx.poster.channel_for_item(detached.item_id) == channel
     assert api.ctx.poster.channel_for_item("api:missing") is None
-    opened = api.client.get(f"/v1/channels/{work}", headers=headers).json()
-    assert opened["visibility"] == "private"
-    assert opened["external_work"] is not None
-    assert opened["my_role"] == "member"
-    handoffs = [
-        m
-        for m in api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()
-        if m["kind"] == "work_handoff"
-    ]
-    assert [m["source_work_id"] for m in handoffs] == [
-        opened["external_work"]["work_id"],
-        api.client.get(f"/v1/channels/{other}", headers=headers).json()["external_work"]["work_id"],
-    ]
 
 
 def test_a_post_hangs_on_the_turn_that_asked_for_the_work(api: Any) -> None:
@@ -692,11 +674,10 @@ def test_a_code_runs_post_hangs_on_the_turn_that_filed_its_issue(api: Any) -> No
     api.ctx.concierge = FakeConcierge()
     assert _turn(api, headers, channel, "Unrelated, while the run is out")["id"] != filed
 
-    work = api.ctx.poster.channel_for_item(item.item_id)
-    assert work is not None and work != channel
+    assert api.ctx.poster.channel_for_item(item.item_id) == channel
     api.ctx.poster.post(
         ChannelPost(
-            channel_id=work,
+            channel_id=channel,
             author_agent="builder",
             kind="progress",
             text="Opened the pull request",
@@ -706,15 +687,7 @@ def test_a_code_runs_post_hangs_on_the_turn_that_filed_its_issue(api: Any) -> No
         )
     )
 
-    # The post lives in the work channel; the hand-off the chat keeps hangs
-    # on the turn that filed the issue, not on the unrelated newer turn.
-    assert [m["turn_id"] for m in _messages(api, headers, work)] == [None]
-    handoffs = [
-        m
-        for m in api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()
-        if m["kind"] == "work_handoff"
-    ]
-    assert [m["turn_id"] for m in handoffs] == [filed]
+    assert [m["turn_id"] for m in _messages(api, headers, channel)] == [filed]
 
 
 def test_a_post_of_a_kind_this_build_does_not_know_is_dropped(api: Any) -> None:
@@ -912,10 +885,8 @@ def test_labelling_an_existing_issue_grants_only_the_runs_that_follow(
             api.client.get(f"/v1/artifacts/{artifact_id}/content", headers=headers).status_code,
         ]
 
-    # The issue's work channel is where its runs live (docs/spikes/
-    # work-channels.md): the one an operator ran from the host is in a
-    # workspace-visible channel every member reads; the one a private chat
-    # asked for is in a channel that chat's members alone can open.
+    # A run nobody asked for in a channel lives in a workspace-visible one,
+    # which every member reads; one a private chat asked for is that chat's.
     before = [200, 200, 410] if filed_from == "host" else [403, 403, 403]
     assert reads(guest, first, "art_first") == before
     if filed_from == "channel":
@@ -931,20 +902,17 @@ def test_labelling_an_existing_issue_grants_only_the_runs_that_follow(
         json={"content": "Run issue 42 again", "intent": "code"},
     ).json()
     settled(api.client, guest, theirs, accepted["turn"]["id"])
-    # The label is on the forge and not yet polled: nothing has joined the
-    # guest to the issue's work channel yet.
+    # The label is on the forge and not yet polled: asking has changed
+    # nothing about the run that already existed.
     assert reads(guest, first, "art_first") == before
-    # The poll re-queues the issue and runs it again: the attempt joins the
-    # issue's one work channel, and asking for it joins the guest's chat to
-    # that channel, so the guest reads the new run and, with it, the job's
-    # earlier attempt; the owner keeps reading both.
+    # The poll re-queues the issue and runs it again: that run is theirs.
     second = _issue_run(api, item, "art_second")
     assert second != first
     assert reads(guest, second, "art_second") == [200, 200, 410]
-    assert reads(guest, first, "art_first") == [200, 200, 410]
+    # The earlier run stays in the channel it ran in.
+    assert reads(guest, first, "art_first") == before
     if filed_from == "channel":
         assert reads(owner, first, "art_first") == [200, 200, 410]
-        assert reads(owner, second, "art_second") == [200, 200, 410]
 
 
 def test_a_channels_members_read_the_events_of_a_run_admitted_with_it(api: Any) -> None:

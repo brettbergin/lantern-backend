@@ -3196,29 +3196,40 @@ hanging, and the timeout greys the buttons out with the same note.
 bridge, stubbed `discord.ui` — and asserts the click-answered and
 typed-answered exchanges reach the model with identical prompts.
 
-### Work channels, and a run's thread as a link
+### Work in the channel that asked, and a run's thread as a link
 
-Every job has one conversation (`docs/spikes/work-channels.md`): the
-system-created, workspace-visible channel `lantern.api.external_work` makes
-for a job as it binds the job's item and attempts (`ExternalJobRow`,
-`ExternalItemRow`, `ExternalRunRow`), whether the work was asked for by a
-chat turn, the API, a label or a schedule. `db/event_scope.channel_for_item`
-and `channel_for_run` answer that channel first, so a run's events are
-scoped to it and `RunChronicle` posts there; the poster binds an item on
-first sight (`bind_item_now`), so no post lands before its channel exists.
-The chat that asked keeps a `work_handoff` message hung on its turn, and
-the result delivered on that turn as before. A plain message in a work
-channel while its run is in flight is a steer (`ApiContext`
-`_steer_in_work_channel`), through `ControlService.steer` like every other.
+Work lives in the channel it was asked for in
+(`docs/spikes/work-channels.md`). `lantern.api.external_work` binds a job's
+item and attempts (`ExternalJobRow`, `ExternalItemRow`, `ExternalRunRow`) to
+the admission's channel when there is one (`_bind_item`,
+`admission_channel_for_item`), and makes a system-created, workspace-visible
+channel only for work nobody asked for in a channel: a label, a schedule, a
+bare API admission. `db/event_scope.channel_for_item` and `channel_for_run`
+answer the admission first and that binding otherwise, so a run's events are
+scoped to its channel and `RunChronicle` posts there; the poster binds an
+item on first sight (`bind_item_now`), so no post lands before its channel
+is known.
+
+A channel works one run at a time. `controls.intake.channel_refusal` is the
+one rule: `ControlService.admit` refuses an issue or workload naming a
+channel with work queued or running (`already_in_progress`),
+`AgentWorkService.file_issue` refuses to file an issue to be run, and a chat
+turn that picks a runner is answered with the refusal before the model is
+asked. A plain message while exactly one run is in flight is a steer
+(`ApiContext._steer_in_channel`), through `ControlService.steer` like every
+other.
 
 The thread a `ChatBridge` opens for a run (`_ensure_thread`) is registered
 as a `ChannelLink` of that channel (`_link_run_thread`, admitting guests):
 `ChannelMirror` posts the channel into the thread, and a reply in the
-thread takes the linked path (`_handle_linked`, a turn in the work
-channel) ahead of the direct `_steer`, which stays for a thread with no
-link — a daemon with no API, or a thread opened before the job was bound.
-A linked thread leaves the moments the channel posts (`_CHANNEL_SAYS`: the
-roster, verdicts, steering replies) to the mirror and renders the rest.
+thread takes the linked path (`_handle_linked`, a turn in the channel)
+ahead of the direct `_steer`, which stays for a thread with no link — a
+daemon with no API, or a thread opened before the job was bound. A linked
+thread leaves the moments the channel posts (`_CHANNEL_SAYS`: the roster,
+verdicts, steering replies) to the mirror and renders the rest. The link is
+retired when the run ends (`_retire_run_thread`): the channel goes on to
+host other runs, each with its own thread, and one left linked would keep
+receiving them.
 
 ### Tool calls in a run thread
 

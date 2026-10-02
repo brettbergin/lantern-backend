@@ -134,7 +134,7 @@ class ApiChannelPoster:
             )
 
     def channel_for_item(self, item_id: str) -> str | None:
-        """The work channel of ``item_id``, bound now when the reconciler
+        """The channel ``item_id``'s work lives in, bound now when the reconciler
         has not got to it yet, so a run's first post never lands in the
         chat that asked instead of the channel the work lives in."""
         from lantern.api.external_work import bind_item_now

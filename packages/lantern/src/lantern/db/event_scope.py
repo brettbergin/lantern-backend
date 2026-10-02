@@ -50,10 +50,8 @@ def admission_channel_for_item(session: Any, item_id: str) -> str | None:
 
 
 def channel_for_item(session: Any, item_id: str) -> str | None:
-    """The conversation an item's work happens in: its work channel once
-    the job is bound (docs/spikes/work-channels.md), else the chat that
-    asked for it."""
-    return presentation_channel_for_item(session, item_id) or admission_channel_for_item(
+    """The conversation for an item's admission or durable presentation."""
+    return admission_channel_for_item(session, item_id) or presentation_channel_for_item(
         session, item_id
     )
 
@@ -173,12 +171,11 @@ def channel_for_run(session: Any, run_id: str) -> str | None:
     ).first()
     if ledger is not None:
         item_id = str(ledger.item_id)
-        presented = presentation_channel_for_item(session, item_id)
-        if presented is not None:
-            return presented
         item: WorkItemRow | None = session.get(WorkItemRow, item_id)
         if item is not None and item.run_kind == "code":
-            return _code_run_channel(session, item, float(ledger.started_at))
+            return _code_run_channel(
+                session, item, float(ledger.started_at)
+            ) or presentation_channel_for_item(session, item_id)
         return channel_for_item(session, item_id)
     found = session.scalar(
         select(WorkItemRow.item_id).where(

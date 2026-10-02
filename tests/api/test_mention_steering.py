@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from alembic import command
 
 from lantern.agents.assignment import AgentAssignment, plan_assignment
@@ -296,18 +297,20 @@ class TestStopFromChat:
         api.ctx.concierge = concierge
         headers = bearer(register(api))
         channel = _channel(api, headers)
-        _live(api, channel, _planned(api, channel))
-        cancelled = _cancels(api)
-        api.loop.dstore.upsert_new(gh_item("2", channel_id=channel), api.clock())
         route = f"/v1/channels/{channel}/turns"
-        # The person's first message is still being answered when the stop,
-        # and another message behind it, land in the channel's lane.
+        # The person's first message is still being answered when the run
+        # goes live and the stop, and another message behind it, land in
+        # the channel's lane. (Sent first: once a run is live here a plain
+        # message steers it instead of reaching the model.)
         first = api.client.post(route, json={"content": "plan the bake"}, headers=headers)
         assert first.status_code == 202, first.text
         deadline = time.monotonic() + 5
         while not concierge.calls and time.monotonic() < deadline:
             time.sleep(0.01)
         assert concierge.calls, "the first turn never started"
+        _live(api, channel, _planned(api, channel))
+        cancelled = _cancels(api)
+        api.loop.dstore.upsert_new(gh_item("2", channel_id=channel), api.clock())
         stop = api.client.post(route, json={"content": "/stop"}, headers=headers)
         assert stop.status_code == 202, stop.text
         behind = api.client.post(route, json={"content": "and then?"}, headers=headers)
@@ -522,13 +525,14 @@ def test_revision_0031_adds_the_column_and_is_safe_to_run_twice(tmp_path: Path) 
     assert "steered_run_id" in columns
 
 
-class TestWorkChannelSteering:
-    """A work channel is one job's conversation (docs/spikes/work-channels.md):
-    a plain message there while its run is in flight is direction for it,
-    through the same control-service steer a mention or the API takes; a
-    chat that merely asked for work keeps answering as a conversation."""
+class TestChannelSteering:
+    """Work lives in the channel that asked for it, one run at a time
+    (docs/spikes/work-channels.md): a plain message there while the run is
+    in flight is direction for it, through the same control-service steer
+    a mention or the API takes, and an explicit ask for new work is
+    refused until it has finished."""
 
-    def test_a_plain_message_in_a_work_channel_steers_its_run(self, api: Api) -> None:
+    def test_a_plain_message_in_a_job_channel_steers_its_run(self, api: Api) -> None:
         from tests.api.test_external_work import channels, external_item
 
         concierge = FakeConcierge()
@@ -549,33 +553,64 @@ class TestWorkChannelSteering:
         (reply,) = [m for m in _replies(api, headers, work) if m["turn_id"] == done["id"]]
         assert "Taken as direction for run `r1`" in reply["content"]
 
-    def test_a_plain_message_in_a_chat_with_a_live_run_is_an_ordinary_turn(self, api: Api) -> None:
+    def test_a_plain_message_in_the_chat_that_asked_steers_its_run(self, api: Api) -> None:
+        """The run lives in the chat it was asked in: what is said there
+        while it runs is for the run, not a fresh question for the model."""
         concierge = FakeConcierge()
         api.ctx.concierge = concierge
         headers = bearer(register(api))
         channel = _channel(api, headers)
         handle = _live(api, channel, _planned(api, channel))
 
-        done = _turn(api, headers, channel, "how is it going?")
+        done = _turn(api, headers, channel, "use the other library")
+
+        assert done["status"] == "completed", done
+        assert done["steered_run_id"] == "r1"
+        assert handle.engine.messages == [("use the other library", None, None)]
+        assert concierge.calls == []
+        (reply,) = [m for m in _replies(api, headers, channel) if m["turn_id"] == done["id"]]
+        assert "Taken as direction for run `r1`" in reply["content"]
+
+    @pytest.mark.parametrize("intent", ["code", "workload"])
+    def test_picking_a_runner_while_a_run_is_live_is_refused(self, api: Api, intent: str) -> None:
+        """One run at a time per channel: an explicit ask for new work is
+        neither started beside the live run nor handed to it as direction."""
+        concierge = FakeConcierge()
+        api.ctx.concierge = concierge
+        headers = bearer(register(api))
+        channel = _channel(api, headers)
+        handle = _live(api, channel, _planned(api, channel))
+
+        done = _turn(api, headers, channel, "now build the importer", intent=intent)
 
         assert done["status"] == "completed", done
         assert done.get("steered_run_id") is None
         assert handle.engine.messages == []
-        assert len(concierge.calls) == 1
+        assert concierge.calls == []
+        (reply,) = [m for m in _replies(api, headers, channel) if m["turn_id"] == done["id"]]
+        assert "Run `r1` is live in this channel" in reply["content"]
+        assert "one run at a time" in reply["content"]
 
-    def test_a_plain_message_in_a_work_channel_with_nothing_in_flight_is_a_turn(
-        self, api: Api
-    ) -> None:
-        from tests.api.test_external_work import channels, external_item
-
+    def test_picking_a_runner_once_the_run_has_ended_starts_work_again(self, api: Api) -> None:
+        """A channel hosts one run after another: with nothing in flight the
+        same ask goes to the model as it always did."""
         concierge = FakeConcierge()
         api.ctx.concierge = concierge
         headers = bearer(register(api))
-        external_item(api)
-        api.ctx.project_work()
-        work = channels(api)[0].id
+        channel = _channel(api, headers)
 
-        done = _turn(api, headers, work, "what is this about?")
+        done = _turn(api, headers, channel, "now build the importer", intent="workload")
+
+        assert done["status"] == "completed", done
+        assert len(concierge.calls) == 1
+
+    def test_a_plain_message_with_nothing_in_flight_is_a_turn(self, api: Api) -> None:
+        concierge = FakeConcierge()
+        api.ctx.concierge = concierge
+        headers = bearer(register(api))
+        channel = _channel(api, headers)
+
+        done = _turn(api, headers, channel, "what is this about?")
 
         assert done["status"] == "completed", done
         assert done.get("steered_run_id") is None

@@ -67,6 +67,7 @@ from lantern.api.push import PushService
 from lantern.api.stream import StreamHub
 from lantern.api.turns import TurnCoordinator
 from lantern.config import Config
+from lantern.daemon.controls.intake import channel_refusal
 from lantern.daemon.controls.principal import (
     ROLE_CAPABILITIES,
     WORKSPACE_ID,
@@ -76,7 +77,6 @@ from lantern.daemon.controls.principal import (
 from lantern.daemon.controls.results import ControlError
 from lantern.daemon.controls.service import ControlService
 from lantern.daemon.controls.steering import stop_command
-from lantern.db.job_scope import external_metadata
 from lantern.errors import ToolRejectedError
 from lantern.log import get_logger
 from lantern.plans import PlanService
@@ -944,11 +944,28 @@ class ApiContext:
                 self.hub.notify()
                 index += 1
                 continue
+            if direct and target is None and intent in _RUNNER_INTENT:
+                # One run at a time per channel: picking a runner asks for
+                # new work, which the live run's channel cannot take. Said
+                # here, before the model is asked, rather than steering a
+                # run with an ask that was meant to start another.
+                busy = channel_refusal(self.loop, turn.channel_id)
+                if busy is not None:
+                    store.append_reply(
+                        turn.id,
+                        content=busy,
+                        agent_slug=target,
+                        now=self.clock(),
+                        participant_index=index,
+                    )
+                    self.hub.notify()
+                    index += 1
+                    continue
             steered = self._steer_by_mention(turn, target, content, principal) if direct else None
             if steered is None and direct and target is None:
-                # A work channel is one job's conversation: a plain message
-                # while its run is live is direction for that run.
-                steered = self._steer_in_work_channel(turn, content, principal)
+                # Work lives in the channel that asked for it: a plain
+                # message while its run is live is direction for that run.
+                steered = self._steer_in_channel(turn, content, principal)
             if steered is not None:
                 # The agent is working live work in this channel: the
                 # mention is direction for that run, not a fresh answer.
@@ -1845,27 +1862,19 @@ class ApiContext:
             "I will answer it at my next step and say what I changed."
         )
 
-    def _steer_in_work_channel(self, turn: Turn, text: str, principal: Principal) -> str | None:
-        """Hand a plain message in a work channel to the one run live there
-        (docs/spikes/work-channels.md), and say so; None when the channel
-        is not a job's, nothing of its is in flight, or the loop refused.
+    def _steer_in_channel(self, turn: Turn, text: str, principal: Principal) -> str | None:
+        """Hand a plain message to the one run live in its channel
+        (docs/spikes/work-channels.md), and say so; None when nothing is in
+        flight there, more than one run is, or the loop refused.
 
-        A work channel is one job's conversation, so there is no run to
-        choose: the instruction goes to the run in flight, through the same
-        control service a steer from the API or a mention takes. Whoever
-        may post there may steer — a bridge thread admits guests — so the
-        principal is widened to ``runs:steer`` for this one call, keeping
-        the person's identity for the record.
+        Work lives in the channel that asked for it, one run at a time, so
+        there is no run to choose: the instruction goes to the run in
+        flight, through the same control service a steer from the API or a
+        mention takes. Whoever may post there may steer — a bridge thread
+        admits guests — so the principal is widened to ``runs:steer`` for
+        this one call, keeping the person's identity for the record.
         """
         if self.loop is None:
-            return None
-        try:
-            with self.loop.dstore.read() as session:
-                job = external_metadata(session, turn.channel_id)
-        except Exception:
-            log.warning("collaboration.work_channel_lookup_failed", exc_info=True)
-            return None
-        if job is None:
             return None
         live = getattr(self.loop, "live_runs_in_channel", None)
         if not callable(live):
@@ -1880,21 +1889,21 @@ class ApiContext:
             outcome = ControlService(self.loop).steer(steering, run_ids[0], text)
         except ControlError as exc:
             log.info(
-                "collaboration.work_channel_steer_refused",
+                "collaboration.channel_steer_refused",
                 channel=turn.channel_id,
                 run=run_ids[0],
                 reason=exc.message,
             )
             return None
         except Exception:
-            log.warning("collaboration.work_channel_steer_failed", exc_info=True)
+            log.warning("collaboration.channel_steer_failed", exc_info=True)
             return None
         try:
             self.collaboration.record_steered_run(turn.id, outcome.run_id, self.clock())
         except Exception:
             log.warning("collaboration.steered_run_unrecorded", turn=turn.id, exc_info=True)
         return (
-            f"Taken as direction for run `{outcome.run_id}`, the work this channel is about. "
+            f"Taken as direction for run `{outcome.run_id}`, the work live in this channel. "
             "I will answer it at my next step and say what I changed."
         )
 

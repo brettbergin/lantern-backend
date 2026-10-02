@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+**Work stays in the channel it was asked in.** 2.1.44 moved a job asked for
+in a chat to a new channel of its own and left a hand-off message behind, so
+one piece of work had two channels. A job is now bound to the channel that
+asked for it, as it was before, and everything asked there next — a retry, a
+resume, new work once the last has ended — runs there too. A channel works
+one run at a time: while one is queued or running a plain message steers it,
+and an explicit ask for new work (a turn that picks a runner, `POST /v1/items` naming the channel, an agent filing an issue to be run) is
+refused, `409 already_in_progress` over the API. A chat bridge's run thread
+is linked to that channel only while its run is live. Advertised as
+`collaboration.channel_runs`; `collaboration.work_channels` is no longer
+advertised, and the channels and `work_handoff` messages it made stay
+readable. Work nobody asked for in a channel keeps a channel of its own.
+
 **A restart no longer fails chat, schedule and API work on a multi-repo
 daemon.** The startup pass that settles work items written before multi-repo
 treated every item without a repository as such a leftover, so a daemon with

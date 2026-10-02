@@ -794,13 +794,14 @@ def test_a_channel_linked_while_the_bridge_runs_is_heard_at_once(
     assert s.messages()[0].origin.get("surface_id") == unlinked
 
 
-def test_a_run_thread_is_linked_to_its_work_channel_and_a_reply_there_is_a_turn(
+def test_a_run_thread_is_linked_to_its_channel_while_the_run_is_live(
     unlinked: Any,
 ) -> None:
-    """The thread the bridge opens for a run is a link of the run's work
-    channel (docs/spikes/work-channels.md): made by the daemon as the
-    headline is posted, admitting guests, so a plain reply in the thread
-    is a turn in the channel rather than a hand-over to the engine."""
+    """The thread the bridge opens for a run is a link of the channel the
+    run lives in (docs/spikes/work-channels.md) for as long as the run is
+    live: made by the daemon as the headline is posted, admitting guests,
+    so a plain reply in the thread is a turn in the channel rather than a
+    hand-over to the engine."""
     from lantern.daemon.model import WorkItem
     from lantern.db.job_models import ExternalRunRow
     from lantern.events import EventBus
@@ -845,3 +846,11 @@ def test_a_run_thread_is_linked_to_its_work_channel_and_a_reply_there_is_a_turn(
     assert message.origin["surface_id"] == str(thread_id)
     # The channel's turn carries the instruction; the engine is not told twice.
     assert engine.posted == []
+
+    # The channel goes on to host other runs, each with a thread of its own:
+    # once this run has ended its thread stops being the channel's window.
+    from lantern.daemon.model import RunReport
+
+    unlinked.bridge.run_finished(item, RunReport("r1", "merged", "1/1 tasks done"))
+    assert wait_for(lambda: unlinked.store.list_channel_links(None, work) == [])
+    assert unlinked.store.link_for_surface("discord", str(thread_id)) is None

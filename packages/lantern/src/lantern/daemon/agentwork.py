@@ -56,7 +56,7 @@ from lantern.agents.tools import (
     work_granted,
     work_tools,
 )
-from lantern.daemon.controls.intake import WorkloadAdmission
+from lantern.daemon.controls.intake import WorkloadAdmission, channel_refusal
 from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import ControlError
 from lantern.daemon.controls.service import ControlService
@@ -375,6 +375,12 @@ class AgentWorkService:
         github = getattr(self.loop, "github", None)
         if github is None:
             raise ToolRejectedError("this daemon has no GitHub access, so it cannot file issues")
+        if request.queue:
+            # A queued issue becomes a run in the channel that asked, which
+            # works one at a time; refused before anything is filed.
+            busy = channel_refusal(self.loop, request.channel_id)
+            if busy is not None:
+                raise ToolRejectedError(busy)
         trigger = self.loop.config.labels_for(request.repo).trigger
         labels = [trigger] if request.queue else []
         # The body is the agent's own text and discovery reads the origin

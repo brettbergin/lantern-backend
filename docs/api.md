@@ -70,30 +70,42 @@ the same short-lived access and rotating refresh tokens as the existing client
 credential flow. Existing machine clients and all existing routes keep their
 original behavior.
 
-### Work channels
+### Work in the channel that asked
 
-With `collaboration.work_channels` every job has a conversation of its own
-(`docs/spikes/work-channels.md`): the system-created, workspace-visible
-channel that work admitted outside chat always got
-(`collaboration.external_work`, below) is now the channel of a job admitted
-from a chat turn or the API too. Attempts of one job share it; a plan,
-verdict, delivery or notice the run posts (`collaboration.run_progress`)
-lands there, and so do the imported milestones, under one ledger, so each
-moment is said once. The chat that asked for the work keeps one message:
-a `work_handoff` carrying `source_work_id`, hung on the turn that asked, and
-the result that turn was always delivered. A client opens the work channel
-from the hand-off (the channel whose `external_work.work_id` matches), and
-the rows `GET /v1/channels/{id}/jobs` answers for the asking chat name the
-work channel in `channel_id`, so a newer client sends a reader there instead
-of drawing the run in the chat; an older client reads the rows as before.
+With `collaboration.channel_runs` work lives in the channel it was asked for
+in (`docs/spikes/work-channels.md`). A job admitted from a chat turn, or
+through the API naming a `channel_id`, is bound to that channel: its
+attempts, the plan, verdicts, delivery and notices its runs post
+(`collaboration.run_progress`) and the imported milestones all land there,
+under one ledger, so each moment is said once. Whatever is asked there next
+runs there too — a retry, a resume, or new work once the last has ended.
+Work nobody asked for in a channel (a labelled issue, a schedule's tick, an
+admission that names no channel) has no conversation to live in, so it keeps
+the system-created, workspace-visible channel `collaboration.external_work`
+describes below.
 
-Steering is the work channel's composer. A plain message there while the
-job's one run is in flight is direction for that run: the turn comes back
-with `steered_run_id` and the agent's acknowledgement, exactly as a mention
-does elsewhere (`collaboration.mention_steering`), and the instruction is
-the same recorded operation `POST /v1/runs/{id}/steering` makes. Whoever may
-post in the channel may steer it. `@agent` still addresses that agent's
-lane, and `/stop` stops the channel's work.
+A channel works one run at a time. While a run it asked for is queued or
+running:
+
+- a plain message there is direction for that run: the turn comes back with
+  `steered_run_id` and the agent's acknowledgement, exactly as a mention does
+  (`collaboration.mention_steering`), and the instruction is the same
+  recorded operation `POST /v1/runs/{id}/steering` makes. Whoever may post in
+  the channel may steer it;
+- a turn that picks a runner (`intent` `code` or `workload`) is answered with
+  a refusal naming the live run, and starts nothing;
+- an admission naming the channel (`POST /v1/items` with `channel_id`) is
+  refused `409 already_in_progress`, with nothing queued. Replaying the
+  admission that made the live item is still a replay.
+
+`@agent` still addresses that agent's lane, and `/stop` stops the channel's
+work, after which the channel is free again.
+
+Releases 2.1.44 to 2.1.47 advertised `collaboration.work_channels` instead
+and moved a chat's job into a channel of its own, leaving a `work_handoff`
+message behind. Those channels and messages stay readable; nothing new is
+written that way, and a job bound to such a channel runs its next attempt
+in the channel that asks for it.
 
 A job bound before this release keeps the chat it was bound to.
 
@@ -1483,11 +1495,13 @@ channel of its own, so a link given a `thread_id` there is stored with that
 thread as its `surface_id` and no `thread_id`; Slack and Mattermost keep
 both. Deleting a link and linking the same surface or thread again works.
 
-The thread a bridge opens for a run is such a link, made by the daemon as
-the run's headline is posted: the link of the run's work channel, admitting
-guests, so the channel's messages reach the thread and a reply typed in the
-thread is a turn in the work channel, steering the run through the same
-path a reply in the app takes. The bridge keeps rendering what the channel
+The thread a bridge opens for a run is such a link for as long as the run is
+live, made by the daemon as the run's headline is posted: the link of the
+channel the run lives in, admitting guests, so the channel's messages reach
+the thread and a reply typed in the thread is a turn in that channel,
+steering the run through the same path a reply in the app takes. The daemon
+retires the link when the run ends — a channel hosts one run after another,
+each with a thread of its own — and makes it again if the run resumes. The bridge keeps rendering what the channel
 has no message for — the headline card, the status line and tool digest it
 edits in place, the agent's narration — and leaves the plan, the verdicts
 and the steering replies to the mirror. With `thread_per_run = false` there

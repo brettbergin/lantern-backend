@@ -68,9 +68,7 @@ def test_run_binding_stays_with_its_attempt_when_a_later_admission_changes(tmp_p
 
     with harness.dstore.read() as session:
         assert admission_channel_for_item(session, item.item_id) == "new-private-channel"
-        # The job's channel is the item's: a later ask from another chat
-        # keeps a hand-off there and does not move the work.
-        assert channel_for_item(session, item.item_id) == "original-channel"
+        assert channel_for_item(session, item.item_id) == "new-private-channel"
         assert channel_for_run(session, "old-attempt") == "original-channel"
 
 

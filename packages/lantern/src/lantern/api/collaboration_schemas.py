@@ -527,7 +527,7 @@ class AuthorOut(ApiModel):
 
 
 #: The services a channel can be linked to, and ``local``: the operator
-#: console's bridge, whose run threads the daemon links to work channels
+#: console's bridge, whose run threads the daemon links to their runs' channels
 #: (docs/spikes/work-channels.md) like any other bridge's.
 BridgeBackendName = Literal["discord", "slack", "mattermost", "local"]
 
