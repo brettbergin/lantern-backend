@@ -154,13 +154,33 @@ jobs:
             sh "${installer}"
           rm -f "${installer}"
 
-      - name: Start Lantern
+      - name: Start the sandbox backend
         if: ${{ !inputs.purge }}
         run: |
           set -euo pipefail
           systemctl --user daemon-reload
           systemctl --user reset-failed "${SANDBOXD}" "${UNIT}" || true
           timeout 300 systemctl --user start "${SANDBOXD}"
+
+      - name: Bake the sandbox template
+        # Before the daemon starts: the carried config names the template by
+        # its Lantern name, which nothing has baked yet, and the daemon's
+        # startup provisions its concierge sandbox from it. Best effort — an
+        # unbaked template means the slower install ladder, not a failure.
+        if: ${{ !inputs.purge }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ ! -f "${OLD_HOME}/state/bake.json" ]; then
+            echo "the sbxloop home never baked a template; nothing to bake"
+            exit 0
+          fi
+          timeout 1800 "${LANTERN}" bake </dev/null
+
+      - name: Start Lantern
+        if: ${{ !inputs.purge }}
+        run: |
+          set -euo pipefail
           timeout 300 systemctl --user start "${UNIT}"
 
       - name: Health check
@@ -172,7 +192,8 @@ jobs:
           got="$("${VENV_LANTERN}" --version | awk '{print $2}')"
           [ "${got}" = "${VERSION}" ] || fail "version is ${got}, expected ${VERSION}"
           "${LANTERN}" doctor || fail "lantern doctor is unhappy"
-          "${LANTERN}" daemon ctl status --json --timeout 300 >/dev/null || fail "daemon did not answer ctl status"
+          # A fresh home's first start provisions everything from scratch.
+          "${LANTERN}" daemon ctl status --json --timeout 900 >/dev/null || fail "daemon did not answer ctl status"
           before="$(systemctl --user show "${UNIT}" -p NRestarts --value)"
           sleep 45
           systemctl --user is-active --quiet "${UNIT}" || fail "unit died within 45s of starting"
@@ -180,19 +201,19 @@ jobs:
           [ "${before}" = "${after}" ] || fail "unit restarted ${before} -> ${after} within 45s (crash loop)"
           echo "::notice::${HOST} is healthy on Lantern ${VERSION}"
 
-      - name: Bake the sandbox template
-        # As deploy.yml re-bakes after an upgrade: the sbxloop host's template
-        # carried the old worker under the old name. Best effort — without it
-        # provisioning runs the install ladder, it does not fail.
-        if: ${{ !inputs.purge }}
+      - name: Outline what the daemon did
+        # This repository is public, and so are its logs: print the unit's
+        # state and only the shape of the daemon's journal (time, level,
+        # event, logger), never the values a log line carries.
+        if: failure() && !inputs.purge && steps.stop.outcome != 'skipped'
         continue-on-error: true
         run: |
-          set -euo pipefail
-          if [ ! -f "${OLD_HOME}/state/bake.json" ]; then
-            echo "the sbxloop home never baked a template; nothing to bake"
-            exit 0
-          fi
-          "${LANTERN}" bake </dev/null
+          systemctl --user show "${UNIT}" -p ActiveState,SubState,NRestarts,ExecMainStatus,ExecMainStartTimestamp || true
+          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>/dev/null \
+            | sed -nE 's/^([0-9T:.Z-]+ +\[[a-z ]+\] +[A-Za-z0-9_.:-]+)( +\[[A-Za-z0-9_.]+\])?.*$/\1\2/p' \
+            | tail -n 120 || true
+          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>/dev/null \
+            | grep -oE '^[A-Za-z_.]*(Error|Exception)\b' | sort | uniq -c || true
 
       - name: Put sbxloop back
         if: failure() && !inputs.purge && steps.stop.outcome != 'skipped'
