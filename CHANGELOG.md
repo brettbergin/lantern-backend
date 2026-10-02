@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+**You can talk to Lantern while a run is live in its channel.** 2.1.48 made
+every plain message in a channel with a run in flight a steer of that run,
+and answered a turn that picked a runner with a refusal before the model was
+asked, so nothing could be said there until the run ended — not even "how is
+it going?". The channel is a conversation about its run again: a plain
+message goes to the model with the read tools, so a question is answered
+from the run's own record; a message that tells the run what to do
+differently is handed over through a new `steer_run` tool (the same recorded
+steer as a mention or `POST /v1/runs/{id}/steering`, with `steered_run_id`
+on the turn); and nothing new starts there until the run has ended — a turn
+that picks a runner is answered without the start tools, and the Workload
+runner's binding choice queues nothing while the channel is busy. An
+admission naming a busy channel is still `409 already_in_progress`.
+
 **The console no longer crashes a screen's load when you switch away
 mid-load.** A screen fills itself in from a worker; switching modes before it
 reported left the worker painting widgets the retired screen no longer had,

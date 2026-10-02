@@ -406,10 +406,10 @@ def channel_refusal(loop: Any, channel_id: str | None, *, item_id: str | None = 
     """Why ``channel_id`` cannot take new work right now, or None.
 
     Work asked for in a channel lives in that channel, one run at a time
-    (docs/spikes/work-channels.md): while one is queued or running there a
-    plain message steers it, and a second ask is refused rather than run
-    beside it. ``item_id`` is the item being admitted, so replaying an
-    admission is not refused by the row it already made.
+    (docs/spikes/work-channels.md): while one is queued or running there the
+    channel is a conversation about it, and a second ask is refused rather
+    than run beside it. ``item_id`` is the item being admitted, so replaying
+    an admission is not refused by the row it already made.
     """
     channel = (channel_id or "").strip()
     if loop is None or not channel:
@@ -424,7 +424,8 @@ def channel_refusal(loop: Any, channel_id: str | None, *, item_id: str | None = 
     if runs:
         return (
             f"Run `{runs[0]}` is live in this channel, and a channel works one run at a time. "
-            "A plain message here steers it; stop it, or wait for it to finish, to start new work."
+            "Ask about it here, or say what to change and it is handed to the run; stop it, "
+            "or wait for it to finish, to start new work."
         )
     if queued:
         return (
