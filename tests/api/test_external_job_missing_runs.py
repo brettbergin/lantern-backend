@@ -51,10 +51,18 @@ def test_a_pruned_latest_chat_attempt_does_not_create_a_second_queued_job(api: A
     with api.harness.dstore.immediate_transaction() as session:
         session.execute(delete(Run).where(Run.run_id == "latest"))
 
-    response = api.client.get(f"/v1/channels/{channel_id}/jobs", headers=headers)
+    # The attempt lives in the job's work channel; the chat that asked
+    # keeps rows that point there, so a reader is sent to the work rather
+    # than shown a second queued job.
+    work = [c for c in channels(api) if c.id != channel_id]
+    assert len(work) == 1
+    response = api.client.get(f"/v1/channels/{work[0].id}/jobs", headers=headers)
     assert response.status_code == 200, response.text
     attempts = response.json()
     assert len(attempts) == 1
     assert attempts[0]["run_id"] == "run_latest"
     assert attempts[0]["unavailable"] is True
-    assert attempts[0]["turn_id"] is not None
+    asked = api.client.get(f"/v1/channels/{channel_id}/jobs", headers=headers).json()
+    assert asked and all(row["channel_id"] == work[0].id for row in asked)
+    assert asked[0]["work_id"] == attempts[0]["work_id"]
+    assert asked[0]["turn_id"] is not None

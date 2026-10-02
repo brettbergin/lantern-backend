@@ -318,7 +318,10 @@ def test_a_run_whose_catalog_fails_does_not_stop_delivery(api: Any, monkeypatch:
             str(row.channel_id)
             for row in session.query(MessageRow).filter(MessageRow.kind == "work_result")
         }
-    assert delivered == {channel, other}
+    # Each result reaches the chat that asked (on its turn) and the job's
+    # own work channel, whatever happened to the other run's catalog.
+    assert {channel, other} <= delivered
+    assert len(delivered) == 4
     response = api.client.get(f"/v1/channels/{channel}/messages", headers=headers)
     assert response.status_code == 200, response.text
     (result,) = [m for m in response.json() if m["kind"] == "work_result"]

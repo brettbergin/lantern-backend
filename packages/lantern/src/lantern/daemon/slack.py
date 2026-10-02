@@ -168,6 +168,7 @@ class SlackBridge(ChatBridge):
     backend: ClassVar[ChatBackend] = "slack"
     label: ClassVar[str] = "Slack"
     mention_re = SLACK_MENTION_RE
+    thread_is_surface = False
 
     def __init__(
         self,

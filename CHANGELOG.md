@@ -1,5 +1,24 @@
 ## [Unreleased]
 
+**Every job has a work channel, and a bridge's run thread is that
+channel's window.** Work asked for in a chat used to live in that chat as a
+run card, next to any other run the chat asked for, while Discord, Slack,
+Mattermost and the console showed the same run as a thread under the
+control channel and steered it through a path with no record. Now a job
+admitted from a chat turn gets the system-created, workspace-visible
+conversation a labelled issue always got (`collaboration.work_channels`):
+its attempts, the chronicle's posts and the imported milestones share it
+under one ledger, the chat that asked keeps a `work_handoff` message on its
+turn plus the result it was always delivered, and a plain message in the
+work channel while its run is in flight is direction for that run through
+the same control-service steer the API and a mention take. The thread a
+bridge opens is linked to the work channel as it opens — guests admitted —
+so the channel's traffic reaches the thread and a reply there is a turn in
+the channel; the bridge keeps its headline, status line, tool digest and
+narration and leaves the plan, verdicts and steering replies to the mirror.
+`409 link_run_thread` is gone: a run's thread links like any surface. A job
+bound before this release keeps its chat. (docs/spikes/work-channels.md)
+
 **sbxloop is now Lantern.** The package, CLI, module, environment prefix,
 config file, unit and home are renamed with no compatibility aliases:
 `lantern-backend` and `lantern-worker` (installed from GitHub Releases, no

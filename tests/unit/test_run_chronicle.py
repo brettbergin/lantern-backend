@@ -52,7 +52,7 @@ class FakePoster:
         return message_id
 
     def channel_for_item(self, item_id: str) -> str | None:
-        return CHANNEL
+        return getattr(self, "channel", CHANNEL)
 
     def artifacts_for_run(self, run_id: str) -> tuple[ArtifactRef, ...]:
         return (REPORT,) if self.files else ()
@@ -475,8 +475,11 @@ def test_an_event_nobody_is_waiting_on_posts_nothing() -> None:
 
 
 def test_a_run_with_no_channel_has_no_chronicle() -> None:
+    """Neither the poster (which binds an item to its work channel) nor the
+    item names a channel: there is nobody to tell."""
     clock = Clock()
     poster = FakePoster()
+    poster.channel = None
 
     assert (
         RunChronicle.for_item(

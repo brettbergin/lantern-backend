@@ -16,11 +16,12 @@ def test_a_member_reads_external_history_and_files_after_reconciliation(api: Api
     api.harness.store.append_event(
         Event(ts=api.clock(), run_id=run_id, type="phase.start", data={"phase": "plan"})
     )
-    api.ctx.chronology.project(api.clock())  # History predates the association.
+    api.ctx.chronology.project(api.clock())
     headers = bearer(guest)
     route = f"/v1/runs/run_{run_id}"
-    assert api.client.get(route + "/events", headers=headers).json()["data"] == []
-    assert api.client.get(route + "/artifacts", headers=headers).status_code == 403
+    # The run was bound to its work channel as it started (its chronicle
+    # posts there), so a member reads its history before any reconciliation.
+    assert api.client.get(route + "/events", headers=headers).json()["data"] != []
 
     api.ctx.project_work()
     listing = api.client.get("/v1/channels", headers=headers)

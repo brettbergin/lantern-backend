@@ -97,6 +97,11 @@ LINKED_SURFACES_TTL_S = 30.0
 #: Written as an escape, never a raw byte: an invisible character is easy to
 #: strip by accident, and an empty prefix would reserve every key.
 SCOPED_POST_KEY_PREFIX = "\x1f"
+#: Bridges on which a thread is a surface of its own: a message typed in
+#: one arrives with the thread's id as its channel, and a post to it goes
+#: to that id, so a link to such a thread is stored with the thread as
+#: its surface. Slack and Mattermost address a thread as (channel, thread).
+THREAD_IS_SURFACE: frozenset[str] = frozenset({"discord", "local"})
 
 
 def scoped_run_post_key(run_id: str, channel_id: str, dedupe_key: str) -> str:
@@ -2814,26 +2819,21 @@ class CollaborationStore:
 
         Takes managing the channel *and* administering the workspace: a link
         makes the channel capture what everyone on that surface says and post
-        its own traffic there, which reaches past the channel. A run's thread
-        belongs to its run and is refused.
+        its own traffic there, which reaches past the channel. The daemon
+        itself (``viewer`` None) links the thread a bridge opens for a run
+        to the run's work channel (docs/spikes/work-channels.md).
         """
-        if backend == "discord" and thread_id is not None:
-            # A Discord thread is a channel of its own: messages typed there
-            # arrive with the thread's id as their channel, and a post to it
-            # goes to that id. So the thread is the surface.
+        if backend in THREAD_IS_SURFACE and thread_id is not None:
+            # A Discord thread (and the console's) is a channel of its own:
+            # messages typed there arrive with the thread's id as their
+            # channel, and a post to it goes to that id. So the thread is
+            # the surface.
             surface_id, thread_id = thread_id, None
-        # A run's thread is recorded once, when the run opens it, so reading
-        # it ahead of the write transaction races nothing that matters.
-        run_thread = self.dstore.run_for_thread(thread_id or surface_id, backend) is not None
         with self.dstore.immediate_transaction() as session:
             _, member = _access(session, channel_id, viewer, "manage", now=now)
             if member is not None and member.role not in MANAGING_ROLES:
                 raise CollaborationError(
                     "channel_forbidden", "linking a surface takes a workspace admin"
-                )
-            if run_thread:
-                raise CollaborationError(
-                    "link_run_thread", "that surface is a run's thread and cannot be linked"
                 )
             existing = _active_link(session, backend, surface_id, thread_id)
             if existing is not None:

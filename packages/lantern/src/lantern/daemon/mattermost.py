@@ -391,6 +391,7 @@ class MattermostBridge(ChatBridge):
     backend: ClassVar[ChatBackend] = "mattermost"
     label: ClassVar[str] = "Mattermost"
     mention_re = MATTERMOST_MENTION_RE
+    thread_is_surface = False
 
     def __init__(
         self,
