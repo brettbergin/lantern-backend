@@ -451,6 +451,7 @@ class DaemonLoop:
         # Where a run's agents come from: the built-ins, `[[agents]]`, then
         # the agents people saved (built per config, like the API's).
         self._agents: tuple[Config, AgentRegistry] | None = None
+        self._plans_service: PlanService | None = None
         # Where a planned assignment reads each agent's remembered
         # context. None (the default) builds the item's own memory service
         # at dispatch, the same one its run gets; a test may set it.
@@ -3249,7 +3250,7 @@ class DaemonLoop:
             # the plan is reconciled from the forge (reading only).
             plan_desk=(
                 PlanGeneration(
-                    PlanService(PlanStore(self.dstore), lambda: self.config),
+                    self.plans,
                     item,
                     self.clock,
                     forge=self.github,
@@ -3896,8 +3897,20 @@ class DaemonLoop:
         )
         return "awaiting_answers"
 
+    @property
+    def plans(self) -> PlanService:
+        """The one plan service this daemon owns. Every surface in the
+        process — the API, intake, the concierge, a plan run's desk — reads
+        and writes plans through it, because the service's mutual exclusion
+        (a plan being published, reconciled or written to the forge is not
+        touched again until that finishes) lives on the instance: a second
+        instance would be blind to what the first is doing."""
+        if self._plans_service is None:
+            self._plans_service = PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self._plans_service
+
     def _plans(self) -> PlanService:
-        return PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self.plans
 
     def _waiting_questions(self, item: WorkItem, run_id: str) -> Clarification | None:
         """The clarifying questions ``item``'s run ``run_id`` is parked on,

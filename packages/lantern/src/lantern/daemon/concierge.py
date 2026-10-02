@@ -109,7 +109,6 @@ from lantern.ids import new_job_id, new_run_id
 from lantern.log import get_logger
 from lantern.plans import Plan, PlanRefusal, PlanService
 from lantern.plans.hierarchy import repository_planning_for
-from lantern.plans.store import PlanStore
 from lantern.provider import ProviderHeldError, ProviderHold, ProviderRecovery
 from lantern.vcs.github.ops import MalformedResponse
 from lantern.vcs.model import CloseReason
@@ -2778,7 +2777,7 @@ class Concierge:
             "display": asker.display or asker.id,
             "via": "concierge",
         }
-        service = PlanService(PlanStore(self.dstore), lambda: self.config)
+        service = self.loop.plans
         existing = _same_draft(service, asker.id, level, repo, sections["title"])
         if existing is not None:
             return f"{_plan_link(existing)} is already drafted for them — nothing new was written."
