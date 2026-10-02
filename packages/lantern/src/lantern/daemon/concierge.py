@@ -263,6 +263,12 @@ class TurnContext:
     work_roles: Mapping[str, str] = field(default_factory=dict)
     #: A one-shot call: it resumes no session and leaves none behind.
     stateless: bool = False
+    #: The person picked the Workload runner for this turn: a turn that ends
+    #: without queueing one is queued by the daemon, with the person's own
+    #: words as the ask.
+    must_start_workload: bool = False
+    #: The workloads ``start_workload`` queued (or found queued) this turn.
+    queued_workloads: list[str] = field(default_factory=list)
     work_products: list[str] = field(default_factory=list)
     #: The sandbox generation of the turn's last session call, so a failure
     #: is blamed on the box it happened in.
@@ -713,6 +719,7 @@ class Concierge:
         work_lead: str | None = None,
         work_roles: Mapping[str, str] | None = None,
         stateless: bool = False,
+        must_start_workload: bool = False,
     ) -> Future[ConciergeReply]:
         """Queue one message; the Future resolves with the reply.
         ``author_id`` is the transport's mentionable id for the speaker,
@@ -781,12 +788,15 @@ class Concierge:
                 work_lead=work_lead,
                 work_roles=dict(work_roles or {}),
                 stateless=stateless,
+                must_start_workload=must_start_workload,
             )
             token = _CURRENT_TURN.set(context)
             try:
                 reply = self._run_turn(
                     text, author=author, on_tool=on_tool, session_key=session_key
                 )
+                if reply.ok and context.must_start_workload and not context.queued_workloads:
+                    reply = reply._replace(text=self._workload_the_person_picked(text, author))
             except BaseException:
                 # No reply will be posted, so nothing is waiting on one:
                 # the effects the tools promised still happen.
@@ -812,6 +822,20 @@ class Concierge:
             self._forget_pending()
             raise
         return queued.future
+
+    def _workload_the_person_picked(self, text: str, author: str) -> str:
+        """Queue the workload a turn's runner choice asked for, when the
+        model answered without doing so.
+
+        Picking the Workload runner is an instruction, not a hint: the
+        person wanted a run, and a turn that answers inline instead gave
+        them a reply they did not ask for. The ask is their own words, the
+        profile the daemon's default, and the reply is what the tool would
+        have said — the inline answer is dropped, since the work will
+        produce the real one.
+        """
+        log.info("concierge.workload_intent_enforced", by=author)
+        return self._tool_start_workload({"ask": text}, by=author)
 
     # -- session lanes ----------------------------------------------------------
 
@@ -2474,6 +2498,7 @@ class Concierge:
         item_id = chat_item_id(key)
         existing = self.dstore.get(item_id)
         if existing is not None:
+            self._turn.queued_workloads.append(item_id)
             profile_text = f"profile `{profile.name}`" if profile is not None else "no profile"
             return f"`{item_id}` already exists ({existing.state}; {profile_text})."
         item = WorkItem(
@@ -2504,6 +2529,7 @@ class Concierge:
             fresh=queued,
             title=item.title[:80],
         )
+        self._turn.queued_workloads.append(item.item_id)
         profile_text = f"profile `{profile.name}`" if profile is not None else "no profile"
         if not queued:
             return f"`{item.item_id}` is already queued or running ({profile_text})."

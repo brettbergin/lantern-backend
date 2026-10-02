@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+**Picking the Workload runner is binding.** A chat turn sent with
+`intent=workload` — the app's Agentic Workload mode, the web app's Research
+report — used to depend on the model calling `start_workload`; when it chose
+to answer inline instead, the person got a reply where they had asked for a
+run. The daemon now queues the workload itself when such a turn ends without
+one, with the person's own words as the ask, and replies with the queue
+acknowledgement.
+
 **Work stays in the channel it was asked in.** 2.1.44 moved a job asked for
 in a chat to a new channel of its own and left a hand-off message behind, so
 one piece of work had two channels. A job is now bound to the channel that
