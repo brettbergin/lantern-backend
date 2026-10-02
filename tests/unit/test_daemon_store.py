@@ -1055,6 +1055,32 @@ class TestRepoScoping:
         assert settled.run_id == "r1"
         assert store.strand_repoless("no repo", now=6.0) == []
 
+    def test_strand_repoless_leaves_items_with_no_repository_by_design(
+        self, tmp_path: Path
+    ) -> None:
+        """A chat, schedule or API item has no repository by design, not by
+        age (#4508). A chat workload parked on the provider — queued, its run
+        pinned — was failed here at the very restart a rotated key needs, and
+        recovery then closed its parked run as an orphan."""
+        store = DaemonStore(tmp_path / "state.db")
+        store.upsert_new(item("m1", item_id="chat:m1", url=""), now=1.0)
+        store.mark_claimed("chat:m1", 2.0)
+        store.mark_running("chat:m1", "r1", 3.0)
+        store.mark_resume_pending("chat:m1", 4.0)
+        store.upsert_new(item("s1", item_id="sched:s1", url=""), now=1.0)
+        store.mark_claimed("sched:s1", 2.0)
+        store.mark_running("sched:s1", "r2", 3.0)
+        store.upsert_new(item("a1", item_id="api:a1", url=""), now=1.0)
+
+        assert store.strand_repoless("no repo", now=5.0) == []
+        parked = store.get("chat:m1")
+        assert parked is not None
+        assert (parked.state, parked.run_id, parked.last_error) == ("queued", "r1", None)
+        running = store.get("sched:s1")
+        assert running is not None and running.state == "running"
+        queued = store.get("api:a1")
+        assert queued is not None and queued.state == "queued"
+
     def test_strand_repoless_settles_a_row_stored_under_the_bare_legacy_id(
         self, tmp_path: Path
     ) -> None:
