@@ -1770,7 +1770,15 @@ default `0` = none) and `tool_fail_output_lines` (head+tail lines echoed for a
 *failed* call, default `20` — a watcher needs the stderr) tune it, along with
 `chronology_level`. Excerpts are line-clipped, body-capped and clamped to
 Discord's 2000-character message limit, with any elision marked
-`… N lines elided …`. **@mention the bot in a run's thread to steer that run**
+`… N lines elided …`. **A run's thread is its work channel's window on the
+service** (`docs/spikes/work-channels.md`): with the remote API on, the
+daemon links the thread to the run's conversation as it opens it, so what
+the channel says — the plan, each verdict, a steering reply, the delivery —
+reaches the thread, and **whatever you type in the thread is direction for
+the run**, recorded exactly as a steer from the web or iOS app is, with
+`@mention` reaching one agent's lane and `/stop` stopping the work. On a
+daemon without the API (headless, or `[api] enabled = false`) the thread
+keeps its old rule: **@mention the bot in a run's thread to steer that run**
 (or reply to one of its messages there) — the same rule the control channel
 uses, so people can talk about a run in its own thread without derailing it.
 Your message is

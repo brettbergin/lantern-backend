@@ -22,7 +22,12 @@ from lantern.api.publicids import run_public_id
 from lantern.api.work_delivery import _artifacts, _result, _with_files, project_work
 from lantern.daemon.controls.principal import WORKSPACE_ID
 from lantern.db.api_models import ApiEventRow
-from lantern.db.collaboration_models import ChannelRow, ChannelRunPostRow, MessageRow
+from lantern.db.collaboration_models import (
+    ChannelMemberRow,
+    ChannelRow,
+    ChannelRunPostRow,
+    MessageRow,
+)
 from lantern.db.daemon_models import DaemonRunRow, DaemonStateRow, RunResumeRow, WorkItemRow
 from lantern.db.engine_models import EventRow, Run
 from lantern.db.event_scope import admission_channel_for_item, turn_for_item
@@ -120,8 +125,13 @@ def _message(
     work: dict[str, Any] | None = None,
     artifacts: list[dict[str, Any]] | None = None,
     chronicle_key: str | None = None,
+    channel_id: str | None = None,
+    turn_id: str | None = None,
 ) -> str | None:
-    """Commit a truthful no-turn entry and its attachments exactly once."""
+    """Commit a truthful no-turn entry and its attachments exactly once.
+
+    The entry goes into the job's own channel unless ``channel_id`` names
+    another: the hand-off a chat that asked for the work keeps."""
     message_id = "msg_job_" + _digest(key)
     if chronicle_key is not None:
         posted = session.get(ChannelRunPostRow, chronicle_key)
@@ -129,15 +139,16 @@ def _message(
             return str(posted.message_id)
     if session.get(MessageRow, message_id) is not None:
         return message_id
-    channel = session.get(ChannelRow, job.channel_id)
+    target = channel_id or job.channel_id
+    channel = session.get(ChannelRow, target)
     if channel is None or channel.state != "active":
         return None
-    sequence = CollaborationStore._next_sequence(session, job.channel_id)
+    sequence = CollaborationStore._next_sequence(session, target)
     session.add(
         MessageRow(
             id=message_id,
-            channel_id=job.channel_id,
-            turn_id=None,
+            channel_id=target,
+            turn_id=turn_id,
             sequence=sequence,
             role="assistant",
             kind=kind,
@@ -158,7 +169,7 @@ def _message(
         )
     )
     if artifacts:
-        CollaborationStore._attach_artifacts(session, message_id, job.channel_id, artifacts, at)
+        CollaborationStore._attach_artifacts(session, message_id, target, artifacts, at)
     if chronicle_key is not None and run_id is not None:
         session.add(
             ChannelRunPostRow(
@@ -171,9 +182,10 @@ def _message(
         )
     channel.updated_at = max(channel.updated_at, at)
     channel.revision += 1
-    if historical and sequence == job.read_baseline + 1:
-        job.read_baseline = max(job.read_baseline, sequence)
-    _channel_metadata(channel, job)
+    if target == job.channel_id:
+        if historical and sequence == job.read_baseline + 1:
+            job.read_baseline = max(job.read_baseline, sequence)
+        _channel_metadata(channel, job)
     session.flush()
     _event(
         session,
@@ -181,7 +193,7 @@ def _message(
         at,
         actor=DAEMON_ACTOR,
         data={
-            "channel_id": job.channel_id,
+            "channel_id": target,
             "work_id": job.work_id,
             "run_id": run_public_id(run_id) if run_id else None,
             "source_run_id": run_public_id(run_id) if run_id else None,
@@ -214,6 +226,33 @@ def _channel_metadata(channel: ChannelRow, job: ExternalJobRow) -> None:
     channel.settings_json = json.dumps(settings)
 
 
+def _members(session: Any, channel_id: str) -> list[ChannelMemberRow]:
+    return list(
+        session.scalars(select(ChannelMemberRow).where(ChannelMemberRow.channel_id == channel_id))
+    )
+
+
+def _join_work_channel(session: Any, work_channel: str, asked: str, at: float) -> None:
+    """The people of the chat that asked for the work join its work channel
+    (docs/spikes/work-channels.md): asking for a job is what grants access
+    to it. Already-members keep their role; a channel's owner is a plain
+    member of the work channel, which is the daemon's."""
+    present = {member.user_id for member in _members(session, work_channel)}
+    for member in _members(session, asked):
+        if member.user_id in present:
+            continue
+        session.add(
+            ChannelMemberRow(
+                channel_id=work_channel,
+                user_id=member.user_id,
+                role="member",
+                added_by=None,
+                joined_at=at,
+                last_read_sequence=0,
+            )
+        )
+
+
 def _ensure_job(
     session: Any,
     *,
@@ -226,7 +265,16 @@ def _ensure_job(
     historical: bool,
     item_id: str | None = None,
     admitted: str | None = None,
+    asked: str | None = None,
 ) -> ExternalJobRow:
+    """The job for ``key``, with its work channel.
+
+    A new job gets a system-created channel. One a chat asked for
+    (``asked``) takes that chat's visibility and people, so a private ask
+    stays among the people who made it; one nobody asked for in a chat is
+    visible to the workspace, as external work always was. ``admitted`` is
+    the pre-work-channel binding kept for jobs bound before it.
+    """
     work_id = "job_" + _digest(key)
     job: ExternalJobRow | None = session.get(ExternalJobRow, work_id)
     if job is not None:
@@ -241,6 +289,8 @@ def _ensure_job(
         job.updated_at = max(job.updated_at, updated_at)
         return job
     channel_id = admitted or "chn_job_" + _digest(key)
+    asking: ChannelRow | None = session.get(ChannelRow, asked) if asked else None
+    visibility = "workspace" if asking is None else str(asking.visibility)
     job = ExternalJobRow(
         work_id=work_id,
         job_key=key,
@@ -270,12 +320,14 @@ def _ensure_job(
                 title=title[:200],
                 state="active",
                 revision=1,
-                visibility="workspace",
+                visibility=visibility,
                 created_at=created_at,
                 updated_at=updated_at,
             )
         )
         session.flush()
+        if asking is not None:
+            _join_work_channel(session, channel_id, asking.id, created_at)
         _event(
             session,
             "collaboration.channel.created",
@@ -297,9 +349,39 @@ def _ensure_job(
     return job
 
 
+def _handoff(
+    session: Any, job: ExternalJobRow, asked: str, item: WorkItemRow, historical: bool
+) -> None:
+    """The one message the chat that asked for the work keeps: the job's
+    identity, for a client to show as a card that opens the work channel.
+    It hangs on the turn that asked, so it sits under the reply that
+    queued the work; the chronology, steering and delivery live in the
+    work channel."""
+    _message(
+        session,
+        job,
+        f"{job.work_id}:handoff:{asked}",
+        f"Working on **{item.title}** in its own channel.",
+        item.created_at,
+        historical=historical,
+        kind="work_handoff",
+        post_kind=None,
+        channel_id=asked,
+        turn_id=turn_for_item(session, item.item_id, asked),
+    )
+
+
 def _bind_item(ctx: Any, session: Any, item: WorkItemRow, historical: bool) -> ExternalJobRow:
+    """Bind an item to its job and the job to its work channel.
+
+    Every job gets the system-created, workspace-visible channel external
+    work always got (docs/spikes/work-channels.md): a chat that asked for
+    the work does not own the job's channel, it keeps a hand-off to it. A
+    job bound before that rule — to the chat that asked — keeps its
+    channel, and so do the attempts already bound.
+    """
     key, source = _item_identity(ctx, item)
-    admitted = admission_channel_for_item(session, item.item_id)
+    asked = admission_channel_for_item(session, item.item_id)
     old = session.get(ExternalJobRow, "job_" + _digest(key))
     previous = old.state if old is not None else None
     job = _ensure_job(
@@ -312,19 +394,23 @@ def _bind_item(ctx: Any, session: Any, item: WorkItemRow, historical: bool) -> E
         updated_at=item.updated_at,
         item_id=item.item_id,
         historical=historical,
-        admitted=admitted,
+        admitted=None,
+        asked=asked,
     )
     alias = session.get(ExternalItemRow, item.item_id)
     if alias is None:
         session.add(
             ExternalItemRow(item_id=item.item_id, work_id=job.work_id, channel_id=job.channel_id)
         )
-    elif admitted:
-        alias.channel_id = admitted
     session.flush()
     channel = session.get(ChannelRow, job.channel_id)
     if channel is not None and job.system_created:
         _channel_metadata(channel, job)
+    if asked is not None and asked != job.channel_id and job.system_created:
+        # A chat that asks for a job joins its work channel, and keeps a
+        # hand-off to it: that is how its people reach the work.
+        _join_work_channel(session, job.channel_id, asked, item.created_at)
+        _handoff(session, job, asked, item, historical)
     no_turn = turn_for_item(session, item.item_id, job.channel_id) is None
     if no_turn and not job.system_created:
         _message(
@@ -476,9 +562,15 @@ def _bind_run(ctx: Any, session: Any, run: Run, historical: bool) -> ExternalJob
             else 0,
         )
         session.add(bound)
+        # A run's events belong to its work channel: the ones recorded
+        # before the binding existed (stamped with no channel, or with the
+        # chat that asked) move there with it.
         session.execute(
             update(ApiEventRow)
-            .where(ApiEventRow.run_id == run.run_id, ApiEventRow.channel_id.is_(None))
+            .where(
+                ApiEventRow.run_id == run.run_id,
+                or_(ApiEventRow.channel_id.is_(None), ApiEventRow.channel_id != bound.channel_id),
+            )
             .values(channel_id=bound.channel_id)
         )
     # Old attempts never make the sidebar look older than its newest activity.
@@ -646,6 +738,11 @@ def reconcile(ctx: Any, *, limit: int = BATCH) -> int:
     return len(pending)
 
 
+#: What kind of post a replayed moment is, as the live chronicle kinds it,
+#: since the two share one ledger and a reader tells them apart by kind.
+_REPLAY_POST_KIND = {"run.tasks": "plan", "review.verdict": "review", "chat.reply": "reply"}
+
+
 def _progress(type_: str, data: dict[str, Any]) -> str | None:
     if type_ == "run.tasks":
         return f"Planned {len(data.get('tasks') or [])} tasks."
@@ -751,9 +848,10 @@ def _project_run(ctx: Any, run_id: str, *, historical: bool) -> bool:
                     event.ts,
                     run_id=run_id,
                     historical=event.seq <= binding.historical_through,
-                    chronicle_key=_live_post_key(run_id, event.type, data, binding.resumes)
-                    if not job.system_created
-                    else None,
+                    post_kind=_REPLAY_POST_KIND.get(event.type, "progress"),
+                    # The live chronicle posts the same moments under the
+                    # same keys; whichever lands first is the one message.
+                    chronicle_key=_live_post_key(run_id, event.type, data, binding.resumes),
                 )
             binding.event_cursor = max(binding.event_cursor, event.seq)
         complete = len(events) < EVENT_BATCH
@@ -778,11 +876,23 @@ def _project_run(ctx: Any, run_id: str, *, historical: bool) -> bool:
                         if record.state in {"merged", "completed"}
                         else f"{run_id}:notice:{record.state}"
                         + (f":resume{binding.resumes}" if binding.resumes else "")
-                    )
-                    if not job.system_created
-                    else None,
+                    ),
                 )
     return complete
+
+
+def bind_item_now(ctx: Any, item_id: str) -> str | None:
+    """The work channel of ``item_id``, binding the item to its job now
+    rather than at the reconciler's next pass: a run's first post must not
+    land before its channel exists, and a chat that asked for the job again
+    must have joined the channel by then. Binding is idempotent. None for
+    an item nobody knows."""
+    with ctx.loop.dstore.immediate_transaction() as session:
+        item = session.get(WorkItemRow, item_id)
+        if item is None:
+            alias = session.get(ExternalItemRow, item_id)
+            return None if alias is None else str(alias.channel_id)
+        return str(_bind_item(ctx, session, item, False).channel_id)
 
 
 def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
@@ -892,12 +1002,17 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
         ):
             continue
         pending = legacy["item_id"].startswith("pending_code:")
+        # Work this chat asked for lives in its own channel now: the row
+        # names that channel, so a client sends the reader there rather
+        # than drawing the run here. An older client reads the row as it
+        # always did.
+        work_id, work_channel = _job_of(ctx, views, None if pending else legacy["item_id"])
         output.append(
             {
                 **legacy,
                 "item_id": None if pending else legacy["item_id"],
-                "work_id": "job_" + _digest(f"{channel_id}:{legacy['item_id']}"),
-                "channel_id": channel_id,
+                "work_id": work_id or "job_" + _digest(f"{channel_id}:{legacy['item_id']}"),
+                "channel_id": work_channel or channel_id,
                 "source": {"kind": "chat", "repository": None, "url": None},
                 "created_at": rfc3339(ctx.clock()),
                 "updated_at": rfc3339(ctx.clock()),
@@ -905,3 +1020,18 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
             }
         )
     return output
+
+
+def _job_of(ctx: Any, views: Views, public_item_id: str | None) -> tuple[str | None, str | None]:
+    """The job and work channel an item is bound to, by its public id."""
+    if public_item_id is None:
+        return None, None
+    try:
+        item = views.item_by_public_id(public_item_id)
+    except Exception:
+        return None, None
+    with ctx.loop.dstore.read() as session:
+        alias = session.get(ExternalItemRow, item.item_id)
+        if alias is None:
+            return None, None
+        return str(alias.work_id), str(alias.channel_id)

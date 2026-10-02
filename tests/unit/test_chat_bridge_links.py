@@ -792,3 +792,56 @@ def test_a_channel_linked_while_the_bridge_runs_is_heard_at_once(
     s.deliver("plan the bread", channel=unlinked, mid=mid(s.backend, 12))
     assert wait_for(lambda: len(s.messages()) >= 1)
     assert s.messages()[0].origin.get("surface_id") == unlinked
+
+
+def test_a_run_thread_is_linked_to_its_work_channel_and_a_reply_there_is_a_turn(
+    unlinked: Any,
+) -> None:
+    """The thread the bridge opens for a run is a link of the run's work
+    channel (docs/spikes/work-channels.md): made by the daemon as the
+    headline is posted, admitting guests, so a plain reply in the thread
+    is a turn in the channel rather than a hand-over to the engine."""
+    from lantern.daemon.model import WorkItem
+    from lantern.db.job_models import ExternalRunRow
+    from lantern.events import EventBus
+    from tests.unit.test_daemon_discord import FakeEngine
+
+    work = unlinked.channel.id
+    with unlinked.bridge.dstore.immediate_transaction() as session:
+        session.add(
+            ExternalRunRow(
+                run_id="r1",
+                work_id="job_r1",
+                channel_id=work,
+                created_at=1.0,
+                state="building",
+                kind="code",
+                updated_at=1.0,
+                revision=1,
+                historical=0,
+                title="Do A",
+                source_json="{}",
+            )
+        )
+    item = WorkItem(item_id="inbox:a.md", source_key="a.md", title="Do A")
+    engine = FakeEngine()
+    unlinked.bridge.run_started(item, "r1", engine, EventBus())  # type: ignore[arg-type]
+    assert wait_for(lambda: unlinked.bridge.dstore.discord_thread("r1") is not None)
+    thread_id = unlinked.bridge.dstore.discord_thread("r1").thread_id  # type: ignore[union-attr]
+    assert wait_for(lambda: len(unlinked.store.list_channel_links(None, work)) == 1)
+    (link,) = unlinked.store.list_channel_links(None, work)
+    assert (link.backend, link.surface_id, link.thread_id) == ("discord", str(thread_id), None)
+    assert link.allow_guests is True
+
+    thread = unlinked.client.channels[thread_id]
+    reply = FakeMessage("use the other library", thread, mid=900)
+    reply.author = FakeUser(99, "stranger")
+    thread.messages[900] = reply
+    unlinked.bridge._handle_message(reply)
+    assert wait_for(lambda: len(unlinked.messages()) >= 1)
+    message = unlinked.messages()[0]
+    assert message.content == "use the other library"
+    assert message.author.display_name == "stranger"
+    assert message.origin["surface_id"] == str(thread_id)
+    # The channel's turn carries the instruction; the engine is not told twice.
+    assert engine.posted == []

@@ -11,7 +11,7 @@ from lantern.db.collaboration_models import ChannelMemberRow, ChannelRow, Messag
 from lantern.db.daemon_models import WorkItemRow
 from lantern.db.job_models import ExternalJobRow
 from tests.api.test_channel_access import _channel, _people, _user_id
-from tests.api.test_external_work import _run, external_item
+from tests.api.test_external_work import _run, channels, external_item
 
 
 def _message(api: Any, channel_id: str, sequence: int, *, historical: bool) -> None:
@@ -206,13 +206,22 @@ def test_imported_no_turn_private_work_stays_read_without_external_metadata(api:
         )
     _run(api, "private-history", "completed", api.clock(), item)
     api.ctx.project_work()
+    # The private chat keeps the hand-off to the work channel, imported as
+    # quietly as the rest of the history; the result lives in the work
+    # channel, which is the job's and not the private chat's.
     messages = api.client.get(f"/v1/channels/{channel_id}/messages", headers=owner).json()
-    assert messages
+    assert [message["kind"] for message in messages] == ["work_handoff"]
     assert all(message["historical"] and message["turn_id"] is None for message in messages)
 
     channel = api.client.get(f"/v1/channels/{channel_id}", headers=owner).json()
     assert channel["external_work"] is None
     assert channel["my_role"] == "owner"
+    work = [c for c in channels(api) if c.id != channel_id]
+    assert len(work) == 1
+    # Asked for in a private chat: the work channel is private to its people.
+    assert work[0].visibility == "private"
+    results = api.client.get(f"/v1/channels/{work[0].id}/messages", headers=owner).json()
+    assert "work_result" in {message["kind"] for message in results}
     assert channel["unread_count"] == 0
     assert api.client.get(f"/v1/channels/{channel_id}", headers=guest).status_code == 404
 

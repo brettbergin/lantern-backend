@@ -119,10 +119,27 @@ class RunChronicle:
         resumes: int = 0,
     ) -> RunChronicle | None:
         """The chronicle for ``item``, or None when there is nobody to tell:
-        no channel asked for the work, or this daemon has no poster."""
-        if poster is None or not item.channel_id or config.agent_team.chronicle == "off":
+        the work has no channel, or this daemon has no poster.
+
+        The channel is the work's own (the poster binds the item to its
+        job's channel, docs/spikes/work-channels.md), else the chat that
+        asked for it; a poster that answers neither leaves the item's
+        own admission channel, which is what it always told."""
+        if poster is None or config.agent_team.chronicle == "off":
             return None
-        return cls(poster, assignment, item, config, clock, artifacts=artifacts, resumes=resumes)
+        try:
+            channel_id = poster.channel_for_item(item.item_id)
+        except Exception:
+            log.warning("chronicle.channel_lookup_failed", item=item.item_id, exc_info=True)
+            channel_id = None
+        channel_id = channel_id or item.channel_id
+        if not channel_id:
+            return None
+        chronicle = cls(
+            poster, assignment, item, config, clock, artifacts=artifacts, resumes=resumes
+        )
+        chronicle.channel_id = str(channel_id)
+        return chronicle
 
     # -- the bus -----------------------------------------------------------
 

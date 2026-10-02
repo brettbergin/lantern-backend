@@ -41,6 +41,8 @@ class ChatInput(Input):
             self.placeholder = (
                 f"{MENTION} ▸ {what}… (ctrl+t: addressed ✓ · {self.prefix} for commands)"
             )
+        elif self.thread:
+            self.placeholder = f"{what}: plain text goes to the run · {self.prefix} for commands"
         else:
             self.placeholder = (
                 f"{what} with {MENTION} or ctrl+t · {self.prefix} for commands · "

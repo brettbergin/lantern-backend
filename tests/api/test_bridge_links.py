@@ -415,17 +415,20 @@ def test_linking_a_surface_takes_a_workspace_admin(api: Any) -> None:
     _link(api, admin, theirs)
 
 
-def test_a_run_thread_cannot_be_linked(api: Any) -> None:
+def test_a_run_thread_is_a_link_like_any_other_surface(api: Any) -> None:
+    """A run's thread is the work channel's window on the service
+    (docs/spikes/work-channels.md): the daemon links it as the run opens
+    it, and a person may link one the same way."""
     owner = bearer(register(api))
     channel_id = _channel(api, owner)
     api.harness.dstore.record_chat_thread("run-1", "C1", "T9", None, backend="slack")
-    refused = api.client.post(
+    linked = api.client.post(
         f"/v1/channels/{channel_id}/links",
         json={"backend": "slack", "surface_id": "C1", "thread_id": "T9"},
         headers=owner,
     )
-    assert refused.status_code == 409, refused.text
-    assert refused.json()["code"] == "link_run_thread"
+    assert linked.status_code == 201, linked.text
+    assert linked.json()["thread_id"] == "T9"
 
 
 def test_a_deleted_thread_link_can_be_made_again(api: Any) -> None:

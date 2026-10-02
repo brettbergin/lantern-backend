@@ -75,6 +75,7 @@ FEATURES: tuple[str, ...] = (
     "collaboration.read_state",
     "collaboration.mention_steering",
     "collaboration.external_work",
+    "collaboration.work_channels",
     "repositories.discover",
     "repositories.manage",
     "repositories.labels",

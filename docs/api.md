@@ -70,6 +70,33 @@ the same short-lived access and rotating refresh tokens as the existing client
 credential flow. Existing machine clients and all existing routes keep their
 original behavior.
 
+### Work channels
+
+With `collaboration.work_channels` every job has a conversation of its own
+(`docs/spikes/work-channels.md`): the system-created, workspace-visible
+channel that work admitted outside chat always got
+(`collaboration.external_work`, below) is now the channel of a job admitted
+from a chat turn or the API too. Attempts of one job share it; a plan,
+verdict, delivery or notice the run posts (`collaboration.run_progress`)
+lands there, and so do the imported milestones, under one ledger, so each
+moment is said once. The chat that asked for the work keeps one message:
+a `work_handoff` carrying `source_work_id`, hung on the turn that asked, and
+the result that turn was always delivered. A client opens the work channel
+from the hand-off (the channel whose `external_work.work_id` matches), and
+the rows `GET /v1/channels/{id}/jobs` answers for the asking chat name the
+work channel in `channel_id`, so a newer client sends a reader there instead
+of drawing the run in the chat; an older client reads the rows as before.
+
+Steering is the work channel's composer. A plain message there while the
+job's one run is in flight is direction for that run: the turn comes back
+with `steered_run_id` and the agent's acknowledgement, exactly as a mention
+does elsewhere (`collaboration.mention_steering`), and the instruction is
+the same recorded operation `POST /v1/runs/{id}/steering` makes. Whoever may
+post in the channel may steer it. `@agent` still addresses that agent's
+lane, and `/stop` stops the channel's work.
+
+A job bound before this release keeps the chat it was bound to.
+
 ### Sign-in through an OpenID Connect provider
 
 With `[api.oidc] enabled = true` (feature `auth.oidc`), a browser client signs
@@ -1441,21 +1468,30 @@ A channel can have a window onto a chat service: a Slack, Discord or
 Mattermost surface where the same conversation happens. When
 `/v1/capabilities` lists `collaboration.bridges`:
 
-| Route                                  | Needs                   | Result                                                                                                                                                        |
-| -------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/bridges`                      | read                    | `{data: [{backend, configured, label}]}` — the services this release can bridge, and whether one is set up here                                               |
-| `GET /v1/channels/{id}/links`          | manage                  | `{data: [{id, channel_id, backend, surface_id, thread_id, allow_guests, created_by, created_at, active}]}`                                                    |
-| `POST /v1/channels/{id}/links`         | manage, workspace admin | Body `{backend, surface_id, thread_id?, allow_guests?}`; `201` with the link; `409 link_exists` for a taken surface, `409 link_run_thread` for a run's thread |
-| `DELETE /v1/channels/{id}/links/{lid}` | manage                  | `204`; `404 link_not_found`                                                                                                                                   |
+| Route                                  | Needs                   | Result                                                                                                              |
+| -------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/bridges`                      | read                    | `{data: [{backend, configured, label}]}` — the services this release can bridge, and whether one is set up here     |
+| `GET /v1/channels/{id}/links`          | manage                  | `{data: [{id, channel_id, backend, surface_id, thread_id, allow_guests, created_by, created_at, active}]}`          |
+| `POST /v1/channels/{id}/links`         | manage, workspace admin | Body `{backend, surface_id, thread_id?, allow_guests?}`; `201` with the link; `409 link_exists` for a taken surface |
+| `DELETE /v1/channels/{id}/links/{lid}` | manage                  | `204`; `404 link_not_found`                                                                                         |
 
 Creating a link takes managing the channel and being a workspace owner or
 admin (`403 channel_forbidden` otherwise): a link makes the channel hear
 everyone on that surface and post its own traffic there, which reaches
-past the channel itself. A thread a run opened is refused. A Discord thread
-is a channel of its own, so a Discord link given a `thread_id` is stored
-with that thread as its `surface_id` and no `thread_id`; Slack and
-Mattermost keep both. Deleting a link and linking the same surface or
-thread again works.
+past the channel itself. A Discord thread (and the operator console's) is a
+channel of its own, so a link given a `thread_id` there is stored with that
+thread as its `surface_id` and no `thread_id`; Slack and Mattermost keep
+both. Deleting a link and linking the same surface or thread again works.
+
+The thread a bridge opens for a run is such a link, made by the daemon as
+the run's headline is posted: the link of the run's work channel, admitting
+guests, so the channel's messages reach the thread and a reply typed in the
+thread is a turn in the work channel, steering the run through the same
+path a reply in the app takes. The bridge keeps rendering what the channel
+has no message for — the headline card, the status line and tool digest it
+edits in place, the agent's narration — and leaves the plan, the verdicts
+and the steering replies to the mirror. With `thread_per_run = false` there
+is no thread to link and steering from the bridge stays as it was.
 
 While a surface is linked, what people type there becomes a turn in the
 channel it mirrors, instead of reaching the daemon's concierge. A link is a
