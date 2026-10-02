@@ -565,7 +565,7 @@ def _print_github_summary(result: RunResult, config: Config) -> None:
                 f"({data.get('blocking', 0)} blocking finding(s))"
             )
         elif event.type == HostEventTypes.RUN_MERGED:
-            who = "by a human" if data.get("by_human") else "by lantern"
+            who = "by a human" if data.get("by_human") else "by Lantern"
             lines.append(f"[bold green]merged[/] {who}: {str(data.get('sha') or '')[:12]}")
         elif event.type == HostEventTypes.RUN_BLOCKED:
             lines.append(f"[bold yellow]blocked[/]: {data.get('why')}")
@@ -1453,7 +1453,7 @@ def secrets_list(
         ),
     ] = True,
 ) -> None:
-    """Show lantern's custom-secret registrations across scopes.
+    """Show Lantern's custom-secret registrations across scopes.
 
     Flags registrations that no longer match what provisioning would
     register (stale scopes, wrong host bindings) — the pre-collision
@@ -2952,7 +2952,7 @@ def daemon(
         # answers with the installed half.
         log.info("versions.check_disabled")
     elif not once:
-        # lantern's releases ship often while upgrading a host is an
+        # Lantern's releases ship often while upgrading a host is an
         # operator's step, so a long-lived daemon drifts behind silently.
         # Check once in the background (never on the startup path) and
         # narrate it only when behind — nobody has to remember to ask.

@@ -161,7 +161,7 @@ class TestServiceDescriptors:
         # would send pip to a package index for our own name.
         discord = service_named("discord").missing_extra_detail
         assert discord.startswith("discord.py missing (install 'discord")
-        assert discord.endswith("into the venv lantern runs from)")
+        assert discord.endswith("into the venv Lantern runs from)")
         slack = service_named("slack").missing_extra_detail
         assert slack.startswith("slack_sdk missing (install ")
         assert "'slack-sdk>=" in slack and "'aiohttp>=" in slack
@@ -185,7 +185,7 @@ class TestExtraInstallHint:
         ]
         monkeypatch.setattr(releases.metadata, "requires", lambda _name: requires)
         assert releases.extra_install_hint("slack", "slack-sdk") == (
-            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv lantern runs from"
+            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv Lantern runs from"
         )
         assert "discord-py>=2.3" in releases.extra_install_hint("discord", "discord.py")
 
@@ -201,5 +201,5 @@ class TestExtraInstallHint:
 
         monkeypatch.setattr(releases.metadata, "requires", missing)
         assert releases.extra_install_hint("discord", "discord.py") == (
-            "install 'discord.py' into the venv lantern runs from"
+            "install 'discord.py' into the venv Lantern runs from"
         )

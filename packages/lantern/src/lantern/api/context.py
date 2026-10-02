@@ -142,14 +142,14 @@ _CONVERSATION_ANSWER = (
 )
 _RUNNER_INTENT = {
     "code": (
-        "\n\nThe person explicitly selected lantern's Code runner for this turn. "
+        "\n\nThe person explicitly selected Lantern's Code runner for this turn. "
         "Coordinate the request into one managed repository run through the existing issue "
         "intake tools. Do not simulate its planner, builder, reviewer, fix rounds, CI, or merge "
         "stages with chat handoffs. If the configured repository or observed symptom is genuinely "
         "ambiguous, ask only for the missing intake fact required by the existing code-run policy."
     ),
     "workload": (
-        "\n\nThe person explicitly selected lantern's Workload runner for this turn. "
+        "\n\nThe person explicitly selected Lantern's Workload runner for this turn. "
         "Call start_workload once with their request and let the existing plan, execute, judge, "
         "revision, and publish stages carry it to completion. Do not simulate those stages with "
         "chat handoffs."

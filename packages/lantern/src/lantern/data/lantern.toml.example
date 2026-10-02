@@ -904,7 +904,7 @@ service_memory = "2g"
 # The Discord backend: a gateway bot posts each run's chronology (agent
 # messages, tool lines, issue/PR links) into a thread under a control channel
 # and relays @mentions typed in the thread to the running agent as steering.
-# Needs discord.py in the venv lantern runs from (`lantern init` installs it)
+# Needs discord.py in the venv Lantern runs from (`lantern init` installs it)
 # and DISCORD_BOT_TOKEN in the
 # environment / .env (never here). Anyone who can post in the channel can
 # steer — restrict the channel. Unset channel_id = Discord off.
@@ -932,7 +932,7 @@ service_memory = "2g"
 # [slack]
 # The Slack backend: the same channel, threads, commands and steering over a
 # Socket Mode app (the app dials out — no public URL). Needs
-# slack-sdk and aiohttp in the venv lantern runs from (`lantern init` installs
+# slack-sdk and aiohttp in the venv Lantern runs from (`lantern init` installs
 # them) plus SLACK_BOT_TOKEN (xoxb-…) and
 # SLACK_APP_TOKEN (xapp-…) in the environment / .env (never here); the README
 # lists the app scopes and event subscriptions. Same knobs as [discord];
@@ -953,7 +953,7 @@ service_memory = "2g"
 # The Mattermost backend: the same channel, threads, commands and steering on
 # an instance you host. The bot dials out over a websocket, so the daemon
 # needs no public URL and no inbound hole — a box behind NAT works. Needs
-# aiohttp in the venv lantern runs from (`lantern init` installs it) plus
+# aiohttp in the venv Lantern runs from (`lantern init` installs it) plus
 # MATTERMOST_BOT_TOKEN in the
 # environment / .env (never here); create a bot account in the System Console
 # and add it to the channel. Same knobs as [discord]. Unset channel_id =
@@ -998,7 +998,7 @@ service_memory = "2g"
 # under /v1 with generated OpenAPI, for a client that admits work, watches
 # it, steers it and fetches results without parsing CLI prose. Off by
 # default; needs the `api` extra's packages (fastapi, uvicorn, pyjwt) in the
-# venv lantern runs from. Clients authenticate with a
+# venv Lantern runs from. Clients authenticate with a
 # short-lived access token minted from credentials created with
 # `lantern api client create`. TLS is your reverse proxy's job.
 # enabled = false

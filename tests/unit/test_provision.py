@@ -108,7 +108,7 @@ class TestSpecs:
         agent, _github = provisioner.build_specs("r1", tmp_path)
         assert "pypi.org" not in agent.policy_allows
         assert "archive.ubuntu.com" not in agent.policy_allows
-        # ...while the rest of the baseline, and lantern's own control
+        # ...while the rest of the baseline, and Lantern's own control
         # plane, are untouched.
         assert "files.pythonhosted.org" in agent.policy_allows
         assert "deb.debian.org" in agent.policy_allows

@@ -57,7 +57,7 @@ class TestDirtyAndHead:
         assert hostgit.is_dirty(root) is True
 
     def test_ignored_names_do_not_count(self, tmp_path: Path) -> None:
-        """lantern's own state dir dropped inside a checkout is run state,
+        """Lantern's own state dir dropped inside a checkout is run state,
         not user content (field failure r5a1d9m9c)."""
         root = make_repo(tmp_path)
         (root / ".lantern").mkdir()
@@ -792,7 +792,7 @@ class TestMergeFromBase:
     def test_a_repository_pre_commit_hook_does_not_run_for_the_checkpoint(
         self, tmp_path: Path
     ) -> None:
-        """The checkpoint is lantern's own commit; a hook the repository
+        """The checkpoint is Lantern's own commit; a hook the repository
         ships must neither veto it nor run on its behalf."""
         upstream, clone = make_run_clone(tmp_path)
         marker = tmp_path / "hook-ran"

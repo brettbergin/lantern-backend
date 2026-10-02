@@ -102,7 +102,7 @@ SERVICE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "slack",
         "name": "Slack",
-        "description": "Team messaging through lantern's Slack bridge",
+        "description": "Team messaging through Lantern's Slack bridge",
         "auth_type": "token",
         "color": "#4A154B",
         "agent_slug": None,
@@ -115,7 +115,7 @@ SERVICE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "discord",
         "name": "Discord",
-        "description": "Community messaging through lantern's Discord bridge",
+        "description": "Community messaging through Lantern's Discord bridge",
         "auth_type": "token",
         "color": "#5865F2",
         "agent_slug": None,
@@ -127,7 +127,7 @@ SERVICE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "mattermost",
         "name": "Mattermost",
-        "description": "Self-hosted messaging through lantern's Mattermost bridge",
+        "description": "Self-hosted messaging through Lantern's Mattermost bridge",
         "auth_type": "token",
         "color": "#0058CC",
         "agent_slug": None,
@@ -266,7 +266,7 @@ def _record(
     return ConnectionOut(
         id=name,
         service_type=name,
-        display_name="lantern host",
+        display_name="Lantern host",
         auth_type="token" if name in CHAT_NAMES else "api_key",
         status=status,
         configured=complete,
@@ -433,14 +433,14 @@ def _remove_locked(ctx: ApiContext, name: str) -> None:
         raise Problem(
             409,
             "external_connection",
-            "this connection has a credential outside lantern's managed secret file",
+            "this connection has a credential outside Lantern's managed secret file",
         )
     owned = {env: "" for env in names.values() if saved.get(env)}
     if not owned and draft == current:
         raise Problem(
             409,
             "external_connection",
-            "this connection is configured outside lantern's managed files",
+            "this connection is configured outside Lantern's managed files",
         )
     after = upsert_text(before, owned)
     verdict = validate_text(draft, home=home, env=os.environ)

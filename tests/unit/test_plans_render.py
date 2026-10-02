@@ -194,7 +194,7 @@ class TestRewritingSections:
         return (
             "A person's preface.\n\n"
             + rendered.replace("- [ ] stored", "- [x] stored").replace(
-                "## Context", "## Team notes\n\nours, not lantern's\n\n## Context"
+                "## Context", "## Team notes\n\nours, not Lantern's\n\n## Context"
             )
             + "\n"
             + render_checklist([ChecklistEntry("o/r#3", "Child")])
@@ -209,7 +209,7 @@ class TestRewritingSections:
         # Untouched: the preface, the ticked criterion, the notes, the
         # context, the marker and the checklist.
         assert out.startswith("A person's preface.\n\n## Goal\n\nKeep plans, and their history.")
-        for kept in ("- [x] stored", "## Team notes\n\nours, not lantern's", "A db."):
+        for kept in ("- [x] stored", "## Team notes\n\nours, not Lantern's", "A db."):
             assert kept in out
         assert marked(out, "plan_p", "node_t") and "<!-- sbx-plan:children -->" in out
         assert "Keep plans.\n" not in out

@@ -242,7 +242,7 @@ async def sync_repository_labels(
                 "create them"
             )
         else:
-            message = f"{entry.repo} already carries every label lantern applies"
+            message = f"{entry.repo} already carries every label Lantern applies"
         return RepositoryLabelSync(
             repository=repository,
             labels=labels,

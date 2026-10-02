@@ -1030,7 +1030,7 @@ class Concierge:
             persona += (
                 "\n\nUse handoff_agent for a bounded discussion or refinement when a native "
                 "peer's distinct judgment will materially improve the answer. Do not recreate "
-                "lantern's execution pipelines with chat handoffs: repository work belongs in "
+                "Lantern's execution pipelines with chat handoffs: repository work belongs in "
                 "its code runner, and research, documents, data, or other deliverables belong "
                 "in start_workload, whose own planner, executor, judge, revision budget, and "
                 "publisher carry the work to completion. "
@@ -1645,7 +1645,7 @@ class Concierge:
                         "Is this daemon running current code? Reports the installed lantern, "
                         "lantern-worker and sbx versions, the latest lantern/lantern-worker "
                         "releases on GitHub (unless the operator switched that check off), and "
-                        "whether the host is behind. lantern's own releases ship frequently, "
+                        "whether the host is behind. Lantern's own releases ship frequently, "
                         "while upgrading this host is an operator's step, so drift is normal "
                         "and worth checking. You cannot upgrade anything — the report says "
                         "what upgrading takes on the daemon host — so report what you find "
@@ -3146,7 +3146,7 @@ class Concierge:
         queue = args.get("queue")
         queued = True if queue is None else bool(queue)
         labels = [trigger] if queued else []
-        full_body = f"{body}\n\n---\nFiled by {by} via the lantern concierge\n"
+        full_body = f"{body}\n\n---\nFiled by {by} via the Lantern concierge\n"
         try:
             ref = self.github.call(
                 lambda ops: ops.issue_create(repo, title, full_body, labels=labels)
@@ -3353,7 +3353,7 @@ class Concierge:
         body = str(args.get("body", "")).strip()
         if not body:
             return "body is required"
-        full_body = f"{body}\n\n---\nPosted by {by} via the lantern concierge\n"
+        full_body = f"{body}\n\n---\nPosted by {by} via the Lantern concierge\n"
         try:
             url = self.github.call(lambda ops: ops.issue_comment(repo, number, full_body))
         except (GithubOpsError, WorkerError, SbxError, DaemonError) as exc:
@@ -3422,7 +3422,7 @@ class Concierge:
             )
         notes: list[str] = []
         if comment:
-            body = f"{comment}\n\n---\nClosed as {reason} by {by} via the lantern concierge\n"
+            body = f"{comment}\n\n---\nClosed as {reason} by {by} via the Lantern concierge\n"
             try:
                 self.github.call(lambda ops: ops.issue_comment(repo, number, body))
             except (GithubOpsError, WorkerError, SbxError, DaemonError) as exc:

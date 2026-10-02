@@ -4771,7 +4771,7 @@ class CollaborationStore:
             is_agent(agent_slug) if is_agent is not None else agent_slug in {a.slug for a in AGENTS}
         )
         if not known:
-            raise CollaborationError("unknown_agent", "Choose a native lantern agent.")
+            raise CollaborationError("unknown_agent", "Choose a native Lantern agent.")
         if not 1 <= len(message.strip()) <= 4000:
             raise CollaborationError(
                 "invalid_handoff", "Provide a message of 1 to 4000 characters."
