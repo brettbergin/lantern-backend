@@ -1658,6 +1658,11 @@ class DaemonStore:
         back instead and must raise an operator notice naming each id and
         issue URL, because their issue is left carrying
         ``lantern:in-progress`` for a human to clear.
+
+        Chat, schedule and API items are left alone like the two passes
+        before this one (#4508): failing one fails live work on every start
+        of a multi-repo daemon, and a run parked on the provider is then
+        closed as an orphan by the restart its recovery asks for.
         """
         with self._write() as session:
             rows = list(
@@ -1665,6 +1670,7 @@ class DaemonStore:
                     select(WorkItemRow).where(
                         WorkItemRow.repo == "",
                         WorkItemRow.state.not_in(sorted(TERMINAL_ITEM_STATES)),
+                        _not_local(),
                     )
                 )
             )

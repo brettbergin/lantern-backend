@@ -247,6 +247,46 @@ def test_daemon_holds_without_reclaim_or_repair_budgets(tmp_path, kind):
     assert h.loop.status()["consecutive_failures"] == 0
 
 
+def test_a_parked_chat_workload_survives_the_restart_a_new_key_needs(tmp_path):
+    """#4508: a rotated key means a restart. On a multi-repo daemon the
+    startup pass for pre-multi-repo rows failed the parked chat item (it has
+    no repository by design), recovery then closed its run as an orphan, and
+    `resume <run>` had nothing left to continue."""
+    from lantern.config import Config
+    from lantern.daemon.control import dispatch
+    from lantern.engine.model import RunResult
+    from tests.unit.test_daemon_loop import Harness, gh_item
+
+    config = Config.model_validate(
+        {"home": str(tmp_path / "state"), "agent": {"backend": "claude"}, "github": {"repo": "o/r"}}
+    )
+    h = Harness(tmp_path, config)
+    h.source.items = [gh_item(item_id="chat:m1", url="", kind="workload")]
+    calls = []
+
+    def runner(item, cfg, run_id, bus, resume):
+        calls.append((run_id, resume))
+        if not resume:
+            h.store.create_run(run_id, "Write the note", kind="workload")
+            h.store.set_run_state(run_id, "executing")
+            hold = h.loop._provider_recovery().record(job(run_id=run_id), rejected("billing"))
+            raise ProviderHeldError(hold)
+        return RunResult(run_id=run_id, state="completed", kind="workload")
+
+    h.loop._runner = runner
+    assert h.loop.tick().outcome == "provider_held"
+    run_id = calls[0][0]
+
+    # What `lantern daemon` does on start with several repositories configured.
+    assert h.dstore.strand_repoless("no repo", h.clock()) == []
+    h.loop.recover()
+
+    assert h.store.get_run(run_id).state == "provider_held"
+    assert dispatch(h.loop, f"resume {run_id}").ok
+    assert h.loop.tick().outcome == "done"
+    assert calls == [(run_id, False), (run_id, True)]
+
+
 def test_restart_opens_same_durable_hold_and_checkpoint(tmp_path):
     path = tmp_path / "state.db"
     with closing(StateStore(path)) as store:

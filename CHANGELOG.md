@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+**A restart no longer fails chat, schedule and API work on a multi-repo
+daemon.** The startup pass that settles work items written before multi-repo
+treated every item without a repository as such a leftover, so a daemon with
+several repositories configured failed any queued, running or parked chat,
+schedule or API item each time it started — including a run parked as
+`provider_held`, which was then closed as an orphan by the very restart a
+rotated key needs. Those items have no repository by design and are now left
+alone, so `resume <backend>` and `resume <item|run>` continue the parked run
+from its checkpoint as documented.
+
 **`lantern doctor` names a systemd drop-in that overrides a rendered unit.**
 The `units` row used to say "linked from …" while a hand-written
 `~/.config/systemd/user/<unit>.d/*.conf` replaced the unit's `ExecStart=`
