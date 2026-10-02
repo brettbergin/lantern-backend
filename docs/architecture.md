@@ -3211,13 +3211,18 @@ item on first sight (`bind_item_now`), so no post lands before its channel
 is known.
 
 A channel works one run at a time. `controls.intake.channel_refusal` is the
-one rule: `ControlService.admit` refuses an issue or workload naming a
-channel with work queued or running (`already_in_progress`),
-`AgentWorkService.file_issue` refuses to file an issue to be run, and a chat
-turn that picks a runner is answered with the refusal before the model is
-asked. A plain message while exactly one run is in flight is a steer
-(`ApiContext._steer_in_channel`), through `ControlService.steer` like every
-other.
+rule for admissions: `ControlService.admit` refuses an issue or workload
+naming a channel with work queued or running (`already_in_progress`), and
+`AgentWorkService.file_issue` refuses to file an issue to be run. A chat
+turn in such a channel stays a conversation (`ApiContext._channel_busy`):
+it goes to the model with `start_work` off and the read tools kept, a
+persona block naming the run or the queued item, and — while exactly one
+run is in flight — a `steer_run` tool (`ApiContext._steer_tool`) that hands
+direction to it through `ControlService.steer` like every other steer and
+marks the turn `steered_run_id`. The model answers a question about the
+run, steers it when told what to change, and says that new work waits;
+the Workload runner's binding choice (`must_start_workload`) is off while
+the channel is busy.
 
 The thread a `ChatBridge` opens for a run (`_ensure_thread`) is registered
 as a `ChannelLink` of that channel (`_link_run_thread`, admitting guests):
