@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+**The console no longer crashes a screen's load when you switch away
+mid-load.** A screen fills itself in from a worker; switching modes before it
+reported left the worker painting widgets the retired screen no longer had,
+which surfaced as a `NoMatches` crash in the log (and as a flaky console
+test). A late result is now dropped. `lantern init` sends `GH_TOKEN` (else
+`GITHUB_TOKEN`) with its GitHub API requests, so an install on a shared CI
+runner is not refused by the unauthenticated rate limit.
+
 **Picking the Workload runner is binding.** A chat turn sent with
 `intent=workload` — the app's Agentic Workload mode, the web app's Research
 report — used to depend on the model calling `start_workload`; when it chose

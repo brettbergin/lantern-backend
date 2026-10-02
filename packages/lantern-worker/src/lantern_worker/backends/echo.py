@@ -7,7 +7,7 @@ multi-job engine tests can script an entire run.
 
 Response object shape (all fields optional):
 ``{"text": str, "json": dict|list, "session_id": str, "sleep_s": float,
-"events": [{"type": str, "data": {...}}], "fail": str,
+"wait_for_path": str, "events": [{"type": str, "data": {...}}], "fail": str,
 "files": {"relative/path": "content"},
 "host_tool_calls": [{"name": str, "arguments": {...}, "call_id": str}],
 "health": {"permission_denials": {...}, "tool_failures": {...}}}``
@@ -113,6 +113,15 @@ class EchoBackend:
             raise RuntimeError(str(response["fail"]))
         if sleep_s := float(response.get("sleep_s", 0)):
             time.sleep(sleep_s)
+        if gate := str(response.get("wait_for_path", "")):
+            # A gate a test opens when it is ready, so an ordering a test
+            # asserts does not rest on how long a child takes to start on
+            # a loaded machine.
+            deadline = time.monotonic() + 30.0
+            while not Path(gate).exists():
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"echo script waited 30s for {gate}")
+                time.sleep(0.02)
         for relative, content in response.get("files", {}).items():
             target = Path.cwd() / relative
             target.parent.mkdir(parents=True, exist_ok=True)

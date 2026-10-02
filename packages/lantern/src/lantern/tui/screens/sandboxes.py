@@ -119,7 +119,9 @@ class SandboxesScreen(ConsoleScreen):
                 error = error or f"run directories: {exc}"
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply, infos, verdicts, rundirs, error)
+        self.app.call_from_thread(
+            self.apply_from_worker, self._apply, infos, verdicts, rundirs, error
+        )
 
     def _apply(
         self,

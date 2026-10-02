@@ -66,7 +66,7 @@ class SecretsScreen(ConsoleScreen):
             rows, error = [], str(exc)
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply, rows, error)
+        self.app.call_from_thread(self.apply_from_worker, self._apply, rows, error)
 
     def _apply(self, rows: list[SecretRow], error: str | None) -> None:
         self.rows, self.error = rows, error
@@ -130,7 +130,7 @@ class SecretsScreen(ConsoleScreen):
             return
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._dry_shown, outcomes, every)
+        self.app.call_from_thread(self.apply_from_worker, self._dry_shown, outcomes, every)
 
     def _dry_shown(self, outcomes: list[object], every: bool) -> None:
         from lantern.sbx.secretstate import CleanOutcome
