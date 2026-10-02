@@ -9,7 +9,13 @@ import pytest
 from typer.testing import CliRunner
 
 from lantern.cli.app import app
-from lantern.fromsbxloop import FromSbxloopError, carry, default_source, rewrite
+from lantern.fromsbxloop import (
+    FromSbxloopError,
+    carry,
+    default_source,
+    rewrite,
+    sbx_version_of,
+)
 from lantern.paths import LanternHome
 
 PEM = b"-----BEGIN RSA PRIVATE KEY-----\nsbxloopAAAA\n-----END RSA PRIVATE KEY-----\n"
@@ -130,3 +136,38 @@ def test_init_dry_run_names_the_carry(tmp_path: Path, monkeypatch: pytest.Monkey
 
     assert f"would carry the sbxloop home {source}" in result.output
     assert not (tmp_path / ".lantern" / "config" / "lantern.toml").exists()
+
+
+def test_the_sbx_release_the_old_home_ran(tmp_path: Path) -> None:
+    source = sbxloop_home(tmp_path / ".sbxloop")
+    assert sbx_version_of(source) is None
+    (source / "sbx").mkdir()
+    (source / "sbx" / "VERSION").write_text("v0.45.1\n")
+    assert sbx_version_of(source) == "0.45.1"
+    (source / "sbx" / "VERSION").write_text("latest\n")
+    assert sbx_version_of(source) is None
+
+
+def test_the_old_homes_sbx_binary_outranks_its_stamp(tmp_path: Path) -> None:
+    source = sbxloop_home(tmp_path / ".sbxloop")
+    (source / "sbx" / "bin").mkdir(parents=True)
+    (source / "sbx" / "VERSION").write_text("0.43.0\n")
+    binary = source / "sbx" / "bin" / "sbx"
+    binary.write_text("#!/bin/sh\necho 'Client Version: v0.45.1 79805a6e Build Tags: cloud'\n")
+    binary.chmod(0o755)
+    assert sbx_version_of(source) == "0.45.1"
+    binary.write_text("#!/bin/sh\nexit 3\n")
+    assert sbx_version_of(source) == "0.43.0"
+
+
+def test_init_installs_the_sbx_the_old_home_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = sbxloop_home(tmp_path / ".sbxloop")
+    (source / "sbx").mkdir()
+    (source / "sbx" / "VERSION").write_text("0.45.1\n")
+    monkeypatch.setenv("LANTERN_HOME", str(tmp_path / ".lantern"))
+
+    result = CliRunner().invoke(app, ["init", "--dry-run", "--from-sbxloop", str(source)])
+
+    assert "0.45.1" in result.output

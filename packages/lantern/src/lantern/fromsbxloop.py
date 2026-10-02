@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -143,6 +144,44 @@ def carry(home: LanternHome, source: Path) -> CarryReport:
                 shutil.copytree(repo, target, symlinks=True)
                 report.carried.append(f"{repo} -> {target}")
     return report
+
+
+_SBX_VERSION = re.compile(r"\d+\.\d+\.\d+")
+
+
+_CLIENT_VERSION = re.compile(r"^Client Version:\s*v?(\d+\.\d+\.\d+)\b", re.MULTILINE)
+
+
+def sbx_version_of(source: Path) -> str | None:
+    """The sbx release the sbxloop home ran.
+
+    Docker's sandbox daemon is shared by every home on the host and refuses a
+    client older than itself, so the Lantern home installs the same sbx the
+    sbxloop home had rather than Lantern's own pin. The home's own sbx binary
+    is asked first (sbx can update itself past the stamp init wrote), then the
+    ``sbx/VERSION`` stamp. ``None`` when neither answers.
+    """
+    root = source.expanduser() / "sbx"
+    binary = root / "bin" / "sbx"
+    if binary.is_file():
+        try:
+            out = subprocess.run(  # nosec B603 - fixed argv, the home's own binary
+                [str(binary), "version"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            out = ""
+        found = _CLIENT_VERSION.search(out)
+        if found:
+            return found.group(1)
+    try:
+        stamped = (root / "VERSION").read_text(encoding="utf-8").strip().removeprefix("v")
+    except OSError:
+        return None
+    return stamped if _SBX_VERSION.fullmatch(stamped) else None
 
 
 def default_source(env: dict[str, str] | os._Environ[str]) -> Path:

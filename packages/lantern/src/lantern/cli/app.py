@@ -2135,8 +2135,9 @@ def init(
         typer.Option(
             "--from-sbxloop",
             help="Carry an sbxloop home (e.g. ~/.sbxloop) into this home first: its config, "
-            "secrets and App key renamed for Lantern, and its workspaces. The source is "
-            "left untouched; state starts fresh.",
+            "secrets and App key renamed for Lantern, and its workspaces, and install the sbx "
+            "release it ran unless --sbx-version says otherwise. The source is left "
+            "untouched; state starts fresh.",
         ),
     ] = None,
 ) -> None:
@@ -2175,6 +2176,10 @@ def init(
         console.print(f"unknown preset {preset!r} (available: {available})")
         raise typer.Exit(2)
     home = LanternHome(resolve_home_root())
+    if from_sbxloop is not None and sbx_version is None:
+        from lantern.fromsbxloop import sbx_version_of
+
+        sbx_version = sbx_version_of(from_sbxloop)
     options = InitOptions(
         systemd=systemd,
         runner_dir=runner_dir.expanduser().resolve() if runner_dir else None,
