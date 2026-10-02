@@ -991,7 +991,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -1385,7 +1386,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -1434,7 +1436,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -3357,7 +3360,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
