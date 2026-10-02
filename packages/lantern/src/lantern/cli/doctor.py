@@ -1772,6 +1772,7 @@ def _launcher_checks(home: LanternHome, env: dict[str, str]) -> list[Check]:
         home_dir = Path(env.get("HOME") or Path.home())
         user_units = home_dir / ".config" / "systemd" / "user"
         problems: list[str] = []
+        overridden = False
         for name in UNIT_NAMES:
             rendered = home.unit(name)
             link = user_units / name
@@ -1779,13 +1780,22 @@ def _launcher_checks(home: LanternHome, env: dict[str, str]) -> list[Check]:
                 problems.append(f"{name} not rendered")
             elif not link.is_symlink() or link.resolve() != rendered.resolve():
                 problems.append(f"{name} not linked from {user_units}")
+            # A drop-in under `<unit>.d/` is merged over the rendered unit
+            # by systemd, so a link that resolves correctly says nothing
+            # about what actually runs; init neither writes nor removes one.
+            for conf in sorted((user_units / f"{name}.d").glob("*.conf")):
+                overridden = True
+                problems.append(f"{name} is overridden by {conf} (a drop-in init does not manage)")
+        remedy = (
+            "remove the drop-in(s) or run `lantern init --systemd`"
+            if overridden
+            else "run `lantern init --systemd`"
+        )
         checks.append(
             Check(
                 "units",
                 not problems,
-                "; ".join(problems) + "; run `lantern init --systemd`"
-                if problems
-                else f"linked from {home.systemd}",
+                "; ".join(problems) + f"; {remedy}" if problems else f"linked from {home.systemd}",
                 hard=False,
             )
         )
