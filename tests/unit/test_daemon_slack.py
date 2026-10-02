@@ -492,6 +492,7 @@ class TestInbound:
             )
             assert wait_for(lambda: bool(concierge.turns))
             assert concierge.turns[0][0] == "what is running?"
+            assert wait_for(lambda: any("hello" in p["text"] for p in client.web.posted))
             answer = next(p for p in client.web.posted if "hello" in p["text"])
             assert answer.get("thread_ts") == "1.2"
         finally:
