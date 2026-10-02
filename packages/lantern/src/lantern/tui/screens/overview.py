@@ -178,7 +178,7 @@ class OverviewScreen(ConsoleScreen):
         if get_current_worker().is_cancelled:
             return
         self.cache.put(data, now)
-        self.app.call_from_thread(self._apply, data)
+        self.app.call_from_thread(self.apply_from_worker, self._apply, data)
 
     def _apply(self, data: Analytics) -> None:
         self.data = data

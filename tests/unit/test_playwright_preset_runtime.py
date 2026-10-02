@@ -93,9 +93,13 @@ async def _exercise_server(command: list[str], url: str) -> None:
             await process.wait()
 
 
+@pytest.mark.timeout(840)
 def test_preset_installs_and_drives_its_browser(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Downloading a browser is the slow part: the suite-wide 300 s timeout
+    has expired mid-download on a slow mirror, so this test takes most of
+    the job's 15 minutes instead (the install itself is capped at 600 s)."""
     config = Config.model_validate(tomllib.loads(render_config_template("playwright")))
     workspace = tmp_path / "target"
     workspace.mkdir()

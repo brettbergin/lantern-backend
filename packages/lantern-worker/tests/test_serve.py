@@ -128,14 +128,18 @@ def test_runs_a_job_and_returns_its_result_with_its_events(server: Server) -> No
 def test_jobs_run_concurrently_in_their_own_children(server: Server, tmp_path: Path) -> None:
     server.read()
     slow = tmp_path / "slow.json"
-    slow.write_text(json.dumps([{"text": "slow", "sleep_s": 1.0}, {"text": "fast"}]))
-    # Two agent jobs share the echo script; the first sleeps, the second
-    # finishes first and its result arrives first.
+    gate = tmp_path / "gate"
+    slow.write_text(json.dumps([{"text": "slow", "wait_for_path": str(gate)}, {"text": "fast"}]))
+    # Two agent jobs share the echo script; the first waits at a gate the
+    # test opens only once the second has finished, so the second's result
+    # arriving first is a fact about concurrency, not about how fast a
+    # child starts on this machine.
     server.send({"t": "env", "exports": {"LANTERN_ECHO_SCRIPT": str(slow)}})
     server.send({"t": "job", "job": job("slow"), **server.paths("slow")})
     time.sleep(0.2)
     server.send({"t": "job", "job": job("fast"), **server.paths("fast")})
     first, _ = server.read_until("result")
+    gate.write_text("go")
     second, _ = server.read_until("result")
     assert (first["job_id"], second["job_id"]) == ("fast", "slow")
     assert server.close() == 0

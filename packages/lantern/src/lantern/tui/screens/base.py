@@ -56,6 +56,20 @@ class ConsoleScreen(Screen[Any]):
         except NoMatches:
             return
 
+    def apply_from_worker(self, fill: Any, *args: Any) -> None:
+        """Hand a worker's result to ``fill``, which paints it into the
+        screen's widgets — if the screen still has them. A mode switch can
+        retire the screen before its worker reports, and a screen resumed
+        and left again in one breath can have two workers in flight; the
+        widgets a late result would fill are gone with the screen, and
+        painting them is not an error, just nothing to do."""
+        if not self.is_mounted:
+            return
+        try:
+            fill(*args)
+        except NoMatches:
+            return
+
     def refresh_data(self, state: ConsoleState) -> None:
         """Repaint from the given snapshot; the base repaints the bar and
         the rail."""

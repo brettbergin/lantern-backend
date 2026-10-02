@@ -144,7 +144,7 @@ class DaemonScreen(ConsoleScreen):
         unit = probe_unit(deps.runner, deps.unit)
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply_unit, unit)
+        self.app.call_from_thread(self.apply_from_worker, self._apply_unit, unit)
 
     def _apply_unit(self, unit: UnitState) -> None:
         self.unit = unit
@@ -170,7 +170,7 @@ class DaemonScreen(ConsoleScreen):
             text = f"reading versions failed: {exc}"
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply_versions, text)
+        self.app.call_from_thread(self.apply_from_worker, self._apply_versions, text)
 
     def _apply_versions(self, text: str) -> None:
         self.versions_text = text
@@ -344,7 +344,9 @@ class DaemonScreen(ConsoleScreen):
         try:
             stream = deps.runner.stream(argv)
         except OSError as exc:
-            self.app.call_from_thread(self._journal_note, f"could not start {argv[0]}: {exc}")
+            self.app.call_from_thread(
+                self.apply_from_worker, self._journal_note, f"could not start {argv[0]}: {exc}"
+            )
             return
         if generation != self._stream_generation or not self._active:
             stream.close()  # suspended or superseded while the process started
@@ -356,7 +358,9 @@ class DaemonScreen(ConsoleScreen):
             for raw in stream.lines():
                 if get_current_worker().is_cancelled or generation != self._stream_generation:
                     break
-                self.app.call_from_thread(self._journal_lines, [redact_text(raw)], generation)
+                self.app.call_from_thread(
+                    self.apply_from_worker, self._journal_lines, [redact_text(raw)], generation
+                )
         finally:
             stream.close()
 

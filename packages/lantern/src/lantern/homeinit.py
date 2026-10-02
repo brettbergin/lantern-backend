@@ -115,8 +115,23 @@ def default_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def fetch_headers(url: str, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The headers a download sends. A GitHub API request carries the
+    token the environment holds (``GH_TOKEN``, else ``GITHUB_TOKEN``):
+    unauthenticated calls share one small hourly allowance per address,
+    which a shared CI runner exhausts, and the release listing an init
+    asks for is then refused as "rate limit exceeded". The token goes to
+    api.github.com only."""
+    headers = {"User-Agent": USER_AGENT}
+    source = os.environ if env is None else env
+    token = source.get("GH_TOKEN") or source.get("GITHUB_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def default_fetcher(url: str, target: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(url, headers=fetch_headers(url))
     with urllib.request.urlopen(request, timeout=120) as response:  # nosec B310 - https only
         target.write_bytes(response.read())
 
