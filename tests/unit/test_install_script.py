@@ -269,6 +269,21 @@ class TestReleaseWheels:
         assert not wheels.exists()
         assert "lantern init --systemd" in log
 
+    def test_extras_can_be_chosen(self, installable: Host) -> None:
+        result = installable.run(LANTERN_EXTRAS="discord,slack,api")
+
+        assert result.returncode == 0, result.stdout + result.stderr
+        [install] = self.install(installable)
+        assert f"lantern_backend-{VERSION}-py3-none-any.whl[discord,slack,api]" in install
+
+    @pytest.mark.parametrize("extras", ["api;rm", "api,", "API"])
+    def test_malformed_extras_stop_before_anything_runs(self, host: Host, extras: str) -> None:
+        result = host.run(LANTERN_EXTRAS=extras)
+
+        assert result.returncode == 2
+        assert "LANTERN_EXTRAS" in result.stderr
+        assert host.invocations == []
+
     def test_a_pinned_version_reads_its_own_release(self, installable: Host) -> None:
         result = installable.run(LANTERN_VERSION=VERSION)
 

@@ -171,3 +171,48 @@ def test_init_installs_the_sbx_the_old_home_ran(
     result = CliRunner().invoke(app, ["init", "--dry-run", "--from-sbxloop", str(source)])
 
     assert "0.45.1" in result.output
+
+
+def test_the_renamed_repository_is_followed_in_config_workspace_and_origin(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    source = sbxloop_home(tmp_path / ".sbxloop")
+    config = source / "config" / "sbxloop.toml"
+    config.write_text(
+        config.read_text() + '\n[[github.repos]]\nrepo = "brettbergin/sbxloop"\n'
+        f'workspace = "{source}/workspaces/brettbergin/sbxloop"\n'
+    )
+    checkout = source / "workspaces" / "brettbergin" / "sbxloop"
+    checkout.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/brettbergin/sbxloop.git",
+        ],
+        check=True,
+    )
+    home = LanternHome(tmp_path / ".lantern")
+
+    carry(home, source)
+
+    text = (home.config / "lantern.toml").read_text()
+    assert 'repo = "brettbergin/lantern-backend"' in text
+    assert f'workspace = "{tmp_path}/.lantern/workspaces/brettbergin/lantern-backend"' in text
+    moved = home.workspaces / "brettbergin" / "lantern-backend"
+    origin = subprocess.run(
+        ["git", "-C", str(moved), "remote", "get-url", "origin"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert origin == "https://github.com/brettbergin/lantern-backend.git"
+    # Another repository's name is its own business.
+    assert rewrite('repo = "brettbergin/angie"') == 'repo = "brettbergin/angie"'

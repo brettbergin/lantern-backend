@@ -15,6 +15,7 @@
 #   LANTERN_HOME=/srv/loop      install somewhere else
 #   LANTERN_VERSION=1.2.3       pin the release (default: the latest GitHub Release)
 #   LANTERN_INIT_ARGS="--no-systemd --sbx-version 0.38.0"   extra init flags
+#   LANTERN_EXTRAS=discord,slack,api   the extras to install (default: discord,slack)
 #
 # Installing needs no root: everything lands under $LANTERN_HOME, which this
 # account owns. Preparing the *host* is a separate, one-time job, and parts of
@@ -32,7 +33,10 @@ set -eu
 LANTERN_HOME="${LANTERN_HOME:-$HOME/.lantern}"
 LANTERN_VERSION="${LANTERN_VERSION:-}"
 PYTHON_SERIES="3.13"
-EXTRAS="discord,slack"
+EXTRAS="${LANTERN_EXTRAS:-discord,slack}"
+case "$EXTRAS" in
+  "" | *[!a-z,]* | ,* | *, | *,,*) echo "lantern install: LANTERN_EXTRAS must be a comma-separated list of extras" >&2; exit 2 ;;
+esac
 REPOSITORY="brettbergin/lantern-backend"
 
 say() { printf '%s\n' "lantern install: $*"; }

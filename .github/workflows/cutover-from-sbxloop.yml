@@ -146,10 +146,21 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          # The extras the sbxloop venv had, not only the installer's default:
+          # an [api] the daemon serves needs fastapi and uvicorn, which an
+          # operator installed into that venv by hand.
+          old_python="${OLD_HOME}/venv/bin/python"
+          has() { "${old_python}" -c 'import importlib.metadata as m, sys; m.distribution(sys.argv[1])' "$1" >/dev/null 2>&1; }
+          extras="discord,slack"
+          if has fastapi && has uvicorn; then extras="${extras},api"; fi
+          if has github-copilot-sdk; then extras="${extras},copilot"; fi
+          if has openai-codex; then extras="${extras},codex"; fi
+          echo "installing with extras ${extras}"
           installer="$(mktemp)"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh?ref=${WORKFLOW_SHA}" \
             -H 'Accept: application/vnd.github.raw+json' > "${installer}"
           LANTERN_VERSION="${VERSION}" \
+            LANTERN_EXTRAS="${extras}" \
             LANTERN_INIT_ARGS="--runner ${RUNNER_DIR} --from-sbxloop ${OLD_HOME}" \
             sh "${installer}"
           rm -f "${installer}"
@@ -209,11 +220,18 @@ jobs:
         continue-on-error: true
         run: |
           systemctl --user show "${UNIT}" -p ActiveState,SubState,NRestarts,ExecMainStatus,ExecMainStartTimestamp || true
-          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>/dev/null \
-            | sed -nE 's/^([0-9T:.Z-]+ +\[[a-z ]+\] +[A-Za-z0-9_.:-]+)( +\[[A-Za-z0-9_.]+\])?.*$/\1\2/p' \
-            | tail -n 120 || true
-          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>/dev/null \
-            | grep -oE '^[A-Za-z_.]*(Error|Exception)\b' | sort | uniq -c || true
+          outline() {
+            sed -E 's/\x1b\[[0-9;]*m//g' \
+              | sed -nE 's/^([0-9T:.Z-]+ +\[[a-z ]+\] +[A-Za-z0-9_.:-]+)( +\[[A-Za-z0-9_.]+\])?.*$/\1\2/p' \
+              | tail -n 120
+          }
+          errors() { grep -oE '^[A-Za-z_.]*(Error|Exception)\b' | sort | uniq -c; }
+          echo "--- journal"
+          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>&1 | outline || true
+          journalctl --user -u "${UNIT}" -o cat --no-pager -n 400 2>/dev/null | errors || true
+          echo "--- ${LANTERN_HOME}/logs/daemon.log"
+          tail -n 400 "${LANTERN_HOME}/logs/daemon.log" 2>/dev/null | outline || true
+          tail -n 400 "${LANTERN_HOME}/logs/daemon.log" 2>/dev/null | errors || true
 
       - name: Put sbxloop back
         if: failure() && !inputs.purge && steps.stop.outcome != 'skipped'
