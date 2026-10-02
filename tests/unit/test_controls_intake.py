@@ -183,6 +183,32 @@ class TestServiceAdmit:
             service.admit(CLIENT, WorkloadAdmission(ask="y"), idempotency=pair)
         assert len(h.dstore.items()) == 1
 
+    def test_a_channel_works_one_run_at_a_time(self, tmp_path: Path) -> None:
+        """Work asked for in a channel lives there (docs/spikes/work-channels.md):
+        while one ask is queued or running a second is refused and queues
+        nothing. Another channel, no channel, and the same channel once its
+        work has ended are all free."""
+        h = Harness(tmp_path, config(home=str(tmp_path / "state")))
+        h.loop.recover()
+        service = ControlService(h.loop)
+        first = service.admit(CLIENT, WorkloadAdmission(ask="x", channel_id="chn_a")).item
+
+        with pytest.raises(ControlError) as queued:
+            service.admit(CLIENT, WorkloadAdmission(ask="y", channel_id="chn_a"))
+        assert queued.value.code == "already_in_progress"
+        assert f"`{first.item_id}` is already queued in this channel" in queued.value.message
+        h.dstore.mark_claimed(first.item_id, h.clock())
+        h.dstore.mark_running(first.item_id, "r1", h.clock())
+        with pytest.raises(ControlError) as running:
+            service.admit(CLIENT, WorkloadAdmission(ask="y", channel_id="chn_a"))
+        assert "Run `r1` is live in this channel" in running.value.message
+        assert [item.item_id for item in h.dstore.items()] == [first.item_id]
+
+        assert service.admit(CLIENT, WorkloadAdmission(ask="y", channel_id="chn_b")).fresh
+        assert service.admit(CLIENT, WorkloadAdmission(ask="z")).fresh
+        h.dstore.mark_done(first.item_id, now=h.clock())
+        assert service.admit(CLIENT, WorkloadAdmission(ask="y", channel_id="chn_a")).fresh
+
     def test_the_capability_is_checked_first(self, tmp_path: Path) -> None:
         h = Harness(tmp_path, config(home=str(tmp_path / "state")))
         reader = Principal(

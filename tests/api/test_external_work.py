@@ -271,18 +271,15 @@ def test_replay_progress_is_durable_and_live_messages_are_not_historical(api: An
     assert json.loads(entries[2].origin_json)["source_run_id"] == "run_active"
 
 
-def test_a_later_admission_from_a_chat_does_not_move_the_job(api: Any) -> None:
-    """A job's work channel is the job's (docs/spikes/work-channels.md): a
-    chat that asks for the same issue again keeps a hand-off to it, and
-    the new attempt joins the old one there, where the whole history is."""
+def test_old_public_attempt_never_leaks_later_private_admission(api: Any) -> None:
     from lantern.api.external_work import jobs
 
     headers = bearer(register(api))
     item = external_item(api)
     _run(api, "public", "failed", api.clock(), item)
     api.ctx.project_work()
-    work_channel = channels(api)[0]
-    asking = api.client.post("/v1/channels", json={"title": "Private"}, headers=headers).json()[
+    public_channel = channels(api)[0]
+    private = api.client.post("/v1/channels", json={"title": "Private"}, headers=headers).json()[
         "id"
     ]
     api.clock.t += 1
@@ -290,20 +287,27 @@ def test_a_later_admission_from_a_chat_does_not_move_the_job(api: Any) -> None:
         session.execute(
             update(WorkItemRow)
             .where(WorkItemRow.item_id == item.item_id)
-            .values(channel_id=asking, state="queued", run_id=None)
+            .values(
+                channel_id=private,
+                title="Private strategy",
+                body="secret details",
+                state="queued",
+                run_id=None,
+            )
         )
     api.ctx.project_work()
     _run(api, "private", "building", api.clock(), item)
     api.ctx.project_work()
-    attempts = jobs(api.ctx, work_channel.id)
-    assert [row["run_id"] for row in attempts] == ["run_public", "run_private"]
-    assert {row["work_id"] for row in attempts} == {attempts[0]["work_id"]}
+    old = jobs(api.ctx, public_channel.id)
+    assert len(old) == 1
+    assert old[0]["run_id"] == "run_public"
+    assert old[0]["title"] == "Repair the checkout"
+    assert old[0]["item_id"] is None
+    assert old[0]["item_actions"] == []
+    assert "Private strategy" not in json.dumps(old)
     with api.harness.dstore.read() as session:
-        assert session.get(ExternalRunRow, "public").channel_id == work_channel.id
-        assert session.get(ExternalRunRow, "private").channel_id == work_channel.id
-    handoff = [entry for entry in _entries(api, asking) if entry.kind == "work_handoff"]
-    assert len(handoff) == 1
-    assert json.loads(handoff[0].origin_json)["source_work_id"] == attempts[0]["work_id"]
+        assert session.get(ExternalRunRow, "public").channel_id == public_channel.id
+        assert session.get(ExternalRunRow, "private").channel_id == private
 
 
 def test_completed_backfill_uses_dirty_queue_without_rescanning_history(api: Any) -> None:
@@ -338,15 +342,10 @@ def test_no_turn_existing_private_channel_gets_truthful_delivery(api: Any) -> No
     response = api.client.get(f"/v1/channels/{channel}/messages", headers=headers)
     assert response.status_code == 200, response.text
     messages = response.json()
-    # The chat that asked keeps the hand-off; the result is told in the
-    # job's own work channel, truthfully, with no invented turn.
-    assert [message["kind"] for message in messages] == ["work_handoff"]
-    work = [c for c in channels(api) if c.id != channel]
-    assert len(work) == 1
-    results = api.client.get(f"/v1/channels/{work[0].id}/messages", headers=headers).json()
-    assert any(message["kind"] == "work_result" for message in results)
+    assert len(channels(api)) == 1
+    assert any(message["kind"] == "work_result" for message in messages)
     assert all(
-        message["turn_id"] is None and message["author"]["kind"] == "system" for message in results
+        message["turn_id"] is None and message["author"]["kind"] == "system" for message in messages
     )
 
 
@@ -420,12 +419,7 @@ def test_existing_no_turn_live_chronicle_and_replay_share_a_ledger(api: Any) -> 
         run_id = f"live-{number}"
         _run(api, run_id, "building", api.clock(), item)
         api.ctx.project_work()
-        # The chronicle tells the story in the job's work channel, which the
-        # poster binds the item to; the replay posts the same moments there
-        # under the same keys, so each is said once whichever lands first.
-        chronicle = RunChronicle.for_item(api.ctx.poster, None, item, api.ctx.config, api.clock)
-        assert chronicle is not None
-        assert chronicle.channel_id != channel
+        chronicle = RunChronicle(api.ctx.poster, None, item, api.ctx.config, api.clock)
         event = Event(
             type="run.tasks", run_id=run_id, ts=api.clock(), data={"tasks": [{"id": "one"}]}
         )
@@ -435,15 +429,8 @@ def test_existing_no_turn_live_chronicle_and_replay_share_a_ledger(api: Any) -> 
         api.ctx.project_work()
         if not live_first:
             chronicle.on_event(event)
-        posts = [
-            entry
-            for entry in _entries(api, chronicle.channel_id)
-            if entry.kind == "agent_update" and entry.post_kind == "plan"
-        ]
+        posts = [entry for entry in _entries(api, channel) if entry.kind == "agent_update"]
         assert len(posts) == 1
-        assert _entries(api, channel) == [] or all(
-            entry.kind == "work_handoff" for entry in _entries(api, channel)
-        )
 
 
 def test_resume_during_artifact_read_never_posts_old_result_as_new_transition(

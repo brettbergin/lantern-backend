@@ -136,7 +136,7 @@ class ThreadView(Vertical):
             return
         unaddressed = not addressed and reply is None and not is_addressed(text, prefix=box.prefix)
         # In a run's thread plain text is direction for the run: the thread
-        # is the run's work channel, and whatever is typed there reaches it.
+        # is the run's channel, and whatever is typed there reaches it.
         if unaddressed and not self.thread and not self._toasted:
             self._toasted = True
             self.app.notify(

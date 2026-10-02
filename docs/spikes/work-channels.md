@@ -1,7 +1,8 @@
-# Work channels: one unit of work, one conversation, every surface
+# Work lives in the channel that asked for it
 
-Status: decided 2026-10-01; implemented by the pull requests this document
-names at the end.
+Status: decided 2026-10-02. It replaces the decision this file recorded on
+2026-10-01 (every job in a channel of its own), which shipped in 2.1.44 and
+was wrong; what it got wrong is below.
 
 ## The problem
 
@@ -9,68 +10,76 @@ Lantern had two chat architectures that showed the same run in two shapes.
 
 The chat bridges — Discord, Slack, Mattermost and the operator console's
 local bridge — post a headline per run in one *control channel* and open a
-*thread per run* under it, streaming the chronology there. A person steers
+*thread per run* under it, streaming the chronology there. A person steered
 by @mentioning the bot in that thread (`daemon/chat.py`, `_steer`), which
-hands the text to the engine directly: no `runs:steer` check, no steering
-record, no operation, nothing the other surfaces can see.
+handed the text to the engine directly: no `runs:steer` check, no steering
+record, no operation, nothing the other surfaces could see.
 
 The collaboration API (`/v1/channels`), which the web and iOS apps speak,
-has durable channels that hold *many* runs each, rendered as a folded run
-card under the reply that queued it. A person steers in the card, or by
-@mentioning an agent in the composer, which steers only when exactly one
-live run in the channel has that agent. Work admitted outside chat (a
-labelled issue, a schedule) already got a channel of its own
-(`collaboration.external_work`), so the apps rendered two shapes with one
-component.
+has durable channels. A run was drawn as a folded card under the reply that
+queued it and steered through a box inside that card, as if it were a
+thread hanging off the conversation rather than the conversation's subject.
 
-`DaemonLoop` calls `frontend.run_started` for every run with no channel
-filter, so a run a linked channel asked for existed twice: the bridge's own
-headline and thread, and the channel's run posts mirrored to the linked
-surface, sharing no identifier. `409 link_run_thread` kept the two apart.
+What was asked for: in Lantern's own surfaces a channel represents the
+work, and people and agents talk and steer in the channel — not in a thread
+under it.
+
+## The first decision, and why it was wrong
+
+The first answer gave every job a new, system-created *work channel* and
+left a hand-off card in the chat that asked. That is the thread model with
+a larger container: the conversation still forked away from where it began,
+and one piece of work had two channels — the one it was asked in and the
+one it ran in. The design questions that led there ("what does the asking
+chat keep?", "what is the unit of a work channel?") presupposed the split
+instead of asking whether the work should leave the channel at all.
 
 ## The decision
 
-- **One unit: a work channel per job.** Every job — admitted from chat, a
-  label, a schedule or the API — gets the system-created, workspace-visible
-  channel external work already got. Attempts (retries) share it. The chat
-  that asked for the work keeps a hand-off message naming the job, which a
-  client shows as a status card linking to the work channel, and the
-  delivery or notice the asking turn already received.
-- **Steering is the work channel's composer.** A plain message in a work
-  channel while its one run is live is direction for that run; `@agent`
-  addresses that agent's lane; `/stop` stops. Every path lands in
-  `ControlService.steer`, so one record, one `run.steer` event, one rule.
-- **A bridge's run thread is a link of the work channel.** The headline and
-  thread the bridges open stay; the thread is registered as a
-  `ChannelLink` of the work channel, admitting guests. Outbound, the
-  channel mirror carries the work channel into the thread; inbound, a reply
-  in the thread is a turn in the work channel, so it steers through the
-  same path as a reply typed in the app. The bridge keeps what the channel
-  has no message for — the headline card, the status line and the tool
-  digest edited in place, the agent's narration — and stops rendering what
-  the channel already says (the task roster, verdicts, steering replies).
-  The local bridge is a `ChatBridge`, so the console inherits all of it.
-- **Anyone who can post in a bridge thread steers**, as before; the link
-  admits guests. Stopping keeps the channel stop's rule (a member).
-- **Advertised as `collaboration.work_channels`.** Older clients keep
-  `/work` and `/jobs` as they were; a job's rows carry the work channel's
-  id so a newer client sends a reader there instead of drawing a card.
+- **Work stays in the channel it was asked in.** A job admitted from a chat
+  turn, or through the API naming a channel, is bound to that channel: its
+  runs, their chronology and their delivery happen there. No second
+  channel, no hand-off.
+- **What comes next happens there too.** A retry, a resume, and a new ask
+  once the last run has ended all run in the same channel.
+- **One run at a time per channel.** While a run is queued or running, a
+  plain message in the channel is direction for it (`ControlService.steer`:
+  one record, one `run.steer` event, one rule), `@agent` addresses that
+  agent's lane, and `/stop` stops it. An explicit ask for *new* work — a
+  turn that picks a runner, an admission naming the channel, an agent
+  filing an issue to be run — is refused until the run has ended. The rule
+  is `controls.intake.channel_refusal`, checked wherever work is admitted.
+- **Work nobody asked for in a channel keeps a channel of its own.** A
+  labelled issue, a schedule's tick and a bare API admission have no
+  conversation to live in; they get the system-created, workspace-visible
+  channel external work always had (`collaboration.external_work`).
+- **A bridge's run thread is a link of the run's channel while the run is
+  live.** The headline and thread the bridges open stay; the thread is
+  registered as a `ChannelLink` of the channel, admitting guests, so the
+  channel reaches the thread and a reply in the thread is a turn in the
+  channel. The link is retired when the run ends, because the channel goes
+  on to host other runs, each with a thread of its own.
+- **Advertised as `collaboration.channel_runs`**, in place of
+  `collaboration.work_channels`. A client without the new flag draws a run
+  card in the chat with its own steer box, as it did before either.
 
 ## What was considered and refused
 
-- *A channel per run.* A retry would start a new conversation and lose the
-  attempt history the external-work design deliberately keeps together.
-- *Feeding the bridge from the chronology instead of the run bus.* The bus
-  and the chronology carry the same engine events; the duplicate was the
-  rendered transcript, not the subscription. Dropping the lines the channel
-  already posts removes it without rewriting the pump.
-- *Moving the console to `/v1`.* Worthwhile, separate: the console reads
-  `state.db` and the ctl queue, and the local bridge already gives it the
-  work channel through the link.
+- *Queueing a second ask behind the live run.* The channel would then hold
+  a waiting job beside the live one, and a plain message would have two
+  things it might mean.
+- *Treating an explicit new ask as steering.* A turn that picked a runner
+  would silently become direction for a different run.
+- *Migrating the channels 2.1.44–2.1.47 made.* They and their hand-off
+  messages stay readable; a job bound to one runs its next attempt in the
+  channel that asks for it.
+- *Giving the console channels.* It stays an operator's view of runs: what
+  is typed in a run's screen reaches the run's channel through the link.
+  Worth doing, and separate.
 
 ## Pull requests
 
-- lantern-backend: work channels, one steering path, bridge threads as links
-  (`collaboration.work_channels`).
-- lantern-web-app: the work-channel screen and the hand-off card.
-- lantern-mobile-app: the same, with the parity rows it moves.
+- lantern-backend: bind work to the asking channel, one run at a time, the
+  thread link retired at the end of its run (`collaboration.channel_runs`).
+- lantern-web-app, lantern-mobile-app: the composer steers the channel's
+  live run; the hand-off card and the separate work-channel screen go.

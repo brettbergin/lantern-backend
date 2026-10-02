@@ -2821,7 +2821,7 @@ class CollaborationStore:
         makes the channel capture what everyone on that surface says and post
         its own traffic there, which reaches past the channel. The daemon
         itself (``viewer`` None) links the thread a bridge opens for a run
-        to the run's work channel (docs/spikes/work-channels.md).
+        to the channel the run lives in (docs/spikes/work-channels.md).
         """
         if backend in THREAD_IS_SURFACE and thread_id is not None:
             # A Discord thread (and the console's) is a channel of its own:

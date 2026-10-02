@@ -298,6 +298,27 @@ class TestFileIssue:
         (_, _, _, labels) = github.created[0]
         assert labels == [Config().labels_for().trigger]
 
+    def test_a_queued_issue_from_a_busy_channel_files_nothing(self, tmp_path: Path) -> None:
+        """A channel works one run at a time (docs/spikes/work-channels.md):
+        an issue filed to be run would become a second run there, so it is
+        refused before the forge is touched. One filed only to be read is
+        not work, and is filed as before."""
+        work, harness, github = service(tmp_path)
+        harness.dstore.upsert_new(
+            WorkItem(item_id="api:busy", source_key="api:busy", title="Busy", channel_id="ch1"),
+            harness.clock(),
+        )
+        tools = offered(work, scout(can_start=["code", "workload"]), channel_id="ch1")
+
+        text = call(tools, "file_issue", repo="o/r", title="Do it", body="now", queue=True)
+        assert "`api:busy` is already queued in this channel" in text
+        assert github.created == []
+        text = call(tools, "start_run", kind="workload", ask="Summarise", profile="research")
+        assert "already queued in this channel" in text
+        assert [item.item_id for item in harness.dstore.items()] == ["api:busy"]
+
+        assert "filed issue" in call(tools, "file_issue", repo="o/r", title="Note", body="read me")
+
     def test_a_code_start_files_a_queued_issue(self, tmp_path: Path) -> None:
         work, _, github = service(tmp_path)
         tools = offered(work, scout(can_start=["code"]), parent_item_id="api:p", parent_depth=1)

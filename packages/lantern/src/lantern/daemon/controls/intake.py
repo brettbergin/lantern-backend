@@ -403,6 +403,38 @@ def admit_issue(loop: Any, request: IssueAdmission, *, label: bool = True) -> Wo
     return item
 
 
+def channel_refusal(loop: Any, channel_id: str | None, *, item_id: str | None = None) -> str | None:
+    """Why ``channel_id`` cannot take new work right now, or None.
+
+    Work asked for in a channel lives in that channel, one run at a time
+    (docs/spikes/work-channels.md): while one is queued or running there a
+    plain message steers it, and a second ask is refused rather than run
+    beside it. ``item_id`` is the item being admitted, so replaying an
+    admission is not refused by the row it already made.
+    """
+    channel = (channel_id or "").strip()
+    if loop is None or not channel:
+        return None
+    live_work = getattr(getattr(loop, "dstore", None), "channel_live_work", None)
+    running, queued = live_work(channel) if callable(live_work) else ([], [])
+    live_runs = getattr(loop, "live_runs_in_channel", None)
+    runs = list(dict.fromkeys([*running, *(live_runs(channel) if callable(live_runs) else ())]))
+    if item_id is not None:
+        queued = [queued_id for queued_id in queued if queued_id != item_id]
+        runs = [run_id for run_id in runs if loop.dstore.item_for_run(run_id) != item_id]
+    if runs:
+        return (
+            f"Run `{runs[0]}` is live in this channel, and a channel works one run at a time. "
+            "A plain message here steers it; stop it, or wait for it to finish, to start new work."
+        )
+    if queued:
+        return (
+            f"`{queued[0]}` is already queued in this channel, and a channel works one run at "
+            "a time. Wait for it, or cancel it, to start new work."
+        )
+    return None
+
+
 def upsert(loop: Any, item: WorkItem, *, by: str | None) -> tuple[WorkItem, bool]:
     """Queue ``item`` as discovery would; the row as the store holds it
     afterwards, and whether this call created it."""
