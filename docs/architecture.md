@@ -2786,7 +2786,12 @@ dispatch picks up what the pass queued. A pass reads each admitted task's
 item — `done` is landed (the source's merge or completed report closed the
 issue), `failed`, `blocked` or `cancelled` is failed — then admits, in the
 plan's order, every task whose `depends_on` are all landed or closed, and
-marks the dependents of a failed task blocked. Admission is
+marks the dependents of a failed task blocked. The run drives the epic,
+not a snapshot of it: a task that joins the epic on the forge while the
+run is live (an approved re-plan's addition, an issue attached or
+adopted) gets a row on the next pass and is admitted when it is ready,
+and one that leaves is followed to its end; the run does not complete
+without a task that joined. Admission is
 `controls/intake.py`'s `admit_issue` with `label=False` — the source's own
 rules, minus the queueing label — then `upsert` with `parent_item_id`
 naming the run (`erun_…`, `daemon/model.py::is_epic_run_id`) and, for a
