@@ -8,10 +8,10 @@ rounds a second time and was handed over, the notice that says what to do —
 `❌ … exhausted its review fix rounds again (…); handed over` — named
 nobody. The only ping was a chat bridge's generic `run … finished` line in
 the control channel, which for a failure reads the same whether the daemon
-retries it or gave up; the run's thread pinged nobody. Those three notices now @mention whoever asked for
-the work in chat and anyone watching the run — the people
-`run.awaiting_answers` already names — in the thread and on the
-control-channel line. Nothing else about them changed: the same notices,
+retries it or gave up; the run's thread pinged nobody. Those three notices
+now @mention whoever asked for the work in chat and anyone watching the run
+— the people `run.awaiting_answers` already names — in the thread and on
+the control-channel line. Nothing else about them changed: the same notices,
 text and levels; an item with no chat requester (a labelled issue, an API
 admission, a schedule) pings nobody; a failure the daemon retries, the
 first exhaustion it resumes by itself, and an operator's own `abandon` or
