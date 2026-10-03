@@ -79,6 +79,19 @@ class TestAnItem:
         assert resumed.status_code == 409 and resumed.json()["detail"] == "work was deleted"
         retried = api.client.post(f"/v1/items/{item['id']}/retry", headers=headers)
         assert retried.status_code == 409 and retried.json()["detail"] == "work was deleted"
+        # Nor an alert control: there is no alert left to acknowledge.
+        for path in (f"/v1/items/{item['id']}/dismiss", f"/v1/runs/{run_public(run_id)}/dismiss"):
+            dismissed = api.client.post(path, headers=headers)
+            assert dismissed.status_code == 409, path
+            assert dismissed.json()["detail"] == "work was deleted"
+        bulk = api.client.post(
+            "/v1/attention/dismiss", json={"targets": [{"item_id": item["id"]}]}, headers=headers
+        )
+        assert bulk.status_code == 200, bulk.text
+        assert [(r["outcome"], r["code"], r["detail"]) for r in bulk.json()["results"]] == [
+            ("skipped", "not_eligible", "work was deleted")
+        ]
+        assert api.loop.dstore.work_mark("item", "gh:issue:1", "dismissed") is None
 
     def test_deleting_twice_is_not_an_error(self, api: Api) -> None:
         item, _run_id, _run_dir = _blocked(api)
