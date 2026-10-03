@@ -79,6 +79,8 @@ def workload_task(id: str, profile: str = "research") -> dict[str, Any]:
     return {
         "id": id,
         "title": f"Survey {id}",
+        "goal": f"what {id} finds out",
+        "context": "docs/formats.md lists the formats people asked for",
         "acceptance_criteria": ["a summary lists three formats"],
         "kind": "workload",
         "workload_profile": profile,
@@ -266,7 +268,7 @@ class TestPlanRun:
         second = [j for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"]
         retried = max(second, key=lambda j: len(j["prompt"]))["prompt"]
         assert "Previous attempt was invalid" in retried
-        assert "a task needs at least one acceptance criterion" in retried
+        assert "every child needs at least one acceptance criterion" in retried
         assert "depends on 'c9', which is not a sibling" in retried
         assert len(desk.delivered) == 1
 
@@ -611,7 +613,19 @@ class TestThePrompt:
             kept=["Mobile app"],
             repositories=["o/mobile"],
         )
-        harness.script([answer({"id": "e1", "title": "Reports API"})])
+        harness.script(
+            [
+                answer(
+                    {
+                        "id": "e1",
+                        "title": "Reports API",
+                        "goal": "reports download",
+                        "context": "src/reports.py",
+                        "acceptance_criteria": ["a report downloads"],
+                    }
+                )
+            ]
+        )
         built = engine(harness, RecordingDesk(plan_brief=brief), keep_sandboxes=True)
         result = built.start("plan", repo=REPO, kind="plan")
         assert result.state == "completed", result.reason
@@ -644,8 +658,14 @@ class TestTheModel:
 class TestProposalRules:
     def test_epics_carry_no_task_sections(self) -> None:
         brief = epic_brief(level="initiative", child_level="epic")
+        whole = {"goal": "g", "context": "c", "acceptance_criteria": ["done"]}
         proposal = PlanProposal.model_validate(
-            {"children": [{"title": "API", "kind": "code", "depends_on": [2]}, {"title": "UI"}]}
+            {
+                "children": [
+                    {"title": "API", "kind": "code", "depends_on": [2], **whole},
+                    {"title": "UI", **whole},
+                ]
+            }
         )
         (problem,) = proposal_problems(proposal, brief)
         assert problem == "epic 1 (API): only a task carries kind, depends_on"
@@ -674,6 +694,50 @@ class TestProposalRules:
             proposal, epic_brief(), lint=lambda commands: [f"`{c}` is bare" for c in commands]
         )
         assert problems == ["task a (Task a): `make test` is bare"]
+
+
+class TestEveryChildIsWhole:
+    """What the prompt asks of every child — a title, a goal, context and
+    acceptance criteria — the validator holds it to, for epics as much as
+    tasks, so a thin child is sent back once rather than delivered."""
+
+    def test_an_epic_needs_its_sections(self) -> None:
+        brief = epic_brief(level="initiative", child_level="epic")
+        proposal = PlanProposal.model_validate({"children": [{"title": "Reports API"}]})
+        problems = proposal_problems(proposal, brief)
+        assert "epic 1 (Reports API): every child needs a goal" in problems
+        assert "epic 1 (Reports API): every child needs context" in problems
+        assert any("at least one acceptance criterion" in p for p in problems)
+
+    def test_a_task_needs_a_goal_and_context_too(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", goal="", context="  ")]}
+        )
+        problems = proposal_problems(proposal, epic_brief())
+        assert "task a (Task a): every child needs a goal" in problems
+        assert "task a (Task a): every child needs context" in problems
+
+    def test_a_child_that_stays_is_not_proposed_again(self) -> None:
+        brief = epic_brief(kept=["Export as CSV"])
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", title="  export  as csv"), code_task("b", title="Task b")]}
+        )
+        (problem,) = proposal_problems(proposal, brief)
+        assert "repeats a child that stays" in problem and "Export as CSV" in problem
+
+    def test_two_children_with_one_title_are_sent_back(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", title="Same"), code_task("b", title="same ")]}
+        )
+        (problem,) = proposal_problems(proposal, epic_brief())
+        assert "task b (same): repeats task a" in problem
+
+    def test_the_hosts_stamp_is_not_the_planners_to_set(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a")], "source_input": {"title": "x"}}
+        )
+        (problem,) = proposal_problems(proposal, epic_brief())
+        assert "source_input" in problem and "leave it out" in problem
 
 
 # -- a re-plan (#2346) -----------------------------------------------------------
@@ -831,7 +895,7 @@ class TestReplanRules:
     def test_a_good_diff_has_none(self) -> None:
         assert (
             self._problems(
-                add=[code_task("a1", deps=["node_1"])],
+                add=[code_task("a1", deps=["node_1"], rationale="nothing exports yet")],
                 modify=[{"target": "node_1", "title": "Sharper", "rationale": "r"}],
                 suggest_close=[{"target": "node_4", "rationale": "covered by node_1"}],
             )
@@ -839,13 +903,15 @@ class TestReplanRules:
         )
 
     def test_an_addition_is_never_a_child_that_exists(self) -> None:
-        (problem,) = self._problems(add=[code_task("node_2", title="Brand new")])
+        (problem,) = self._problems(add=[code_task("node_2", title="Brand new", rationale="r")])
         assert "`node_2` is a current child's id; `modify` it rather than add it" in problem
-        (problem,) = self._problems(add=[code_task("a1", title="  current   node_2 ")])
+        (problem,) = self._problems(
+            add=[code_task("a1", title="  current   node_2 ", rationale="r")]
+        )
         assert "repeats the current child node_2" in problem
 
     def test_the_room_left_by_the_cap(self) -> None:
-        problems = self._problems(add=[code_task("a1"), code_task("a2"), code_task("a3")])
+        problems = self._problems(add=[code_task(i, rationale="r") for i in ("a1", "a2", "a3")])
         assert "add at most 2 tasks (the level's cap is 4); this answer adds 3" in problems
 
     def test_an_entry_names_a_changeable_current_child_once(self) -> None:
@@ -886,3 +952,42 @@ class TestReplanRules:
     def test_a_close_says_why(self) -> None:
         with pytest.raises(ValueError, match="say why"):
             PlanReplan.model_validate({"suggest_close": [{"target": "node_1", "rationale": " "}]})
+
+    def test_every_entry_says_why(self) -> None:
+        problems = self._problems(
+            add=[code_task("a1", rationale=" ")],
+            modify=[{"target": "node_1", "title": "Sharper"}],
+        )
+        assert "addition a1 (Task a1): say why in `rationale`" in problems
+        assert "modify node_1: say why in `rationale`" in problems
+
+    def test_changes_cannot_make_a_dependency_cycle(self) -> None:
+        # node_2 already depends on node_1; making node_1 depend on node_2 loops.
+        replan = PlanReplan.model_validate(
+            {"modify": [{"target": "node_1", "depends_on": ["node_2"], "rationale": "r"}]}
+        )
+        brief = epic_brief(
+            mode="replan",
+            room=2,
+            cap=4,
+            current=[
+                current_child("node_1"),
+                current_child("node_2", depends_on=["node_1"]),
+            ],
+        )
+        problems = replan_problems(replan, brief)
+        assert any("make a cycle" in p for p in problems), problems
+
+    def test_an_addition_does_not_depend_on_a_child_this_diff_closes(self) -> None:
+        problems = self._problems(
+            add=[code_task("a1", deps=["node_2"], rationale="r")],
+            suggest_close=[{"target": "node_2", "rationale": "gone"}],
+        )
+        assert any("depends on node_2, which this diff closes" in p for p in problems), problems
+
+    def test_a_change_may_not_empty_a_required_section(self) -> None:
+        problems = self._problems(
+            modify=[{"target": "node_1", "goal": "", "acceptance_criteria": [], "rationale": "r"}]
+        )
+        assert "modify node_1: a child cannot be left without a goal" in problems
+        assert any("without acceptance criteria" in p for p in problems)
