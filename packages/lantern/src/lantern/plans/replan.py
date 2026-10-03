@@ -14,8 +14,11 @@ entry:
   changed since is refused naming what moved, and an issue that changed
   after that reading is refused by the write's own check. Nothing is
   written when either refuses.
-- ``suggest_close`` — the child's issue is closed as not planned (GitHub's
-  ``state_reason``; GitLab records no reason), then a comment on it gives
+- ``suggest_close`` — judged like a change first: the child must still
+  read as it did when the diff was proposed (``before`` against the plan,
+  ``forge_version`` against the issue read now), since a person who rewrote
+  it may well want it. Then the issue is closed as not planned (GitHub's
+  ``state_reason``; GitLab records no reason), and a comment on it gives
   the rationale and who approved it. The node stays in the plan, closed:
   nothing is deleted, and a person can reopen the issue. An issue already
   closed is left as it is, without a comment.
@@ -43,8 +46,9 @@ from typing import Any, Literal
 from lantern.config import Config
 from lantern.engine.planning import fold_title
 from lantern.errors import LanternError
-from lantern.plans.model import Plan, PlanNode, ReplanEntry, child_level
+from lantern.plans.model import Plan, PlanNode, ReplanEntry, child_level, content_version
 from lantern.plans.publish import publish_level
+from lantern.plans.reconcile import as_forge_has_it, seen_of
 from lantern.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision
 from lantern.vcs.protocol import IssueOps
 
@@ -217,13 +221,39 @@ class _Apply:
         return EntryResult(entry.id, entry.action, "updated", child.id, forge.number, forge.url)
 
     def close(self, entry: ReplanEntry, parent: PlanNode) -> EntryResult:
+        """An approved ``suggest_close``: judged against the issue as the
+        forge has it now, like a change is. The child must still read as
+        it did when the diff was proposed (``before`` on the plan,
+        ``forge_version`` on the issue itself) — a person who rewrote it
+        since may well want it — and an issue a person already closed is
+        left as it is, without a comment."""
         plan = self.current()
         child = self.child(plan, entry)
         forge = child.forge
         assert forge is not None  # nosec B101 - self.child checked
         done = EntryResult(entry.id, entry.action, "closed", child.id, forge.number, forge.url)
-        if forge.state == "closed":
+        moved = [k for k, v in entry.before.items() if _plain(getattr(child, k)) != v]
+        if moved:
+            raise _Refused(
+                f"“{child.title}” changed since the re-plan was proposed "
+                f"({', '.join(sorted(moved))}); discard this entry or re-plan again"
+            )
+        try:
+            row = self.ops.issue_get(child.repository, forge.number)
+        except LanternError as exc:
+            raise _Refused(
+                f"could not read {child.repository}#{forge.number} before closing it: {_say(exc)}"
+            ) from exc
+        seen = seen_of(row, child.repository, forge.number)
+        if seen.state == "closed":
             return replace(done, reason="it was already closed on the forge")
+        if entry.forge_version:
+            current = as_forge_has_it(plan, child, title=seen.title, body=seen.body)
+            if content_version(current) != entry.forge_version:
+                raise _Refused(
+                    f"“{child.title}” changed on the forge since the re-plan was proposed; "
+                    "nothing was closed — discard this entry or re-plan again"
+                )
         self.ops.issue_close(child.repository, forge.number, reason="not_planned")
         self.changed(
             child.id,
