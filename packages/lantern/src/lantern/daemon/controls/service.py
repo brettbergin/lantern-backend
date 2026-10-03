@@ -863,6 +863,7 @@ class ControlService:
         named: dict[str, Any] = {"item_id": target} if kind == "item" else {"run_id": target}
 
         def apply(op_id: str | None) -> DismissOutcome:
+            self._refuse_deleted(**named)
             if undo:
                 return self.loop.undismiss_work(
                     **named, actor=principal.audit(), expected_revision=expected_revision
@@ -954,6 +955,7 @@ class ControlService:
             for index, (kind, key, revision) in enumerate(named):
                 where: dict[str, Any] = {"item_id": key} if kind == "item" else {"run_id": key}
                 try:
+                    self._refuse_deleted(**where)
                     outcome = self.loop.dismiss_work(
                         **where,
                         actor=principal.audit(),

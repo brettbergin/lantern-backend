@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+**Deleted work no longer takes a dismissal.** `POST /v1/items/{id}/dismiss`,
+its run twin and `POST /v1/attention/dismiss` accepted work a person had
+already deleted and wrote a dismissal on it, though deleted work is meant to
+take no further command. They now refuse it as every other control does
+(`409 not_eligible`, "work was deleted"; `skipped` in a bulk dismissal).
+
 **An owner can write the rules that will let agents take decisions.** Every
 plan level needs a person to approve it, publish it and start it, and there
 was no way to say once "this agent may do that, under these conditions". A
