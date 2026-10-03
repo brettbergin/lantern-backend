@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+**The fleet analytics are served over the API.** How the runs of a window
+went — outcomes, time to land, time parked on a person, turns, rework,
+failures by cause — was computed inside the console and nowhere else, so no
+web or mobile client could show it. `GET /v1/analytics` (`runs:read`) answers
+with the same fold: `window_s` (a week when omitted, 60 seconds to 90 days),
+`buckets` (7 when omitted, at most 90) and `until` (RFC 3339 or epoch; now
+when omitted). Every derived value is a field — per-kind `lanes` and the
+`total`, `phases`, `buckets`, `rework`, review and CI rounds, `failures`,
+the `costliest` and `longest_parked` runs by public id, median and p90
+`spreads`, and the `previous` window with a `delta` for each value — with
+durations in seconds, `null` where there is nothing to measure, and never a
+currency. Advertised as `analytics`. The fold itself moved from
+`lantern.tui.analytics` to `lantern.analytics`; the console shows what it
+did.
+
 **An alert can be dismissed, and finished work deleted.** A failed item
 offered one control, retry, so work nobody meant to retry asked for attention
 for good. `POST /v1/items/{id}/dismiss` (and `/v1/runs/{id}/dismiss` for a run

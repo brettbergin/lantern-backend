@@ -2260,6 +2260,11 @@ backend reported — tokens and turns by persona and by phase and model — with
 unknowns kept as `null` and `recorded: false` when nothing was reported, which
 is not zero. `spend` is always `null`, and `spend_basis` says why: no backend
 reports a charge in a known unit, and a token total is not a bill.
+`GET /v1/analytics?window_s&buckets&until` is the console's Overview for any
+client: the runs that began in a window (a week when omitted, at most 90
+days) folded into outcomes, time to land, time parked on a person, turns,
+rework and failures by cause, per run kind and in total, with the window
+before it for comparison.
 
 **Diagnostics and administration.** `GET /v1/logs` (`diagnostics:read`;
 `tail` up to 500, `level`, `grep` as a plain substring) is the daemon's

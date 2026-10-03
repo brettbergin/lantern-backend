@@ -28,6 +28,7 @@ from lantern.api.context import ApiContext
 from lantern.api.routes import (
     admin,
     agents,
+    analytics,
     artifacts,
     auth,
     catalog,
@@ -183,6 +184,7 @@ def create_app(ctx: ApiContext) -> FastAPI:
     app.include_router(control.router)
     app.include_router(artifacts.router)
     app.include_router(usage.router)
+    app.include_router(analytics.router)
     app.include_router(admin.router)
     app.include_router(diagnostics.router)
     app.include_router(events.router)

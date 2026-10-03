@@ -666,6 +666,616 @@
         "title": "AgentUpdate",
         "type": "object"
       },
+      "AnalyticsBucket": {
+        "additionalProperties": false,
+        "description": "One slice of the window, by the runs that began in it.",
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "landed": {
+            "title": "Landed",
+            "type": "integer"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns"
+        ],
+        "title": "AnalyticsBucket",
+        "type": "object"
+      },
+      "AnalyticsDelta": {
+        "additionalProperties": false,
+        "description": "This window's total against the previous window's, as a share of\nthe previous value (``0.25`` is a quarter more). ``null`` when nothing\npreceded the window or the previous value was zero.",
+        "properties": {
+          "active_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active S"
+          },
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Tokens"
+          },
+          "cancelled": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled"
+          },
+          "elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed S"
+          },
+          "failed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed"
+          },
+          "landed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landed"
+          },
+          "ok_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok Rate"
+          },
+          "parked_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parked S"
+          },
+          "parked_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parked Share"
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns"
+          }
+        },
+        "required": [
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s",
+          "elapsed_s",
+          "parked_s",
+          "ok_rate",
+          "parked_share"
+        ],
+        "title": "AnalyticsDelta",
+        "type": "object"
+      },
+      "AnalyticsFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count"
+        ],
+        "title": "AnalyticsFailure",
+        "type": "object"
+      },
+      "AnalyticsLane": {
+        "additionalProperties": false,
+        "description": "One run kind's totals over a window \u2014 or every kind together\n(``all``), or the window before this one (``previous``).",
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "elapsed_s": {
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed": {
+            "title": "Landed",
+            "type": "integer"
+          },
+          "ok_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok Rate"
+          },
+          "parked_s": {
+            "title": "Parked S",
+            "type": "number"
+          },
+          "parked_share": {
+            "title": "Parked Share",
+            "type": "number"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s",
+          "elapsed_s",
+          "parked_s",
+          "ok_rate",
+          "parked_share"
+        ],
+        "title": "AnalyticsLane",
+        "type": "object"
+      },
+      "AnalyticsPhase": {
+        "additionalProperties": false,
+        "description": "One phase's share of the window, by the attempts that started in it.",
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "retries": {
+            "title": "Retries",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "attempts",
+          "retries",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s"
+        ],
+        "title": "AnalyticsPhase",
+        "type": "object"
+      },
+      "AnalyticsRework": {
+        "additionalProperties": false,
+        "properties": {
+          "replans": {
+            "title": "Replans",
+            "type": "integer"
+          },
+          "retried_share": {
+            "title": "Retried Share",
+            "type": "number"
+          },
+          "revisions": {
+            "title": "Revisions",
+            "type": "integer"
+          },
+          "suspect": {
+            "title": "Suspect",
+            "type": "integer"
+          },
+          "tasks": {
+            "title": "Tasks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tasks",
+          "revisions",
+          "replans",
+          "suspect",
+          "retried_share"
+        ],
+        "title": "AnalyticsRework",
+        "type": "object"
+      },
+      "AnalyticsRun": {
+        "additionalProperties": false,
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "parked_s": {
+            "title": "Parked S",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "state",
+          "turns",
+          "tokens",
+          "active_s",
+          "parked_s"
+        ],
+        "title": "AnalyticsRun",
+        "type": "object"
+      },
+      "AnalyticsSpread": {
+        "additionalProperties": false,
+        "properties": {
+          "median": {
+            "title": "Median",
+            "type": "number"
+          },
+          "p90": {
+            "title": "P90",
+            "type": "number"
+          }
+        },
+        "required": [
+          "median",
+          "p90"
+        ],
+        "title": "AnalyticsSpread",
+        "type": "object"
+      },
+      "AnalyticsSpreads": {
+        "additionalProperties": false,
+        "description": "Median and p90 across the window's runs; ``null`` where no run\ngives one.",
+        "properties": {
+          "active_s": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cycle_s": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "turns",
+          "cycle_s",
+          "active_s"
+        ],
+        "title": "AnalyticsSpreads",
+        "type": "object"
+      },
+      "AnalyticsWindow": {
+        "additionalProperties": false,
+        "description": "A window of runs, folded: outcomes, time, turns and failures by\ncause. A run is attributed whole to the window it began in. Telemetry,\nnever a currency.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsBucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "ci_rounds": {
+            "title": "Ci Rounds",
+            "type": "integer"
+          },
+          "costliest": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsRun"
+            },
+            "title": "Costliest",
+            "type": "array"
+          },
+          "delta": {
+            "$ref": "#/components/schemas/AnalyticsDelta"
+          },
+          "empty": {
+            "title": "Empty",
+            "type": "boolean"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsLane"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "longest_parked": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsRun"
+            },
+            "title": "Longest Parked",
+            "type": "array"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsPhase"
+            },
+            "title": "Phases",
+            "type": "array"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsLane"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_rounds": {
+            "title": "Review Rounds",
+            "type": "integer"
+          },
+          "rework": {
+            "$ref": "#/components/schemas/AnalyticsRework"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "spreads": {
+            "$ref": "#/components/schemas/AnalyticsSpreads"
+          },
+          "total": {
+            "$ref": "#/components/schemas/AnalyticsLane"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          },
+          "window_s": {
+            "title": "Window S",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "observed_at",
+          "window_s",
+          "empty",
+          "total",
+          "lanes",
+          "phases",
+          "buckets",
+          "rework",
+          "review_rounds",
+          "ci_rounds",
+          "failures",
+          "costliest",
+          "longest_parked",
+          "spreads",
+          "previous",
+          "delta"
+        ],
+        "title": "AnalyticsWindow",
+        "type": "object"
+      },
       "ArtifactOut": {
         "additionalProperties": false,
         "properties": {
@@ -12640,6 +13250,81 @@
         "summary": "Update Memory",
         "tags": [
           "collaboration"
+        ]
+      }
+    },
+    "/v1/analytics": {
+      "get": {
+        "description": "How the runs that began in a window went: outcomes, time to land,\ntime parked on a person, turns, rework and failures by cause, per run\nkind and in total, with the window before it for comparison. The\nwindow is `window_s` seconds (a week when omitted, at most 90 days)\nending at `until` (RFC 3339 or epoch; now when omitted), cut into\n`buckets` equal slices. Telemetry, never a bill.",
+        "operationId": "get_analytics_v1_analytics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_s",
+            "required": false,
+            "schema": {
+              "default": 604800,
+              "maximum": 7776000,
+              "minimum": 60,
+              "title": "Window S",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "buckets",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Buckets",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsWindow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Analytics",
+        "tags": [
+          "analytics"
         ]
       }
     },
