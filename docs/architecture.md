@@ -1661,10 +1661,13 @@ provision (agent box only, data dir mounted, no toolchains)
   output before delivery, and the delivery is recorded as a `plan`
   `Published` row, so a resume delivers without a second turn and never
   twice. The plan service writes it in one revision: the node's previous
-  `proposed` children go, a person's `draft` and `approved` children stay,
-  each proposed child is `proposed` with `origin = planner` and its
-  dependencies mapped to the new ids, under the same section rules a
-  person's edit meets.
+  `proposed` children go with everything under them, a person's `draft`
+  and `approved` children stay, and so does a `proposed` child a person
+  has since built under (a drafted or approved task under a proposed epic
+  makes the epic theirs — the brief names it as kept and it takes one of
+  the cap's places); each proposed child is `proposed` with
+  `origin = planner` and its dependencies mapped to the new ids, under the
+  same section rules a person's edit meets.
 
 - **Events.** `plan.generation.started` when the run starts,
   `plan.generation.proposed` in the delivery's transaction, and

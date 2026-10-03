@@ -1655,7 +1655,8 @@ class PlanService:
                 f"and {len(proposal.children)} were proposed",
                 node_id=node.id,
             )
-        replaced = [child for child in plan.children(node.id) if child.state == "proposed"]
+        staying = {child.id for child in kept}
+        replaced = [child for child in plan.children(node.id) if child.id not in staying]
         gone = [n for child in replaced for n in (child, *plan.descendants(child.id))]
         if any(n.state == "published" for n in gone):
             raise PlanRefusal(
@@ -2621,8 +2622,19 @@ def _current(child: PlanNode) -> CurrentChild:
 
 def _kept(plan: Plan, node: PlanNode) -> list[PlanNode]:
     """The children of ``node`` a proposal leaves where they are: every one
-    a person made, edited or approved — all but the planner's ``proposed``."""
-    return [child for child in plan.children(node.id) if child.state != "proposed"]
+    a person made, edited or approved, and every ``proposed`` one a person
+    has since built under (a drafted or approved task under a proposed
+    epic makes the epic theirs). What is left — a planner's ``proposed``
+    child with nothing but the planner's own work beneath it — is what
+    the next proposal replaces. One rule, so the room the brief reports,
+    the room the delivery enforces and what the delivery removes agree."""
+    return [child for child in plan.children(node.id) if _stays(plan, child)]
+
+
+def _stays(plan: Plan, child: PlanNode) -> bool:
+    if child.state != "proposed":
+        return True
+    return any(n.state != "proposed" for n in plan.descendants(child.id))
 
 
 def _noun(level: str) -> str:
