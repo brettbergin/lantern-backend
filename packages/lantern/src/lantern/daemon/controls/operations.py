@@ -75,6 +75,7 @@ EFFECTS: dict[str, str] = {
     "schedule.resume": "the schedule fires again",
     "daemon.stop": "the graceful stop is committed and signalled",
     "daemon.restart": "the restart is committed and signalled",
+    "plan.approve": "the node's draft and proposed children are approved",
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
     "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
     "plan.run": "the epic run is recorded and its ready tasks are admitted",
@@ -510,6 +511,66 @@ class OperationRunner:
         return outcome.model_copy(update={"operation_id": op.id})
 
 
+def record_plan_operation[R](
+    store: OperationStore,
+    spec: OperationSpec,
+    *,
+    call: Callable[[], R],
+    result: Callable[[R], dict[str, Any]],
+    clock: Callable[[], float] = time.time,
+    generation: str | None = None,
+) -> tuple[str, R]:
+    """One write to a plan or the forge as a recorded operation, for
+    whoever holds the store: a route answering a person, or the daemon
+    acting for an agent. Accept ``spec``, claim it for ``generation``, make
+    the ``call`` and finish the operation — ``succeeded`` with ``result``
+    of what came back, and the operation's id and that value are returned.
+
+    Nothing is called and nothing new is recorded when the idempotency
+    pair names an operation that exists: :class:`OperationReplay` carries
+    it when the request is the same, :class:`IdempotencyConflict` when it
+    differs. A :class:`~lantern.plans.PlanRefusal` from ``call`` finishes
+    the operation ``failed`` with the refusal's code and detail, its
+    status and extras kept as the result so a replay can answer the same
+    refusal, and is re-raised naming its record (``extra["operation_id"]``).
+    Any other exception finishes it ``failed`` with ``code="crashed"`` and
+    is re-raised too. A process that dies in between leaves the row
+    ``running`` for :func:`reconcile_operations`.
+    """
+    # The plan service imports this package (its principal), so the
+    # refusal is looked up when one can first be raised, not at import.
+    from lantern.plans.service_base import PlanRefusal
+
+    op, created = store.accept(spec, clock())
+    if not created:
+        raise OperationReplay(op)
+    store.claim(op.id, generation, clock())
+    try:
+        value = call()
+    except PlanRefusal as exc:
+        store.finish(
+            op.id,
+            clock(),
+            state="failed",
+            result={"status": exc.status, "extra": dict(exc.extra)},
+            error_code=exc.code,
+            error_detail=exc.detail,
+        )
+        exc.extra.setdefault("operation_id", op.id)
+        raise
+    except Exception as exc:
+        store.finish(
+            op.id,
+            clock(),
+            state="failed",
+            error_code="crashed",
+            error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+        )
+        raise
+    store.finish(op.id, clock(), state="succeeded", result=result(value))
+    return op.id, value
+
+
 def reconcile_operations(loop: Any, *, generation: str, now: float) -> list[Operation]:
     """Settle what a previous generation left unfinished, from evidence.
 
@@ -663,6 +724,28 @@ def _judge(
         if (op.action == "daemon.pause") == held:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the hold did not survive the restart"
+    if op.action == "plan.approve":
+        # One transaction on the plan, which moves its revision: the
+        # children it named say whether it landed, and a plan still at the
+        # revision the approve read was never written to at all.
+        from lantern.plans.store import PlanStore
+
+        request = op.request or {}
+        plan = PlanStore(loop.dstore).get(op.target_key)
+        if plan is None:
+            return "failed", "unknown_target", "no such plan"
+        children = plan.children(str(request.get("node_id") or ""))
+        if request.get("node_ids") is not None:
+            named = set(request["node_ids"])
+            children = [child for child in children if child.id in named]
+        written = op.expected_revision is None or plan.revision > op.expected_revision
+        if written and children and all(c.state not in ("draft", "proposed") for c in children):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the approval was interrupted before it was written; approving the level again is safe",
+        )
     if op.action == "plan.publish":
         # Each node is recorded as it lands and found again by its marker,
         # so what the walk left is safe to repeat under a new key.

@@ -70,8 +70,10 @@ from lantern.daemon.controls.intake import PlanAdmission
 from lantern.daemon.controls.operations import (
     IdempotencyConflict,
     Operation,
+    OperationReplay,
     OperationSpec,
     OperationStore,
+    record_plan_operation,
 )
 from lantern.engine.planning import Clarification, PlanAnswer
 from lantern.plans import Plan, PlanNode, PlanRefusal
@@ -696,38 +698,7 @@ async def remove_node(
     return plan_out(plan)
 
 
-@router.post(
-    "/{plan_id}/nodes/{node_id}/approve",
-    response_model=PlanOut,
-    summary="Approve a node's children",
-    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
-)
-async def approve_children(
-    plan_id: str,
-    node_id: str,
-    body: PlanApprove,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
-) -> PlanOut:
-    """A person's "this is right": the node's draft and proposed children —
-    every one, or those ``node_ids`` names — become ``approved``, ready to
-    publish."""
-    try:
-        plan = await ctx.call(
-            ctx.plans.approve,
-            plan_id,
-            node_id,
-            expected_revision=body.expected_revision,
-            node_ids=body.node_ids,
-            now=ctx.clock(),
-            actor=actor_of(auth),
-        )
-    except PlanRefusal as exc:
-        raise problem_of(exc) from exc
-    ctx.hub.notify()
-    return plan_out(plan)
-
-
+APPROVE_ACTION = "plan.approve"
 PUBLISH_ACTION = "plan.publish"
 
 
@@ -765,12 +736,24 @@ def recorded[R, T](
     with the refusal (raised on as a ``Problem`` naming the operation) or
     the crash. Every operation route in this module and the epic runs'
     comes here, so a daemon that dies mid-call leaves the same record
-    whichever route was running."""
+    whichever route was running.
+
+    The record itself is
+    :func:`~lantern.daemon.controls.operations.record_plan_operation`'s,
+    which the daemon calls with no request in hand; this is its HTTP
+    answer."""
     store = getattr(ctx.loop, "operations", None)
     if not isinstance(store, OperationStore):
         raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
     try:
-        op, created = store.accept(spec, ctx.clock())
+        op_id, value = record_plan_operation(
+            store,
+            spec,
+            call=call,
+            result=result,
+            clock=ctx.clock,
+            generation=getattr(ctx.loop, "generation", None),
+        )
     except IdempotencyConflict as exc:
         raise Problem(
             409,
@@ -778,35 +761,85 @@ def recorded[R, T](
             "the idempotency key was already used with a different request",
             operation_id=exc.existing.id,
         ) from exc
-    if not created:
+    except OperationReplay as exc:
         try:
-            return replay(op)
-        except PlanRefusal as exc:
-            raise problem_of(exc) from exc
-    store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
-    try:
-        value = call()
+            return replay(exc.existing)
+        except PlanRefusal as refusal:
+            raise problem_of(refusal) from refusal
     except PlanRefusal as exc:
-        store.finish(
-            op.id,
-            ctx.clock(),
-            state="failed",
-            result={"status": exc.status, "extra": exc.extra},
-            error_code=exc.code,
-            error_detail=exc.detail,
+        # The refusal names its operation by now: the problem carries it.
+        raise problem_of(exc) from exc
+    return out(value, op_id)
+
+
+def _replay_approve(ctx: ApiContext, plan_id: str, op: Operation) -> Plan:
+    """An earlier call under the same key: the plan as it is now, or the
+    refusal the call recorded, or ``409`` while it still runs."""
+    replayed_refusal(op)
+    return ctx.plans.get(plan_id)
+
+
+@router.post(
+    "/{plan_id}/nodes/{node_id}/approve",
+    response_model=PlanOut,
+    summary="Approve a node's children",
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM, 503: PROBLEM},
+)
+async def approve_children(
+    plan_id: str,
+    node_id: str,
+    body: PlanApprove,
+    request: Request,
+    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
+    auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
+) -> PlanOut:
+    """A person's "this is right": the node's draft and proposed children —
+    every one, or those ``node_ids`` names — become ``approved``, ready to
+    publish. Recorded as a ``plan.approve`` operation under whoever made
+    it, so a refusal's problem names its ``operation_id``. The
+    ``Idempotency-Key`` header is optional: with one, a replay answers the
+    plan as it is now (or the refusal the first call recorded) and approves
+    nothing again, and a different body under the same key is ``409
+    idempotency_conflict``; without one, each call is its own operation."""
+    principal = auth.principal
+    pair = idempotency(
+        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/approve", required=False
+    )
+    actor = actor_of(auth)
+
+    def run() -> Plan:
+        return recorded(
+            ctx,
+            OperationSpec(
+                action=APPROVE_ACTION,
+                target_kind="plan",
+                target_key=plan_id,
+                principal=principal,
+                request={
+                    "plan_id": plan_id,
+                    "node_id": node_id,
+                    "expected_revision": body.expected_revision,
+                    "node_ids": body.node_ids,
+                },
+                idempotency=pair,
+                expected_revision=body.expected_revision,
+            ),
+            replay=lambda op: _replay_approve(ctx, plan_id, op),
+            call=lambda: ctx.plans.approve(
+                plan_id,
+                node_id,
+                expected_revision=body.expected_revision,
+                node_ids=body.node_ids,
+                now=ctx.clock(),
+                actor=actor,
+            ),
+            result=lambda plan: {"revision": plan.revision},
+            out=lambda plan, _op_id: plan,
         )
-        raise Problem(exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id) from exc
-    except Exception as exc:
-        store.finish(
-            op.id,
-            ctx.clock(),
-            state="failed",
-            error_code="crashed",
-            error_detail=f"{type(exc).__name__}: {exc}"[:2000],
-        )
-        raise
-    store.finish(op.id, ctx.clock(), state="succeeded", result=result(value))
-    return out(value, op.id)
+
+    plan = await ctx.call(run)
+    ctx.hub.notify()
+    return plan_out(plan)
 
 
 def _published(

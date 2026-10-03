@@ -87,13 +87,30 @@ def _node(plan: dict[str, Any], title: str) -> dict[str, Any]:
 
 
 def _approve(
-    api: Api, headers: dict[str, str], plan: dict[str, Any], node_id: str | None = None, **body: Any
+    api: Api,
+    headers: dict[str, str],
+    plan: dict[str, Any],
+    node_id: str | None = None,
+    key: str | None = None,
+    **body: Any,
 ) -> Any:
+    extra = {} if key is None else {"Idempotency-Key": key}
     return api.client.post(
         f"/v1/plans/{plan['id']}/nodes/{node_id or plan['root_id']}/approve",
         json={"expected_revision": plan["revision"], **body},
-        headers=headers,
+        headers={**headers, **extra},
     )
+
+
+def _operations(api: Api, plan_id: str) -> list[dict[str, Any]]:
+    """What the operation log holds for the plan, in no promised order."""
+    listed = api.client.get(
+        "/v1/operations",
+        params={"target_kind": "plan", "target_id": plan_id},
+        headers=api.bearer(),
+    )
+    assert listed.status_code == 200, listed.text
+    return list(listed.json()["data"])
 
 
 def _publish(
@@ -162,6 +179,140 @@ class TestApprove:
         plan = _add(api, api.bearer(DRAFT), _create(api, api.bearer(DRAFT)), title="A")
         refused = _approve(api, api.bearer(frozenset({"runs:read"})), plan)
         assert refused.status_code == 403 and refused.json()["capability"] == "plans:create"
+
+
+class TestAnApprovalIsRecorded:
+    """Who approved a level is an operation, as who published it is."""
+
+    def test_it_is_on_the_record_under_who_made_it(self, api: Api) -> None:
+        headers = {"Authorization": "Bearer " + api.token(DRAFT, name="approver")["access_token"]}
+        plan = _add(api, headers, _create(api, headers), title="A")
+        approved = _approve(api, headers, plan)
+        assert approved.status_code == 200, approved.text
+        (op,) = _operations(api, plan["id"])
+        assert (op["action"], op["state"]) == ("plan.approve", "succeeded")
+        assert op["actor"]["display"] == "approver"
+        assert op["effect"] == "the node's draft and proposed children are approved"
+        assert op["request"] == {
+            "plan_id": plan["id"],
+            "node_id": plan["root_id"],
+            "expected_revision": plan["revision"],
+            "node_ids": None,
+        }
+        assert op["result"] == {"revision": approved.json()["revision"]}
+        events = [e for e in api.loop.operations.events() if e["operation_id"] == op["id"]]
+        assert [e["type"] for e in events] == ["operation.accepted", "operation.finished"]
+        assert events[0]["actor"]["display"] == "approver"
+        assert events[0]["data"] == {"action": "plan.approve", "state": "accepted"}
+        assert events[1]["data"]["state"] == "succeeded"
+
+    def test_the_children_it_names_are_in_the_request(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        plan = _add(api, headers, plan, title="B")
+        a = _node(plan, "A")["id"]
+        assert _approve(api, headers, plan, node_ids=[a]).status_code == 200
+        (op,) = _operations(api, plan["id"])
+        assert op["request"]["node_ids"] == [a]
+
+    def test_a_stale_revision_is_refused_as_before_and_recorded_failed(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        stale = _approve(api, headers, {**plan, "revision": plan["revision"] - 1})
+        assert stale.status_code == 409, stale.text
+        problem = stale.json()
+        assert problem["code"] == "stale_revision"
+        assert problem["current_revision"] == plan["revision"]
+        (op,) = _operations(api, plan["id"])
+        assert problem["operation_id"] == op["id"]
+        assert (op["state"], op["error_code"]) == ("failed", "stale_revision")
+        assert op["error_detail"] == problem["detail"]
+        assert op["result"] == {"status": 409, "extra": {"current_revision": plan["revision"]}}
+        finished = [
+            e
+            for e in api.loop.operations.events()
+            if e["operation_id"] == op["id"] and e["type"] == "operation.finished"
+        ]
+        assert [e["data"]["state"] for e in finished] == ["failed"]
+        after = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        assert _node(after, "A")["state"] == "draft"
+
+    def test_nothing_to_approve_is_refused_as_before_and_recorded_failed(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        plan = _approve(api, headers, plan).json()
+        again = _approve(api, headers, plan)
+        assert again.status_code == 422, again.text
+        problem = again.json()
+        assert problem["code"] == "invalid_argument" and "nothing to approve" in problem["detail"]
+        # Two operations, told apart by id: the clock here does not move,
+        # so the log's order between them says nothing.
+        ops = {op["id"]: op for op in _operations(api, plan["id"])}
+        refused = ops.pop(problem["operation_id"])
+        (approved,) = ops.values()
+        assert approved["state"] == "succeeded"
+        assert (refused["state"], refused["error_code"]) == ("failed", "invalid_argument")
+        assert refused["result"] == {"status": 422, "extra": {}}
+
+    def test_a_replay_under_the_same_key_answers_the_first_answer(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        first = _approve(api, headers, plan, key="once")
+        assert first.status_code == 200, first.text
+        # The same request again: the revision it names is stale by now,
+        # and the answer is the first one all the same.
+        replay = _approve(api, headers, plan, key="once")
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == first.json()
+        assert len(_operations(api, plan["id"])) == 1
+
+    def test_a_refusal_replays_as_the_same_refusal(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        stale = {**plan, "revision": plan["revision"] + 5}
+        first = _approve(api, headers, stale, key="once")
+        again = _approve(api, headers, stale, key="once")
+        assert again.status_code == first.status_code == 409
+        for field in ("code", "detail", "current_revision", "operation_id"):
+            assert again.json()[field] == first.json()[field]
+        assert again.json()["code"] == "stale_revision"
+        assert again.json()["current_revision"] == plan["revision"]
+        assert len(_operations(api, plan["id"])) == 1
+
+    def test_another_request_under_the_same_key_is_a_conflict(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        plan = _add(api, headers, plan, title="B")
+        a, b = _node(plan, "A")["id"], _node(plan, "B")["id"]
+        first = _approve(api, headers, plan, key="once", node_ids=[a])
+        assert first.status_code == 200, first.text
+        other = _approve(api, headers, plan, key="once", node_ids=[b])
+        assert other.status_code == 409, other.text
+        assert other.json()["code"] == "idempotency_conflict"
+        (op,) = _operations(api, plan["id"])
+        assert other.json()["operation_id"] == op["id"]
+        after = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        assert _node(after, "B")["state"] == "draft"
+
+    def test_without_a_key_each_call_is_its_own_operation(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        plan = _add(api, headers, plan, title="B")
+        a, b = _node(plan, "A")["id"], _node(plan, "B")["id"]
+        plan = _approve(api, headers, plan, node_ids=[a]).json()
+        assert _approve(api, headers, plan, node_ids=[b]).status_code == 200
+        ops = _operations(api, plan["id"])
+        assert [op["state"] for op in ops] == ["succeeded", "succeeded"]
+        assert len({op["id"] for op in ops}) == 2
+
+    def test_no_operation_record_is_unavailable_and_approves_nothing(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        api.loop.operations = None
+        refused = _approve(api, headers, plan)
+        assert refused.status_code == 503 and refused.json()["code"] == "daemon_not_ready"
+        after = api.client.get(f"/v1/plans/{plan['id']}", headers=headers).json()
+        assert _node(after, "A")["state"] == "draft"
 
 
 class TestWhoMayPublish:
@@ -447,3 +598,43 @@ class TestAnInterruptedOperation:
         assert settled.state == "failed"
         assert settled.error_code == "interrupted_before_effect"
         assert "resume" in str(settled.error_detail)
+
+    def test_an_approve_the_daemon_died_during_is_settled_from_the_plan(self, api: Api) -> None:
+        """Over the real route's request shape: the write landed, the
+        record of it did not."""
+        from lantern.daemon.controls.principal import Principal
+
+        headers = api.bearer(DRAFT)
+        plan = _add(api, headers, _create(api, headers), title="A")
+        store = api.loop.operations
+        op, _ = store.accept(
+            OperationSpec(
+                action="plan.approve",
+                target_kind="plan",
+                target_key=plan["id"],
+                principal=Principal.trusted("tester", "test"),
+                request={
+                    "plan_id": plan["id"],
+                    "node_id": plan["root_id"],
+                    "expected_revision": plan["revision"],
+                    "node_ids": None,
+                },
+                expected_revision=plan["revision"],
+            ),
+            api.clock(),
+        )
+        store.claim(op.id, "an-earlier-generation", api.clock())
+        api.ctx.plans.approve(
+            plan["id"],
+            plan["root_id"],
+            expected_revision=plan["revision"],
+            node_ids=None,
+            now=api.clock(),
+            actor={"kind": "person", "id": "p1", "display": "Pat"},
+        )
+        (settled,) = [
+            o
+            for o in reconcile_operations(api.loop, generation="now", now=api.clock())
+            if o.id == op.id
+        ]
+        assert (settled.state, settled.error_code) == ("succeeded", None)

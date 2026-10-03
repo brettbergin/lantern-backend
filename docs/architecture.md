@@ -2503,6 +2503,19 @@ the fact that a new generation is answering for a stop or restart. What the
 evidence cannot decide is `reconciling` with the reason, for an operator; it is
 never guessed `succeeded`, and a timeout is never evidence.
 
+A write to a plan is not a `ControlService` verb, and its refusal is a
+`PlanRefusal` (a status, a code and fields a route renders), not a
+`ControlError`. `record_plan_operation`, beside the runner, is the same
+accept, claim, call, finish for those: it takes the store, the spec and the
+call, finishes the row `succeeded` with the result, `failed` with the
+refusal (its status and fields kept, so a replay answers the same refusal)
+or `failed crashed`, and raises what the store and the plan service raise —
+`OperationReplay`, `IdempotencyConflict`, the `PlanRefusal` naming its
+operation — never an HTTP answer. So it needs no request: the plan routes'
+`recorded` (`api/routes/plans.py`) is the wrapper that turns those into
+problem bodies, and daemon code acting for an agent calls it with the
+agent's principal and gets the same row.
+
 ### The remote API listener
 
 External job conversations are a durable read-side projection in
@@ -2744,6 +2757,15 @@ through `PlanService.brief`, puts the planner's clarifying questions on the
 node through `PlanService.ask_questions`, and writes the level through
 `PlanService.deliver_proposal`, which applies the same section rules in one
 revision.
+
+Approving a level is one store write (`PlanService.approve`: the node's
+draft and proposed children become `approved` in one revision) and the
+route records it as a `plan.approve` operation, so who approved a level is
+in the operation log beside who published it. `reconcile_operations`
+settles one the daemon died during from the plan: `succeeded` when the plan
+moved past the revision the approve read and the children it named are no
+longer draft or proposed, `failed` otherwise — safe, since nothing is ever
+half-approved and approving again is the whole write.
 
 Publishing a level (#2341) is split three ways. `render.py` turns a node
 into its issue body — the sections as markdown headings, then the
