@@ -32,6 +32,7 @@ from lantern.plans.forgeread import Seen, gone, say, seen_of
 from lantern.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from lantern.plans.model import (
     CONTENT_FIELDS,
+    Advance,
     Level,
     Plan,
     PlanNode,
@@ -613,6 +614,7 @@ class _ServiceBase:
         remove: Sequence[str] = (),
         archived: bool | None = None,
         input: dict[str, Any] | None = None,
+        advance: Advance | None = None,
         events: Sequence[PlanEvent] = (),
         actor: Mapping[str, Any],
     ) -> Plan:
@@ -625,6 +627,7 @@ class _ServiceBase:
                 remove=remove,
                 archived=archived,
                 input=input,
+                advance=advance,
                 events=events,
                 actor=dict(actor),
             )

@@ -120,6 +120,7 @@ class _Planning(_ServiceBase):
         now: float,
         item_id: str | None = None,
         channel_id: str | None = None,
+        proposed_by: str | None = None,
     ) -> tuple[Plan, int]:
         """Write a plan run's proposal under its node: the node's previous
         ``proposed`` children (and anything under them) are replaced, the
@@ -128,7 +129,13 @@ class _Planning(_ServiceBase):
         and its dependencies mapped to the new ids — one write, one
         revision, held to the same rules a person's edit is. The plan may
         have moved while the planner worked, so the write is made against
-        the revision it reads, and read again when another write won."""
+        the revision it reads, and read again when another write won.
+
+        ``proposed_by`` is the planner agent bound to the run
+        (``agent:<slug>``), recorded on every node the proposal writes — its
+        children, and the root it generates; ``None`` (a run that names no
+        agent) records nobody rather than a guess. The event stays the
+        planner's, a system actor, as it always was."""
 
         def attempt() -> tuple[Plan, int]:
             plan, node = self.breakdown_target(plan_id, node_id)
@@ -148,7 +155,7 @@ class _Planning(_ServiceBase):
                     "stale_input",
                     "the planning brief changed during generation; generate again",
                 )
-            upsert, remove = self._proposed_children(plan, node, proposal, now)
+            upsert, remove = self._proposed_children(plan, node, proposal, now, proposed_by)
             if plan.generation_pending and node.id == plan.root_id:
                 if proposal.root is None:
                     raise PlanRefusal(
@@ -158,8 +165,16 @@ class _Planning(_ServiceBase):
                 if problems:
                     raise PlanRefusal(422, "invalid_proposal", "; ".join(problems))
                 generated = self._with_sections(node, proposal.root.model_dump(), siblings=[])
+                # The content is the planner's now, not the person's whose
+                # placeholder it replaces.
                 upsert.append(
-                    replace(generated, origin="planner", state="proposed", updated_at=now)
+                    replace(
+                        generated,
+                        origin="planner",
+                        state="proposed",
+                        proposed_by=proposed_by,
+                        updated_at=now,
+                    )
                 )
             try:
                 changed = self.store.apply(
@@ -197,9 +212,15 @@ class _Planning(_ServiceBase):
             ) from exc
 
     def _proposed_children(
-        self, plan: Plan, node: PlanNode, proposal: PlanProposal, now: float
+        self,
+        plan: Plan,
+        node: PlanNode,
+        proposal: PlanProposal,
+        now: float,
+        proposed_by: str | None = None,
     ) -> tuple[list[PlanNode], list[str]]:
-        """The node upserts and removals that put ``proposal`` under ``node``."""
+        """The node upserts and removals that put ``proposal`` under ``node``,
+        each new child recorded as proposed by ``proposed_by``."""
         level = child_level(node.level)
         assert level is not None  # nosec B101 - breakdown_target refused a task
         kept = _kept(plan, node)
@@ -264,6 +285,7 @@ class _Planning(_ServiceBase):
                 title="",
                 created_at=now,
                 updated_at=now,
+                proposed_by=proposed_by,
             )
             fresh.append(self._with_sections(base, sections, siblings=[]))
         ids = [n.id for n in fresh]
@@ -319,6 +341,7 @@ class _Planning(_ServiceBase):
         now: float,
         item_id: str | None = None,
         channel_id: str | None = None,
+        proposed_by: str | None = None,
     ) -> tuple[Plan, int]:
         """Keep a re-plan run's diff on its node, waiting for a person: it
         replaces any diff still waiting there, and writes nothing else — no
@@ -326,7 +349,9 @@ class _Planning(_ServiceBase):
         addition that repeats a child the node has (by id or title), and an
         entry whose child left the forge while the planner worked, are left
         out and counted as ``skipped``; an empty diff clears the node's.
-        Recorded as ``plan.generation.proposed`` with ``kind: "replan"``."""
+        Recorded as ``plan.generation.proposed`` with ``kind: "replan"``.
+        ``proposed_by`` (the run's planner, ``agent:<slug>``) is kept on the
+        diff: an addition approved from it is recorded as proposed by it."""
 
         def attempt() -> tuple[Plan, int]:
             plan, node = self.breakdown_target(plan_id, node_id)
@@ -338,6 +363,8 @@ class _Planning(_ServiceBase):
                     node_id=node.id,
                 )
             pending, counts = self._replan_entries(plan, node, replan, run_id, now)
+            if pending is not None:
+                pending = replace(pending, proposed_by=proposed_by)
             try:
                 changed = self.store.apply(
                     plan.id,

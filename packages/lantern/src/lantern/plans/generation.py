@@ -17,7 +17,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from lantern.daemon.model import WorkItem
+from lantern.agents.assignment import AgentAssignment
+from lantern.daemon.model import WorkItem, is_planned_assignment
 from lantern.engine.planning import (
     PlanBrief,
     PlanDelivery,
@@ -30,6 +31,23 @@ from lantern.log import get_logger
 from lantern.plans.service import PLANNER, PlanRefusal, PlanService, replanned
 
 log = get_logger(__name__)
+
+
+def planner_of(item: WorkItem) -> str | None:
+    """Who a plan item's run proposes as: ``agent:<slug>`` of the agent its
+    assignment binds to the ``plan`` phase. Dispatch stores the assignment
+    on the item before the desk is built, and every attempt reuses it, so
+    this is the agent that actually takes the turn. ``None`` when the item
+    carries no planned assignment (or one that cannot be read, or binds
+    nobody to the phase): nobody is recorded rather than a guess."""
+    if not is_planned_assignment(item.assignment_json):
+        return None
+    assert item.assignment_json is not None  # nosec B101 - checked above
+    try:
+        binding = AgentAssignment.from_json(item.assignment_json).binding_for("plan")
+    except (KeyError, TypeError, ValueError):
+        return None
+    return None if binding is None else f"agent:{binding.slug}"
 
 
 class PlanGeneration:
@@ -50,6 +68,8 @@ class PlanGeneration:
         self.plan_id = item.plan_id
         self.node_id = item.plan_node_id
         self.clock = clock
+        # Who the run's proposals are recorded as proposed by.
+        self.planner = planner_of(item)
         # The daemon's forge connection, read (never written) before a
         # re-plan so its children are the forge's.
         self.forge = forge
@@ -122,6 +142,7 @@ class PlanGeneration:
                 now=self.clock(),
                 item_id=self.item.item_id,
                 channel_id=self.item.channel_id,
+                proposed_by=self.planner,
             )
         except PlanRefusal as exc:
             raise PlanDeliveryError(exc.detail) from exc
@@ -137,6 +158,7 @@ class PlanGeneration:
                 now=self.clock(),
                 item_id=self.item.item_id,
                 channel_id=self.item.channel_id,
+                proposed_by=self.planner,
             )
         except PlanRefusal as exc:
             raise PlanDeliveryError(exc.detail) from exc

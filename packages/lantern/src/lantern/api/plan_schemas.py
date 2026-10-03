@@ -133,6 +133,25 @@ class PlanReplanOut(ApiModel):
     entries: list[PlanReplanEntryOut]
 
 
+class PlanReviewOut(ApiModel):
+    """A reviewer's verdict on a node's level — its children as they were
+    when it was given: ``approve``, or ``escalate`` to a person, with the
+    ``reasons``, the run that reviewed and who did (``agent:<slug>``).
+    ``digest`` names what was reviewed; ``current`` is whether the level
+    still reads so — any edit, addition, removal or reorder of the children
+    since makes it ``false``, and a review that is not current says nothing
+    about the level as it is now. Written by the daemon, never through the
+    API."""
+
+    run_id: str
+    verdict: Literal["approve", "escalate"]
+    reasons: list[str] = Field(default_factory=list)
+    digest: str
+    reviewed_by: str | None = None
+    at: str
+    current: bool
+
+
 class PlanNodeOut(ApiModel):
     id: str
     parent_id: str | None = None
@@ -161,6 +180,17 @@ class PlanNodeOut(ApiModel):
     drift: list[PlanDrift] = Field(default_factory=list)
     #: A re-plan's diff waiting for a person, or null.
     replan: PlanReplanOut | None = None
+    #: Who the node's content is from, who approved it for publishing and
+    #: who published it: a principal's id (as the same act's event names
+    #: its actor) or ``agent:<slug>``; null where nobody is recorded — a
+    #: node adopted from the forge, one from before these were kept, a
+    #: step not taken yet. An edit that makes the node a draft again clears
+    #: ``approved_by``. Read-only.
+    proposed_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    #: The latest review of the node's level, or null. Read-only.
+    review: PlanReviewOut | None = None
 
 
 class PlanRollup(ApiModel):
@@ -194,6 +224,13 @@ class PlanSummary(ApiModel):
     #: says so here.
     reconciled_at: str | None = None
     reconcile_error: str | None = None
+    #: Whether the plan may move itself forward (feature
+    #: ``planning.advance``): ``manual`` — a person takes every step — or
+    #: ``auto``. Set only by a holder of ``plans:publish``.
+    advance: Literal["manual", "auto"] = "manual"
+    #: The goal the plan was proposed from; null for a plan a person
+    #: drafted. Read-only.
+    goal_id: str | None = None
 
 
 class PlanInput(ApiModel):
@@ -244,13 +281,20 @@ class PlanCreate(PlanSections):
     level: Literal["initiative", "epic"]
     repository: str = Field(min_length=3, max_length=200)
     title: str = Field(min_length=1, max_length=256)
+    #: Whether the plan may move itself forward; ``manual`` when left out.
+    #: Anything else needs ``plans:publish`` (``403`` naming it otherwise).
+    advance: Literal["manual", "auto"] | None = None
 
 
 class PlanUpdate(PlanSections):
     """Edit the inference brief while generation_pending, otherwise the
-    generated root's sections."""
+    generated root's sections; and, with ``advance``, the plan's switch."""
 
     expected_revision: int = Field(ge=1)
+    #: Whether the plan may move itself forward. A value the plan does not
+    #: already have needs ``plans:publish`` (``403`` naming it otherwise);
+    #: left out, or the value it has, changes nothing.
+    advance: Literal["manual", "auto"] | None = None
 
 
 class PlanNodeCreate(TaskSections):

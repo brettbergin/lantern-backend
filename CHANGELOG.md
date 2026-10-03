@@ -31,6 +31,31 @@ already deleted and wrote a dismissal on it, though deleted work is meant to
 take no further command. They now refuse it as every other control does
 (`409 not_eligible`, "work was deleted"; `skipped` in a bulk dismissal).
 
+**A plan records who proposed, approved and published each node, and whether
+it may advance on its own.** A node said only where it came from (a person,
+the planner, the forge); who approved or published it lived in an event, and
+the planner's proposals were attributed to a fixed system actor, so "the
+agent that proposed a level may not approve it" could not be checked. Every
+node now carries `proposed_by`, `approved_by` and `published_by` — a
+person's id or `agent:<slug>`, `null` where nobody is recorded: the planner's
+root and children carry the agent bound to the `plan` run that proposed them
+(none when the run names no agent, never a guess), an approval and a publish
+carry whoever made them, an edit that makes a child a draft again clears its
+approval, and an issue adopted from the forge has none. A node can also hold
+a `review` of its level — a verdict, its reasons and a digest of the children
+as they were reviewed — whose `current` flag turns false on any edit,
+addition, removal or reorder of those children; nothing writes one yet. A
+plan carries `advance` (`manual`, the default, or `auto`) and a read-only
+`goal_id`. Setting `advance` takes `plans:publish`, on `POST /v1/plans` and
+on `PATCH /v1/plans/{id}`: a member, who may edit a plan, is refused `403`
+naming the capability when they name a value the plan does not have, and
+their other edits work as before; the concierge's `draft_plan` cannot set it.
+A flip is a `plan.node.changed` event with `change: advance`. Nothing acts on
+`advance` in this release — every plan is drafted, approved, published and
+run by people exactly as before. Advertised as `planning.advance`; the
+columns arrive with revision 0051, and plans and nodes from before it read
+`manual` and `null`.
+
 **An owner can write the rules that will let agents take decisions.** Every
 plan level needs a person to approve it, publish it and start it, and there
 was no way to say once "this agent may do that, under these conditions". A

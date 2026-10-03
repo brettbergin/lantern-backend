@@ -566,6 +566,12 @@ class PlanRow(Base):
     reconciled_at: Mapped[float | None] = mapped_column(REAL)
     reconcile_error: Mapped[str | None] = mapped_column(Text)
     input_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
+    # Whether the plan may move itself forward (revision 0051): "manual"
+    # (a person takes every step) or "auto". Nothing sets "auto" but a
+    # holder of plans:publish.
+    advance: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'manual'"))
+    # The goal the plan was proposed from; NULL for a plan a person drafted.
+    goal_id: Mapped[str | None] = mapped_column(Text)
 
 
 class PlanNodeRow(Base):
@@ -628,6 +634,16 @@ class PlanNodeRow(Base):
     # that proposed it and its entries, as a JSON object; NULL when none is
     # waiting.
     replan_json: Mapped[str | None] = mapped_column(Text)
+    # Who the node's content is from and who let it through (revision
+    # 0051): a person's id or ``agent:<slug>``; NULL where nobody is
+    # recorded (a node from before the revision, one adopted from the
+    # forge, a planner run that named no agent).
+    proposed_by: Mapped[str | None] = mapped_column(Text)
+    approved_by: Mapped[str | None] = mapped_column(Text)
+    published_by: Mapped[str | None] = mapped_column(Text)
+    # A reviewer's verdict on the node's level (its children), as a JSON
+    # object with the digest of what was reviewed; NULL until one is given.
+    review_json: Mapped[str | None] = mapped_column(Text)
 
 
 class PlanEpicRunRow(Base):
