@@ -15877,7 +15877,7 @@
     },
     "/v1/plans": {
       "get": {
-        "description": "Every plan in the workspace, drafts included, most recently changed\nfirst. ``repository`` matches a plan any of whose nodes targets it.",
+        "description": "Every plan in the workspace, drafts included, most recently changed\nfirst, a page at a time: at most ``limit`` (200, the default, is the\nmost), and ``cursor`` \u2014 the ``next_cursor`` of the page before \u2014 for\nthe rest. ``repository`` matches a plan any of whose nodes targets it;\na cursor belongs to the filters it was issued under (``400\ninvalid_cursor`` otherwise).",
         "operationId": "list_plans_v1_plans_get",
         "parameters": [
           {
@@ -15936,6 +15936,34 @@
                 }
               ],
               "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           }
         ],

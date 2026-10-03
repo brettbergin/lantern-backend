@@ -28,7 +28,7 @@ from lantern.api.commands import admit_plan, idempotency, replayed_problem
 from lantern.api.context import ApiContext
 from lantern.api.errors import Problem
 from lantern.api.models import rfc3339
-from lantern.api.pagination import Page
+from lantern.api.pagination import Page, decode_cursor, encode_cursor
 from lantern.api.plan_schemas import (
     PlanAnswerOut,
     PlanAnswers,
@@ -266,11 +266,39 @@ async def list_plans(
     repository: Annotated[str | None, Query(max_length=200)] = None,
     level: Annotated[Literal["initiative", "epic"] | None, Query()] = None,
     state: Annotated[Literal["draft", "published", "archived"] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> Page[PlanSummary]:
     """Every plan in the workspace, drafts included, most recently changed
-    first. ``repository`` matches a plan any of whose nodes targets it."""
+    first, a page at a time: at most ``limit`` (200, the default, is the
+    most), and ``cursor`` — the ``next_cursor`` of the page before — for
+    the rest. ``repository`` matches a plan any of whose nodes targets it;
+    a cursor belongs to the filters it was issued under (``400
+    invalid_cursor`` otherwise)."""
+    filters: dict[str, Any] = {"repository": repository, "level": level, "state": state}
+    after: tuple[float, str] | None = None
+    if cursor is not None:
+        key = decode_cursor(cursor, filters)
+        try:
+            after = (float(key["u"]), str(key["i"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise Problem(400, "invalid_cursor", "the cursor is malformed") from exc
     plans = await ctx.call(ctx.plans.find, repository=repository, level=level, state=state)
-    return Page(data=[PlanSummary(**_summary_fields(plan)) for plan in plans])
+    ordered = sorted(plans, key=lambda plan: (-plan.updated_at, plan.id))
+    if after is not None:
+        ordered = [p for p in ordered if (-p.updated_at, p.id) > (-after[0], after[1])]
+    more = len(ordered) > limit
+    page = ordered[:limit]
+    next_cursor = (
+        encode_cursor({"u": page[-1].updated_at, "i": page[-1].id}, filters)
+        if more and page
+        else None
+    )
+    return Page(
+        data=[PlanSummary(**_summary_fields(plan)) for plan in page],
+        next_cursor=next_cursor,
+        has_more=more,
+    )
 
 
 @router.post(
