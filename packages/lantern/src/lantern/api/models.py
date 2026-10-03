@@ -79,6 +79,19 @@ class Target(ApiModel):
     id: str
 
 
+class Dismissal(ApiModel):
+    """A person acknowledged the alert this work raises: it keeps its state
+    and its controls and no longer asks anyone for attention. ``cause`` is
+    ``dismissed`` for a plain acknowledgement. Gone again the moment the
+    work changes state, so a new failure is a new alert."""
+
+    at: str
+    by: Actor | None = None
+    cause: str = "dismissed"
+    reason: str | None = None
+    operation_id: str | None = None
+
+
 class OperationOut(ApiModel):
     id: str
     workspace_id: str = WORKSPACE_ID
@@ -344,6 +357,8 @@ class Item(ApiModel):
     updated_at: str
     revision: int = 0
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a person's dismissal of this item's alert stands.
+    dismissal: Dismissal | None = None
     #: The agent asked to lead the work, or, once the run is planned, the
     #: agent that leads it. ``None`` for work admitted without one.
     lead_agent: str | None = None
@@ -410,6 +425,9 @@ class Run(ApiModel):
     review_wait: str | None = None
     revision: int = 0
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a dismissal of this run's alert stands: its work item's
+    #: when one pins the run, the run's own otherwise.
+    dismissal: Dismissal | None = None
 
 
 class TaskOutputOut(ApiModel):
@@ -763,6 +781,8 @@ class Gate(ApiModel):
     revision: int = 0
     required_capability: str = "gates:approve"
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a dismissal of the gated item's alert stands.
+    dismissal: Dismissal | None = None
 
 
 class GateApproval(ApiModel):

@@ -56,6 +56,36 @@ async def cancel_run(
     return result
 
 
+@router.post("/runs/{run_id}/dismiss", response_model=RunCommandResult)
+async def dismiss_run(
+    run_id: str,
+    request: Request,
+    body: RunCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Acknowledge the alert this run raises, for everyone. A run its work
+    item pins is dismissed on the item (the same mark ``POST
+    /v1/items/{id}/dismiss`` leaves); a run nothing pins carries its own.
+    Refused for a run that raises no alert. The dismissal ends by itself
+    when the work changes state."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/dismiss", required=False)
+    return await run_verb(ctx, auth, "dismiss", run_id, body, pair)
+
+
+@router.post("/runs/{run_id}/undismiss", response_model=RunCommandResult)
+async def undismiss_run(
+    run_id: str,
+    request: Request,
+    body: RunCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Take a dismissal back: the run's work asks for attention again."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/undismiss", required=False)
+    return await run_verb(ctx, auth, "undismiss", run_id, body, pair)
+
+
 @router.post("/runs/{run_id}/resume", response_model=RunCommandResult)
 async def resume_run(
     run_id: str,

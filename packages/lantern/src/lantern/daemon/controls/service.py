@@ -46,6 +46,7 @@ from lantern.daemon.controls.results import (
     BreakerResetOutcome,
     CancelOutcome,
     ControlError,
+    DismissOutcome,
     GateOutcome,
     GrantRoundsOutcome,
     ItemOutcome,
@@ -783,6 +784,54 @@ class ControlService:
             item_id,
             idempotency=idempotency,
             expected_revision=expected_revision,
+        )
+        return self._record(spec, apply)
+
+    # -- alerts ---------------------------------------------------------------------
+
+    def dismiss(
+        self,
+        principal: Principal,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        reason: str | None = None,
+        undo: bool = False,
+        expected_revision: int | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DismissOutcome:
+        """Dismiss the alert a piece of work raises — for everyone, not for
+        the caller alone — or, with ``undo``, take the dismissal back. Name
+        the work by its item, or by a run when no item carries it. Needs
+        ``runs:control``: it changes what every other person is shown."""
+        require(principal, "runs:control")
+        if (item_id is None) == (run_id is None):
+            raise ControlError("invalid_argument", "name an item or a run, not both")
+        kind = "item" if item_id is not None else "run"
+        target = normalize_item_id(item_id) if item_id is not None else str(run_id)
+        named: dict[str, Any] = {"item_id": target} if kind == "item" else {"run_id": target}
+
+        def apply(op_id: str | None) -> DismissOutcome:
+            if undo:
+                return self.loop.undismiss_work(
+                    **named, actor=principal.audit(), expected_revision=expected_revision
+                )
+            return self.loop.dismiss_work(
+                **named,
+                actor=principal.audit(),
+                reason=reason,
+                expected_revision=expected_revision,
+                operation_id=op_id,
+            )
+
+        spec = self._spec(
+            f"{kind}.{'undismiss' if undo else 'dismiss'}",
+            principal,
+            kind,
+            target,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            reason=reason,
         )
         return self._record(spec, apply)
 

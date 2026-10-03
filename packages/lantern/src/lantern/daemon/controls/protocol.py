@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from lantern.config import ScheduleConfig
-from lantern.daemon.controls.results import CancelOutcome, ResumeOutcome
+from lantern.daemon.controls.results import CancelOutcome, DismissOutcome, ResumeOutcome
 from lantern.daemon.model import WorkItem
 
 
@@ -86,4 +86,22 @@ class ControlLoop(Protocol):
     def abandon_item(self, item_id: str, reason: str | None = None) -> WorkItem: ...
     def retry_item(self, item_id: str, by: str | None = None) -> WorkItem: ...
     def requeue_item(self, item_id: str) -> WorkItem: ...
+    def dismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+    ) -> DismissOutcome: ...
+    def undismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        expected_revision: int | None = None,
+    ) -> DismissOutcome: ...
     def clock(self) -> float: ...

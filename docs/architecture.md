@@ -2417,6 +2417,18 @@ fix rounds, no gate); an action that acts on the forge is refused with
 "could not tell" is a refusal, never a guess. The loop keeps its own
 refusals (it holds the locks); the two agree by test.
 
+`dismiss` and `undismiss` are the two controls that act on an alert rather
+than on the work. A dismissal is a row in `daemon_work_marks` (revision 0049),
+keyed to the work item when one carries the work and to the run when nothing
+pins it — a side table, because a column on the item or the run would bump the
+row's `revision` and refuse the next command of everyone who had read it. The
+mark is current state only; the operation it names is the record of who and
+when. It is dropped by trigger (`db/work_marks.py`) the moment the item's — or
+the unpinned run's — `state` changes, so the rule holds for a write from the
+CLI's process or a rolled-back release, and a retry that fails again is a new
+alert without any code remembering to say so. `Subject.dismissed` is how
+eligibility swaps `dismiss` for `undismiss`; no other control reads it.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

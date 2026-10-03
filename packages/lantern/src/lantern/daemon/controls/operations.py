@@ -59,6 +59,10 @@ EFFECTS: dict[str, str] = {
     "item.abandon": "the item is settled as abandoned and the source owed its report",
     "item.retry": "the item is re-queued with attempts reset",
     "item.requeue": "the item is unpinned and re-queued",
+    "item.dismiss": "the item's alert is marked dismissed for everyone",
+    "item.undismiss": "the item's alert asks for attention again",
+    "run.dismiss": "the run's alert is marked dismissed for everyone",
+    "run.undismiss": "the run's alert asks for attention again",
     "repo.resume": "the repository is polled again from the next tick",
     "repo.labels_sync": "every label the loop applies exists on the repository",
     "daemon.breaker_reset": "the breaker is closed and its failure count is zero",
@@ -597,6 +601,28 @@ def _judge(
         if item.state == expected[op.action]:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", f"item is {item.state}"
+    if op.action in ("item.dismiss", "item.undismiss", "run.dismiss", "run.undismiss"):
+        # The mark is the effect: it stands or it does not. A run a work
+        # item pins carries its mark on the item, as the verb wrote it.
+        kind, key = op.target_kind, op.target_key
+        if kind == "run":
+            owner = loop.dstore.item_for_run(key)
+            pinning = loop.dstore.get(owner) if owner else None
+            if pinning is not None and pinning.run_id == key:
+                kind, key = "item", pinning.item_id
+        else:
+            named = loop.dstore.get(key)
+            if named is None:
+                return "failed", "unknown_target", "no such item"
+            key = named.item_id
+        standing = loop.dstore.work_mark(kind, key, "dismissed") is not None
+        if standing != op.action.endswith(".undismiss"):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the alert is still dismissed" if standing else "the alert was not dismissed",
+        )
     if op.action in ("daemon.stop", "daemon.restart"):
         # The process exited and a new generation is answering: that is
         # exactly the effect these promise.

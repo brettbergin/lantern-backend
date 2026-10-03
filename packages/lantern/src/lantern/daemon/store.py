@@ -80,6 +80,7 @@ from lantern.db.daemon_models import (
     RunWatchRow,
     ScheduleRowModel,
     WorkItemRow,
+    WorkMarkRow,
     WorkspaceUsageRow,
 )
 from lantern.engine.model import RunKind
@@ -528,6 +529,39 @@ class HoldRecord(NamedTuple):
     reason: str
     created_at: float
     operation_id: str | None
+
+
+class WorkMark(NamedTuple):
+    """A mark a person left on work (revision 0049): ``dismissed`` — the
+    alert is acknowledged — or ``deleted`` — the work is hidden from every
+    listing. ``subject_kind`` is ``item`` or ``run`` and ``subject_key`` the
+    id as stored; ``actor`` is the principal's audit fields."""
+
+    subject_kind: str
+    subject_key: str
+    mark: str
+    cause: str
+    at: float
+    actor: dict[str, Any]
+    reason: str | None
+    operation_id: str | None
+
+
+def _row_to_mark(row: WorkMarkRow) -> WorkMark:
+    try:
+        actor = json.loads(row.actor_json or "{}")
+    except ValueError:
+        actor = {}
+    return WorkMark(
+        subject_kind=str(row.subject_kind),
+        subject_key=str(row.subject_key),
+        mark=str(row.mark),
+        cause=str(row.cause),
+        at=float(row.at),
+        actor=actor if isinstance(actor, dict) else {},
+        reason=None if row.reason is None else str(row.reason),
+        operation_id=None if row.operation_id is None else str(row.operation_id),
+    )
 
 
 def _row_to_pause_hold(row: HoldRow) -> HoldRecord:
@@ -2596,6 +2630,85 @@ class DaemonStore:
                 wanted=_loggable(fields),
             )
             raise ValueError(refuse(current))
+
+    # -- marks on work (revision 0049) --------------------------------------------
+
+    def work_marks(
+        self, *, item_ids: Sequence[str] = (), run_ids: Sequence[str] = ()
+    ) -> dict[tuple[str, str, str], WorkMark]:
+        """The marks standing on these items and runs, keyed
+        ``(subject_kind, subject_key, mark)``, in one query. Ids are matched
+        exactly, as stored: a mark is written under the id its row carries,
+        which is the id a reader that selected the row already holds."""
+        wanted = [
+            and_(WorkMarkRow.subject_kind == kind, WorkMarkRow.subject_key.in_(keys))
+            for kind, keys in (("item", sorted(set(item_ids))), ("run", sorted(set(run_ids))))
+            if keys
+        ]
+        if not wanted:
+            return {}
+        with self._read() as session:
+            rows = session.scalars(select(WorkMarkRow).where(or_(*wanted))).all()
+            return {
+                (str(row.subject_kind), str(row.subject_key), str(row.mark)): _row_to_mark(row)
+                for row in rows
+            }
+
+    def work_mark(self, subject_kind: str, subject_key: str, mark: str) -> WorkMark | None:
+        with self._read() as session:
+            row = session.get(WorkMarkRow, (subject_kind, subject_key, mark))
+            return _row_to_mark(row) if row is not None else None
+
+    def set_work_mark(
+        self,
+        subject_kind: str,
+        subject_key: str,
+        mark: str,
+        *,
+        cause: str,
+        at: float,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Leave ``mark`` on the work; False when it already stood (the
+        standing mark is kept as it is — who dismissed first stays who
+        dismissed). ``subject_key`` is the id as stored: the triggers that
+        drop a mark match the row's own key."""
+        stmt = (
+            sqlite_insert(WorkMarkRow)
+            .values(
+                subject_kind=subject_kind,
+                subject_key=subject_key,
+                mark=mark,
+                cause=cause,
+                at=at,
+                actor_json=json.dumps(dict(actor or {}), sort_keys=True),
+                reason=reason[:2000] if reason else None,
+                operation_id=operation_id,
+            )
+            .on_conflict_do_nothing()
+        )
+        with self._write() as session:
+            fresh = _rowcount(session.execute(stmt)) == 1
+        log.debug("store.work_mark_set", kind=subject_kind, key=subject_key, mark=mark, fresh=fresh)
+        return fresh
+
+    def clear_work_mark(self, subject_kind: str, subject_key: str, mark: str) -> bool:
+        """Take ``mark`` off the work; False when none stood."""
+        with self._write() as session:
+            result = session.execute(
+                delete(WorkMarkRow).where(
+                    WorkMarkRow.subject_kind == subject_kind,
+                    WorkMarkRow.subject_key == subject_key,
+                    WorkMarkRow.mark == mark,
+                )
+            )
+            cleared = _rowcount(result) == 1
+        log.debug(
+            "store.work_mark_cleared", kind=subject_kind, key=subject_key, mark=mark, was=cleared
+        )
+        return cleared
 
     def pending_reports(self) -> list[WorkItem]:
         """Items whose decision the source has not been told about yet

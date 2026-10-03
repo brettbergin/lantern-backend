@@ -1732,7 +1732,7 @@ Rules a client can rely on:
 | ------------------------ | ------------------------------------------------------------------------------------------- |
 | `runs:read`              | Every read: status, items, queue, runs, tasks, events, streams, gates, holds, schedules     |
 | `items:create`           | `POST /v1/items`                                                                            |
-| `runs:control`           | Cancel, resume, retry, requeue, abandon, re-arm the review wait                             |
+| `runs:control`           | Cancel, resume, retry, requeue, abandon, re-arm the review wait, dismiss an alert           |
 | `runs:steer`             | `POST /v1/runs/{id}/steering`                                                               |
 | `budgets:grant`          | `POST /v1/runs/{id}/round-grants`                                                           |
 | `gates:approve`          | `POST /v1/gates/{id}/approve`                                                               |
@@ -1823,7 +1823,9 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/items[/{id}]`, `/v1/queue`                                  | `runs:read`            | Work items; the queue in dispatch order                                     |
 | `POST`   | `/v1/items`                                                      | `items:create`         | Admit an issue, a workload ask or a tool recipe                             |
 | `POST`   | \`/v1/items/{id}/retry                                           | requeue                | abandon\`                                                                   |
+| `POST`   | `/v1/items/{id}/dismiss`, `…/undismiss`                          | `runs:control`         | Acknowledge the item's alert for everyone; take that back                   |
 | `GET`    | `/v1/runs[/{id}]`, `…/tasks`                                     | `runs:read`            | Runs and their tasks                                                        |
+| `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
 | `POST`   | `/v1/runs/{id}/steering`                                         | `runs:steer`           | Direction for the run in flight                                             |
 | `GET`    | `/v1/runs/{id}/steering`                                         | `runs:read`            | Every instruction and its fate                                              |
@@ -1904,6 +1906,42 @@ operation's transitions ride the chronology.
 - **Bots get one answer.** A command refused by policy is a recorded
   operation in state `failed` with its `error_code`; retrying it is a new
   operation, not a fix loop.
+
+### Dismissing an alert
+
+Work that finished without success, or is parked on a person, asks for
+attention until someone acts on it — and sometimes the right act is none: the
+failure is understood, nobody wants a retry. `POST /v1/items/{id}/dismiss`
+(feature `work.dismiss`; `runs:control`; body
+`{"reason": …, "expected_revision": …}`, both optional) records that
+acknowledgement **for everyone**: the item, its run, its gate and its rows in
+`/v1/channels/{id}/work` and `/jobs` carry
+`dismissal: {at, by, cause, reason, operation_id}`, and a client leaves a
+dismissed row out of whatever it shows as needing attention.
+
+- **Nothing about the work changes.** Its state, its `revision` and its other
+  `available_actions` stay as they were — a dismissed failure can still be
+  retried, a dismissed gate still approved. A command sent with the revision
+  read before the dismissal is not stale.
+- **Where it applies.** `dismiss` is in an item's `available_actions` when the
+  item is `failed`, `blocked`, `cancelled`, `gated`, `awaiting_review`,
+  `paused_review` or `awaiting_answers`, or is `queued` behind a run parked
+  `provider_held`. Anything else is `409 not_eligible` with the state named.
+  Dismissing twice answers `200` with the first dismissal.
+- **It ends by itself.** The moment the item changes state the dismissal is
+  gone: a retry that fails again is a new alert. `POST …/undismiss` takes it
+  back by hand; `undismiss` replaces `dismiss` in `available_actions` while a
+  dismissal stands.
+- **A run without an item.** Work an item carries is dismissed through the
+  item; `POST /v1/runs/{id}/dismiss` on such a run leaves the same mark. A run
+  nothing pins — its item row is gone, or has moved on to a later attempt —
+  advertises `dismiss` itself when it is `failed`, `blocked`, `cancelled`,
+  `gated`, `awaiting_review`, `held`, `provider_held` or `awaiting_answers`,
+  and its dismissal ends when the run changes state.
+
+The operation (`item.dismiss`, `item.undismiss`, `run.dismiss`,
+`run.undismiss`) is the record of who and when; the same four are command
+actions on `/v1/ws`.
 
 ## Following the work: events, SSE and the WebSocket
 

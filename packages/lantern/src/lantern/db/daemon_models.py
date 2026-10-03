@@ -37,6 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+import lantern.db.work_marks  # noqa: F401 - registers the mark triggers on Base
 from lantern.db.base import Base
 from lantern.db.revisions import attach as attach_revision_trigger
 
@@ -668,3 +669,33 @@ class PlanEpicRunTaskRow(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     admitted_at: Mapped[float | None] = mapped_column(REAL)
     updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+
+
+class WorkMarkRow(Base):
+    """What a person did to an alert, not to the work: ``dismissed`` (the
+    alert is acknowledged and stops asking for attention) or ``deleted``
+    (the work is hidden from every listing; its rows stay as the audit
+    trail).
+
+    A side table rather than a column on the work it marks: every write to
+    ``daemon_work_items`` or ``runs`` bumps the row's ``revision``, so a
+    mark kept there would refuse the next command of everyone who had read
+    the row before it — and some work has no item row at all, only a run.
+    ``subject_kind`` is ``item`` or ``run``; ``subject_key`` is the id as
+    stored. ``cause`` says how the mark came to stand (``dismissed``,
+    ``abandoned``, ``cancelled``, ``deleted``). The row is current state
+    only — who did it and when is the operation ``operation_id`` names —
+    and :mod:`lantern.db.work_marks` drops it when the work moves again.
+    """
+
+    __tablename__ = "daemon_work_marks"
+    __table_args__ = (PrimaryKeyConstraint("subject_kind", "subject_key", "mark"),)
+
+    subject_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_key: Mapped[str] = mapped_column(Text, nullable=False)
+    mark: Mapped[str] = mapped_column(Text, nullable=False)
+    cause: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[float] = mapped_column(REAL, nullable=False)
+    actor_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
+    reason: Mapped[str | None] = mapped_column(Text)
+    operation_id: Mapped[str | None] = mapped_column(Text)
