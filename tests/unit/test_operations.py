@@ -433,6 +433,21 @@ class TestReconciler:
             assert lost is not None and lost.state == "failed"
             assert lost.error_code == "interrupted_before_effect" and lost.error_detail == detail
 
+    def test_an_interrupted_bulk_dismissal_says_it_is_safe_to_send_again(
+        self, tmp_path: Path
+    ) -> None:
+        h = Harness(tmp_path)
+        op, _ = h.loop.operations.accept(
+            spec(action="attention.dismiss_all", target_kind="workspace", target_key="local"),
+            now=1.0,
+        )
+        h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        judged = h.loop.operations.get(op.id)
+        assert judged is not None and judged.state == "failed"
+        assert judged.error_code == "interrupted_before_effect"
+        assert "sending it again dismisses what is left" in (judged.error_detail or "")
+
     @pytest.mark.parametrize(("opened_at", "expected"), [(None, "succeeded"), (5.0, "failed")])
     def test_a_claimed_breaker_reset_is_judged_from_the_breaker(
         self, tmp_path: Path, opened_at: float | None, expected: str

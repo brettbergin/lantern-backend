@@ -46,6 +46,8 @@ from lantern.daemon.controls.results import (
     BreakerResetOutcome,
     CancelOutcome,
     ControlError,
+    DismissAllOutcome,
+    DismissedTarget,
     DismissOutcome,
     GateOutcome,
     GrantRoundsOutcome,
@@ -841,6 +843,63 @@ class ControlService:
             target,
             idempotency=idempotency,
             expected_revision=expected_revision,
+            reason=reason,
+        )
+        return self._record(spec, apply)
+
+    def dismiss_all(
+        self,
+        principal: Principal,
+        targets: Sequence[tuple[Literal["item", "run"], str, int | None]],
+        *,
+        reason: str | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DismissAllOutcome:
+        """Dismiss several alerts under one operation: each target is
+        ``(kind, id, expected_revision)``, the ones a person was looking at
+        when they asked. A target that cannot be dismissed — it moved on,
+        it raises no alert, its revision is stale — is skipped with the
+        refusal it would have had alone; the rest are dismissed."""
+        require(principal, "runs:control")
+        named = [
+            (kind, normalize_item_id(key) if kind == "item" else key, revision)
+            for kind, key, revision in targets
+        ]
+
+        def apply(op_id: str | None) -> DismissAllOutcome:
+            results: list[DismissedTarget] = []
+            for index, (kind, key, revision) in enumerate(named):
+                where: dict[str, Any] = {"item_id": key} if kind == "item" else {"run_id": key}
+                try:
+                    outcome = self.loop.dismiss_work(
+                        **where,
+                        actor=principal.audit(),
+                        reason=reason,
+                        expected_revision=revision,
+                        operation_id=op_id,
+                    )
+                except ControlError as exc:
+                    results.append(
+                        DismissedTarget(
+                            index=index, outcome="skipped", code=exc.code, detail=exc.message
+                        )
+                    )
+                    continue
+                results.append(
+                    DismissedTarget(
+                        index=index,
+                        outcome="dismissed" if outcome.fresh else "already_dismissed",
+                    )
+                )
+            return DismissAllOutcome(results=results)
+
+        spec = self._spec(
+            "attention.dismiss_all",
+            principal,
+            "workspace",
+            principal.workspace_id,
+            idempotency=idempotency,
+            targets=[[kind, key, revision] for kind, key, revision in named],
             reason=reason,
         )
         return self._record(spec, apply)

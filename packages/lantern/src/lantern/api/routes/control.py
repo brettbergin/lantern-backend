@@ -8,10 +8,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from lantern.api.auth.deps import Authenticated, get_ctx, ready_daemon, require
-from lantern.api.commands import approve_gate, idempotency, run_verb, steer
+from lantern.api.commands import approve_gate, dismiss_all, idempotency, run_verb, steer
 from lantern.api.context import ApiContext
 from lantern.api.errors import Problem
 from lantern.api.models import (
+    AttentionDismissed,
+    AttentionDismissRequest,
     Gate,
     GateApproval,
     GateResult,
@@ -84,6 +86,24 @@ async def undismiss_run(
     """Take a dismissal back: the run's work asks for attention again."""
     pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/undismiss", required=False)
     return await run_verb(ctx, auth, "undismiss", run_id, body, pair)
+
+
+@router.post("/attention/dismiss", response_model=AttentionDismissed)
+async def dismiss_attention(
+    body: AttentionDismissRequest,
+    request: Request,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> AttentionDismissed:
+    """Dismiss several alerts at once, under one operation. The request
+    names each alert — the ones the person was looking at, never "all" —
+    by its item, or by its run when no item carries the work. Each is
+    dismissed as its own route would dismiss it; one that cannot be (an
+    unknown id, a stale ``expected_revision``, work that raises no alert)
+    is ``skipped`` with the reason and does not fail the rest. ``results``
+    answers in the request's order."""
+    pair = idempotency(request, auth.principal, "/v1/attention/dismiss", required=False)
+    return await dismiss_all(ctx, auth, body, pair)
 
 
 @router.post("/runs/{run_id}/resume", response_model=RunCommandResult)

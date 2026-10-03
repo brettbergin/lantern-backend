@@ -63,6 +63,7 @@ EFFECTS: dict[str, str] = {
     "item.undismiss": "the item's alert asks for attention again",
     "run.dismiss": "the run's alert is marked dismissed for everyone",
     "run.undismiss": "the run's alert asks for attention again",
+    "attention.dismiss_all": "each named alert is marked dismissed, or named as skipped",
     "repo.resume": "the repository is polled again from the next tick",
     "repo.labels_sync": "every label the loop applies exists on the repository",
     "daemon.breaker_reset": "the breaker is closed and its failure count is zero",
@@ -622,6 +623,14 @@ def _judge(
             "failed",
             "interrupted_before_effect",
             "the alert is still dismissed" if standing else "the alert was not dismissed",
+        )
+    if op.action == "attention.dismiss_all":
+        # Each alert is its own mark and dismissing twice changes nothing,
+        # so what the walk left is safe to send again.
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the bulk dismissal was interrupted; sending it again dismisses what is left",
         )
     if op.action in ("daemon.stop", "daemon.restart"):
         # The process exited and a new generation is answering: that is

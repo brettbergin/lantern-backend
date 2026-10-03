@@ -21,6 +21,9 @@ from lantern.api.context import ApiContext
 from lantern.api.errors import CONTROL_STATUS, Problem
 from lantern.api.models import (
     Admitted,
+    AttentionDismissed,
+    AttentionDismissRequest,
+    AttentionDismissResult,
     GateApproval,
     GateResult,
     IntakeRequest,
@@ -37,7 +40,7 @@ from lantern.api.models import (
     ToolIntake,
     WorkloadIntake,
 )
-from lantern.api.projections import Views, not_found
+from lantern.api.projections import NOT_FOUND, Views, not_found
 from lantern.daemon.controls.eligibility import Subject, check as check_eligibility
 from lantern.daemon.controls.intake import (
     AdmitRequest,
@@ -48,7 +51,13 @@ from lantern.daemon.controls.intake import (
 )
 from lantern.daemon.controls.operations import IdempotencyConflict, Operation, OperationReplay
 from lantern.daemon.controls.principal import Capability as PrincipalCapability, Principal
-from lantern.daemon.controls.results import AdmitOutcome, DismissOutcome, ItemOutcome, Outcome
+from lantern.daemon.controls.results import (
+    AdmitOutcome,
+    DismissAllOutcome,
+    DismissOutcome,
+    ItemOutcome,
+    Outcome,
+)
 from lantern.daemon.controls.steering import SteeringStore
 from lantern.db.collaboration_models import ChannelRow
 from lantern.vcs.protocol import Capability
@@ -351,6 +360,77 @@ async def item_command(
     result = await ctx.call(project)
     ctx.hub.notify()
     return result
+
+
+# -- alerts: several dismissed at once ---------------------------------------------
+
+
+async def dismiss_all(
+    ctx: ApiContext,
+    auth: Authenticated,
+    body: AttentionDismissRequest,
+    pair: tuple[str, str] | None,
+) -> AttentionDismissed:
+    """Dismiss every alert the request names under one operation. A target
+    is skipped, never fatal: an id that names nothing, work that moved
+    since the person looked, work that raises no alert."""
+    principal = auth.principal
+    service = ctx.service()
+    # Where each resolved target sits in the request, so an answer by the
+    # service's index lands on the entry the client named.
+    places: list[int] = []
+    results: list[AttentionDismissResult] = [
+        AttentionDismissResult(
+            item_id=target.item_id,
+            run_id=target.run_id,
+            outcome="skipped",
+            code="not_found",
+            detail=NOT_FOUND,
+        )
+        for target in body.targets
+    ]
+
+    def apply() -> DismissAllOutcome:
+        views = Views(ctx)
+        named: list[tuple[Literal["item", "run"], str, int | None]] = []
+        places.clear()
+        for place, target in enumerate(body.targets):
+            try:
+                if target.item_id is not None:
+                    item = views.item_by_public_id(target.item_id)
+                    named.append(("item", item.item_id, target.expected_revision))
+                else:
+                    record = views.run_by_public_id(target.run_id or "")
+                    named.append(("run", record.run_id, target.expected_revision))
+            except Problem:
+                continue
+            places.append(place)
+        return service.dismiss_all(principal, named, reason=body.reason, idempotency=pair)
+
+    def fill(outcomes: list[dict[str, Any]]) -> None:
+        for entry in outcomes:
+            place = places[int(entry["index"])]
+            results[place] = results[place].model_copy(
+                update={
+                    "outcome": entry["outcome"],
+                    "code": entry.get("code"),
+                    "detail": entry.get("detail"),
+                }
+            )
+
+    try:
+        outcome = await run_command(ctx, apply)
+    except Replayed as replay:
+        existing = replay.operation
+        problem = replayed_problem(existing)
+        if problem is not None:
+            raise problem from replay
+        fill(list((existing.result or {}).get("results") or []))
+        return AttentionDismissed(operation=OperationOut.from_operation(existing), results=results)
+    fill([entry.model_dump() for entry in outcome.results])
+    op = await ctx.call(lambda: _operation(ctx, outcome.operation_id))
+    ctx.hub.notify()
+    return AttentionDismissed(operation=OperationOut.from_operation(op), results=results)
 
 
 # -- runs: cancel, resume, round grants, the review wait ---------------------------
