@@ -78,6 +78,6 @@ def test_the_plan_service_is_built_in_one_place() -> None:
     sites = sorted(
         str(path.relative_to(root))
         for path in root.rglob("*.py")
-        if re.search(r"\bPlanService\(", path.read_text())
+        if re.search(r"(?<!class )\bPlanService\(", path.read_text())
     )
     assert sites == ["daemon/loop.py"], sites

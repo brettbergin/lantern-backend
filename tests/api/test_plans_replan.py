@@ -260,7 +260,7 @@ class TestApprovingAChange:
     ) -> None:
         """The change goes through the direct edit's write, which reads the
         issue itself: an edit the reconcile did not see still refuses it."""
-        from lantern.plans import service
+        from lantern.plans import service_planner as service
 
         fake, plan, headers = _published(api)
         a = _node(plan, "A")
@@ -328,7 +328,7 @@ class TestApprovingAClose:
     ) -> None:
         """A forge the reconcile could not read is no reason to close an
         issue blind: the close reads it first, like a change does."""
-        from lantern.plans import service
+        from lantern.plans import service_planner as service
 
         fake, plan, headers = _published(api)
         b = _node(plan, "B")
