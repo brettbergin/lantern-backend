@@ -1476,7 +1476,7 @@ class PlanService:
                 )
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
-            except Exception as exc:  # a change still reads its issue before writing
+            except Exception as exc:  # a change or a close still reads its issue first
                 log.warning("plans.replan_reconcile_failed", plan_id=plan_id, error=repr(exc))
 
             def edit(entry: ReplanEntry) -> PlanNode:
