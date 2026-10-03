@@ -1997,8 +1997,9 @@ The request names each alert — the ones the person was looking at; there is no
 "everything", because what they were shown may have changed since it was
 drawn. With `attention`, those are the entries of
 [`GET /v1/attention`](#what-is-waiting-on-a-person) that offer `dismiss`: send
-each one's `item_id` with its `revision`, and the entry leaves the list for
-everyone. The answer is `{operation, results}` with one
+each one's `item_id` — with `expected_revision` only for an `item` entry,
+whose `revision` is the item's — and the entry leaves the list for everyone.
+The answer is `{operation, results}` with one
 result per target in the request's order: `dismissed`, `already_dismissed`, or
 `skipped` with the `code` and `detail` the single route would have refused
 with (`not_found`, `not_eligible`, `stale_revision`). A skipped target does not
@@ -2172,7 +2173,7 @@ One entry per thing a person has to act on:
 
 - **`kind` is open.** A later release adds kinds (a plan's questions and
   proposals, an agent's escalation). A client leaves out an entry whose `kind`
-  it does not know and still trusts `counts`; it never fails the page.
+  it does not know rather than failing the page; `counts` still includes it.
 - **`id` is opaque and stable.** The same thing waiting keeps its id from one
   read to the next. When it stops waiting the entry is gone, and when it waits
   again in a new way — a review wait that paused, a retry that failed on a new

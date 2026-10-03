@@ -223,6 +223,9 @@ def waiting(views: Views, *, include_dismissed: bool = False) -> list[Waiting]:
         item = None
         if task.item_id is not None:
             item = items.get(task.item_id) or task_items.get(task.item_id)
+            if item is not None:
+                # Read under the other spelling of its id: the listed row.
+                item = items.get(item.item_id, item)
             seen = from_item(item)
             if seen is None or seen[0] != "failed":
                 # The item has moved since the run's last pass (retried, or
@@ -230,7 +233,8 @@ def waiting(views: Views, *, include_dismissed: bool = False) -> list[Waiting]:
                 # driver follows it on its next one.
                 continue
             # The task's failed item is the same waiting thing: one entry.
-            items.pop(task.item_id, None)
+            if item is not None:
+                items.pop(item.item_id, None)
         found.append(
             Waiting(
                 "epic_task",
