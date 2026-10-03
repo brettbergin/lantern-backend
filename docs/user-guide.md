@@ -2199,6 +2199,11 @@ by itself when the item changes state — a retry that fails again asks again.
 `/undismiss` takes it back; `POST /v1/runs/{id}/dismiss` does the same for a
 run no work item carries, and `POST /v1/attention/dismiss` dismisses up to 200
 named alerts under one operation, skipping by name any that moved on.
+`GET /v1/attention` (`runs:read`) is the list those alerts come from: every
+open gate, item parked on a review or on answers, item that ended `failed` or
+`blocked`, failed epic-run task, provider hold awaiting recovery and suspended
+repository, each with the actions the server offers and whether the caller
+may take them, and `counts` to badge from (`?limit=1` is enough).
 `POST /v1/items/{id}/delete` (or `/v1/runs/{id}/delete`) puts finished work
 away: it leaves every listing and its run directories and sandboxes are removed
 now instead of at the `gc` sweep, while the records and the event trail stay

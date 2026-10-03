@@ -30,6 +30,7 @@ from lantern.api.routes import (
     agents,
     analytics,
     artifacts,
+    attention,
     auth,
     catalog,
     channel_files,
@@ -182,6 +183,7 @@ def create_app(ctx: ApiContext) -> FastAPI:
     app.include_router(runs.router)
     app.include_router(catalog.router)
     app.include_router(control.router)
+    app.include_router(attention.router)
     app.include_router(artifacts.router)
     app.include_router(usage.router)
     app.include_router(analytics.router)

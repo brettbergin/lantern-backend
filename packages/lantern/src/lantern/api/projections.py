@@ -48,7 +48,7 @@ from lantern.api.models import (
     rfc3339,
 )
 from lantern.api.publicids import PublicIds, item_key, parse_run_id, run_public_id, split_item_key
-from lantern.daemon.controls.eligibility import Subject, available_actions
+from lantern.daemon.controls.eligibility import Action, Subject, available_actions
 from lantern.daemon.controls.intake import RECIPE_PARAMETERS
 from lantern.daemon.controls.steering import Steering as SteeringRecord
 from lantern.daemon.model import (
@@ -57,7 +57,7 @@ from lantern.daemon.model import (
     live_run_ids,
     requested_roles,
 )
-from lantern.daemon.store import MergeGate, dispatch_eligible_at
+from lantern.daemon.store import MergeGate, ReviewHold, dispatch_eligible_at
 from lantern.db.collaboration_models import ChannelRow
 from lantern.db.event_scope import channel_for_item
 from lantern.engine.model import RunRecord, TaskRecord
@@ -123,6 +123,15 @@ def _mark_actor(actor: dict[str, Any]) -> Actor | None:
     )
 
 
+def item_repository(item: WorkItem) -> str | None:
+    """The ``owner/name`` an item belongs to: the one recorded on it, else
+    the one its id names; ``None`` for work no repository asked for."""
+    if item.repo:
+        return item.repo
+    parsed = try_parse_gh_id(item.item_id)
+    return parsed.repo if parsed is not None else None
+
+
 def not_found() -> Problem:
     """One answer for an id of any kind that names nothing: never which
     kind it was not."""
@@ -143,6 +152,8 @@ class Views:
         self._status: dict[str, Any] | None = None
         self._dismissals: dict[tuple[str, str], Dismissal | None] = {}
         self._deleted: dict[tuple[str, str], float | None] = {}
+        self._gate_states: dict[str, str | None] = {}
+        self._hold_states: dict[str, str | None] = {}
 
     # -- live state ----------------------------------------------------------------
 
@@ -264,11 +275,15 @@ class Views:
         gate_state: str | None = None
         hold_state: str | None = None
         if run_id is not None and item is not None and item.state == "gated":
-            gate = self.dstore.merge_gate_for(run_id)
-            gate_state = gate.state if gate is not None else None
+            if run_id not in self._gate_states:
+                gate = self.dstore.merge_gate_for(run_id)
+                self._gate_states[run_id] = gate.state if gate is not None else None
+            gate_state = self._gate_states[run_id]
         if run_id is not None and item is not None and item.state in _REVIEW_WAIT_ITEM_STATES:
-            hold = self.dstore.review_hold_for(run_id)
-            hold_state = hold.state if hold is not None else None
+            if run_id not in self._hold_states:
+                hold = self.dstore.review_hold_for(run_id)
+                self._hold_states[run_id] = hold.state if hold is not None else None
+            hold_state = self._hold_states[run_id]
         return Subject(
             run_kind=(run.kind if run is not None else item.kind if item else "code"),
             run_state=run.state if run is not None else None,
@@ -280,6 +295,41 @@ class Views:
             review_hold_state=hold_state,
             dismissed=self.dismissal(item, run_id) is not None,
             deleted=self.deleted_at(item, run_id) is not None,
+        )
+
+    def note_parked(
+        self, *, gates: Sequence[MergeGate] = (), holds: Sequence[ReviewHold] = ()
+    ) -> None:
+        """Hand over gates and review holds the caller already read, each
+        the one its run has, so judging a page of parked work does not read
+        every one of them again."""
+        for gate in gates:
+            self._gate_states[gate.run_id] = gate.state
+        for hold in holds:
+            self._hold_states[hold.run_id] = hold.state
+
+    def work_actions(self, item: WorkItem, run: RunRecord | None) -> frozenset[Action]:
+        """Every action open on the work ``item`` carries right now — its
+        own and those of ``run``, the run it pins — as eligibility answers
+        for it: what the item and the run advertise, in one set."""
+        return available_actions(self._subject(item, run))
+
+    def gate_actions(
+        self, gate: MergeGate, item: WorkItem | None, run: RunRecord | None
+    ) -> frozenset[Action]:
+        """What eligibility allows on ``gate`` as it stands, judged as the
+        gate listing judges it."""
+        return available_actions(self._gate_subject(gate, item, run))
+
+    def _gate_subject(
+        self, gate: MergeGate, item: WorkItem | None, run: RunRecord | None
+    ) -> Subject:
+        return Subject(
+            run_kind=run.kind if run is not None else "code",
+            run_state=run.state if run is not None else None,
+            item_state=item.state if item is not None else None,
+            pinned=item is not None and item.run_id == gate.run_id,
+            gate_state=gate.state,
         )
 
     # -- items ---------------------------------------------------------------------
@@ -297,7 +347,7 @@ class Views:
             kind = "api"
         else:
             kind = "other"
-        repo = item.repo or (parsed.repo if parsed is not None else None)
+        repo = item_repository(item)
         return Origin(
             kind=kind,
             repository_id=repo_ids.get(repo) if repo else None,
@@ -536,15 +586,8 @@ class Views:
     def _gate(self, gate: MergeGate, public_id: str) -> Gate:
         run = self.run_record(gate.run_id)
         item = self.dstore.get(gate.item_id)
-        subject = Subject(
-            run_kind=run.kind if run is not None else "code",
-            run_state=run.state if run is not None else None,
-            item_state=item.state if item is not None else None,
-            pinned=item is not None and item.run_id == gate.run_id,
-            gate_state=gate.state,
-        )
         dismissal = self.dismissal(item, gate.run_id) if item is not None else None
-        actions = available_actions(subject)
+        actions = self.gate_actions(gate, item, run)
         return Gate(
             id=public_id,
             kind=gate.kind,
