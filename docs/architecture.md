@@ -1723,10 +1723,15 @@ provision (agent box only, data dir mounted, no toolchains)
   number, a choice's name, the person's own words, or `skip`; `_steer`
   finds no live engine and hands it to `_plan_reply`) answers through the
   same loop path, one question at a time, and the run resumes once every
-  question has an answer. A reply is matched against the plan record, so
-  it still answers after a restart has emptied the bridge's memory of what
-  it posted; a click on a pre-restart button is refused like any expired
-  choice. In a collaboration channel the run's chronicle posts the
+  question has an answer. A reply is matched against the plan record, and
+  the bridge records where it posted each question there too
+  (`Clarification.posts`, `<backend>:<message id>` → question id, through
+  `DaemonLoop.record_plan_question_posts`), so after a restart has emptied
+  the bridge's memory a reply to a question's post and a click on its
+  buttons both still find their question (`plan_question_for_post`); a
+  reply to nothing in particular answers the one open question, or the
+  one whose choices it names, and is asked which otherwise. In a
+  collaboration channel the run's chronicle posts the
   questions as a notice, and the channel-scoped `plan.generation.questions`
   event carries them for the client's questions card.
 

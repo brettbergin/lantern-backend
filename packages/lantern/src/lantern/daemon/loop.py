@@ -121,7 +121,7 @@ from lantern.engine.model import (
     TaskRecord,
     run_summary,
 )
-from lantern.engine.planning import Clarification, PlanAnswer
+from lantern.engine.planning import Clarification, PlanAnswer, PlanQuestion
 from lantern.engine.reconcile import acknowledge_human_threads
 from lantern.engine.sinks import published_line
 from lantern.engine.store import StateStore
@@ -3937,6 +3937,35 @@ class DaemonLoop:
         if waiting is None or item.plan_id is None or item.plan_node_id is None:
             return None
         return PlanQuestionsWaiting(item.plan_id, item.plan_node_id, run_id, waiting)
+
+    def record_plan_question_posts(self, run_id: str, posts: Mapping[str, str]) -> None:
+        """A chat bridge posted the questions ``run_id`` waits on: remember
+        where (``<backend>:<message id>`` → question id) on the plan record,
+        so a reply or a click still finds its question after a restart."""
+        waiting = self.plan_questions_for_run(run_id)
+        if waiting is None:
+            return
+        self.plans.record_question_posts(
+            waiting.plan_id, waiting.node_id, run_id=run_id, posts=posts, now=self.clock()
+        )
+
+    def plan_question_for_post(self, key: str) -> tuple[PlanQuestionsWaiting, PlanQuestion] | None:
+        """The parked run and the question a chat post (``key``,
+        ``<backend>:<message id>``) carried, from the plan record: what a
+        click on that post answers when the bridge that posted it is gone."""
+        for item in self.dstore.items(["awaiting_answers"]):
+            if item.kind != "plan" or not item.run_id:
+                continue
+            waiting = self._waiting_questions(item, item.run_id)
+            if waiting is None or item.plan_id is None or item.plan_node_id is None:
+                continue
+            question = waiting.posted(key)
+            if question is not None:
+                return (
+                    PlanQuestionsWaiting(item.plan_id, item.plan_node_id, item.run_id, waiting),
+                    question,
+                )
+        return None
 
     def answer_plan_questions(
         self,

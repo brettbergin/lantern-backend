@@ -1714,6 +1714,7 @@ class ChatBridge(ABC):
             "your own words; reply `skip` to let the planner decide. The questions are in "
             "the plan too.",
         )
+        posts: dict[str, str] = {}
         for index, question in enumerate(questions, start=1):
             prefix = f"{index}/{count} · " if count > 1 else ""
             choice = plan_choice_question(question, prefix)
@@ -1735,7 +1736,20 @@ class ChatBridge(ABC):
                     moved = self._plan_questions.pop(provisional, None)
                     if moved is not None:
                         self._plan_questions[message_id] = moved
+                posts[self._post_key(message_id)] = question.id
         self.log.info("chat.plan_questions_posted", run=run_id, questions=count)
+        # On the plan record too, so a reply or a click finds its question
+        # after a restart has emptied this bridge's memory of the posts.
+        record = getattr(self.loop_ref, "record_plan_question_posts", None)
+        if posts and callable(record):
+            try:
+                record(run_id, posts)
+            except Exception:
+                self.log.warning("chat.plan_posts_not_recorded", run=run_id, exc_info=True)
+
+    def _post_key(self, message_id: str) -> str:
+        """How the plan record names one of this bridge's posts."""
+        return f"{self.backend}:{message_id}"
 
     def _remember_plan_question(self, key: str, post: _PlanQuestionPost) -> None:
         with self._lock:
@@ -1750,6 +1764,8 @@ class ChatBridge(ABC):
         recorded on the plan. None when the message is no plan question."""
         with self._lock:
             post = self._plan_questions.get(message_id)
+        if post is None:
+            post = self._plan_post_on_record(message_id)
         if post is None:
             return None
         if value not in post.question.values:
@@ -1768,6 +1784,31 @@ class ChatBridge(ABC):
                 self._plan_questions.pop(message_id, None)
         self._schedule(self._say_in_thread(post.run_id, reply))
         return ok
+
+    def _plan_post_on_record(self, message_id: str) -> _PlanQuestionPost | None:
+        """The plan question ``message_id`` carried, as the plan record
+        remembers the post: how a click lands after a restart. None when
+        no waiting run posted it, or its question is answered already."""
+        lookup = getattr(self.loop_ref, "plan_question_for_post", None)
+        if not callable(lookup):
+            return None
+        try:
+            found = lookup(self._post_key(message_id))
+        except Exception:
+            self.log.warning("chat.plan_post_lookup_failed", message=message_id, exc_info=True)
+            return None
+        if found is None:
+            return None
+        waiting, question = found
+        if question.id in waiting.clarification.answers:
+            return None
+        return _PlanQuestionPost(
+            waiting.run_id,
+            waiting.plan_id,
+            waiting.node_id,
+            question.id,
+            plan_choice_question(question),
+        )
 
     def _plan_reply(self, msg: Inbound, run_id: str, text: str) -> bool:
         """A message in the thread of a plan run parked on its questions: an
@@ -1806,11 +1847,20 @@ class ChatBridge(ABC):
                 with self._lock:
                     post = self._plan_questions.get(str(msg.reply_to_id))
                 if post is not None and post.run_id == run_id:
-                    target = next(
-                        (q for q in clarification.questions if q.id == post.question_id), None
-                    )
+                    target = clarification.question(post.question_id)
+                if target is None:
+                    # The bridge that posted it may be gone: the plan
+                    # record remembers where each question was posted.
+                    target = clarification.posted(self._post_key(str(msg.reply_to_id)))
             if target is None:
                 still = clarification.unanswered()
+                if len(still) > 1:
+                    # Words that name a choice only one open question
+                    # offers answer that question; anything else is asked
+                    # about rather than guessed at.
+                    naming = [q for q in still if match_free_text(plan_choice_question(q), words)]
+                    if len(naming) == 1:
+                        still = naming
                 if len(still) != 1:
                     self._schedule(
                         self._send(

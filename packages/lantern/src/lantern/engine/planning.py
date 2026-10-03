@@ -194,6 +194,11 @@ class Clarification(_Model):
     answered_at: float | None = None
     #: Who answered or skipped, as a person reads it.
     answered_by: str | None = None
+    #: Where each question was posted in chat — ``<backend>:<message id>``
+    #: → the question's id — so a reply to that message, or a click on its
+    #: buttons, still finds its question after a restart has emptied the
+    #: bridge's own memory of what it posted.
+    posts: dict[str, str] = Field(default_factory=dict)
 
     @property
     def settled(self) -> bool:
@@ -202,6 +207,14 @@ class Clarification(_Model):
 
     def unanswered(self) -> list[PlanQuestion]:
         return [q for q in self.questions if q.id not in self.answers]
+
+    def question(self, question_id: str) -> PlanQuestion | None:
+        return next((q for q in self.questions if q.id == question_id), None)
+
+    def posted(self, key: str) -> PlanQuestion | None:
+        """The question posted as ``key`` (``<backend>:<message id>``)."""
+        question_id = self.posts.get(key)
+        return None if question_id is None else self.question(question_id)
 
 
 def clarification_problems(answer: PlanClarification, brief: PlanBrief) -> list[str]:

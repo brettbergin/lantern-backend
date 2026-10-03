@@ -221,8 +221,9 @@ def test_an_ambiguous_or_unmatched_reply_is_not_guessed_at(
     park(world)
     bridge, thread = bridge_for(world, tmp_path)
     try:
-        # Two questions open and the reply names neither: asked to say which.
-        bridge._handle_message(steer_msg("csv", thread, mid=904))
+        # Two questions open and the reply could answer either ("1" is a
+        # choice of both): asked to say which, not guessed at.
+        bridge._handle_message(steer_msg("1", thread, mid=904))
         assert wait_for(lambda: any("2 questions are still open" in s for s in thread.sent))
         assert waiting(world).answers == {}
         post_questions(bridge, thread, world)
@@ -264,5 +265,73 @@ def test_the_bot_is_the_one_addressed(harness: Harness, tmp_path: Path) -> None:
         bridge._handle_message(chatter)
         assert waiting(world).answers == {}
         assert BOT_USER.id not in {m.id for m in chatter.mentions}
+    finally:
+        bridge.close()
+
+
+def test_a_reply_to_a_question_posted_before_a_restart_answers_it(
+    harness: Harness, tmp_path: Path
+) -> None:
+    """The bridge that posted the questions is gone; a fresh one gets a
+    reply to the first question's post while both are still open. The
+    plan record remembers which question that post carried."""
+    world = World(harness)
+    park(world)
+    first_bridge, thread = bridge_for(world, tmp_path)
+    try:
+        post_questions(first_bridge, thread, world)
+        first = posted(thread, "Which formats?")
+    finally:
+        first_bridge.close()
+    assert set(waiting(world).posts.values()) == {"fmt", "who"}
+
+    bridge, thread2 = bridge_for(world, tmp_path / "second")
+    try:
+        assert bridge._plan_questions == {}
+        reply = FakeMessage("pdf", thread2, mid=911, reply_to=first)
+        thread2.messages[911] = reply
+        bridge._handle_message(reply)
+        assert wait_for(lambda: "fmt" in waiting(world).answers)
+        assert waiting(world).answers["fmt"].value == "pdf"
+        assert waiting(world).status == "awaiting_answers"
+    finally:
+        bridge.close()
+
+
+def test_a_click_on_a_button_posted_before_a_restart_answers_it(
+    harness: Harness, tmp_path: Path
+) -> None:
+    world = World(harness)
+    park(world)
+    first_bridge, thread = bridge_for(world, tmp_path)
+    try:
+        post_questions(first_bridge, thread, world)
+        second = posted(thread, "Who downloads them?")
+    finally:
+        first_bridge.close()
+
+    bridge, _ = bridge_for(world, tmp_path / "second")
+    try:
+        assert bridge._answer_choice(str(second.id), "public", "brett", author_name="brett")
+        assert waiting(world).answers["who"].value == "public"
+        # Answered: the same button is no longer a plan question.
+        assert bridge._answer_choice(str(second.id), "staff", "brett") is False
+        # A value the question never offered is refused, not guessed at.
+        assert bridge._answer_choice("999999", "public", "brett") is False
+    finally:
+        bridge.close()
+
+
+def test_a_reply_naming_a_choice_only_one_open_question_offers_answers_it(
+    harness: Harness, tmp_path: Path
+) -> None:
+    world = World(harness)
+    park(world)
+    bridge, thread = bridge_for(world, tmp_path)
+    try:
+        bridge._handle_message(steer_msg("public", thread, mid=912))
+        assert wait_for(lambda: "who" in waiting(world).answers)
+        assert waiting(world).answers["who"].value == "public"
+        assert waiting(world).status == "awaiting_answers"
     finally:
         bridge.close()

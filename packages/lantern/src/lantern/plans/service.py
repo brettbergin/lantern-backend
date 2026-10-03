@@ -932,6 +932,47 @@ class PlanService:
             409, "stale_revision", "the plan kept changing while the questions were written"
         )
 
+    def record_question_posts(
+        self,
+        plan_id: str,
+        node_id: str,
+        *,
+        run_id: str,
+        posts: Mapping[str, str],
+        now: float,
+    ) -> None:
+        """Remember where a chat bridge posted the questions ``run_id`` is
+        waiting on (``<backend>:<message id>`` → question id), so a reply to
+        a post or a click on its buttons finds its question from the plan
+        record after a restart. Nothing when the questions are no longer
+        waiting or another run asked them; no event — nothing a person
+        reads changed."""
+        for _ in range(3):
+            plan = self.get(plan_id)
+            node = self._node(plan, node_id)
+            waiting = node.generation
+            if waiting is None or waiting.settled or waiting.run_id != run_id:
+                return
+            known = {k: q for k, q in posts.items() if waiting.question(q) is not None}
+            if not known or all(waiting.posts.get(k) == q for k, q in known.items()):
+                return
+            remembered = waiting.model_copy(update={"posts": {**waiting.posts, **known}})
+            try:
+                self.store.apply(
+                    plan.id,
+                    expected_revision=plan.revision,
+                    now=now,
+                    upsert=[replace(node, generation=remembered)],
+                )
+            except StaleRevision:
+                continue
+            except PlanGone as exc:
+                raise _not_found(plan_id) from exc
+            return
+        raise PlanRefusal(
+            409, "stale_revision", "the plan kept changing while the posts were recorded"
+        )
+
     def waiting_questions(self, plan_id: str, node_id: str) -> Clarification:
         """The node's clarifying questions while they wait for a person,
         refused by name when nothing waits: none were asked, or they were
