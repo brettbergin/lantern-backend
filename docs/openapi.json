@@ -16210,7 +16210,7 @@
     },
     "/v1/plans/{plan_id}/nodes": {
       "post": {
-        "description": "A new child one level under ``parent_id``; the plan as it now is,\nwith the new node's id in the ``Location`` header.",
+        "description": "A new child one level under ``parent_id``; the plan as it now is,\nwith the new node's id in the ``Location`` header. A parent at\n``[planning]``'s cap refuses it (``409 level_full``) \u2014 the same count\nthe planner's room, attaching and publishing are held to.",
         "operationId": "add_node_v1_plans__plan_id__nodes_post",
         "parameters": [
           {

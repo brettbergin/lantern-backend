@@ -292,6 +292,16 @@ class PlanService:
         if level is None:
             raise PlanRefusal(422, "invalid_argument", "a task has no children")
         repo = self._child_repository(parent, level, repository)
+        cap = self._cap(parent)
+        held = len(_occupied(plan, parent))
+        if held >= cap:
+            raise PlanRefusal(
+                409,
+                "level_full",
+                f"this {parent.level} already holds {held} of the {cap} {_noun(level)} "
+                "[planning] allows; remove one to add more",
+                node_id=parent.id,
+            )
         siblings = plan.children(parent.id)
         node = PlanNode(
             id=new_id("node_"),
@@ -813,16 +823,16 @@ class PlanService:
                 repository=node.repository,
             )
         cap = self._cap(node)
-        kept = _kept(plan, node)
+        held = len(_occupied(plan, node))
         if (
             not replanned(plan, node)
-            and len(kept) >= cap
+            and held >= cap
             and not (plan.generation_pending and node.id == plan.root_id)
         ):
             raise PlanRefusal(
                 409,
                 "level_full",
-                f"this {node.level} already holds {len(kept)} of the {cap} "
+                f"this {node.level} already holds {held} of the {cap} "
                 f"{_noun(level)} [planning] allows; remove one to propose more",
                 node_id=node.id,
             )
@@ -863,7 +873,7 @@ class PlanService:
                 else ""
             ),
             kept=[] if replan else [child.title for child in kept],
-            room=max(cap - len(kept), 0),
+            room=max(self._room(plan, node), 0),
             cap=cap,
             profiles=[
                 ProfileRef(name=profile.name, description=profile.description or "")
@@ -1316,7 +1326,7 @@ class PlanService:
                 continue
             titles.add(fold_title(child.title))
             minted[index] = new_id("node_")
-        room = self._cap(node) - len(children)
+        room = self._room(plan, node)
         if len(minted) > room:
             raise PlanRefusal(
                 409,
@@ -1606,14 +1616,8 @@ class PlanService:
         children on the forge or additions approved with it."""
         if not adds:
             return
-        planning = self._config().planning_for(node.repository)
-        cap, key = (
-            (planning.max_epics_per_initiative, "max_epics_per_initiative")
-            if node.level == "initiative"
-            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
-        )
-        children = {c.id for c in plan.children(node.id)}
-        total = len(children | {e.node_id for e in adds})
+        cap, key = self._cap_key(node)
+        total = len({c.id for c in _occupied(plan, node)} | {e.node_id for e in adds})
         if total > cap:
             raise PlanRefusal(
                 409,
@@ -1675,10 +1679,18 @@ class PlanService:
         )
 
     def _cap(self, node: PlanNode) -> int:
+        return self._cap_key(node)[0]
+
+    def _cap_key(self, node: PlanNode) -> tuple[int, str]:
+        """The cap on ``node``'s children and the ``[planning]`` key it is."""
         planning = self._config().planning_for(node.repository)
         if node.level == "initiative":
-            return planning.max_epics_per_initiative
-        return planning.max_tasks_per_epic
+            return planning.max_epics_per_initiative, "max_epics_per_initiative"
+        return planning.max_tasks_per_epic, "max_tasks_per_epic"
+
+    def _room(self, plan: Plan, node: PlanNode) -> int:
+        """How many more children the cap leaves ``node`` room for."""
+        return self._cap(node) - len(_occupied(plan, node))
 
     def _proposed_children(
         self, plan: Plan, node: PlanNode, proposal: PlanProposal, now: float
@@ -1687,7 +1699,7 @@ class PlanService:
         level = child_level(node.level)
         assert level is not None  # nosec B101 - breakdown_target refused a task
         kept = _kept(plan, node)
-        room = self._cap(node) - len(kept)
+        room = self._room(plan, node)
         if len(proposal.children) > room:
             raise PlanRefusal(
                 409,
@@ -2325,21 +2337,15 @@ class PlanService:
 
     def _check_room(self, plan: Plan, parent: PlanNode) -> None:
         """One more child keeps ``parent`` within ``[planning]``'s cap."""
-        planning = self._config().planning_for(parent.repository)
-        cap, key = (
-            (planning.max_epics_per_initiative, "max_epics_per_initiative")
-            if parent.level == "initiative"
-            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
-        )
-        children = [c for c in plan.children(parent.id) if c.followed]
-        if len(children) + 1 > cap:
+        cap, key = self._cap_key(parent)
+        held = len(_occupied(plan, parent))
+        if held + 1 > cap:
             raise PlanRefusal(
                 409,
                 "too_many_children",
-                f"{parent.title} already has {len(children)} children on the forge; "
-                f"[planning] {key} is {cap}",
+                f"{parent.title} already has {held} children; [planning] {key} is {cap}",
                 cap=cap,
-                children=len(children),
+                children=held,
             )
 
     # -- the rules ------------------------------------------------------------
@@ -2407,22 +2413,16 @@ class PlanService:
 
     def _check_cap(self, plan: Plan, node: PlanNode, targets: Sequence[PlanNode]) -> None:
         """The level stays within ``[planning]``'s cap on one parent."""
-        planning = self._config().planning_for(node.repository)
-        cap, key = (
-            (planning.max_epics_per_initiative, "max_epics_per_initiative")
-            if node.level == "initiative"
-            else (planning.max_tasks_per_epic, "max_tasks_per_epic")
-        )
-        going = {t.id for t in targets}
-        children = [c for c in plan.children(node.id) if c.state == "published" or c.id in going]
-        if len(children) > cap:
+        cap, key = self._cap_key(node)
+        going = {t.id for t in targets if t.id != node.id}  # the node itself is no child
+        total = len({c.id for c in _occupied(plan, node)} | going)
+        if total > cap:
             raise PlanRefusal(
                 409,
                 "too_many_children",
-                f"{node.title} would have {len(children)} children on the forge; "
-                f"[planning] {key} is {cap}",
+                f"{node.title} would have {total} children on the forge; [planning] {key} is {cap}",
                 cap=cap,
-                children=len(children),
+                children=total,
             )
 
     @staticmethod
@@ -2676,6 +2676,20 @@ def _stays(plan: Plan, child: PlanNode) -> bool:
     if child.state != "proposed":
         return True
     return any(n.state != "proposed" for n in plan.descendants(child.id))
+
+
+def _occupied(plan: Plan, node: PlanNode) -> list[PlanNode]:
+    """The children of ``node`` that each take one of the level's places
+    under ``[planning]``'s cap — one rule for drafting, the planner's room,
+    a re-plan's room, attaching and publishing: every child that stays
+    (:func:`_kept`), unless it has left its parent on the forge (detached).
+    A planner's proposed child with nothing under it is replaceable and
+    takes no place; a closed child still on the forge keeps its place."""
+    return [
+        child
+        for child in _kept(plan, node)
+        if not (child.forge is not None and child.forge.detached)
+    ]
 
 
 def _noun(level: str) -> str:
