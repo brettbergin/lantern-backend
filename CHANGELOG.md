@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+**A workload no longer fails at publishing when a file it listed is gone.**
+A task's file list is taken when the task ends; a later task that cleaned up
+the scratch an earlier one left (a `.src/` of fetched pages, a `.verify/`
+project) made the chat and artifact sinks raise `FileNotFoundError` at
+publishing, and twenty minutes of judged work ended as a failed run (#4522).
+A declared file that is gone by then is skipped and named — in the daemon
+log (`run.publish_files_missing`) and on the `run.published` event
+(`missing`) — and the result delivers what is there.
+
 **You can talk to Lantern while a run is live in its channel.** 2.1.48 made
 every plain message in a channel with a run in flight a steer of that run,
 and answered a turn that picked a runner with a refusal before the model was

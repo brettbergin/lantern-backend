@@ -3275,15 +3275,18 @@ class LoopEngine:
             # chat backend attaches them to the result where it can, and
             # names them otherwise. Only the record (``Published``) persists.
             paths: list[str] = []
+            # Declared files that were gone by publishing (#4522): named
+            # on the event, so the reply can say what was not delivered.
+            missing: list[str] = []
             try:
                 if sink == "artifact":
-                    entry, paths = self._publish_artifact(p, run, carried)
+                    entry, paths, missing = self._publish_artifact(p, run, carried)
                 elif sink == "pr":
                     entry = self._publish_pr(p, run, tasks, carried)
                 elif sink == "issue":
                     entry = self._publish_issue(p, run, tasks, carried)
                 else:
-                    entry, paths = self._publish_chat(p, run, carried)
+                    entry, paths, missing = self._publish_chat(p, run, carried)
             except (
                 SbxError,
                 GithubOpsError,
@@ -3302,6 +3305,7 @@ class LoopEngine:
                 tasks=entry.tasks,
                 files=entry.files,
                 paths=paths,
+                missing=missing,
                 message=(
                     sinks.chat_text(tasks, run.pr_title, carried)
                     if sink == "chat"
@@ -3312,43 +3316,77 @@ class LoopEngine:
 
     def _stage_files(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Path, list[str]]:
+    ) -> tuple[Path, list[str], list[str]]:
         """Copy the files the tasks declared — only those — out to
         ``runs/<run>/artifacts``: a host copy from a mounted workspace, a
         tar of the listed paths from an unmounted one. Returns the
-        directory and the files' host paths, in declaration order."""
+        directory, the files' host paths in declaration order, and the
+        declared files that were gone by the time the result was
+        published.
+
+        A task's file list is taken when the task ends; a later task may
+        clean up what an earlier one left (a ``.src/`` of fetched pages,
+        a ``.verify/`` project), so a declared file can be missing here
+        (#4522). That is skipped and named, never the run's failure: the
+        work is judged and on the row, and the result is what is there."""
         target = artifacts_dir(run, self.config.paths)
         assert target is not None
         files = sinks.declared_files(carried)
         target.mkdir(parents=True, exist_ok=True)
+        missing: list[str] = []
         if files:
             if p.pair.mounted:
                 assert p.pair.workspace is not None
                 for rel in files:
-                    dest = target / rel
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with (
-                        repofiles.open_file(p.pair.workspace, rel) as source,
-                        dest.open("wb") as out,
-                    ):
-                        shutil.copyfileobj(source, out)
-                        os.fchmod(out.fileno(), os.fstat(source.fileno()).st_mode & 0o777)
+                    try:
+                        with repofiles.open_file(p.pair.workspace, rel) as source:
+                            dest = target / rel
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            with dest.open("wb") as out:
+                                shutil.copyfileobj(source, out)
+                                os.fchmod(out.fileno(), os.fstat(source.fileno()).st_mode & 0o777)
+                    except (FileNotFoundError, NotADirectoryError):
+                        missing.append(rel)
             else:
-                self._copy_out(p.pair, target, files)
-        return target, [str(target / rel) for rel in files]
+                present = self._present_in_sandbox(p.pair, files)
+                missing = [rel for rel in files if rel not in present]
+                if len(missing) < len(files):
+                    self._copy_out(p.pair, target, [rel for rel in files if rel in present])
+        if missing:
+            log.warning("run.publish_files_missing", run=run.run_id, missing=missing)
+        kept = [rel for rel in files if rel not in missing]
+        return target, [str(target / rel) for rel in kept], missing
+
+    def _present_in_sandbox(self, pair: SandboxPair, files: Sequence[str]) -> set[str]:
+        """Which of ``files`` (relative to the work dir) exist in the agent
+        sandbox right now. Raises ``SbxError`` when the sandbox cannot
+        answer; the callers decide what that costs."""
+        names = " ".join(shlex.quote(name) for name in files)
+        script = (
+            f"cd {shlex.quote(pair.agent_workdir)} && "
+            f'for f in {names}; do [ -e "$f" ] && printf "%s\\n" "$f"; done; true'
+        )
+        result = pair.agent.exec(["sh", "-c", script])
+        if not result.ok:
+            raise SbxError(
+                f"listing the declared files failed (exit {result.returncode})",
+                argv=result.argv,
+                stderr=result.stderr,
+            )
+        return {line for line in result.stdout.splitlines() if line.strip()}
 
     def _publish_artifact(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Published, list[str]]:
+    ) -> tuple[Published, list[str], list[str]]:
         """The artifact sink: the declared files, staged on the host."""
-        target, paths = self._stage_files(p, run, carried)
+        target, paths, missing = self._stage_files(p, run, carried)
         entry = Published(
             sink="artifact",
             location=str(target),
             tasks=[t.spec.id for t in carried],
             files=len(paths),
         )
-        return entry, paths
+        return entry, paths, missing
 
     def _publish_pr(
         self,
@@ -3445,7 +3483,7 @@ class LoopEngine:
 
     def _publish_chat(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Published, list[str]]:
+    ) -> tuple[Published, list[str], list[str]]:
         """The chat sink is the ``run.published`` event itself: its
         ``message`` is the reply, posted where the run was asked for by
         whoever drives the engine (the daemon's thread, the CLI's
@@ -3453,14 +3491,14 @@ class LoopEngine:
         way the artifact sink stages them (#799) — a result that names a
         file nobody can open is not a delivered result — and their paths
         ride the event for the backend to attach or name."""
-        _, paths = self._stage_files(p, run, carried)
+        _, paths, missing = self._stage_files(p, run, carried)
         entry = Published(
             sink="chat",
             location="chat",
             tasks=[t.spec.id for t in carried],
             files=len(paths),
         )
-        return entry, paths
+        return entry, paths, missing
 
     # -- post-build stages -------------------------------------------------
 
