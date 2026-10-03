@@ -1438,6 +1438,105 @@
         "title": "ArtifactRefOut",
         "type": "object"
       },
+      "AttentionActRequest": {
+        "additionalProperties": false,
+        "description": "One action on one entry. ``action`` is a name the entry lists in\n``actions``; ``expected_revision`` is the entry's ``revision`` as the\nperson read it; ``params`` are the action's own arguments, the fields\nits own route takes in its body.",
+        "properties": {
+          "action": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "AttentionActRequest",
+        "type": "object"
+      },
+      "AttentionActResult": {
+        "additionalProperties": false,
+        "description": "What became of an act: the command's own answer under ``result``,\nthe operation it recorded, and whether the entry still waits.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ItemCommandResult"
+              },
+              {
+                "$ref": "#/components/schemas/RunCommandResult"
+              },
+              {
+                "$ref": "#/components/schemas/SteerResult"
+              },
+              {
+                "$ref": "#/components/schemas/GateResult"
+              },
+              {
+                "$ref": "#/components/schemas/RepositoryResult"
+              },
+              {
+                "$ref": "#/components/schemas/EpicRunChanged"
+              }
+            ],
+            "title": "Result"
+          },
+          "still_waiting": {
+            "title": "Still Waiting",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entry_id",
+          "action",
+          "still_waiting",
+          "result"
+        ],
+        "title": "AttentionActResult",
+        "type": "object"
+      },
       "AttentionAction": {
         "additionalProperties": false,
         "description": "One action the server offers on an entry right now, the capability\nit needs, and whether the caller holds that capability.",
@@ -14403,6 +14502,71 @@
         "summary": "Dismiss Attention",
         "tags": [
           "control"
+        ]
+      }
+    },
+    "/v1/attention/{entry_id}/act": {
+      "post": {
+        "description": "Take one of the actions an entry of `GET /v1/attention` offers,\nnaming only the entry and the action. The entry is looked up as it\nstands now (a dismissed one included, so `undismiss` works) and the\nrequest is handed to the command the action's own route runs: the same\noperation, the same refusals, nothing recorded for the act itself.\n\n`action` is one of the entry's `actions`; the caller needs that\naction's `capability` (`403 forbidden` naming it otherwise). `params`\nare the action's own arguments, validated as its route validates its\nbody: `rounds` for `grant_rounds`; `text` (and `source_refs`,\n`task_id`, `agent_slug`) for `steer`; `reason` for `abandon`,\n`dismiss` and the other item actions; `reason` and\n`discard_undelivered` for `delete`; `retry` and `reason` for `cancel`.\n\n`expected_revision` is the entry's `revision` as the person read it,\nnever defaulted from the entry as it stands. `gate_approve` requires\nit (`422` without). On a `gate_approve`, and on an item action of an\n`item` entry, the command itself checks it and records the refusal;\non any other action the entry's revision is compared before the\ncommand runs. Either way a moved entry is `409 stale_revision` with\nthe current `revision`. An entry whose `revision` is `null` \u2014 an\n`epic_task`, a `repository` \u2014 takes none (`422`).\n\nThe `Idempotency-Key` header is required (`422\nidempotency_key_required`), scoped to the caller and this entry. A\nreplay answers the first act (`replayed: true`), also once the entry\nis gone; another action, or other `params`, under the same key is\n`409 idempotency_conflict`.\n\nAn id nothing is waiting under is `409 not_waiting`: the thing was\nsettled, or waits again as a new entry. An action the entry does not\noffer now is `409 not_eligible` with `offered`; a name that is no\naction is `422 unknown_action`. Every refusal of the action's own\nroute can be answered too.\n\n`200` with `{entry_id, action, operation_id, replayed, still_waiting,\nresult}`; `202` where the action's own route answers `202` (a gate\napproval, a steer, a cancel honoured at the run's next boundary).\n`result` is the body the action's own route answers and\n`still_waiting` whether the entry is still on the list (dismissed\nalerts left out) as the answer is written.",
+        "operationId": "act_on_attention_v1_attention__entry_id__act_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttentionActRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Accepted: the action's effect completes afterwards."
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Act on an entry",
+        "tags": [
+          "attention"
         ]
       }
     },

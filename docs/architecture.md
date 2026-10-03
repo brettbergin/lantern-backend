@@ -2478,6 +2478,36 @@ capability its command requires (`api/commands.py:ACTIONS`) and whether the
 caller's principal holds it. Entry kinds are open, so a later one (a plan's
 questions, an escalation) is an addition and not a new contract.
 
+Acting on an entry is routing, not a second set of commands.
+`POST /v1/attention/{id}/act` (`api/attention_act.py`) finds the entry as it
+stands, checks the action is one it offers and the caller holds its
+capability, and calls the function the action's own route calls
+(`api/commands.py`, `api/admin.py`, `control_epic_run` in
+`api/routes/plan_runs.py`) with the caller's idempotency pair scoped to the
+act route and the entry. The command records the one operation there is; the
+act records none, so a replay is recognised by asking the operation store
+what the pair already names (`OperationStore.for_idempotency`) before the
+entry is looked up — after a successful act the entry is gone, and the replay
+is aimed from that operation's own target. The revision a caller sends is the
+entry's: a command that checks that same record (the gate's approval, an item
+action on an item entry) is handed it, and for any other the entry is
+compared in the route.
+
+The list has no table, so its changes are found by comparison.
+`AttentionTracker` (`api/attention_events.py`) records `attention.opened` and
+`attention.resolved` as an entry appears on and leaves the default list. The
+set last announced lives in `daemon_state` (`attention.open:<entry id>`), each
+value written or removed in the transaction of the event that announces it
+(`Chronology.record(state=…)`), so a restart replays nothing and loses no
+resolution; with no `attention.seeded` value — an upgrade — the first pass
+records the set and announces nothing. It runs on the projector's pass and
+reads the list only when the daemon itself recorded something that can change
+it since the last pass (`Chronology.recorded_after`: operations, run
+lifecycle, gates, notices, plans — never a run's projected output or a chat's
+traffic), or once a minute for the changes that record nothing; an idle pass
+runs no statement. Each event is recorded against the entry's run and item,
+so `visibility` scopes it as it scopes that work's own events.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

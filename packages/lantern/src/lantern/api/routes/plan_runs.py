@@ -209,22 +209,21 @@ async def run_epic(
 ControlVerb = Literal["pause", "resume", "cancel", "retry", "skip"]
 
 
-async def _control(
+async def control_epic_run(
+    ctx: ApiContext,
+    auth: Authenticated,
     verb: ControlVerb,
     plan_id: str,
     node_id: str,
-    request: Request,
-    ctx: ApiContext,
-    auth: Authenticated,
+    pair: tuple[str, str] | None,
 ) -> EpicRunChanged:
     """One control on an epic run, recorded as a ``plan.run.<verb>``
-    operation: the ``Idempotency-Key`` header is required, a replay answers
+    operation under the caller's idempotency ``pair``: a replay answers
     the run as it is now (or the refusal it recorded), and a different
-    request under the same key is ``409 idempotency_conflict``."""
+    request under the same key is ``409 idempotency_conflict``. The
+    command behind each control route here, and behind an act on an
+    ``epic_task`` entry of ``/v1/attention``."""
     principal = auth.principal
-    pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run/{verb}", required=True
-    )
     actor = actor_of(auth)
 
     def replay(op: Operation) -> EpicRunChanged:
@@ -263,6 +262,22 @@ async def _control(
     changed = await ctx.call(apply)
     ctx.hub.notify()
     return changed
+
+
+async def _control(
+    verb: ControlVerb,
+    plan_id: str,
+    node_id: str,
+    request: Request,
+    ctx: ApiContext,
+    auth: Authenticated,
+) -> EpicRunChanged:
+    """A control route's answer: the ``Idempotency-Key`` header is
+    required and scoped to the route."""
+    pair = idempotency(
+        request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run/{verb}", required=True
+    )
+    return await control_epic_run(ctx, auth, verb, plan_id, node_id, pair)
 
 
 _CONTROL_RESPONSES: dict[int | str, dict[str, Any]] = {

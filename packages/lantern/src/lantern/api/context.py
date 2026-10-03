@@ -82,6 +82,7 @@ from lantern.plans import PlanService
 from lantern_worker.protocol import HostToolSpec
 
 if TYPE_CHECKING:
+    from lantern.api.attention_events import AttentionTracker
     from lantern.api.auth.oidc import OidcProvider
 
 T = TypeVar("T")
@@ -451,6 +452,7 @@ class ApiContext:
         self._oidc: tuple[Any, Any] | None = None
         self._guardrails: Guardrails | None = None
         self._push: PushService | None = None
+        self._attention: AttentionTracker | None = None
         #: The HTTP transport the push relay is reached through; ``None``
         #: is the network. A test mounts its fake relay here.
         self.relay_transport: Any = None
@@ -724,6 +726,16 @@ class ApiContext:
                 transport=lambda: self.relay_transport,
             )
         return self._push
+
+    @property
+    def attention(self) -> AttentionTracker:
+        """What announces an entry of ``/v1/attention`` appearing and
+        leaving (``attention.opened``, ``attention.resolved``)."""
+        if self._attention is None:
+            from lantern.api.attention_events import AttentionTracker
+
+            self._attention = AttentionTracker(self)
+        return self._attention
 
     def _agent_name(self, slug: str | None) -> str:
         """An agent as a notification names it: its display name, and the

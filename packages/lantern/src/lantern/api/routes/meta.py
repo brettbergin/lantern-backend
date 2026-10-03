@@ -85,6 +85,7 @@ FEATURES: tuple[str, ...] = (
     "analytics",
     "attention",
     "delegation",
+    "attention.act",
 )
 
 

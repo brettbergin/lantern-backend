@@ -48,6 +48,9 @@ class Projector:
         #: thread so the loop's finish path never hashes a tree.
         self._catalog: Callable[[str], None] | None = None
         self._deliver_work: Callable[[], object] | None = None
+        #: Announces what started and stopped waiting on a person; handed
+        #: the time and the watermark, it answers how many events it wrote.
+        self._attend: Callable[[float, int | None], int] | None = None
         self._pending: deque[str] = deque()
         #: Woken, like the streams, whenever the chronology grows.
         self._listeners: list[Callable[[], None]] = []
@@ -62,6 +65,12 @@ class Projector:
 
     def deliver_work_with(self, fn: Callable[[], object]) -> None:
         self._deliver_work = fn
+
+    def attend_with(self, fn: Callable[[float, int | None], int]) -> None:
+        """What to call each pass with the time and the chronology's
+        high-water mark. It decides for itself whether anything moved that
+        it has to look at; an idle pass must cost it nothing."""
+        self._attend = fn
 
     def listen(self, fn: Callable[[], None]) -> None:
         """Call ``fn`` (on this thread; it must only wake its own) whenever
@@ -108,6 +117,13 @@ class Projector:
         # ctl command, the frontend, this projection — and every stream
         # hears of it here, whichever thread wrote.
         newest = self.chronology.watermark()
+        if self._attend is not None:
+            try:
+                if self._attend(now, newest):
+                    # What it announced is news to the streams too.
+                    newest = self.chronology.watermark()
+            except Exception:
+                log.warning("api.attention_failed", exc_info=True)
         if copied or newest != self._last_seen:
             self._last_seen = newest
             self.hub.notify()
