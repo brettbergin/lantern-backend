@@ -30,6 +30,7 @@ Action = Literal[
     "abandon",
     "dismiss",
     "undismiss",
+    "delete",
 ]
 ACTIONS: tuple[Action, ...] = get_args(Action)
 
@@ -57,6 +58,13 @@ _ITEM_TRANSITIONS: dict[Action, frozenset[str]] = {
     "requeue": frozenset({"running", "queued"}),
 }
 _RESUMABLE_ITEM_STATES: frozenset[str] = frozenset({"queued", "cancelled", "failed"})
+#: Where finished work rests. Only work at rest can be deleted: work that is
+#: queued, running or parked on a decision is settled first (abandoned or
+#: cancelled), so a delete never doubles as a way to stop something.
+_RESTING_ITEM_STATES: frozenset[str] = frozenset({"done", "failed", "blocked", "cancelled"})
+_RESTING_RUN_STATES: frozenset[str] = frozenset(
+    {"merged", "completed", "failed", "blocked", "cancelled"}
+)
 #: The states that ask a person to look: finished without success, or parked
 #: on a decision. Only these have an alert to dismiss — work that is queued,
 #: running or done has nothing to acknowledge.
@@ -108,6 +116,8 @@ class Subject:
     forge: Capability | None = None
     #: A person already dismissed the alert this work raises.
     dismissed: bool = False
+    #: A person deleted the work: it is hidden, and nothing more applies.
+    deleted: bool = False
 
 
 def check(action: Action, subject: Subject) -> None:
@@ -126,6 +136,8 @@ def check(action: Action, subject: Subject) -> None:
                 "capability_unsupported",
                 "the version-control backend cannot act on the target",
             )
+    if subject.deleted:
+        raise ControlError("not_eligible", "work was deleted")
     refusal = _refusal(action, subject)
     if refusal is not None:
         raise ControlError("not_eligible", refusal)
@@ -193,6 +205,25 @@ def _refusal(action: Action, s: Subject) -> str | None:
         return _nothing_to_dismiss(s)
     if action == "undismiss":
         return None if s.dismissed else "not dismissed"
+    if action == "delete":
+        return _not_deletable(s)
+    return None
+
+
+def _not_deletable(s: Subject) -> str | None:
+    """Why the work cannot be deleted yet, or ``None`` when it can: it must
+    be at rest. The work item decides when it carries the work, as for a
+    dismissal."""
+    if s.is_current:
+        return "run is in flight"
+    if s.item_state is not None and (s.pinned or s.run_state is None):
+        if s.item_state in _RESTING_ITEM_STATES:
+            return None
+        return f"work item is {s.item_state}; abandon it first"
+    if s.run_state is None:
+        return "no work to delete"
+    if s.run_state not in _RESTING_RUN_STATES:
+        return f"run is {s.run_state}; cancel it first"
     return None
 
 

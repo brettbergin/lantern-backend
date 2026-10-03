@@ -1837,6 +1837,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/runs[/{id}]`, `…/tasks`                                     | `runs:read`            | Runs and their tasks                                                        |
 | `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
 | `POST`   | `/v1/attention/dismiss`                                          | `runs:control`         | Dismiss several named alerts under one operation                            |
+| `POST`   | `/v1/items/{id}/delete`, `/v1/runs/{id}/delete`                  | `runs:control`         | Put finished work away: hidden from listings, run directories removed       |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
 | `POST`   | `/v1/runs/{id}/steering`                                         | `runs:steer`           | Direction for the run in flight                                             |
 | `GET`    | `/v1/runs/{id}/steering`                                         | `runs:read`            | Every instruction and its fate                                              |
@@ -1982,6 +1983,42 @@ result per target in the request's order: `dismissed`, `already_dismissed`, or
 `skipped` with the `code` and `detail` the single route would have refused
 with (`not_found`, `not_eligible`, `stale_revision`). A skipped target does not
 fail the others.
+
+### Deleting finished work
+
+Dismissing takes an alert off the list of things to look at; the work stays in
+every other listing. `POST /v1/items/{id}/delete` (feature `work.delete`;
+`runs:control`; body
+`{"reason": …, "expected_revision": …, "discard_undelivered": false}`, all
+optional) puts the work away:
+
+- **Hidden, not erased.** The item and every run it had leave `GET /v1/items`,
+  `GET /v1/runs` and a channel's `/work` and `/jobs`. The rows, the event trail
+  and the operation stay — they are the audit record — and a read of the
+  item or the run by its id still answers, with `deleted_at` set and no
+  `available_actions`. `?include_deleted=true` on either listing shows
+  them again.
+- **The disk is reclaimed.** Each run's sandboxes and run directory are removed
+  now instead of at the retention sweep, recorded with the same `daemon.gc`
+  event; a deleted run cannot be resumed.
+- **The forge is not touched.** The pull request, the branch and the issue stay
+  as they are: they belong to the target repository.
+- **Only work at rest.** `delete` is in `available_actions` for an item that is
+  `done`, `failed`, `blocked` or `cancelled` and has no run in flight. Anything
+  queued, running or parked on a decision is `409 not_eligible` — abandon or
+  cancel it first; a delete never doubles as a way to stop something.
+- **Undelivered work is kept.** When a run's delivery failed, or its sandboxes
+  were kept, its workspace is the only copy of what the run produced: the
+  delete is refused — `409 not_eligible` with `"undelivered": true` in the
+  problem body — unless `discard_undelivered` is `true`.
+- **No further command.** Deleted work refuses every control with
+  `409 not_eligible` "work was deleted". The source asking for the work again
+  is not a command: an issue re-admitted comes back as a fresh item, visible
+  again, while its deleted runs stay hidden.
+
+`POST /v1/runs/{id}/delete` deletes the item when one pins the run, and the run
+alone when nothing does. Deleting twice answers `200`. `item.delete` and
+`run.delete` are command actions on `/v1/ws`.
 
 ## Following the work: events, SSE and the WebSocket
 
@@ -2194,7 +2231,10 @@ from a developer machine.
 By design, on this API: general configuration writes, backup and restore,
 garbage collection, sandbox deletion, and starting a daemon that is not
 running. Each stays on the host's own CLI until it has its own attribution,
-conflict and active-run story. Repository registration has one (see
+conflict and active-run story. Deleting one finished piece of work has one
+(see Deleting finished work above) and removes that work's own run
+directories and sandboxes; the retention sweep and every other sandbox are
+still the host's. Repository registration has one (see
 Repositories above); a repository's other settings are still the file's. A tool run takes no
 steering, no round grants and no gate: a fixed recipe has nothing to steer.
 

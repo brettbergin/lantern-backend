@@ -64,6 +64,8 @@ EFFECTS: dict[str, str] = {
     "run.dismiss": "the run's alert is marked dismissed for everyone",
     "run.undismiss": "the run's alert asks for attention again",
     "attention.dismiss_all": "each named alert is marked dismissed, or named as skipped",
+    "item.delete": "the item and its runs are hidden and their run directories removed",
+    "run.delete": "the run is hidden and its run directory removed",
     "repo.resume": "the repository is polled again from the next tick",
     "repo.labels_sync": "every label the loop applies exists on the repository",
     "daemon.breaker_reset": "the breaker is closed and its failure count is zero",
@@ -623,6 +625,25 @@ def _judge(
             "failed",
             "interrupted_before_effect",
             "the alert is still dismissed" if standing else "the alert was not dismissed",
+        )
+    if op.action in ("item.delete", "run.delete"):
+        # The mark is written last, after the directories are gone, and
+        # every step before it is safe to repeat.
+        kind, key = op.target_kind, op.target_key
+        if kind == "item":
+            named = loop.dstore.get(key)
+            key = named.item_id if named is not None else key
+        else:
+            owner = loop.dstore.item_for_run(key)
+            pinning = loop.dstore.get(owner) if owner else None
+            if pinning is not None and pinning.run_id == key:
+                kind, key = "item", pinning.item_id
+        if loop.dstore.work_mark(kind, key, "deleted") is not None:
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the delete was interrupted; sending it again finishes it",
         )
     if op.action == "attention.dismiss_all":
         # Each alert is its own mark and dismissing twice changes nothing,

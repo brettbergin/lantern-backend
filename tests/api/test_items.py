@@ -134,9 +134,9 @@ class TestDetail:
         assert detail["body"] == "please do it" and detail["state"] == "blocked"
         assert detail["runs"] == [detail["run_id"]] and detail["run_id"].startswith("run_")
         assert detail["admitted_by"] is None  # a poll, not a recorded admission
-        # A blocked item can be retried or abandoned, not requeued — and its
-        # alert dismissed.
-        assert detail["available_actions"] == ["retry", "abandon", "dismiss"]
+        # A blocked item can be retried or abandoned, not requeued — its
+        # alert dismissed, or the item put away.
+        assert detail["available_actions"] == ["retry", "abandon", "dismiss", "delete"]
         assert detail["revision"] >= 1 and detail["updated_at"].endswith("Z")
 
 

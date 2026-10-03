@@ -2189,6 +2189,12 @@ by itself when the item changes state — a retry that fails again asks again.
 `/undismiss` takes it back; `POST /v1/runs/{id}/dismiss` does the same for a
 run no work item carries, and `POST /v1/attention/dismiss` dismisses up to 200
 named alerts under one operation, skipping by name any that moved on.
+`POST /v1/items/{id}/delete` (or `/v1/runs/{id}/delete`) puts finished work
+away: it leaves every listing and its run directories and sandboxes are removed
+now instead of at the `gc` sweep, while the records and the event trail stay
+and nothing on the forge is touched. Only work at rest can be deleted — abandon
+or cancel anything still in play first — and a run holding work that was never
+delivered is kept unless the request says `discard_undelivered`.
 
 **Following the work.** Every public event — the daemon's notices, a run's
 start and finish, its engine chronology (every persisted event, `worker.stdout`
@@ -2204,7 +2210,7 @@ does when the daemon stops or the token is revoked; it says why in a
 `stream.closed` frame). `/v1/ws` multiplexes the same events and the same
 typed commands on one WebSocket — a bearer token in the `Authorization` header
 or an `auth{token}` first frame (never the query string), `subscribe{after, run_id, type_prefix}`, and `command{id, action, target, params, idempotency_key, expected_revision}` for `item.admit`, `item.retry`,
-`item.requeue`, `item.abandon`, `item.dismiss` and `item.undismiss`, answered by `reply{id, ok, result | problem}` with the same body and the same idempotency the REST route has.
+`item.requeue`, `item.abandon`, `item.dismiss`, `item.undismiss` and `item.delete`, answered by `reply{id, ok, result | problem}` with the same body and the same idempotency the REST route has.
 History is kept for `[api] replay_retention_s`; a cursor below what remains is
 `410 cursor_expired` with a pointer to the snapshot, never a silent skip. A
 read of one run is refused only when that run itself lost events to the

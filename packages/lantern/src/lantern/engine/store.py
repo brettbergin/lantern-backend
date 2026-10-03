@@ -25,7 +25,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -1013,13 +1013,16 @@ class StateStore:
         kinds: Sequence[str] | None = None,
         after: tuple[float, str] | None = None,
         limit: int = 50,
+        exclude: Collection[str] = (),
     ) -> list[RunRecord]:
         """A page of runs in :meth:`recent_runs` order (touched most
         recently first), keyed on ``(updated_at, run_id)`` so a reader
         paging while runs move sees no gap and no repeat (#1036).
         ``states`` are matched on the record, after the legacy spellings
         are remapped, so the filter is applied in Python on a bounded
-        over-read rather than trusted to the column."""
+        over-read rather than trusted to the column. ``exclude`` names
+        runs to leave out (the ones a person deleted), skipped in the same
+        read so a page is still full."""
         stmt = select(Run).order_by(Run.updated_at.desc(), Run.run_id.desc())
         if kinds:
             stmt = stmt.where(Run.kind.in_(list(kinds)))
@@ -1035,6 +1038,8 @@ class StateStore:
         out: list[RunRecord] = []
         with self._read() as session:
             for row in session.scalars(stmt):
+                if row.run_id in exclude:
+                    continue
                 record = self._run_record(row)
                 if wanted and record.state not in wanted:
                     continue

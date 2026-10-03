@@ -31,6 +31,7 @@ from __future__ import annotations
 import shutil
 import time
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -221,37 +222,106 @@ def prune_run_dirs(
         if dry_run:
             freed += verdict.size_bytes
             continue
-        record = store.get_run(verdict.run_id)
-        workspace_removed = record.workspace is not None and _is_within(
-            record.workspace, verdict.path
+        removed = _mark_and_remove(
+            store,
+            home,
+            verdict.run_id,
+            verdict.path,
+            size_bytes=verdict.size_bytes,
+            age_s=verdict.age_s,
+            now=now,
+            actor=actor,
         )
-        data = {
-            "path": str(verdict.path),
-            "bytes": verdict.size_bytes,
-            "age_s": verdict.age_s,
-            "workspace_removed": workspace_removed,
-            "by": actor,
-        }
-        if not store.append_event_if_state(
-            _gc_event(verdict.run_id, now, data), TERMINAL_RUN_STATES
-        ):
-            log.info(
-                "gc.kept",
-                run=verdict.run_id,
-                reason="left the terminal states since classification",
-            )
+        if removed is None:
             continue
-        if not _remove(verdict.path, home):
+        if not removed:
             failed.append(verdict.run_id)
-            store.append_event(
-                _gc_event(verdict.run_id, now, {**data, "error": "could not remove directory"})
-            )
             continue
         pruned.append(verdict.run_id)
         freed += verdict.size_bytes
     return GcResult(
         verdicts=verdicts, pruned=pruned, failed=failed, bytes_freed=freed, dry_run=dry_run
     )
+
+
+def _mark_and_remove(
+    store: StateStore,
+    home: LanternHome,
+    run_id: str,
+    path: Path,
+    *,
+    size_bytes: int,
+    age_s: float | None,
+    now: float,
+    actor: str,
+) -> bool | None:
+    """Mark one run's directory as removed, then remove it — the order
+    :func:`prune_run_dirs` documents. ``None`` when the run left the
+    terminal states before the marker could be written (nothing is
+    touched); ``False`` when the marker stands and the removal failed."""
+    record = store.get_run(run_id)
+    workspace_removed = record.workspace is not None and _is_within(record.workspace, path)
+    data = {
+        "path": str(path),
+        "bytes": size_bytes,
+        "age_s": age_s,
+        "workspace_removed": workspace_removed,
+        "by": actor,
+    }
+    if not store.append_event_if_state(_gc_event(run_id, now, data), TERMINAL_RUN_STATES):
+        log.info("gc.kept", run=run_id, reason="left the terminal states since classification")
+        return None
+    if not _remove(path, home):
+        store.append_event(_gc_event(run_id, now, {**data, "error": "could not remove directory"}))
+        return False
+    return True
+
+
+RunDirRemoval = Literal["removed", "absent", "kept", "failed"]
+
+
+def remove_run_dir(
+    store: StateStore,
+    home: LanternHome,
+    run_id: str,
+    *,
+    now: float | None = None,
+    actor: str = "cli",
+) -> RunDirRemoval:
+    """Remove one run's directory now, whatever its age: a person deleted
+    the work, so retention has nothing to wait for. The same marker-first
+    order and the same ``daemon.gc`` event as a sweep, so ``resume``
+    refuses the run afterwards exactly as it refuses a pruned one.
+
+    ``absent`` when there is no directory (already pruned, or the run died
+    before it had one); ``kept`` when the run is not terminal — a caller
+    settles it first; ``failed`` when the marker stands and the removal
+    did not finish (the next sweep does). What the caller keeps the
+    directory for — a failed delivery, kept sandboxes — is the caller's
+    decision: this removes what it is told to."""
+    now = time.time() if now is None else now
+    if not is_run_id(run_id):
+        return "absent"
+    path = home.runs / run_id
+    if not path.is_dir():
+        return "absent"
+    try:
+        record = store.get_run(run_id)
+    except StateError:
+        return "absent"
+    removed = _mark_and_remove(
+        store,
+        home,
+        run_id,
+        path,
+        size_bytes=dir_size(path),
+        age_s=max(0.0, now - record.updated_at),
+        now=now,
+        actor=actor,
+    )
+    if removed is None:
+        return "kept"
+    return "removed" if removed else "failed"
 
 
 def workspace_pruned(store: StateStore, run_id: str) -> bool:

@@ -4257,6 +4257,17 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
           "dismissal": {
             "anyOf": [
               {
@@ -4507,6 +4518,17 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
           },
           "dismissal": {
             "anyOf": [
@@ -9504,6 +9526,17 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
           "dismissal": {
             "anyOf": [
               {
@@ -11485,6 +11518,42 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "discard_undelivered": {
+            "default": false,
+            "title": "Discard Undelivered",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "WorkDeleteCommand",
         "type": "object"
       },
       "WorkflowCreate": {
@@ -15535,7 +15604,7 @@
     },
     "/v1/items": {
       "get": {
-        "description": "Work items, newest first, filterable by state, kind and repository.",
+        "description": "Work items, newest first, filterable by state, kind and repository.\nItems a person deleted are left out unless ``include_deleted``.",
         "operationId": "list_items_v1_items_get",
         "parameters": [
           {
@@ -15590,6 +15659,16 @@
                 }
               ],
               "title": "Repository Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
             }
           },
           {
@@ -15806,6 +15885,66 @@
           }
         },
         "summary": "Abandon Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
+    "/v1/items/{item_id}/delete": {
+      "post": {
+        "description": "Put a finished item away: it and its runs leave every listing, and\ntheir sandboxes and run directories are removed. The records and the\nevent trail stay, readable by id, and nothing on the forge is touched.\nRefused for an item that is not at rest (abandon it first), and \u2014\nunless ``discard_undelivered`` \u2014 when a run's workspace is the only\ncopy of work that was never delivered. Deleting twice answers with the\nitem as it stands.",
+        "operationId": "delete_item_v1_items__item_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkDeleteCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Item",
         "tags": [
           "items"
         ]
@@ -18447,7 +18586,7 @@
     },
     "/v1/runs": {
       "get": {
-        "description": "Runs touched most recently first, filterable by state and kind.",
+        "description": "Runs touched most recently first, filterable by state and kind.\nRuns a person deleted are left out unless ``include_deleted``.",
         "operationId": "list_runs_v1_runs_get",
         "parameters": [
           {
@@ -18486,6 +18625,16 @@
                 }
               ],
               "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
             }
           },
           {
@@ -18686,6 +18835,66 @@
           }
         },
         "summary": "Cancel Run",
+        "tags": [
+          "control"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/delete": {
+      "post": {
+        "description": "Put a finished run away. A run its work item pins deletes the item\nwith every run it had (the same as ``POST /v1/items/{id}/delete``); a\nrun nothing pins is deleted alone. Refused for a run that is not at\nrest (cancel it first).",
+        "operationId": "delete_run_v1_runs__run_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkDeleteCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Run",
         "tags": [
           "control"
         ]

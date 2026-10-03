@@ -242,6 +242,21 @@ class DismissOutcome(Outcome):
     item: WorkItem | None = None
 
 
+class DeleteOutcome(Outcome):
+    """Work hidden from every listing, its run directories and sandboxes
+    removed; the rows stay as the audit trail. ``runs`` are the runs hidden
+    with it and ``removed`` the ones whose directory was actually removed
+    (the rest had none left)."""
+
+    subject_kind: Literal["item", "run"]
+    subject_key: str
+    #: ``False`` when the work was already deleted — idempotent.
+    fresh: bool = True
+    item: WorkItem | None = None
+    runs: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
 class DismissedTarget(BaseModel):
     """What became of one alert a bulk dismissal named, by its place in
     the request."""

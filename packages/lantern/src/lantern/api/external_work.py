@@ -855,6 +855,10 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
             attempts = [*attempts, None]
         for binding in attempts:
             item = latest_item
+            # Work a person deleted is gone from the channel's list too: the
+            # attempt by its run's mark, the item-only row by the item's.
+            if views.deleted_at(None if binding is not None else item, binding and binding.run_id):
+                continue
             public_item = views.item(item) if item is not None else None
             record = views.run_record(binding.run_id) if binding is not None else None
             run = views.run(record) if record is not None else None

@@ -34,7 +34,7 @@ class TestAnItem:
         self, api: Api
     ) -> None:
         item = _blocked(api)
-        assert item["available_actions"] == ["retry", "abandon", "dismiss"]
+        assert item["available_actions"] == ["retry", "abandon", "dismiss", "delete"]
         headers = api.bearer()
         response = api.client.post(
             f"/v1/items/{item['id']}/dismiss", json={"reason": "known flake"}, headers=headers
@@ -50,7 +50,7 @@ class TestAnItem:
         # Nothing about the work moved: the same state at the same revision.
         assert body["item"]["state"] == "blocked"
         assert body["item"]["revision"] == item["revision"]
-        assert body["item"]["available_actions"] == ["retry", "abandon", "undismiss"]
+        assert body["item"]["available_actions"] == ["retry", "abandon", "undismiss", "delete"]
         # Another person reads the same dismissal, on the item and on its run.
         other = api.bearer(frozenset({"runs:read"}))
         assert _item(api, item["id"], other)["dismissal"] == dismissal
@@ -158,7 +158,7 @@ class TestAnAbandon:
         assert dismissal["cause"] == "abandoned" and dismissal["reason"] == "scope changed"
         assert dismissal["by"]["via"] == "api"
         assert dismissal["operation_id"] == response.json()["operation"]["id"]
-        assert abandoned["available_actions"] == ["retry", "undismiss"]
+        assert abandoned["available_actions"] == ["retry", "undismiss", "delete"]
         # Delivering the report the source is owed changes nothing.
         api.loop.tick()
         assert _item(api, item["id"], headers)["dismissal"] == dismissal

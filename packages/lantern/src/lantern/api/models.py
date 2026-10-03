@@ -361,6 +361,9 @@ class Item(ApiModel):
     available_actions: list[str] = Field(default_factory=list)
     #: Set while a person's dismissal of this item's alert stands.
     dismissal: Dismissal | None = None
+    #: When a person deleted the item: it is left out of every listing and
+    #: takes no further command; the record stays readable by its id.
+    deleted_at: str | None = None
     #: The agent asked to lead the work, or, once the run is planned, the
     #: agent that leads it. ``None`` for work admitted without one.
     lead_agent: str | None = None
@@ -430,6 +433,9 @@ class Run(ApiModel):
     #: Set while a dismissal of this run's alert stands: its work item's
     #: when one pins the run, the run's own otherwise.
     dismissal: Dismissal | None = None
+    #: When a person deleted the run's work: left out of every listing,
+    #: its run directory removed; the record stays readable by its id.
+    deleted_at: str | None = None
 
 
 class TaskOutputOut(ApiModel):
@@ -674,6 +680,14 @@ class Admitted(ApiModel):
 class ItemCommand(ApiModel):
     reason: str | None = Field(default=None, max_length=2000)
     expected_revision: int | None = Field(default=None, ge=0)
+
+
+class WorkDeleteCommand(ApiModel):
+    reason: str | None = Field(default=None, max_length=2000)
+    expected_revision: int | None = Field(default=None, ge=0)
+    #: Delete even when a run's workspace is the only copy of work that
+    #: was never delivered. Off by default: that work would be lost.
+    discard_undelivered: bool = False
 
 
 class ItemCommandResult(ApiModel):

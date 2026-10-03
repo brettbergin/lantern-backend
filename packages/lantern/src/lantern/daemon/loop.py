@@ -70,6 +70,7 @@ from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import (
     CancelOutcome,
     ControlError,
+    DeleteOutcome,
     DismissOutcome,
     ResumeOutcome,
     SteerOutcome,
@@ -136,7 +137,14 @@ from lantern.errors import (
     WorkerError,
 )
 from lantern.events import Event, EventBus, HostEventTypes
-from lantern.gc import DAY_S, format_bytes, prune_run_dirs, workspace_pruned
+from lantern.gc import (
+    DAY_S,
+    delivery_failed,
+    format_bytes,
+    prune_run_dirs,
+    remove_run_dir,
+    workspace_pruned,
+)
 from lantern.ghids import (
     is_api_id,
     is_chat_id,
@@ -1549,6 +1557,108 @@ class DaemonLoop:
         log.info("work.undismissed", kind=kind, key=key, by=(actor or {}).get("id"), fresh=fresh)
         return DismissOutcome(
             verb="undismiss", subject_kind=kind, subject_key=key, fresh=fresh, item=item
+        )
+
+    # -- delete: finished work put away ---------------------------------------------
+
+    def delete_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+        discard_undelivered: bool = False,
+    ) -> DeleteOutcome:
+        """Put finished work away: hide it from every listing and remove
+        the sandboxes and run directories of every run it had. The rows and
+        the event trail stay — they are the audit record — and nothing on
+        the forge is touched: the pull request, the branch and the issue
+        are the target repository's, not this listing's.
+
+        Only work at rest: anything queued, running or parked on a decision
+        is refused by name (abandon or cancel it first), so a delete never
+        doubles as a way to stop something. Refused too, unless
+        ``discard_undelivered``, when a run's workspace is the only copy of
+        work that was never delivered. The marks are written last: a delete
+        interrupted before them leaves the work visible, and sending it
+        again finishes the job. Deleting twice is not an error."""
+        kind, key, item, record = self._alert_subject(item_id, run_id, expected_revision)
+        if self.dstore.work_mark(kind, key, "deleted") is not None:
+            return DeleteOutcome(subject_kind=kind, subject_key=key, fresh=False, item=item)
+        check_eligibility(
+            "delete",
+            Subject(
+                run_kind=record.kind if record is not None else item.kind if item else "code",
+                run_state=record.state if record is not None else None,
+                item_state=item.state if item is not None else None,
+                is_current=record is not None and self._live_run(record.run_id) is not None,
+                pinned=item is not None and record is not None and item.run_id == record.run_id,
+            ),
+        )
+        run_ids = [key]
+        if item is not None:
+            run_ids = list(
+                dict.fromkeys(
+                    [
+                        *self.dstore.runs_for_item(item.item_id),
+                        *([item.run_id] if item.run_id else []),
+                    ]
+                )
+            )
+        records: dict[str, RunRecord] = {}
+        for candidate in run_ids:
+            if self._live_run(candidate) is not None:
+                raise ControlError("not_eligible", f"run {candidate} is in flight")
+            try:
+                records[candidate] = self.store.get_run(candidate)
+            except (LanternError, StateError):
+                continue
+        if not discard_undelivered:
+            for candidate, found in records.items():
+                if found.kept_reason is not None or delivery_failed(self.store, candidate):
+                    raise ControlError(
+                        "not_eligible",
+                        f"run {candidate} holds work that was never delivered — its "
+                        "workspace is the only copy; `discard_undelivered` deletes it anyway",
+                        # What a client keys its "delete anyway" on, rather
+                        # than on the sentence.
+                        undelivered=True,
+                    )
+        now = self.clock()
+        who = str((actor or {}).get("display") or (actor or {}).get("id") or "operator")
+        repo = item.repo if item is not None else None
+        removed: list[str] = []
+        for candidate in run_ids:
+            known = records.get(candidate)
+            if known is not None and known.state not in TERMINAL_RUN_STATES:
+                # A run its item settled without it: never resumed now.
+                self._close_dead_run(candidate, "deleted", now, repo=repo)
+            self._remove_stale_run_sandboxes(candidate, repo=repo, deleting=True)
+            if remove_run_dir(self.store, self.config.paths, candidate, now=now, actor=who) == (
+                "removed"
+            ):
+                removed.append(candidate)
+        fresh = self.dstore.mark_deleted(
+            item.item_id if item is not None else None,
+            run_ids,
+            now,
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+        log.info(
+            "work.deleted", kind=kind, key=key, by=who, runs=len(run_ids), removed=len(removed)
+        )
+        return DeleteOutcome(
+            subject_kind=kind,
+            subject_key=key,
+            fresh=fresh,
+            item=item,
+            runs=run_ids,
+            removed=removed,
         )
 
     def _close_dead_run(
@@ -5953,7 +6063,9 @@ class DaemonLoop:
             # running one was reconciled above.
         self._deliver_pending_reports()
 
-    def _remove_stale_run_sandboxes(self, run_id: str, *, repo: str | None = None) -> None:
+    def _remove_stale_run_sandboxes(
+        self, run_id: str, *, repo: str | None = None, deleting: bool = False
+    ) -> None:
         """A dead process leaves the run's microVMs — and their secret
         registrations — behind. Both must go before resume re-provisions
         under the same names: a lingering secret cannot be replaced, so the
@@ -5979,6 +6091,11 @@ class DaemonLoop:
             ):
                 try:
                     remove_run_sandbox(self.sbx, name, role, self.config)
+                    if deleting:
+                        # A person deleted the work: said in the journal,
+                        # not in the run's thread, which is being put away.
+                        log.info("work.sandbox_removed", run=run_id, sandbox=name, role=role)
+                        continue
                     self._notice(
                         "recovery.stale_sandbox_removed",
                         f"recovery: removed stale sandbox {name} (and its secrets)",
