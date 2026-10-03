@@ -318,6 +318,18 @@ class OperationStore:
             row = session.get(OperationRow, op_id)
             return None if row is None else _row(row)
 
+    def for_idempotency(self, scope: str, key: str) -> Operation | None:
+        """The operation an idempotency pair already names, if any: what a
+        surface asks before it works out what a replay is a replay of."""
+        with self.dstore.read() as session:
+            row = session.scalars(
+                select(OperationRow).where(
+                    OperationRow.idempotency_scope == scope,
+                    OperationRow.idempotency_key == key,
+                )
+            ).first()
+            return None if row is None else _row(row)
+
     def recent(
         self,
         *,

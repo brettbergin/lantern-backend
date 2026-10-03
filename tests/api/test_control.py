@@ -379,6 +379,25 @@ class TestGates:
         ]
         assert types == ["gate.opened", "gate.resolved"]
 
+    def test_a_keyed_approval_replays_once_the_gate_has_moved(self, api: Api) -> None:
+        """The approval is what moved the gate: a retry under the same key
+        is answered from its record, not judged against the merged gate."""
+        run_id = gated(api)
+        headers = {**api.bearer(), "Idempotency-Key": "approve-1"}
+        (gate,) = api.client.get("/v1/gates", headers=headers).json()["data"]
+        path = f"/v1/gates/{gate['id']}/approve"
+        body = {"expected_revision": gate["revision"]}
+        first = api.client.post(path, json=body, headers=headers)
+        assert first.status_code == 202, first.text
+        landed(api, run_id)
+        replay = api.client.post(path, json=body, headers=headers)
+        assert replay.status_code == 202, replay.text
+        assert replay.json()["operation"]["id"] == first.json()["operation"]["id"]
+        assert replay.json()["gate"]["state"] == "merged"
+        # Without the key it is a second approval, and the gate has moved.
+        again = api.client.post(path, json=body, headers=api.bearer())
+        assert again.status_code == 409
+
     def test_a_held_publication_is_released_the_same_way(self, api: Api) -> None:
         run_id = gated(api, kind="publish")
         headers = api.bearer()

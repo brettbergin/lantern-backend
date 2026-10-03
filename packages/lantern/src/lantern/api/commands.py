@@ -50,7 +50,12 @@ from lantern.daemon.controls.intake import (
     ToolAdmission,
     WorkloadAdmission,
 )
-from lantern.daemon.controls.operations import IdempotencyConflict, Operation, OperationReplay
+from lantern.daemon.controls.operations import (
+    IdempotencyConflict,
+    Operation,
+    OperationReplay,
+    OperationStore,
+)
 from lantern.daemon.controls.principal import Capability as PrincipalCapability, Principal
 from lantern.daemon.controls.results import (
     AdmitOutcome,
@@ -658,6 +663,19 @@ async def approve_gate(
     def apply() -> Outcome:
         views = Views(ctx)
         gate = views.gate_by_public_id(public_id)
+        # A replay is answered from its record before the gate is judged
+        # again: the approval it repeats is what moved the gate, and the
+        # gate as it stands now would refuse it.
+        store = getattr(ctx.loop, "operations", None)
+        earlier = (
+            store.for_idempotency(*pair) if isinstance(store, OperationStore) and pair else None
+        )
+        if (
+            earlier is not None
+            and earlier.action == "gate.approve"
+            and earlier.target_key == gate.run_id
+        ):
+            raise OperationReplay(earlier)
         run = views.run_record(gate.run_id)
         forge = forge_capability(ctx, gate.repo or None) if gate.kind == "merge" else None
         check_eligibility(

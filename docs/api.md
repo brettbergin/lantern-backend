@@ -1854,6 +1854,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
 | `GET`    | `/v1/attention`                                                  | `runs:read`            | Everything waiting on a person, with counts and the actions offered         |
 | `POST`   | `/v1/attention/dismiss`                                          | `runs:control`         | Dismiss several named alerts under one operation                            |
+| `POST`   | `/v1/attention/{id}/act`                                         | `runs:read`            | Take an action an entry offers (it needs that action's capability too)      |
 | `POST`   | `/v1/items/{id}/delete`, `/v1/runs/{id}/delete`                  | `runs:control`         | Put finished work away: hidden from listings, run directories removed       |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
 | `POST`   | `/v1/runs/{id}/steering`                                         | `runs:steer`           | Direction for the run in flight                                             |
@@ -2052,8 +2053,10 @@ alone when nothing does. Deleting twice answers `200`. `item.delete` and
 The **chronology** is one durable, ordered stream: the daemon's notices, a
 run's start and finish, its engine events (every persisted one, `worker.stdout`
 included — filter with `type_prefix`), gate transitions, steering receipts,
-and every operation any surface recorded. Each event's `id` (`evt_<n>`) is
-also the cursor.
+every operation any surface recorded, and — with `attention.act` —
+[`attention.opened` and `attention.resolved`](#hearing-that-an-entry-appeared-or-left)
+when something starts and stops waiting on a person. Each event's `id`
+(`evt_<n>`) is also the cursor.
 
 1. Read a snapshot: `GET /v1/status` reports `watermark`.
 2. Read what came after it: `GET /v1/events?after=evt_<watermark>` — pages
@@ -2218,7 +2221,8 @@ Each entry carries:
   entry for work an epic run admitted names the run in `epic_run_id`; an
   `epic_task` entry names its item and that item's run when it has them.
 - `revision`: the gate's for a `gate` entry, the item's for an `item` entry,
-  `null` otherwise — what an act on the entry is checked against.
+  `null` otherwise — what an [act on the entry](#acting-on-an-entry) sends as
+  `expected_revision`.
 - `actions`: `{action, capability, allowed}` for every action the server
   offers on the entry right now, the act that settles the wait first and the
   ones that give the work up or put the alert away last. They are what the
@@ -2251,6 +2255,165 @@ one page badges every tab.
 `GET /v1/items` and `GET /v1/gates` already show a `runs:read` holder, with no
 per-channel filter. `channel_id` alone is withheld — it is set only when the
 caller can read that conversation, as on `GET /v1/items`.
+
+### Acting on an entry
+
+When `/v1/capabilities` lists `attention.act`,
+`POST /v1/attention/{id}/act` takes one of the actions an entry offers, naming
+nothing but the entry and the action — what a notification's button holds. It
+is routing and nothing else: the entry is looked up as it stands now (a
+dismissed one included, so `undismiss` works), and the request is handed to
+the command the action's own route runs. The operation recorded, its
+refusals and its effect are that command's; nothing is recorded for the act
+itself, so `GET /v1/operations` shows each act once.
+
+```json
+{"action": "gate_approve", "expected_revision": 3, "params": {}}
+```
+
+- **`action`** is one of the entry's `actions`. The caller needs `runs:read`
+  for the route and the action's own `capability` for the act
+  (`403 forbidden` naming the capability otherwise).
+- **`params`** are the action's own arguments — the fields its own route
+  takes in its body, validated by the same model, so an unknown or
+  ill-typed one is `422 invalid_request` with `errors` (`loc` begins
+  `params`).
+
+| `action`                          | The route it runs                                         | `params`                                                  |
+| --------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| `gate_approve`                    | `POST /v1/gates/{id}/approve`                             | none                                                      |
+| `review_wait_resume`              | `POST /v1/runs/{id}/review-wait/resume`                   | none                                                      |
+| `grant_rounds`                    | `POST /v1/runs/{id}/round-grants`                         | `rounds` (required)                                       |
+| `resume`                          | `POST /v1/runs/{id}/resume`                               | none                                                      |
+| `cancel`                          | `POST /v1/runs/{id}/cancel`                               | `retry`                                                   |
+| `steer`                           | `POST /v1/runs/{id}/steering`                             | `text` (required), `source_refs`, `task_id`, `agent_slug` |
+| `retry`, `requeue`                | `POST /v1/items/{id}/retry`, `…/requeue`                  | none                                                      |
+| `abandon`, `dismiss`, `undismiss` | `POST /v1/items/{id}/abandon`, `…/dismiss`, `…/undismiss` | `reason`                                                  |
+| `delete`                          | `POST /v1/items/{id}/delete`                              | `reason`, `discard_undelivered`                           |
+| `task_retry`, `task_skip`         | `POST /v1/plans/{id}/nodes/{task_id}/run/retry`, `…/skip` | none                                                      |
+| `repository_resume`               | `POST /v1/repositories/{id}/resume`                       | none                                                      |
+
+- **`expected_revision`** is the entry's `revision` as the person read it. It
+  is never defaulted from the entry as it stands: the point of it is that the
+  person acted on what they saw. How each kind supplies it:
+
+  - A `gate` entry carries its gate's revision. `gate_approve` **requires**
+    it (`422 invalid_request`, `errors[].loc` `["expected_revision"]`,
+    without) and the approval binds to it exactly as on the gate's own route.
+  - An `item` entry carries its item's revision. The item actions (`retry`,
+    `requeue`, `abandon`, `dismiss`, `undismiss`, `delete`) hand it to their
+    command, which checks it inside its own operation.
+  - Every other pairing — a run's action (`cancel`, `resume`, `grant_rounds`,
+    `steer`, `review_wait_resume`) on an `item` entry, any action but the
+    approval on a `gate` entry — runs a command that checks some other
+    record's revision or none. There the entry's revision is compared before
+    the command runs and the command is sent none.
+  - An `epic_task`, a `repository` and a `provider_hold` entry have
+    `revision: null`: the epic run's retry and skip, and a repository's
+    resume, take no revision. Sending one is `422 invalid_request`.
+
+  Wherever it is checked, a moved entry is `409 stale_revision` with the
+  current `revision`. Optional everywhere but on `gate_approve`.
+
+- **`Idempotency-Key`** is required (`422 idempotency_key_required`). The key
+  is scoped to the workspace, the caller and this entry, and it is the key
+  the action's operation is recorded under. A replay answers the first act
+  (`replayed: true`, the same `operation_id`) — also once the entry is gone,
+  which after a successful act it usually is; a refusal the command recorded
+  replays as that refusal. Another action, or other `params`, under the same
+  key is `409 idempotency_conflict`. A refusal made here, before any command
+  ran (`not_waiting`, `not_eligible`, `forbidden`, a `422`), records nothing
+  and consumes no key.
+
+The answer is `200` — or `202` where the action's own route answers `202`: a
+gate approval, a steer, a cancel honoured at the run's next boundary — with
+`Location: /v1/operations/{id}`:
+
+```json
+{
+  "entry_id": "gate:gate_x1",
+  "action": "gate_approve",
+  "operation_id": "op_…",
+  "replayed": false,
+  "still_waiting": false,
+  "result": {"gate": {"…": "…"}, "operation": {"…": "…"}, "message": "…"}
+}
+```
+
+`result` is the body the action's own route answers (an item, a run, a
+steering record, a gate or a repository with its `operation`; the epic run
+with its `operation_id`). `still_waiting` says whether an entry under this id
+is on the list — dismissed alerts left out — as the answer is written:
+`false` after a retry, an approval or a dismissal, `true` after an
+`undismiss` or a re-armed review wait. It is a reading, not a promise: a
+gate whose landing fails is reopened and waits again.
+
+| Problem                         | When                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `409 not_waiting`               | Nothing is waiting under the id (with `entry_id`): it was settled, or it waits again as a new entry. Read the list again       |
+| `409 not_eligible`              | The entry does not offer the action now; `action` and `offered` say which it does                                              |
+| `422 unknown_action`            | The name is no action at all; `actions` lists the ones there are                                                               |
+| `403 forbidden`                 | The caller lacks the action's `capability` (or `runs:read`)                                                                    |
+| `422 idempotency_key_required`  | No `Idempotency-Key`                                                                                                           |
+| `422 invalid_request`           | `params` the action does not take, a missing `expected_revision` on `gate_approve`, a revision sent for an entry that has none |
+| `409 stale_revision`            | The entry moved since it was read (with `revision`)                                                                            |
+| `409 idempotency_conflict`      | The key already names another act on this entry (with `operation_id`)                                                          |
+| anything the action's route has | `capability_unknown`, `already_in_progress`, `task_not_failed`, `run_ended`, … as that route                                   |
+
+There is no WebSocket command for an act: the socket's `command` frame takes
+the actions' own names (`gate.approve`, `item.retry`, …) as before.
+
+### Hearing that an entry appeared or left
+
+With `attention.act`, the chronology carries two durable events, so a client
+— or a notification rule — no longer polls the list and compares:
+
+- `attention.opened` when an entry appears on the default list (dismissed
+  alerts left out);
+- `attention.resolved` when it leaves: it was approved, retried, skipped,
+  resumed, dismissed, deleted, or its work moved by itself.
+
+An `undismiss` opens the entry again under the same id; work that fails
+again is a new entry and a new `attention.opened`. `data` is the same in
+both:
+
+```json
+{
+  "entry_id": "item:itm_x1:blocked:run_r1",
+  "kind": "item", "group": "failed", "state": "blocked",
+  "title": "…", "since": "…",
+  "repository": "owner/name", "repository_id": "repo_…",
+  "item_id": "itm_x1", "run_id": "run_r1", "gate_id": null,
+  "plan_id": null, "node_id": null, "epic_run_id": null,
+  "revision": 4
+}
+```
+
+`entry_id` is exactly the list's `id`, and the other fields are the entry's
+as the list had them when it opened (a `resolved` event repeats them: the
+entry is no longer there to read). `channel_id` and `actions` are not in the
+event — they depend on who is reading; read the entry for them. The event's
+own `run_id` and `item_id` are set where the entry has them.
+
+- **Who sees them.** They are scoped
+  [as a run's events are](#who-sees-which-events): an entry about work a
+  channel asked for reaches that channel's readers; work no channel asked for
+  reaches workspace owners and admins; a plain API client sees all of them.
+  An entry with no run and no item — a suspended repository, a provider hold,
+  a task that was never admitted — is recorded with neither, and such an
+  event reaches every workspace member, as the daemon's own notices about the
+  same thing do. The list itself stays workspace-wide.
+- **When.** The daemon compares the list with what it last announced when it
+  records something that could have changed it (a command, a run starting or
+  ending, a gate, a notice, a plan or an epic run moving) — within about a
+  second — and otherwise once a minute, which is how a change that records
+  nothing (polling that stopped, a provider hold) is found. Treat the events
+  as prompt, not instantaneous; the list is always the truth.
+- **Across a restart.** What was announced is kept, so a restart announces
+  nothing twice and still reports what settled while the daemon was down.
+- **On upgrade.** The first comparison records what is already waiting
+  without announcing it: there is no burst of `attention.opened` for old
+  entries. Their `attention.resolved` is still recorded when they leave.
 
 ## Delegation
 
@@ -2484,21 +2647,21 @@ a backend reported, not a bill.
 Every refusal is `application/problem+json` with a stable `code`, the
 request's `X-Request-Id`, and the fields a client needs to act:
 
-| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `invalid_request`, `invalid_cursor`, `oidc_invalid_request`                                                                                                                                                                                                                                                                                                                                                |
-| 401    | `unauthenticated`, `invalid_token`, `token_expired`, `token_revoked`, `client_revoked`, `refresh_reuse_detected`, `oidc_exchange_failed`                                                                                                                                                                                                                                                                   |
-| 403    | `forbidden` (with `capability`), `agent_forbidden`, `oidc_not_allowed`, `oidc_account_disabled`, `oidc_not_provisioned`                                                                                                                                                                                                                                                                                    |
-| 404    | `not_found`, `unknown_target`, `agent_not_found`, `device_not_found`, `notification_not_found`                                                                                                                                                                                                                                                                                                             |
-| 409    | `not_eligible`, `already_terminal`, `already_in_progress`, `stale_revision`, `unsupported_for_kind`, `capability_unknown`, `capability_unsupported`, `idempotency_conflict`, `hold_owned`, `unsupervised`, `agent_read_only`, `agent_revision_conflict` (with `current_revision`), `agent_exists`, `agent_archived`, `oidc_account_conflict`, `device_limit_reached` (with `limit`), `device_not_enrolled` |
-| 410    | `cursor_expired` (with `snapshot`), `artifact_gone`                                                                                                                                                                                                                                                                                                                                                        |
-| 411    | `length_required`                                                                                                                                                                                                                                                                                                                                                                                          |
-| 413    | `body_too_large` (with `limit`)                                                                                                                                                                                                                                                                                                                                                                            |
-| 422    | `invalid_request` (with `errors`), `invalid_argument`, `idempotency_key_required`, `unknown_action`, `invalid_agent` (with `problems`)                                                                                                                                                                                                                                                                     |
-| 429    | `too_many_attempts`, `too_many_streams`                                                                                                                                                                                                                                                                                                                                                                    |
-| 500    | `internal_error` (never the exception's text)                                                                                                                                                                                                                                                                                                                                                              |
-| 502    | `push_relay_refused`, `push_relay_unavailable`                                                                                                                                                                                                                                                                                                                                                             |
-| 503    | `daemon_not_ready` (with `Retry-After`), `daemon_stopping`, `source_unavailable`, `oidc_unavailable`, `push_disabled`                                                                                                                                                                                                                                                                                      |
+| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`, `invalid_cursor`, `oidc_invalid_request`                                                                                                                                                                                                                                                                                                                                                               |
+| 401    | `unauthenticated`, `invalid_token`, `token_expired`, `token_revoked`, `client_revoked`, `refresh_reuse_detected`, `oidc_exchange_failed`                                                                                                                                                                                                                                                                                  |
+| 403    | `forbidden` (with `capability`), `agent_forbidden`, `oidc_not_allowed`, `oidc_account_disabled`, `oidc_not_provisioned`                                                                                                                                                                                                                                                                                                   |
+| 404    | `not_found`, `unknown_target`, `agent_not_found`, `device_not_found`, `notification_not_found`                                                                                                                                                                                                                                                                                                                            |
+| 409    | `not_eligible`, `not_waiting`, `already_terminal`, `already_in_progress`, `stale_revision`, `unsupported_for_kind`, `capability_unknown`, `capability_unsupported`, `idempotency_conflict`, `hold_owned`, `unsupervised`, `agent_read_only`, `agent_revision_conflict` (with `current_revision`), `agent_exists`, `agent_archived`, `oidc_account_conflict`, `device_limit_reached` (with `limit`), `device_not_enrolled` |
+| 410    | `cursor_expired` (with `snapshot`), `artifact_gone`                                                                                                                                                                                                                                                                                                                                                                       |
+| 411    | `length_required`                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 413    | `body_too_large` (with `limit`)                                                                                                                                                                                                                                                                                                                                                                                           |
+| 422    | `invalid_request` (with `errors`), `invalid_argument`, `idempotency_key_required`, `unknown_action`, `invalid_agent` (with `problems`)                                                                                                                                                                                                                                                                                    |
+| 429    | `too_many_attempts`, `too_many_streams`                                                                                                                                                                                                                                                                                                                                                                                   |
+| 500    | `internal_error` (never the exception's text)                                                                                                                                                                                                                                                                                                                                                                             |
+| 502    | `push_relay_refused`, `push_relay_unavailable`                                                                                                                                                                                                                                                                                                                                                                            |
+| 503    | `daemon_not_ready` (with `Retry-After`), `daemon_stopping`, `source_unavailable`, `oidc_unavailable`, `push_disabled`                                                                                                                                                                                                                                                                                                     |
 
 `unknown_target` and `not_eligible` carry the daemon's own sentence in
 `detail` — the same one `ctl` prints.

@@ -62,6 +62,9 @@ class ApiServer:
             )
             ctx.projector.catalog_with(self._catalog_run)
         ctx.projector.deliver_work_with(ctx.project_work)
+        # What starts and stops waiting on a person is announced from the
+        # same pass, when something that could change it was recorded.
+        ctx.projector.attend_with(ctx.attention.step)
         # Push rides the chronology too: the projector wakes the dispatcher
         # as it wakes the streams, and the dispatcher polls on its own.
         ctx.projector.listen(ctx.push.dispatcher.wake)

@@ -83,8 +83,9 @@ ACTION_ORDER: tuple[Action, ...] = (
     "delete",
 )
 #: Each of those as the command a client sends for it: where its
-#: capability is read from, so the two can never disagree.
-_COMMAND: dict[str, str] = {
+#: capability is read from, so the two can never disagree, and the name
+#: the operation it records carries.
+WORK_COMMANDS: dict[str, str] = {
     "gate_approve": "gate.approve",
     "review_wait_resume": "run.review_resume",
     "grant_rounds": "run.grant_rounds",
@@ -112,7 +113,7 @@ def capability_for(action: str) -> str:
         return _TASK_CAPABILITY
     if action in REPOSITORY_ACTIONS:
         return ADMIN_ACTIONS["repository.resume"][0]
-    return COMMANDS[_COMMAND[action]][0]
+    return COMMANDS[WORK_COMMANDS[action]][0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,7 +290,7 @@ def counts(found: Sequence[Waiting]) -> AttentionCounts:
     return AttentionCounts(total=len(found), **per_group)
 
 
-def _advertise(actions: Iterable[str], principal: Principal) -> list[AttentionAction]:
+def _advertise(actions: Iterable[str], principal: Principal | None) -> list[AttentionAction]:
     advertised = []
     for action in actions:
         capability = capability_for(action)
@@ -297,7 +298,7 @@ def _advertise(actions: Iterable[str], principal: Principal) -> list[AttentionAc
             AttentionAction(
                 action=action,
                 capability=capability,
-                allowed=capability in principal.capabilities,
+                allowed=principal is not None and capability in principal.capabilities,
             )
         )
     return advertised
@@ -308,13 +309,17 @@ def _ordered(allowed: Iterable[str]) -> list[str]:
     return [action for action in ACTION_ORDER if action in held]
 
 
-def entries(views: Views, page: Sequence[Waiting], auth: Authenticated) -> list[AttentionEntry]:
-    """The page as a client reads it: public ids, references, the actions
-    eligibility answers for each entry and whether the caller may take
-    them. ``channel_id`` is set only where the caller can read the
-    conversation, as the item listing does it."""
+def entries(
+    views: Views, page: Sequence[Waiting], auth: Authenticated | None
+) -> list[AttentionEntry]:
+    """The page as a client reads it, one entry for each of ``page`` in
+    its order: public ids, references, the actions eligibility answers for
+    each entry and whether the caller may take them. ``channel_id`` is set
+    only where the caller can read the conversation, as the item listing
+    does it. With no caller (the daemon reading its own list) no action is
+    allowed and no conversation is named."""
     now = views.now
-    principal = auth.principal
+    principal = auth.principal if auth is not None else None
     items = list({w.item.item_id: w.item for w in page if w.item is not None}.values())
     gates = [w.gate for w in page if w.gate is not None]
     item_ids = views.ids.item_ids(items, now) if items else {}
@@ -330,7 +335,7 @@ def entries(views: Views, page: Sequence[Waiting], auth: Authenticated) -> list[
     views.load_dismissals(item_ids=[item.item_id for item in items])
     if any(w.kind == "item" and w.item.state in REVIEW_WAIT_STATES for w in page if w.item):
         views.note_parked(holds=views.dstore.review_holds(_STANDING_HOLD_STATES))
-    channels = views.visible_item_channels(items, auth.member)
+    channels = views.visible_item_channels(items, auth.member) if auth is not None else {}
 
     def base(w: Waiting) -> dict[str, Any]:
         item = w.item
@@ -434,3 +439,31 @@ def entries(views: Views, page: Sequence[Waiting], auth: Authenticated) -> list[
                 )
             )
     return out
+
+
+def find(
+    views: Views, entry_id: str, auth: Authenticated | None, *, include_dismissed: bool = False
+) -> AttentionEntry | None:
+    """The entry ``entry_id`` names as it stands now, or ``None`` when
+    nothing is waiting under that id. What is waiting of the id's own kind
+    is matched by id with no caller in mind — a fixed number of statements
+    however much waits — and only the match is projected for ``auth``, so
+    looking one entry up does not read a conversation for every other."""
+    kind = entry_id.partition(":")[0]
+    found = [w for w in waiting(views, include_dismissed=include_dismissed) if w.kind == kind]
+    for w, entry in zip(found, entries(views, found, None), strict=True):
+        if entry.id == entry_id:
+            return entry if auth is None else entries(views, [w], auth)[0]
+    return None
+
+
+def subject(w: Waiting) -> tuple[str | None, str | None]:
+    """The run and the item an entry is about, by the ids the stores keep:
+    what an event about the entry is recorded against, so it is shown to
+    whoever is shown the work's own events."""
+    item_id = w.item.item_id if w.item is not None else None
+    if w.gate is not None:
+        return w.gate.run_id, item_id
+    if w.task is not None:
+        return w.task.run_id or (w.item.run_id if w.item is not None else None), item_id
+    return (w.item.run_id if w.item is not None else None), item_id

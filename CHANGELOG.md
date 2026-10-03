@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+**An entry of the attention list can be acted on, and says when it comes and
+goes.** To act on what `GET /v1/attention` listed, a client had to know which
+of a dozen routes an action meant, with which ids, revision and idempotency
+rules — more than a notification's button can hold — and nothing told anyone
+an entry had appeared or left, so every client polled the list and compared.
+`POST /v1/attention/{id}/act` takes `{action, expected_revision, params}` and
+a required `Idempotency-Key`, finds the entry as it stands (a dismissed one
+included), and hands the request to the command the action's own route runs:
+the same operation, recorded once, and the same refusals. `expected_revision`
+is the entry's `revision` as the person read it — required to approve a gate,
+never defaulted — and `params` are the action's own arguments, validated by
+its route's body model. An id nothing waits under is `409 not_waiting`; an
+action the entry does not offer is `409 not_eligible` with `offered`; a
+replay answers the first act even after the entry is gone. The answer carries
+the command's own result, its `operation_id`, and `still_waiting`. Alongside
+it the chronology records `attention.opened` and `attention.resolved`, whose
+`entry_id` is the list's `id`, scoped as the work's own events are. What was
+announced is kept across a restart; an upgrade announces nothing that was
+already waiting; and the comparison runs only when the daemon recorded
+something that could change the list, or once a minute. Advertised as
+`attention.act`. One fix rode along: a keyed replay of
+`POST /v1/gates/{id}/approve` after the gate had merged was judged against
+the merged gate and refused (`409 not_eligible`); it now answers the first
+approval, as every other keyed command does.
+
 **Deleted work no longer takes a dismissal.** `POST /v1/items/{id}/dismiss`,
 its run twin and `POST /v1/attention/dismiss` accepted work a person had
 already deleted and wrote a dismissal on it, though deleted work is meant to

@@ -18,7 +18,7 @@ skipped past.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -291,10 +291,23 @@ class Chronology:
         data: dict[str, Any] | None = None,
         occurred_at: float | None = None,
         audience_user_id: str | None = None,
+        state: Mapping[str, str | None] | None = None,
     ) -> int:
         """Append one daemon-originated event; returns its ``seq``. It
-        belongs to the channel that asked for its run or item, if any."""
+        belongs to the channel that asked for its run or item, if any.
+        ``state`` is ``daemon_state`` values set (``None``: deleted) in the
+        event's own transaction, for a writer whose memory of what it has
+        announced must move with the announcement."""
         with self.dstore.transaction() as session:
+            for key, value in (state or {}).items():
+                if value is None:
+                    session.execute(delete(DaemonStateRow).where(DaemonStateRow.key == key))
+                else:
+                    session.execute(
+                        insert(DaemonStateRow)
+                        .prefix_with("OR REPLACE")
+                        .values(key=key, value=value)
+                    )
             channel_id = (
                 self._run_channel(session, run_id)
                 if run_id
@@ -326,6 +339,23 @@ class Chronology:
         with self.dstore.read() as session:
             newest = session.scalar(select(func.max(ApiEventRow.seq)))
         return None if newest is None else int(newest)
+
+    def recorded_after(self, after: int, prefixes: Sequence[str]) -> bool:
+        """Whether the daemon itself recorded an event whose type starts
+        with one of ``prefixes`` past ``after``. A projected engine event
+        is not one: a run's own output moves the watermark every second
+        and says nothing a reader of this asks about."""
+        with self.dstore.read() as session:
+            found = session.scalar(
+                select(ApiEventRow.seq)
+                .where(
+                    ApiEventRow.seq > after,
+                    ApiEventRow.source_seq.is_(None),
+                    or_(*(ApiEventRow.type.like(prefix + "%") for prefix in prefixes)),
+                )
+                .limit(1)
+            )
+        return found is not None
 
     def bounds(self) -> tuple[int | None, int]:
         """``(oldest seq still held, highest seq ever pruned)``."""
