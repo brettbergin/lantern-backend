@@ -2700,7 +2700,11 @@ attachments, and never served as a type a browser would run. Usage
 client: `null` stays `null`, `recorded` says whether anything was
 reported, and `spend` is `null` by construction with the basis stated —
 telemetry, not an invoice. A window folds every run touched in it from the
-samples' own timestamps and is at most 90 days wide.
+samples' own timestamps and is at most 90 days wide. Analytics
+(`api/analytics.py`) is the console's fold (`lantern.analytics`, which
+knows no surface) with its derived values written out as fields: runs
+attributed whole to the window they began in, durations in seconds,
+`null` where there is nothing to measure, and no currency.
 
 **Push notifications.** `api/push/` pings people's devices through a push
 relay that holds the provider's key and nothing else. `api_push_devices`

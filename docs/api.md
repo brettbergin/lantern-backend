@@ -1852,6 +1852,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/artifacts/{id}[/content]`                                   | `artifacts:read`       | One entry; its bytes as an attachment                                       |
 | `GET`    | `/v1/runs/{id}/usage`, `/v1/usage`                               | `runs:read`            | Reported tokens and turns; never a bill                                     |
 | `GET`    | `/v1/usage/pool`                                                 | `runs:read`            | Today's runs and tokens against the daily cap and budget                    |
+| `GET`    | `/v1/analytics`                                                  | `runs:read`            | A window of runs folded: outcomes, time to land and parked, turns, causes   |
 | `GET`    | `/v1/operations[/{id}]`                                          | `audit:read`           | Every command any surface recorded                                          |
 | `GET`    | `/v1/repositories`, `/profiles`, `/recipes`                      | `runs:read`            | What work may be admitted against                                           |
 | `POST`   | `/v1/repositories/{id}/resume`                                   | `daemon:manage`        | Poll a suspended repository again                                           |
@@ -2131,6 +2132,53 @@ still verifies; it never widens to the unfiltered view a plain API client
 gets. `GET /v1/events` and `GET /v1/events/stream` accept
 `channel_id=<chn_...>` to follow one channel.
 
+## Fleet analytics
+
+When `/v1/capabilities` lists `analytics`, `GET /v1/analytics` (`runs:read`)
+answers "is this performing well" for a window of runs: the same fold the
+console's Overview draws, with every derived value as a field so a client
+never recomputes one. A run belongs whole to the window it **began** in.
+
+| Query      | Default | Bounds                                                                               |
+| ---------- | ------- | ------------------------------------------------------------------------------------ |
+| `window_s` | 604800  | 60 to 7776000 (90 days)                                                              |
+| `buckets`  | 7       | 1 to 90 equal slices of the window                                                   |
+| `until`    | now     | RFC 3339 or epoch seconds: where the window ends; the window begins in 1970 or later |
+
+A value outside these is `422 invalid_request`. The response:
+
+- `since`, `until`, `observed_at`, `window_s`, and `empty` (no run began in
+  the window).
+- `total` and `lanes` (one per run kind, by name): `runs`, `landed` (merged
+  or completed), `failed`, `cancelled`, `turns`, `tokens` (input plus
+  output), `cache_read_tokens`, `active_s` (the time phase attempts were
+  running), `elapsed_s` (creation to last update), `parked_s` (elapsed the
+  loop did not spend working — waiting on a person), `ok_rate` and
+  `parked_share`. A cancelled run is a decision, not a failure: `ok_rate` is
+  landed over landed plus failed, and `null` when no run was judged.
+- `phases`: per phase, `attempts`, `retries` (attempts past the first),
+  `turns`, `tokens`, `cache_read_tokens` and `active_s`, longest first.
+- `buckets`: each with its own `since` and `until`, the `runs` that began in
+  it, how many of them `landed`, `failed` or were `cancelled`, and their
+  `turns`.
+- `rework` (`tasks`, `revisions`, `replans`, `suspect`, `retried_share`),
+  `review_rounds` and `ci_rounds`.
+- `failures`: `reason` and `count`, most common first. The reason is the head
+  of the failed runs' own reason — the class, not one run's detail.
+- `costliest` (most turns) and `longest_parked`: up to eight runs each, by
+  `run_…` id, with `kind`, `state`, `turns`, `tokens`, `active_s` and
+  `parked_s`.
+- `spreads`: `median` and `p90` for `turns`, `cycle_s` (creation to last
+  update over the runs that landed — time to land) and `active_s`; `null`
+  where no run gives one.
+- `previous` (the window before this one, every kind together; `null` when no
+  run began in it) and `delta`: each of the lane's values as a share of the
+  previous window's (`0.25` is a quarter more), `null` when there is nothing
+  to compare with — a change from nothing is not a percentage.
+
+Durations are seconds. Nothing here is a currency: turns and tokens are what
+a backend reported, not a bill.
+
 ## Errors
 
 Every refusal is `application/problem+json` with a stable `code`, the
@@ -2166,6 +2214,7 @@ request's `X-Request-Id`, and the fields a client needs to act:
 | Artifact catalog per run       | 2000 files                                         |
 | Log tail                       | 500 records                                        |
 | Usage window                   | 90 days                                            |
+| Analytics window               | 1 minute to 90 days, in at most 90 buckets         |
 | Access token                   | `[api] access_token_ttl_s` (15 minutes)            |
 | Refresh token                  | `[api] refresh_token_ttl_s` (7 days)               |
 | Auth failures                  | 10 per minute per client and address, 60 s lockout |

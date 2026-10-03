@@ -1,5 +1,5 @@
-"""What the console's Overview reports: a window of runs folded into the
-few numbers that answer "is this performing well".
+"""What the console's Overview and ``GET /v1/analytics`` report: a window
+of runs folded into the few numbers that answer "is this performing well".
 
 
 Three things this module insists on, because each of them was a wrong
@@ -23,7 +23,8 @@ are counted and reported, never folded into the denominator.
 Everything here is a pure fold over rows from
 :meth:`~lantern.engine.store.StateStore.runs_between` and
 :meth:`~lantern.engine.store.StateStore.phases_between`, so it is tested
-without a screen.
+without a screen and served without one: nothing here knows which surface
+is asking.
 """
 
 from __future__ import annotations
@@ -40,8 +41,8 @@ from lantern.engine.store import (
     TaskTotalsRecord,
 )
 
-#: The window the Overview reports on, and the number of buckets its
-#: trends are drawn with — a day per bucket over a week.
+#: The window reported on when nobody asks for another, and the number of
+#: buckets its trends are drawn with — a day per bucket over a week.
 WINDOW_S = 7 * 86400.0
 BUCKETS = 7
 

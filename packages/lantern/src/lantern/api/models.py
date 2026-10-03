@@ -956,6 +956,149 @@ class UsagePool(ApiModel):
     turns_tokens_today: int
 
 
+# -- fleet analytics ----------------------------------------------------------------
+
+
+class AnalyticsLane(ApiModel):
+    """One run kind's totals over a window — or every kind together
+    (``all``), or the window before this one (``previous``)."""
+
+    kind: str
+    runs: int
+    #: Runs that finished the way they were meant to: merged or completed.
+    landed: int
+    failed: int
+    #: A person's decision, not an outcome: counted, never judged.
+    cancelled: int
+    turns: int
+    #: Input plus output tokens the backends reported.
+    tokens: int
+    cache_read_tokens: int
+    #: Seconds the runs' phase attempts were actually running.
+    active_s: float
+    #: Seconds from each run's creation to its last update.
+    elapsed_s: float
+    #: Elapsed time the loop did not spend working: waiting on a person.
+    parked_s: float
+    #: Landed over landed plus failed; ``null`` when no run was judged.
+    ok_rate: float | None
+    parked_share: float
+
+
+class AnalyticsPhase(ApiModel):
+    """One phase's share of the window, by the attempts that started in it."""
+
+    phase: str
+    attempts: int
+    #: Attempts past the first: where the loop went round again.
+    retries: int
+    turns: int
+    tokens: int
+    cache_read_tokens: int
+    active_s: float
+
+
+class AnalyticsBucket(ApiModel):
+    """One slice of the window, by the runs that began in it."""
+
+    since: str
+    until: str
+    #: Every run that began here, whatever its state now.
+    runs: int
+    landed: int
+    failed: int
+    cancelled: int
+    turns: int
+
+
+class AnalyticsRework(ApiModel):
+    tasks: int
+    revisions: int
+    replans: int
+    #: Tasks flagged as having a suspect verify.
+    suspect: int
+    retried_share: float
+
+
+class AnalyticsFailure(ApiModel):
+    #: The head of the failed runs' reason: the class, not one run's detail.
+    reason: str
+    count: int
+
+
+class AnalyticsRun(ApiModel):
+    run_id: str
+    kind: str
+    state: str
+    turns: int
+    tokens: int
+    active_s: float
+    parked_s: float
+
+
+class AnalyticsSpread(ApiModel):
+    median: float
+    p90: float
+
+
+class AnalyticsSpreads(ApiModel):
+    """Median and p90 across the window's runs; ``null`` where no run
+    gives one."""
+
+    turns: AnalyticsSpread | None
+    #: Creation to last update, over the runs that landed: time to land.
+    cycle_s: AnalyticsSpread | None
+    active_s: AnalyticsSpread | None
+
+
+class AnalyticsDelta(ApiModel):
+    """This window's total against the previous window's, as a share of
+    the previous value (``0.25`` is a quarter more). ``null`` when nothing
+    preceded the window or the previous value was zero."""
+
+    runs: float | None
+    landed: float | None
+    failed: float | None
+    cancelled: float | None
+    turns: float | None
+    tokens: float | None
+    cache_read_tokens: float | None
+    active_s: float | None
+    elapsed_s: float | None
+    parked_s: float | None
+    ok_rate: float | None
+    parked_share: float | None
+
+
+class AnalyticsWindow(ApiModel):
+    """A window of runs, folded: outcomes, time, turns and failures by
+    cause. A run is attributed whole to the window it began in. Telemetry,
+    never a currency."""
+
+    workspace_id: str = WORKSPACE_ID
+    since: str
+    until: str
+    observed_at: str
+    window_s: int
+    #: No run began in the window.
+    empty: bool
+    total: AnalyticsLane
+    lanes: list[AnalyticsLane]
+    phases: list[AnalyticsPhase]
+    buckets: list[AnalyticsBucket]
+    rework: AnalyticsRework
+    review_rounds: int
+    ci_rounds: int
+    failures: list[AnalyticsFailure]
+    costliest: list[AnalyticsRun]
+    longest_parked: list[AnalyticsRun]
+    spreads: AnalyticsSpreads
+    #: The window before this one, every kind together; ``null`` when no
+    #: run began in it.
+    previous: AnalyticsLane | None
+    delta: AnalyticsDelta
+
+
 # -- diagnostics and administration (#1040) -----------------------------------------
 
 

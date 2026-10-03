@@ -167,7 +167,8 @@ plotext silently paints every series the same blue. Convert it with
 `chart.rgb` first; `tests/unit/tui/test_tui_charts.py` asserts on the
 painted output rather than on the argument for exactly this reason.
 
-The numbers are `lantern.tui.analytics`, folded from
+The numbers are `lantern.analytics` (the fold `GET /v1/analytics` serves
+too), folded from
 `StateStore.runs_between` / `phases_between` in one grouped pass each and
 recomputed on a slow timer of its own — nothing in a week-long window
 changes between console ticks. An empty window says so rather than drawing
