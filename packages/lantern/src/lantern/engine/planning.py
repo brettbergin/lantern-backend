@@ -484,9 +484,20 @@ def _child_problems(
     label: str,
     brief: PlanBrief,
     lint: Callable[[Sequence[str]], list[str]] | None,
+    *,
+    whole: bool = True,
 ) -> list[str]:
-    """Every rule one child of ``brief``'s level breaks."""
+    """Every rule one child of ``brief``'s level breaks. ``whole`` holds it
+    to what the prompt asks of every child — a goal, context and
+    acceptance criteria — which a change to an existing child is judged
+    on only where it sets them (see :func:`_change_problems`)."""
     problems: list[str] = []
+    if whole:
+        for name, noun in (("goal", "a goal"), ("context", "context")):
+            if not getattr(child, name).strip():
+                problems.append(f"{label}: every child needs {noun}")
+        if not child.acceptance_criteria:
+            problems.append(f"{label}: every child needs at least one acceptance criterion")
     if brief.child_level == "epic":
         stray = [
             name
@@ -502,8 +513,6 @@ def _child_problems(
             problems.append(f"{label}: only a task carries {', '.join(stray)}")
         return problems
     profiles = {profile.name for profile in brief.profiles}
-    if not child.acceptance_criteria:
-        problems.append(f"{label}: a task needs at least one acceptance criterion")
     if child.kind is None:
         problems.append(f"{label}: a task needs a kind, `code` or `workload`")
     elif child.kind == "workload":
@@ -562,8 +571,22 @@ def proposal_problems(
             problems.extend(proposal.root.problems())
     if count > brief.room:
         problems.append(f"propose at most {brief.room} {brief.child_noun}; this answer has {count}")
+    if proposal.source_input is not None:
+        problems.append("`source_input` is the host's stamp, not part of the answer; leave it out")
+    kept = {fold_title(title): title for title in brief.kept}
+    seen: dict[str, str] = {}
     for index, child in enumerate(proposal.children):
         label = f"{brief.child_level} {child.id or index + 1} ({child.title})"
+        folded = fold_title(child.title)
+        if folded in kept:
+            problems.append(
+                f"{label} repeats a child that stays (“{kept[folded]}”); propose only what "
+                "is still missing"
+            )
+        elif folded in seen:
+            problems.append(f"{label}: repeats {seen[folded]}; one child per outcome")
+        else:
+            seen[folded] = label
         problems.extend(_child_problems(child, label, brief, lint))
     try:
         proposal.dependencies()
@@ -738,8 +761,14 @@ def replan_problems(
         )
     titles = {fold_title(c.title): c for c in brief.current}
     ids = [c.id for c in brief.current]
+    closing = {entry.target for entry in replan.suggest_close}
     for index, child in enumerate(replan.add):
         label = f"addition {child.id or index + 1} ({child.title})"
+        if not child.rationale.strip():
+            problems.append(f"{label}: say why in `rationale`")
+        for ref in child.depends_on:
+            if isinstance(ref, str) and ref.strip() in closing:
+                problems.append(f"{label} depends on {ref.strip()}, which this diff closes")
         same = titles.get(fold_title(child.title))
         if same is not None:
             problems.append(
@@ -773,6 +802,8 @@ def replan_problems(
             )
             continue
         seen[entry.target] = action
+        if isinstance(entry, ReplanChange) and not entry.rationale.strip():
+            problems.append(f"{label}: say why in `rationale`")
         if not target.changeable:
             problems.append(
                 f"{label}: “{target.title}” is closed or not followed on the forge; leave it"
@@ -780,6 +811,18 @@ def replan_problems(
             continue
         if isinstance(entry, ReplanChange):
             problems.extend(_change_problems(entry, target, brief, label, lint))
+    # The level's dependencies as the diff leaves them — every current
+    # child's, with each change's `depends_on` in place of what it had —
+    # must still be an order to run in.
+    graph: dict[str, set[str]] = {c.id: set(c.depends_on) for c in brief.current}
+    for change in replan.modify:
+        deps = change.changes().get("depends_on")
+        if isinstance(deps, list) and change.target in graph:
+            graph[change.target] = {d for d in deps if d in graph}
+    try:
+        TopologicalSorter(graph).prepare()
+    except CycleError as exc:
+        problems.append(f"those dependencies make a cycle among the current {noun}: {exc.args[1]}")
     return problems
 
 
@@ -800,6 +843,11 @@ def _change_problems(
     if not changes:
         return [f"{label}: name at least one section to change"]
     problems: list[str] = []
+    for name, noun in (("goal", "a goal"), ("context", "context")):
+        if name in changes and not str(changes[name]).strip():
+            problems.append(f"{label}: a child cannot be left without {noun}")
+    if "acceptance_criteria" in changes and not changes["acceptance_criteria"]:
+        problems.append(f"{label}: a child cannot be left without acceptance criteria")
     deps = changes.get("depends_on")
     if isinstance(deps, list):
         for dep in deps:
@@ -836,7 +884,7 @@ def _change_problems(
     if merged.kind == "code" and "workload_profile" not in changes and "kind" in changes:
         merged = merged.model_copy(update={"workload_profile": None})
     checked = lint if "verify_commands" in changes else None
-    problems.extend(_child_problems(merged, label, brief, checked))
+    problems.extend(_child_problems(merged, label, brief, checked, whole=False))
     return problems
 
 
