@@ -46,16 +46,15 @@ from typing import Any, Literal
 from lantern.config import Config
 from lantern.engine.planning import fold_title
 from lantern.errors import LanternError
-from lantern.plans.model import Plan, PlanNode, ReplanEntry, child_level, content_version
+from lantern.plans.forgeread import say, seen_of
+from lantern.plans.model import Plan, PlanNode, ReplanEntry, child_level, content_version, plain
 from lantern.plans.publish import publish_level
-from lantern.plans.reconcile import as_forge_has_it, seen_of
-from lantern.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision
+from lantern.plans.reconcile import as_forge_has_it
+from lantern.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision, retry_stale
 from lantern.vcs.protocol import IssueOps
 
 Outcome = Literal["created", "found", "updated", "closed", "failed"]
 
-#: How long an error from the forge may run in a result.
-ERROR_MAX = 500
 #: Sections held as tuples on a node and as lists in an entry.
 _LISTS = frozenset({"acceptance_criteria", "verify_commands", "depends_on"})
 
@@ -111,14 +110,6 @@ _Refused = EntryRefused
 EditFn = Callable[[ReplanEntry], PlanNode]
 
 
-def _say(exc: BaseException) -> str:
-    return (" ".join(str(exc).split()) or type(exc).__name__)[:ERROR_MAX]
-
-
-def _plain(value: Any) -> Any:
-    return list(value) if isinstance(value, tuple) else value
-
-
 def node_fields(sections: Mapping[str, Any]) -> dict[str, Any]:
     """An entry's sections as a node's fields."""
     return {k: tuple(v or ()) if k in _LISTS else v for k, v in sections.items()}
@@ -169,23 +160,25 @@ class _Apply:
     ) -> Plan:
         """One write against the plan as it now is: a reconcile or a
         person's edit between two entries is not a conflict here."""
-        for _ in range(3):
+
+        def attempt() -> Plan:
             plan = self.current()
             upsert, events = change(plan)
             if not upsert:
                 return plan
-            try:
-                return self.store.apply(
-                    plan.id,
-                    expected_revision=plan.revision,
-                    now=self.clock(),
-                    upsert=upsert,
-                    events=events,
-                    actor=self.actor,
-                )
-            except StaleRevision:
-                continue
-        raise _Refused("the plan kept changing while the re-plan was applied")
+            return self.store.apply(
+                plan.id,
+                expected_revision=plan.revision,
+                now=self.clock(),
+                upsert=upsert,
+                events=events,
+                actor=self.actor,
+            )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise _Refused("the plan kept changing while the re-plan was applied") from exc
 
     def child(self, plan: Plan, entry: ReplanEntry) -> PlanNode:
         child = plan.node(entry.node_id)
@@ -209,7 +202,7 @@ class _Apply:
     def modify(self, entry: ReplanEntry) -> EntryResult:
         plan = self.current()
         child = self.child(plan, entry)
-        moved = [k for k, v in entry.before.items() if _plain(getattr(child, k)) != v]
+        moved = [k for k, v in entry.before.items() if plain(getattr(child, k)) != v]
         if moved:
             raise _Refused(
                 f"“{child.title}” changed since the re-plan was proposed "
@@ -232,7 +225,7 @@ class _Apply:
         forge = child.forge
         assert forge is not None  # nosec B101 - self.child checked
         done = EntryResult(entry.id, entry.action, "closed", child.id, forge.number, forge.url)
-        moved = [k for k, v in entry.before.items() if _plain(getattr(child, k)) != v]
+        moved = [k for k, v in entry.before.items() if plain(getattr(child, k)) != v]
         if moved:
             raise _Refused(
                 f"“{child.title}” changed since the re-plan was proposed "
@@ -242,7 +235,7 @@ class _Apply:
             row = self.ops.issue_get(child.repository, forge.number)
         except LanternError as exc:
             raise _Refused(
-                f"could not read {child.repository}#{forge.number} before closing it: {_say(exc)}"
+                f"could not read {child.repository}#{forge.number} before closing it: {say(exc)}"
             ) from exc
         seen = seen_of(row, child.repository, forge.number)
         if seen.state == "closed":
@@ -279,7 +272,7 @@ class _Apply:
                 close_comment(child, parent, entry.rationale, who),
             )
         except LanternError as exc:
-            return replace(done, reason=f"the comment saying why could not be posted: {_say(exc)}")
+            return replace(done, reason=f"the comment saying why could not be posted: {say(exc)}")
         return done
 
     def adds(self, entries: Sequence[ReplanEntry], parent: PlanNode) -> list[EntryResult]:
@@ -403,7 +396,7 @@ class _Apply:
                     results[entry.id] = self.close(entry, parent)
             except (_Refused, LanternError) as exc:
                 results[entry.id] = EntryResult(
-                    entry.id, entry.action, "failed", entry.node_id, error=_say(exc)
+                    entry.id, entry.action, "failed", entry.node_id, error=say(exc)
                 )
         adds = [e for e in entries if e.action == "add"]
         if adds:
@@ -415,7 +408,7 @@ class _Apply:
                     results.setdefault(
                         entry.id,
                         EntryResult(
-                            entry.id, entry.action, "failed", entry.node_id, error=_say(exc)
+                            entry.id, entry.action, "failed", entry.node_id, error=say(exc)
                         ),
                     )
         ordered = tuple(results[e.id] for e in entries)

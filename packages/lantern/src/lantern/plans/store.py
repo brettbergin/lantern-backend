@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -50,6 +50,28 @@ class StaleRevision(Exception):
     def __init__(self, current: int) -> None:
         super().__init__(f"the plan is at revision {current}")
         self.current = current
+
+
+#: How many times a write against the plan as it is now is tried before
+#: the caller is told the plan kept changing.
+TRIES = 3
+
+
+def retry_stale[T](attempt: Callable[[], T], *, tries: int = TRIES) -> T:
+    """Run ``attempt`` — one read of a plan and one :meth:`PlanStore.apply`
+    against the revision it read — again when another write won in
+    between, up to ``tries`` times. The last :class:`StaleRevision`
+    propagates when every try lost: the caller says what that means for
+    it (a ``409``, a failed node, a reconcile marked busy). One shape for
+    every write that is not a person's edit of a revision they named."""
+    last: StaleRevision | None = None
+    for _ in range(tries):
+        try:
+            return attempt()
+        except StaleRevision as exc:
+            last = exc
+    assert last is not None  # nosec B101 - tries is positive
+    raise last
 
 
 class PlanGone(Exception):

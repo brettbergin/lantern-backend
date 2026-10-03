@@ -51,8 +51,9 @@ from typing import Any
 
 from lantern.config import Config
 from lantern.errors import LanternError
+from lantern.plans.forgeread import GONE, Seen, issue_ref, say, seen_of
 from lantern.plans.hierarchy import repository_planning
-from lantern.plans.model import Drift, ForgeRef, ForgeState, Plan, PlanNode, child_level
+from lantern.plans.model import Drift, ForgeRef, Plan, PlanNode, child_level, plain
 from lantern.plans.render import (
     HEADINGS,
     LIST_SECTIONS,
@@ -71,6 +72,7 @@ from lantern.plans.store import (
     Reconciled,
     StaleRevision,
     new_id,
+    retry_stale,
 )
 from lantern.vcs.checklist import START, ChecklistMangled, parse_checklist
 from lantern.vcs.protocol import IssueOps
@@ -78,14 +80,9 @@ from lantern.vcs.protocol import IssueOps
 #: An issue on the forge: its repository (casefolded) and number.
 Key = tuple[str, int]
 
-#: What the forge answers for an issue that is not there any more: GitHub
-#: says 410 for a deleted issue and 404 for one it cannot find.
-GONE = frozenset({404, 410})
 #: The most issues one reconcile reads; a tree larger than this is read up
 #: to it and the rest is named as not read.
 MAX_ISSUES = 500
-#: How long an error from the forge may run in a result.
-ERROR_MAX = 300
 #: The longest goal an adopted issue's free text becomes.
 GOAL_MAX = 8000
 #: Drift of these kinds is one entry per node: a later edit moves its
@@ -104,24 +101,7 @@ def _node_key(node: PlanNode) -> Key | None:
     return None if node.forge is None else key_of(node.repository, node.forge.number)
 
 
-def _say(exc: BaseException) -> str:
-    return (" ".join(str(exc).split()) or type(exc).__name__)[:ERROR_MAX]
-
-
 # -- reading ------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class Seen:
-    """One issue as the forge answered it."""
-
-    repo: str
-    number: int
-    url: str
-    title: str
-    body: str
-    state: ForgeState
-    updated_at: str | None
 
 
 @dataclass(slots=True)
@@ -143,20 +123,6 @@ class Snapshot:
 
     reads: dict[Key, Read] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
-
-
-def seen_of(row: Mapping[str, Any], repo: str, number: int) -> Seen:
-    state: ForgeState = "closed" if str(row.get("state") or "") == "closed" else "open"
-    updated = row.get("updated_at")
-    return Seen(
-        repo=repo_of(row) or repo,
-        number=int(row.get("number") or number),
-        url=str(row.get("html_url") or ""),
-        title=str(row.get("title") or ""),
-        body=str(row.get("body") or ""),
-        state=state,
-        updated_at=None if updated is None else str(updated),
-    )
 
 
 class _Reader:
@@ -181,7 +147,7 @@ class _Reader:
         except LanternError as exc:
             if getattr(exc, "http_status", None) in GONE:
                 return Read()
-            return Read(error=f"could not read {repo}#{number}: {_say(exc)}")
+            return Read(error=f"could not read {repo}#{number}: {say(exc)}")
         return Read(seen=seen_of(row, repo, number))
 
     def children(
@@ -204,7 +170,7 @@ class _Reader:
             try:
                 rows = self.ops.sub_issues_list(seen.repo, seen.number)
             except LanternError as exc:
-                return None, None, f"could not list the sub-issues of {where}: {_say(exc)}"
+                return None, None, f"could not list the sub-issues of {where}: {say(exc)}"
             for row in rows:
                 if isinstance(row, dict) and isinstance(row.get("number"), int):
                     links.append((repo_of(row) or seen.repo, int(row["number"]), row))
@@ -312,14 +278,6 @@ def merge_drift(drift: Iterable[Drift], entry: Drift) -> tuple[Drift, ...]:
             reason=entry.reason,
         ),
     )
-
-
-def _plain(value: Any) -> Any:
-    return list(value) if isinstance(value, tuple) else value
-
-
-def _ref(node: PlanNode) -> str:
-    return f"{node.repository}#{node.forge.number}" if node.forge else node.id
 
 
 class _Fold:
@@ -458,8 +416,8 @@ class _Fold:
                 Drift(
                     "sections",
                     self.now,
-                    {k: _plain(getattr(node, k)) for k in fields},
-                    {k: _plain(v) for k, v in fields.items()},
+                    {k: plain(getattr(node, k)) for k in fields},
+                    {k: plain(v) for k, v in fields.items()},
                 ),
                 fields=sorted(fields),
             )
@@ -473,7 +431,7 @@ class _Fold:
             )
         missing = node.origin != "forge" and not marked(seen.body, self.plan.id, node.id)
         if missing and not forge.marker_missing:
-            reason = f"the sbx-plan marker was removed from {_ref(node)}"
+            reason = f"the sbx-plan marker was removed from {issue_ref(node)}"
             edited = self.record(
                 edited, Drift("marker_removed", self.now, reason=reason), reason=reason
             )
@@ -642,7 +600,7 @@ class _Fold:
                 and parent_read is not None
                 and parent_read.children is not None
             ):
-                self.detach(node, f"it was removed from {_ref(parent)} on the forge")
+                self.detach(node, f"it was removed from {issue_ref(parent)} on the forge")
                 continue
             self.content(node, own)
             self.reached.add(node.id)
@@ -702,7 +660,8 @@ def reconcile_plan(
     in lantern meanwhile is folded again from the same reading."""
     snap = read_forge(ops, plan=plan, config=config)
     error = "; ".join(snap.errors)[:2000] or None
-    for _ in range(3):
+
+    def attempt() -> Reconciliation:
         current = store.get(plan.id)
         if current is None:
             raise PlanGone(plan.id)
@@ -710,18 +669,19 @@ def reconcile_plan(
         folded = fold(current, snap, now=now)
         if not folded.upsert:
             return Reconciliation(store.mark_reconciled(plan.id, Reconciled(now, error)), 0, error)
-        try:
-            changed = store.apply(
-                plan.id,
-                expected_revision=current.revision,
-                now=now,
-                upsert=folded.upsert,
-                events=folded.events,
-                actor=None if actor is None else dict(actor),
-                reconciled=Reconciled(now, error),
-            )
-        except StaleRevision:
-            continue
+        changed = store.apply(
+            plan.id,
+            expected_revision=current.revision,
+            now=now,
+            upsert=folded.upsert,
+            events=folded.events,
+            actor=None if actor is None else dict(actor),
+            reconciled=Reconciled(now, error),
+        )
         return Reconciliation(changed, len(folded.events), error)
-    busy = "the plan kept changing while the forge was folded in; try again"
-    return Reconciliation(store.mark_reconciled(plan.id, Reconciled(None, busy)), 0, busy)
+
+    try:
+        return retry_stale(attempt)
+    except StaleRevision:
+        busy = "the plan kept changing while the forge was folded in; try again"
+        return Reconciliation(store.mark_reconciled(plan.id, Reconciled(None, busy)), 0, busy)
