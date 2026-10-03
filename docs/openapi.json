@@ -2827,7 +2827,7 @@
       },
       "Dismissal": {
         "additionalProperties": false,
-        "description": "A person acknowledged the alert this work raises: it keeps its state\nand its controls and no longer asks anyone for attention. ``cause`` is\n``dismissed`` for a plain acknowledgement. Gone again the moment the\nwork changes state, so a new failure is a new alert.",
+        "description": "A person acknowledged the alert this work raises: it keeps its state\nand its controls and no longer asks anyone for attention. ``cause`` is\n``dismissed`` for a plain acknowledgement and ``abandoned`` when the\nperson gave the work up \u2014 the abandon is its own acknowledgement. Gone\nagain the moment the work changes state, so a new failure is a new\nalert.",
         "properties": {
           "at": {
             "title": "At",
