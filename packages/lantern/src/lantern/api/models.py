@@ -82,8 +82,10 @@ class Target(ApiModel):
 class Dismissal(ApiModel):
     """A person acknowledged the alert this work raises: it keeps its state
     and its controls and no longer asks anyone for attention. ``cause`` is
-    ``dismissed`` for a plain acknowledgement. Gone again the moment the
-    work changes state, so a new failure is a new alert."""
+    ``dismissed`` for a plain acknowledgement and ``abandoned`` when the
+    person gave the work up — the abandon is its own acknowledgement. Gone
+    again the moment the work changes state, so a new failure is a new
+    alert."""
 
     at: str
     by: Actor | None = None

@@ -710,12 +710,22 @@ class ControlService:
         require(principal, "runs:control")
         item_id = normalize_item_id(item_id)
 
-        def apply(_: str | None) -> ItemOutcome:
+        def apply(op_id: str | None) -> ItemOutcome:
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.abandon_item(item_id, reason)
             except (KeyError, ValueError) as exc:
                 raise ControlError(_code_for(exc), _message(exc)) from exc
+            if principal.kind != "system":
+                # A person gave the item up: that is the acknowledgement, so
+                # the `failed` it rests in does not ask for attention again.
+                self.loop.dstore.dismiss_abandoned(
+                    item.item_id,
+                    item.updated_at,
+                    actor=principal.audit(),
+                    reason=reason,
+                    operation_id=op_id,
+                )
             return ItemOutcome(verb="abandon", item=item)
 
         spec = self._spec(

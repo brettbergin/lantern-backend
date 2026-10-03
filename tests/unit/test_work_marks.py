@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from lantern.daemon.store import TERMINAL_ITEM_STATES, DaemonStore
+from lantern.daemon.store import TERMINAL_ITEM_STATES, DaemonStore, apply_item_verb
 from lantern.db.schema import MIGRATIONS_DIR
 from lantern.db.work_marks import RESTING_ITEM_STATES, TRIGGERS
 from lantern.engine.store import StateStore
@@ -137,6 +137,30 @@ class TestAnItemThatMovesLosesItsDismissal:
         _dismiss(dstore, "item", two)
         dstore.retry(one, 4.0)
         assert dstore.work_mark("item", two, "dismissed") is not None
+
+
+class TestAnAbandonIsItsOwnDismissal:
+    def test_the_row_only_verb_dismisses_what_it_abandons(self, dstore: DaemonStore) -> None:
+        """No daemon up: the CLI and the console write the row themselves,
+        and the item must not come back as an unattended failure when the
+        daemon does."""
+        key = _admitted(dstore)
+        apply_item_verb(dstore, "abandon", "gh:1", now=5.0, by="sam via lantern tui")
+        mark = dstore.work_mark("item", key, "dismissed")
+        assert mark is not None and mark.cause == "abandoned" and mark.at == 5.0
+        assert mark.actor["display"] == "sam via lantern tui"
+        # Delivering the report it owes leaves the dismissal where it is.
+        assert dstore.take_pending_report(key)
+        assert dstore.work_mark("item", key, "dismissed") is not None
+        # Run again, it is new work.
+        apply_item_verb(dstore, "retry", "gh:1", now=6.0, by="sam")
+        assert dstore.work_mark("item", key, "dismissed") is None
+
+    def test_the_daemon_s_own_abandon_dismisses_nothing(self, dstore: DaemonStore) -> None:
+        """A pull request closed unmerged: nobody has looked at it yet."""
+        key = _admitted(dstore)
+        dstore.abandon(key, "PR closed unmerged while parked", 5.0)
+        assert dstore.work_mark("item", key, "dismissed") is None
 
 
 class TestADeletedMark:

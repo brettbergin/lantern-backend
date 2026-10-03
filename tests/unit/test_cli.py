@@ -903,6 +903,11 @@ class TestDaemonItemControls:
         assert item is not None and item.state == "failed"
         assert item.last_error == "plan spiraled" and item.run_id == "r_x"
         assert item.pending_report == "abandoned"  # the issue is owed the news
+        # Giving it up is the acknowledgement: it does not go on asking
+        # for attention the way an unattended failure does.
+        mark = dstore.work_mark("item", item.item_id, "dismissed")
+        assert mark is not None and mark.cause == "abandoned"
+        assert mark.reason == "plan spiraled" and mark.actor["via"] == "cli"
         dstore.close()
         result = runner.invoke(app, ["daemon", "requeue", "gh:issue:12"])
         assert result.exit_code == 2 and "requeue refused" in result.output

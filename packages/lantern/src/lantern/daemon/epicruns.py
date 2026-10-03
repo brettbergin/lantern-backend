@@ -630,7 +630,7 @@ class EpicRunDriver:
                 elif (
                     now_task.state == "queued"
                     and now_task.item_id is not None
-                    and self._withdraw(now_task.item_id, why)
+                    and self._withdraw(now_task.item_id, why, actor, now)
                 ):
                     withdrawn.append(task.node_id)
                     now_task = replace(now_task, state="cancelled", reason=f"withdrawn: {why}")
@@ -829,17 +829,20 @@ class EpicRunDriver:
             raise PlanRefusal(404, "not_found", f"{node.title} is not a task of any epic run")
         return run, node
 
-    def _withdraw(self, item_id: str, why: str) -> bool:
+    def _withdraw(self, item_id: str, why: str, actor: Mapping[str, Any], now: float) -> bool:
         """Abandon an item still waiting in the queue — no run started or
         pinned — through the item abandon; ``False`` when it is not (a
-        dispatch took it: its run is left to finish)."""
+        dispatch took it: its run is left to finish). The person who
+        stopped the epic run has seen what they stopped, so the withdrawn
+        item is dismissed with it rather than left asking for attention."""
         item = self.loop.dstore.get(item_id)
         if item is None or item.state != "queued" or item.run_id is not None:
             return False
         try:
-            self.loop.abandon_item(item_id, why, queued_only=True)
+            withdrawn = self.loop.abandon_item(item_id, why, queued_only=True)
         except (KeyError, ValueError):
             return False
+        self.loop.dstore.dismiss_abandoned(withdrawn.item_id, now, actor=actor, reason=why)
         return True
 
     def _admit(self, run: EpicRun, node: PlanNode, task: EpicRunTask, now: float) -> EpicRunTask:

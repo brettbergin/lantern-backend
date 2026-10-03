@@ -2694,6 +2694,33 @@ class DaemonStore:
         log.debug("store.work_mark_set", kind=subject_kind, key=subject_key, mark=mark, fresh=fresh)
         return fresh
 
+    def dismiss_abandoned(
+        self,
+        item_id: str,
+        at: float,
+        *,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """A person's abandon is its own acknowledgement. The item rests in
+        ``failed`` — the state an unattended failure rests in too — so
+        without this the work someone just gave up on would go on asking
+        for attention. Called after the abandon, by the surfaces a person
+        abandons through; never by the daemon's own abandons (a pull
+        request closed unmerged), which nobody has looked at yet.
+        ``item_id`` as stored."""
+        return self.set_work_mark(
+            "item",
+            item_id,
+            "dismissed",
+            cause="abandoned",
+            at=at,
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+
     def clear_work_mark(self, subject_kind: str, subject_key: str, mark: str) -> bool:
         """Take ``mark`` off the work; False when none stood."""
         with self._write() as session:
@@ -4616,6 +4643,12 @@ def _int_or_none(value: str | None) -> int | None:
     return None if value is None else int(value)
 
 
+def _row_only_actor(by: str) -> dict[str, object]:
+    """Who a row-only verb names: the operator at the command line or the
+    console, with no daemon up to authenticate anyone."""
+    return {"kind": "operator", "id": by, "display": by, "via": "cli"}
+
+
 def apply_item_verb(
     dstore: DaemonStore, verb: str, item_id: str, *, now: float, by: str
 ) -> WorkItem:
@@ -4625,7 +4658,9 @@ def apply_item_verb(
     with the store's reason for a refused transition."""
     item_id = normalize_item_id(item_id)
     if verb == "abandon":
-        return dstore.abandon(item_id, f"abandoned by {by}", now)
+        abandoned = dstore.abandon(item_id, f"abandoned by {by}", now)
+        dstore.dismiss_abandoned(abandoned.item_id, now, actor=_row_only_actor(by))
+        return abandoned
     if verb == "retry":
         return dstore.retry(item_id, now, f"re-queued by {by}")
     if verb == "requeue":

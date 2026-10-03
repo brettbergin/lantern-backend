@@ -141,6 +141,59 @@ class TestAnItem:
         assert gate["state"] == "open" and gate["available_actions"] == ["approve"]
 
 
+class TestAnAbandon:
+    """Giving work up is the acknowledgement: the `failed` it rests in is
+    not a new thing to look at."""
+
+    def test_an_abandoned_item_does_not_ask_for_attention(self, api: Api) -> None:
+        item = _blocked(api)
+        headers = api.bearer()
+        response = api.client.post(
+            f"/v1/items/{item['id']}/abandon", json={"reason": "scope changed"}, headers=headers
+        )
+        assert response.status_code == 200, response.text
+        abandoned = response.json()["item"]
+        assert abandoned["state"] == "failed"
+        dismissal = abandoned["dismissal"]
+        assert dismissal["cause"] == "abandoned" and dismissal["reason"] == "scope changed"
+        assert dismissal["by"]["via"] == "api"
+        assert dismissal["operation_id"] == response.json()["operation"]["id"]
+        assert abandoned["available_actions"] == ["retry", "undismiss"]
+        # Delivering the report the source is owed changes nothing.
+        api.loop.tick()
+        assert _item(api, item["id"], headers)["dismissal"] == dismissal
+        # Run again, it is new work.
+        retried = api.client.post(f"/v1/items/{item['id']}/retry", headers=headers)
+        assert retried.json()["item"]["dismissal"] is None
+
+    def test_abandoning_the_run_in_flight_stays_dismissed_once_it_settles(self, api: Api) -> None:
+        """The item is settled first and the run cancelled after: the
+        run's end must not bring the alert back."""
+        from tests.api.test_control import in_flight
+
+        thread, _run_id, release = in_flight(api, gh_item("1"))
+        headers = api.bearer()
+        try:
+            (item,) = api.client.get("/v1/items", headers=headers).json()["data"]
+            response = api.client.post(f"/v1/items/{item['id']}/abandon", headers=headers)
+            assert response.status_code == 200, response.text
+        finally:
+            release.set()
+            thread.join(10)
+        settled = _item(api, item["id"], headers)
+        assert settled["state"] == "failed"
+        assert settled["dismissal"] is not None and settled["dismissal"]["cause"] == "abandoned"
+        run = api.client.get(f"/v1/runs/{settled['run_id']}", headers=headers).json()
+        assert run["state"] == "cancelled" and run["dismissal"] == settled["dismissal"]
+
+    def test_the_daemon_s_own_abandon_is_still_an_alert(self, api: Api) -> None:
+        item = _blocked(api)
+        api.loop.dstore.abandon("gh:issue:1", "PR closed unmerged while parked", api.clock())
+        fresh = _item(api, item["id"], api.bearer())
+        assert fresh["state"] == "failed" and fresh["dismissal"] is None
+        assert "dismiss" in fresh["available_actions"]
+
+
 class TestARun:
     def test_a_run_its_item_pins_is_dismissed_on_the_item(self, api: Api) -> None:
         item = _blocked(api)
