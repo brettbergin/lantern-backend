@@ -2101,12 +2101,15 @@ def _plan_profiles(brief: PlanBrief) -> str:
 
 
 def _plan_checkouts(
-    checkouts: Sequence[tuple[str, str]], home: str, others: Sequence[str] = ()
+    checkouts: Sequence[tuple[str, str]], own: str, others: Sequence[str] = ()
 ) -> str:
+    """The checkouts as the planner's prompt lists them: the level's own
+    repository where it was cut, and the repositories kept children target
+    that are not checked out here."""
     lines = [
         f"- `{where}` — {repo}, the repository this level lives in"
         for repo, where in checkouts
-        if repo == home
+        if repo == own
     ]
     if not lines:
         lines.append("(no checkout could be cut; plan from the node alone and say so in `context`)")

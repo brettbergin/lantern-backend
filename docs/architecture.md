@@ -1644,7 +1644,9 @@ provision (agent box only, data dir mounted, no toolchains)
   directory by `Provisioner.clone_repo_into_data_dir` on the host, under the
   host's credential, which lives only in the clone's environment; the
   sandbox is handed the tree, never a token, and the planner's session runs
-  `read_only`. Nothing is delivered from the checkout. The run's config is
+  `read_only`. Nothing is delivered from the checkout. A resume — the
+  answer to a park, or a crash — cuts the checkout again, so a run parked
+  for days proposes from the repository as it is now. The run's config is
   narrowed to that one repository, as every run's is, so the other
   repositories an initiative's kept epics target are named to the planner
   rather than checked out.
