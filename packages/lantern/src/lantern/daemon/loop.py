@@ -32,7 +32,7 @@ import signal
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
@@ -3825,6 +3825,9 @@ class DaemonLoop:
             self.dstore.mark_blocked(item.item_id, reason, now)
             fresh = self.dstore.get(item.item_id) or item
             self._deliver_report(fresh)
+            # Read before the finish path: a chat bridge clears the run's
+            # watch registry once it has told the watchers how it ended.
+            notify = self._run_notify(item, run_id)
             self._frontend_finished(item, report._replace(reason=reason))
             pr_text = f" · PR {report.pr[1]}" if report.pr and report.pr[1] else ""
             self._notice(
@@ -3839,6 +3842,7 @@ class DaemonLoop:
                 hint="the run stopped at something only a human can settle (a gate, a "
                 "conflict, a decision the agent must not take); the item stays claimed "
                 "until someone acts on it — `lantern daemon ctl status` lists what is held",
+                mention_ids=notify,
             )
             return "blocked"
         reason = str(error) if error is not None else (report.reason or f"run ended {report.state}")
@@ -3882,6 +3886,7 @@ class DaemonLoop:
                 hint="the item spent every attempt `[daemon] max_attempts_per_item` "
                 "allows and was handed back to its source; nothing retries it on its "
                 "own — re-apply the trigger label (or `retry <item>`) to run it again",
+                mention_ids=self._run_notify(item, run_id),
             )
             outcome = "failed"
         self._frontend_finished(item, report)
@@ -3974,10 +3979,7 @@ class DaemonLoop:
         if self._consecutive_failures:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
+        notify = self._run_notify(item, run_id)
         try:
             record = self.store.get_run(run_id)
         except LanternError:
@@ -4044,10 +4046,7 @@ class DaemonLoop:
         if self._consecutive_failures:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
+        notify = self._run_notify(item, run_id)
         self.dstore.create_merge_gate(
             run_id,
             item.item_id,
@@ -4091,14 +4090,11 @@ class DaemonLoop:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
         self.dstore.mark_awaiting_answers(item.item_id, now)
+        notify = self._run_notify(item, run_id)
         self._frontend_finished(item, report)
         waiting = self._waiting_questions(item, run_id)
         count = len(waiting.questions) if waiting is not None else 0
         noun = "question" if count == 1 else "questions"
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
         self._notice(
             "run.awaiting_answers",
             f"❓ {item.item_id}: the planner asks {count} {noun} before it proposes — "
@@ -4402,15 +4398,11 @@ class DaemonLoop:
         """Who hears that a PR waits for a review: whoever asked for the
         work, the run's watchers, and ``[landing] review_notify`` for the
         repository (#675)."""
-        notify: list[str] = []
-        for who in [
-            item.requested_by,
-            *self.dstore.run_watchers(run_id),
-            *self.config.review_notify_for(item.repo or self.config.primary_repo or ""),
-        ]:
-            if who and who not in notify:
-                notify.append(who)
-        return notify
+        return self._run_notify(
+            item,
+            run_id,
+            self.config.review_notify_for(item.repo or self.config.primary_repo or ""),
+        )
 
     # -- review holds: the poll and its exits (#675) ---------------------------------
 
@@ -5690,6 +5682,7 @@ class DaemonLoop:
             hint="the run used every fix round it was granted and the checks it was "
             "fixing are still not passing; the PR stands and nothing retries on its own "
             "— grant more rounds to continue it, or retry the item for a fresh plan",
+            mention_ids=self._run_notify(item, run_id),
         )
         self._frontend_finished(item, report)
         if self._consecutive_failures >= self.config.daemon.max_consecutive_failures:
@@ -6134,6 +6127,20 @@ class DaemonLoop:
         )
 
     # -- helpers ------------------------------------------------------------------------
+
+    def _run_notify(self, item: WorkItem, run_id: str, more: Iterable[str] = ()) -> list[str]:
+        """Who a notice about this run addresses: whoever asked for the
+        work, then the run's watchers, then ``more`` — each once, empty ids
+        skipped. The ids are backend-less (a frontend renders only the ones
+        that are its own), and an item nobody asked for in chat has no
+        requester, so the list may well be empty. Read it before
+        ``_frontend_finished``: a chat bridge's finish path clears the
+        run's watch registry."""
+        notify: list[str] = []
+        for who in [item.requested_by, *self.dstore.run_watchers(run_id), *more]:
+            if who and who not in notify:
+                notify.append(who)
+        return notify
 
     def _notice(
         self,

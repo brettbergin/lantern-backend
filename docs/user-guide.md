@@ -1736,6 +1736,16 @@ refused egress called out; and a finished report card (the headline turns
 settled is a one-line notice in the control channel, pointing at the run's
 thread — `🎉 gh:issue:9 merged (2/2 tasks done) · PR …`,
 `❌ gh:issue:4 failed (…); 1 attempt(s) left`, `🚧 gh:issue:7 blocked: … — a human needs to look` when an issue lands in `lantern:blocked`, `🛑 circuit breaker opened …` — with every URL masked so nothing sprouts a preview.
+The lines that leave a run with nobody but a person to move it —
+`🚧 … blocked`, `❌ … abandoned after N attempt(s)` and
+`❌ … exhausted its review fix rounds again (…); handed over` — @mention
+whoever asked for the work in chat and anyone watching the run, both in the
+run's thread and on the control-channel line.
+An item nobody asked for in chat (a labelled issue, an API admission, a
+schedule) has nobody to name and posts the same line without a ping; a
+failure the daemon retries by itself, the first exhaustion it resumes with
+more rounds, and an `abandon` or `cancel` a person just typed ping nobody
+either.
 With `[landing] merge_gate = "chat"` — the one opt-in human touchpoint — a
 run that clears every bar parks instead of merging: `⏸ ready to merge — waiting for your approval` lands in the run's thread @mentioning whoever
 asked for the work — with a persistent **Approve merge** button on

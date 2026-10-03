@@ -1,5 +1,26 @@
 ## [Unreleased]
 
+**A run only a person can move now says so to that person.** When a run
+ended `blocked`, was abandoned after its last attempt, or exhausted its fix
+rounds a second time and was handed over, the notice that says what to do —
+`🚧 … blocked: … — a human needs to look`,
+`❌ … abandoned after N attempt(s)`,
+`❌ … exhausted its review fix rounds again (…); handed over` — named
+nobody. The only ping was a chat bridge's generic `run … finished` line in
+the control channel, which for a failure reads the same whether the daemon
+retries it or gave up; the run's thread pinged nobody. Those three notices
+now @mention whoever asked for the work in chat and anyone watching the run
+— the people `run.awaiting_answers` already names — in the thread and on
+the control-channel line. Nothing else about them changed: the same notices,
+text and levels; an item with no chat requester (a labelled issue, an API
+admission, a schedule) pings nobody; a failure the daemon retries, the
+first exhaustion it resumes by itself, and an operator's own `abandon` or
+`cancel` ping nobody; the public `daemon.notice` event still carries no
+mentions. The watchers are read before the run's finish is handed to the
+frontends — for `run.awaiting_answers` too, which read them after — since a
+chat bridge clears a run's watches once it has posted its "run finished"
+line.
+
 **Approving a plan level is on the record.** `POST /v1/plans/{id}/nodes/{node_id}/approve`
 is now a `plan.approve` operation, as publishing already was: who approved
 a level, against which revision and for which children, is in

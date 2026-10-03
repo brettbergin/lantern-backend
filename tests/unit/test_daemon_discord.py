@@ -1087,6 +1087,57 @@ class TestBridge:
         finally:
             bridge.close()
 
+    def test_a_notice_pings_the_people_it_names_where_it_lands(self, tmp_path: Path) -> None:
+        """A notice that names people (a run only a person can move) pings
+        them in the run's thread and on its control-channel mirror — and an
+        id that is another service's is left out rather than rendered as a
+        mention that resolves to nobody."""
+        bridge, client, _ = make_bridge(tmp_path)
+        bridge.start()
+        try:
+            item = WorkItem(item_id="gh:issue:8", source_key="8", title="T")
+            bridge.run_started(item, "r1", FakeEngine(), EventBus())  # type: ignore[arg-type]
+            assert wait_for(lambda: bridge.dstore.discord_thread("r1") is not None)
+            tid = bridge.dstore.discord_thread("r1").thread_id  # type: ignore[union-attr]
+            bridge.daemon_notice(
+                DaemonNotice(
+                    "run.blocked",
+                    "🚧 gh:issue:8 blocked: a rule wants an approval — a human needs to look",
+                    item_id="gh:issue:8",
+                    run_id="r1",
+                    level="error",
+                    mention_ids=("555", "U0123ABCDEF"),
+                )
+            )
+            thread, control = client.channels[tid], client.channels[42]
+            assert wait_for(lambda: any("gh:issue:8 blocked" in s for s in control.sent))
+            (in_thread,) = [s for s in thread.sent if "gh:issue:8 blocked" in s]
+            (mirrored,) = [s for s in control.sent if "gh:issue:8 blocked" in s]
+            assert in_thread.startswith("<@555> ") and mirrored.startswith("<@555> ")
+            assert f"<#{tid}>" in mirrored and f"<#{tid}>" not in in_thread
+            assert "U0123ABCDEF" not in in_thread + mirrored
+            for channel, text in ((thread, in_thread), (control, mirrored)):
+                sent = channel.sent_kwargs[channel.sent.index(text)]
+                # User mentions allowed (the key is absent without the extra).
+                assert sent.get("allowed_mentions") != "none", "the ping may notify"
+            # Nobody of this service to name: the plain line, nobody pinged.
+            bridge.daemon_notice(
+                DaemonNotice(
+                    "run.abandoned",
+                    "❌ gh:issue:8 abandoned after 3 attempt(s): boom",
+                    item_id="gh:issue:8",
+                    run_id="r1",
+                    level="error",
+                    mention_ids=("U0123ABCDEF",),
+                )
+            )
+            assert wait_for(lambda: any("gh:issue:8 abandoned" in s for s in control.sent))
+            (plain,) = [s for s in control.sent if "gh:issue:8 abandoned" in s]
+            assert "<@" not in plain
+            assert control.sent_kwargs[control.sent.index(plain)]["allowed_mentions"] == "none"
+        finally:
+            bridge.close()
+
     def test_tool_calls_are_batched_into_one_block_when_verbose(self, tmp_path: Path) -> None:
         # verbose keeps the stream-everything behaviour normal had before #235
         bridge, client, _ = make_bridge(tmp_path, chronology_level="verbose")
