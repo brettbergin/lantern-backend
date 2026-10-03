@@ -15,8 +15,15 @@ after publish, :mod:`~lantern.plans.direct` a person's edits, attaches and
 detaches written to the forge after publish, :mod:`~lantern.plans.replan` a
 re-plan's approved diff applied through the publish path and the direct
 edit's write, :mod:`~lantern.plans.complete` the summary and close of a
-finished epic or initiative, and :mod:`~lantern.plans.service` the rules
-every surface goes through.
+finished epic or initiative, :mod:`~lantern.plans.forgeread` what every
+module that reads the forge shares, and :mod:`~lantern.plans.service` the
+rules every surface goes through — one object, :class:`PlanService`, made
+of four parts over a common base: a person's drafting
+(:mod:`~lantern.plans.service_drafts`), the planner's side
+(:mod:`~lantern.plans.service_planner`), the clarifying questions
+(:mod:`~lantern.plans.service_questions`) and the forge writes
+(:mod:`~lantern.plans.service_forge`), with the store, the refusal, the
+busy sets and the checks they share in :mod:`~lantern.plans.service_base`.
 """
 
 from __future__ import annotations
