@@ -2684,8 +2684,12 @@ without a cycle, published nodes left to the forge. A write is one
 transaction that checks the plan's single `revision`, applies the node
 upserts and deletes, bumps the revision and records its `plan.*` events in
 `api_events`, so a client that sees the event reads the change. The API
-routes (`api/routes/plans.py`) only translate; the planner, publishing and
-epic runs call the same service. The planner's breakdown is a `plan` run
+routes (`api/routes/plans.py`; the epic runs' in `api/routes/plan_runs.py`)
+only translate, and every write that is a recorded operation — publish, a
+re-plan's approval, an epic run's start and its controls — goes through
+one `recorded` helper, so a daemon that dies mid-call leaves the same
+record whichever route was running; the planner, publishing and epic runs
+call the same service. The planner's breakdown is a `plan` run
 ([Plan runs](#plan-runs)) whose desk (`plans/generation.py`) reads the node
 through `PlanService.brief`, puts the planner's clarifying questions on the
 node through `PlanService.ask_questions`, and writes the level through

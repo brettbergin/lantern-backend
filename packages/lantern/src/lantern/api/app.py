@@ -41,6 +41,7 @@ from lantern.api.routes import (
     items,
     meta,
     operations,
+    plan_runs,
     plans,
     push,
     runs,
@@ -194,4 +195,5 @@ def create_app(ctx: ApiContext) -> FastAPI:
     app.include_router(workspace.router)
     app.include_router(push.router)
     app.include_router(plans.router)
+    app.include_router(plan_runs.router)
     return app
