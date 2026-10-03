@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+**A new capability, `policy:manage`, belongs to the workspace owner alone.**
+It will guard editing the standing rules that let agents take decisions on
+their own; the routes follow, and nothing asks for it yet. An owner holds
+it. An admin, who held every capability except `credentials:manage`, now
+holds every one except that and `policy:manage`; a member does not hold it,
+and an agent acting for itself never does. An owner's client gains it when
+the API next starts and their next token refresh (or sign-in) carries it; an
+admin's client is left exactly as it was. A plain API client holds it only
+when it was registered with `--cap policy:manage` — one that counts as an
+owner because it holds `daemon:manage` does not. `GET /v1/capabilities`
+lists it, so a client that checks capability names against a closed list
+has to accept the new value.
+
 **A workload no longer fails at publishing when a file it listed is gone.**
 A task's file list is taken when the task ends; a later task that cleaned up
 the scratch an earlier one left (a `.src/` of fetched pages, a `.verify/`

@@ -4804,7 +4804,8 @@
                 "collaboration:write",
                 "collaboration:delegate",
                 "plans:create",
-                "plans:publish"
+                "plans:publish",
+                "policy:manage"
               ],
               "type": "string"
             },

@@ -3,14 +3,17 @@ refresh token; every failure mode is named, none leaks a secret."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import jwt
 import pytest
 
+from lantern.api.auth.deps import require, resolve_token, role_of
 from lantern.api.auth.keys import load_or_create, rotate
 from lantern.api.auth.store import check_secret, hash_secret, parse_capabilities
 from lantern.api.auth.tokens import LEEWAY_S, TokenError, mint_access, verify_access
+from lantern.api.errors import Problem
 from lantern.daemon.controls.principal import ALL_CAPABILITIES
 from tests.api.conftest import Api
 
@@ -36,6 +39,10 @@ class TestSecrets:
         assert parse_capabilities(["runs:read", "runs:read"]) == frozenset({"runs:read"})
         with pytest.raises(ValueError, match="unknown capabilities: bogus"):
             parse_capabilities(["bogus", "runs:read"])
+
+    def test_policy_manage_is_a_capability_a_client_can_be_registered_with(self) -> None:
+        """The host operator names it like any other; it is never implied."""
+        assert parse_capabilities(["policy:manage"]) == frozenset({"policy:manage"})
 
 
 class TestTokenGrant:
@@ -171,6 +178,35 @@ class TestAccessTokens:
         assert api.client.get("/v1/operations", headers=headers).status_code == 403
         me = api.client.get("/v1/me", headers=headers).json()
         assert me["capabilities"] == ["runs:read"]
+
+    def test_policy_manage_is_advertised(self, api: Api) -> None:
+        headers = api.bearer(frozenset({"runs:read"}))
+        body = api.client.get("/v1/capabilities", headers=headers).json()
+        assert "policy:manage" in body["capabilities"]
+
+    def test_a_client_holds_policy_manage_only_when_it_was_granted(self, api: Api) -> None:
+        granted = api.bearer(frozenset({"runs:read", "policy:manage"}))
+        me = api.client.get("/v1/me", headers=granted).json()
+        assert me["capabilities"] == ["runs:read", "policy:manage"]
+
+    def test_a_client_that_reads_as_an_owner_does_not_hold_policy_manage(self, api: Api) -> None:
+        """A plain client holding ``daemon:manage`` acts with the owner role
+        where a route asks for a role. That is not a capability: a route
+        gated on ``policy:manage`` refuses it, naming what it lacks."""
+        pair = api.token(frozenset({"runs:read", "daemon:manage"}))
+        me = api.client.get(
+            "/v1/me", headers={"Authorization": f"Bearer {pair['access_token']}"}
+        ).json()
+        assert me["capabilities"] == ["runs:read", "daemon:manage"]
+        auth = resolve_token(api.ctx, pair["access_token"])
+        assert auth.member is None
+        assert role_of(auth) == "owner"
+        assert not auth.principal.can("policy:manage")
+        with pytest.raises(Problem) as refused:
+            asyncio.run(require("policy:manage")(auth))
+        assert refused.value.status == 403
+        assert refused.value.code == "forbidden"
+        assert refused.value.extra == {"capability": "policy:manage"}
 
     def test_the_key_rotates_without_orphaning_live_tokens(self, api: Api) -> None:
         pair = api.token()

@@ -1745,6 +1745,7 @@ Rules a client can rely on:
 | `collaboration:delegate` | Accept a conversational or delegated channel turn                                           |
 | `plans:create`           | Draft plans and edit their unpublished nodes                                                |
 | `plans:publish`          | Publish a plan level to the forge, edit published nodes, run an epic                        |
+| `policy:manage`          | Edit the standing rules that let agents take decisions; only an owner holds it              |
 
 A refusal names the capability it needed (`403 forbidden` with
 `"capability"`), before the target is looked at.
@@ -1753,6 +1754,15 @@ A workspace member's client holds exactly what their role grants. When a
 release adds a capability to a role, the API grants it to every active
 member's client as it starts; the member's next token refresh (or sign-in)
 carries it.
+
+`policy:manage` is the owner's alone. An owner holds every capability; an
+admin holds every one except `credentials:manage` and `policy:manage`; a
+member holds neither. An agent acting for itself never holds it, whoever it
+is working for. A plain API client holds it only when the host operator
+registered it with `--cap policy:manage`: counting as an owner where a route
+asks for a role (a client holding `daemon:manage` does) is not holding the
+capability. No route asks for it yet; the routes that will are gated on the
+capability, never on a role.
 
 ## Capability discovery
 

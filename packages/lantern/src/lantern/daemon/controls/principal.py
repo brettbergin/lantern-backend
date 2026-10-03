@@ -41,6 +41,7 @@ Capability = Literal[
     "collaboration:delegate",
     "plans:create",
     "plans:publish",
+    "policy:manage",
 ]
 
 #: Every capability, in the order the spike lists them.
@@ -57,15 +58,22 @@ ROLES: tuple[Role, ...] = get_args(Role)
 
 #: What an API client holds by virtue of its user's workspace role. An
 #: owner holds everything. An admin holds everything except managing
-#: credentials. A member may read and steer runs, ask for new work, take
-#: part in collaboration and draft plans (``plans:create``); run artifacts,
-#: controls, gates, budgets, daemon management, credentials, audit,
-#: diagnostics and publishing plans to the forge stay with admins. (The
-#: artifact routes still let a member read the files of a run a channel
-#: they can read asked for: see ``api/routes/artifacts.py``.)
+#: credentials (``credentials:manage``) and editing the standing rules that
+#: let agents take decisions (``policy:manage``): both are the owner's
+#: alone. A member may read and steer runs, ask for new work, take part in
+#: collaboration and draft plans (``plans:create``); run artifacts,
+#: controls, gates, budgets, daemon management, audit, diagnostics and
+#: publishing plans to the forge stay with admins. (The artifact routes
+#: still let a member read the files of a run a channel they can read asked
+#: for: see ``api/routes/artifacts.py``.)
+#:
+#: ``policy:manage`` is checked as a capability and never inferred from a
+#: role: a plain API client that reads as an owner because it holds
+#: ``daemon:manage`` (``api/auth/deps.py``) does not hold it unless the
+#: host operator registered it with the capability by name.
 ROLE_CAPABILITIES: dict[Role, frozenset[Capability]] = {
     "owner": ALL_CAPABILITIES,
-    "admin": ALL_CAPABILITIES - {"credentials:manage"},
+    "admin": ALL_CAPABILITIES - {"credentials:manage", "policy:manage"},
     "member": frozenset(
         {
             "runs:read",
@@ -121,7 +129,9 @@ class Principal:
         approve a gate, grant a budget or read anything it was not already
         given. ``on_behalf_of`` is the person the agent is working for, and
         rides only in the attribution the source hears -- it grants
-        nothing, so a forged name buys no capability."""
+        nothing, so a forged name buys no capability. ``policy:manage`` is
+        never held by an agent principal: the rules that say what an agent
+        may decide are not the agent's to edit, whoever it is working for."""
         for_whom = f" for {on_behalf_of}" if on_behalf_of else ""
         return cls(
             kind="agent",
