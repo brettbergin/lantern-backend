@@ -269,7 +269,6 @@ class EpicRunDriver:
         if plan is None or plan.node(run.node_id) is None:
             log.warning("epic_run.plan_gone", epic_run=run.id, plan=run.plan_id)
             return
-        order = [n for n in plan.children(run.node_id) if run.task(n.id) is not None]
         before = {t.node_id: t for t in run.tasks}
         tasks = dict(before)
         changed: dict[str, EpicRunTask] = {}
@@ -279,6 +278,17 @@ class EpicRunDriver:
                 tasks[task.node_id] = task
                 changed[task.node_id] = task
 
+        # The epic is driven, not a snapshot of it: a task that joined it
+        # on the forge since the run started (an approved re-plan's
+        # addition, an issue attached or adopted) gets a row and is
+        # admitted when it is ready; one that left stays followed to its
+        # end. The order is the plan's.
+        children = plan.children(run.node_id)
+        if run.state in LIVE_RUN_STATES:
+            for node in children:
+                if node.followed and node.id not in tasks:
+                    put(EpicRunTask(node_id=node.id, position=node.position, state="waiting"))
+        order = [n for n in children if n.id in tasks]
         for task in list(tasks.values()):
             put(self._follow(task))
         if run.state in LIVE_RUN_STATES:
