@@ -1871,16 +1871,23 @@ class Provisioner:
 
     # -- a workload's repository checkout (#758) ---------------------------
 
-    def clone_repo_into_data_dir(self, run_id: str, workspace: Path, repo: str) -> Path:
+    def clone_repo_into_data_dir(
+        self, run_id: str, workspace: Path, repo: str, *, fresh: bool = False
+    ) -> Path:
         """A plain checkout of ``repo`` for a workload whose plan asked for
         one, cut into its data directory at ``<workspace>/<name>`` — the
         agent reads it there (the data directory is what the agent box
         sees). Single-branch from the remote under the host's GitHub
         credential; no submodules, LFS or tags, and nothing to deliver:
         publishing to a repository is the pr sink's (#759). An existing
-        checkout (a resume) is reused as it stands.
+        checkout (a resume) is reused as it stands, unless ``fresh`` asks
+        for the repository as it is now: then it is cut again (a plan run
+        parked on its questions reads today's tree, not the one it asked
+        about).
         """
         clone_dir = workspace / repo.rsplit("/", 1)[1]
+        if fresh and (clone_dir / ".git").exists():
+            shutil.rmtree(clone_dir)
         if (clone_dir / ".git").exists():
             self.bus.emit(
                 "sandbox.workspace_clone",
