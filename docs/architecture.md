@@ -1650,12 +1650,19 @@ provision (agent box only, data dir mounted, no toolchains)
   rather than checked out.
 
 - **Validated like decompose.** `PlanProposal` is checked by
-  `proposal_problems` inside `_agent_json`'s retry: the level's room, a
-  task's acceptance criteria and kind, a workload task's configured profile,
-  a code task's verify commands (no shell variables, and the verify lint
-  under the target repository's own toolchains, read from the checkout on
-  the host), and `depends_on` among siblings without a cycle. Invalid twice
-  fails the run named.
+  `proposal_problems` inside `_agent_json`'s retry, to what the prompt
+  asks: the level's room, every child whole (a goal, context and
+  acceptance criteria, epics as much as tasks) and proposed once (no title
+  a sibling or a kept child already has), a task's kind, a workload
+  task's configured profile, a code task's verify commands (no shell
+  variables, and the verify lint under the target repository's own
+  toolchains, read from the checkout on the host), `depends_on` among
+  siblings without a cycle, and no `source_input` — that is the host's
+  stamp. A re-plan's `replan_problems` holds every entry to a `rationale`,
+  refuses a change that empties a required section or an addition that
+  leans on a child the same diff closes, and checks the level's
+  dependencies as the diff leaves them for a cycle. Invalid twice fails
+  the run named.
 
 - **Delivered once.** The validated proposal is persisted on the task's
   output before delivery, and the delivery is recorded as a `plan`
