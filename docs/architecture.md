@@ -2534,6 +2534,51 @@ operation — never an HTTP answer. So it needs no request: the plan routes'
 problem bodies, and daemon code acting for an agent calls it with the
 agent's principal and gets the same row.
 
+### Delegation
+
+A **grant** is a standing rule an owner writes once: this agent may take this
+action, under these conditions, at most this many times a day
+(`daemon/controls/delegation.py`). When the daemon is about to act for an
+agent it asks one pure function, `decide(grants, agent_slug, action, attrs, used_today)`, and gets one of three answers: `allow` (naming the grant),
+`deny`, or `escalate` to a person. `attrs` are facts the host established about
+the act — the repository, the plan level, how many children, who proposed it,
+the stored review verdict, the failure's cause, the retries already made —
+never anything the agent reported about itself, and a fact a condition needs
+that is missing or unreadable escalates rather than passing: "could not tell"
+is a refusal here as everywhere else. An agent never approves a level it
+proposed, whatever the grants say.
+
+Agents' capability sets are **not** widened to make any of this work.
+`Principal.for_agent` still carries `items:create` and nothing else, and no
+route's capability check changes. A capability says what a caller may ask the
+daemon to do; a grant says what the daemon may do on its own for an agent
+while it holds the resource in hand and can read its attributes. Giving the
+agent principal `plans:publish` would let it publish anything, from any
+surface, with no conditions and no ledger; the grant is consulted where the
+facts are, and every answer is written down.
+
+What can be granted is a **closed list** — `plan.propose`, `plan.breakdown`,
+`plan.approve`, `plan.publish`, `plan.run`, `plan.run.retry`, `item.retry`,
+`run.grant_rounds` — and `decide` denies anything else even if a row names it.
+That list is the whole mechanism by which editing grants, credentials, daemon
+management and configuration stay with people: they are not on it. Conditions
+are data (six optional keys, each accepted only by the actions it means
+something for), never an expression language.
+
+Grants and the **decisions ledger** live in the daemon's database
+(`daemon_grants`, `daemon_decisions`, revision 0050), behind
+`DelegationStore` (`daemon/controls/delegation_store.py`), which the loop
+holds as `loop.delegation`. A grant's daily use is counted from the ledger's
+`allow` rows in the cap day (`[daemon] run_cap_timezone`), so the count and
+the audit trail cannot disagree. Writing a grant takes `policy:manage` — the
+owner's alone, checked as a capability, never inferred from a role — and goes
+through `ControlService` as a recorded operation (`grant.create`,
+`grant.update`, `grant.delete`) that recovery settles from the stored grant.
+The only surface that writes one is the API's `/v1/grants`; chat, `ctl` and
+the WebSocket's commands deliberately do not. Grants ship empty, and nothing
+in the loop calls `decide` yet: the judge, the store and the routes are in
+place for the driver that will.
+
 ### The remote API listener
 
 External job conversations are a durable read-side projection in

@@ -14,6 +14,7 @@ import pytest
 from lantern.config import Config
 from lantern.daemon.control import ControlClient, ControlServer, dispatch
 from lantern.daemon.controls import ControlError, ControlService, Principal
+from lantern.daemon.controls.delegation import Conditions, Grant
 from lantern.daemon.controls.generation import GENERATION_KEY
 from lantern.daemon.controls.operations import (
     IdempotencyConflict,
@@ -79,6 +80,22 @@ def plan_spec(**overrides: Any) -> OperationSpec:
     }
     fields.update(overrides)
     return OperationSpec(**fields)
+
+
+def _grant(h: Harness) -> Grant:
+    """A stored grant at revision 1, as an owner's write leaves it."""
+    grant: Grant = h.loop.delegation.create_grant(
+        agent_slug="critic",
+        action="plan.approve",
+        conditions=Conditions(max_children=8),
+        daily_limit=5,
+        enabled=True,
+        note="small levels",
+        created_by="usr_owner",
+        created_by_display="owner",
+        now=1.0,
+    )
+    return grant
 
 
 class TestStore:
@@ -773,6 +790,124 @@ class TestReconciler:
             "failed",
             "unknown_target",
         )
+
+    def test_a_claimed_grant_create_is_judged_from_the_stored_grant(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path)
+        grant = _grant(h)
+        written, _ = h.loop.operations.accept(
+            spec(action="grant.create", target_kind="grant", target_key=grant.id), now=1.0
+        )
+        lost, _ = h.loop.operations.accept(
+            spec(action="grant.create", target_kind="grant", target_key="grant_lost"), now=1.5
+        )
+        for op in (written, lost):
+            h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        assert h.loop.operations.get(written.id).state == "succeeded"  # type: ignore[union-attr]
+        judged = h.loop.operations.get(lost.id)
+        assert judged is not None and judged.state == "failed"
+        assert judged.error_code == "interrupted_before_effect"
+        assert judged.error_detail == "the grant was not written"
+
+    @pytest.mark.parametrize(
+        ("applied", "changes", "expected", "code"),
+        [
+            # The edit landed: the grant holds it and its revision moved.
+            (
+                {"daily_limit": 9, "enabled": False},
+                {"daily_limit": 9, "enabled": False},
+                "succeeded",
+                None,
+            ),
+            ({"note": None}, {"note": None}, "succeeded", None),
+            (
+                {"conditions": Conditions(levels=("task",))},
+                {"conditions": {"levels": ["task"]}},
+                "succeeded",
+                None,
+            ),
+            # It never landed: the grant is where the caller read it.
+            (None, {"daily_limit": 9}, "failed", "interrupted_before_effect"),
+            # Someone else's edit landed instead: the grant moved, without this change.
+            ({"note": "theirs"}, {"daily_limit": 9}, "failed", "interrupted_before_effect"),
+        ],
+    )
+    def test_a_claimed_grant_update_is_judged_from_what_the_grant_holds(
+        self,
+        tmp_path: Path,
+        applied: dict[str, Any] | None,
+        changes: dict[str, Any],
+        expected: str,
+        code: str | None,
+    ) -> None:
+        h = Harness(tmp_path)
+        grant = _grant(h)
+        if applied is not None:
+            h.loop.delegation.update_grant(grant.id, applied, expected_revision=1, now=2.0)
+        op, _ = h.loop.operations.accept(
+            spec(
+                action="grant.update",
+                target_kind="grant",
+                target_key=grant.id,
+                request={"changes": changes},
+                expected_revision=1,
+            ),
+            now=1.0,
+        )
+        h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        settled = h.loop.operations.get(op.id)
+        assert settled is not None and (settled.state, settled.error_code) == (expected, code)
+        if expected == "failed":
+            assert "does not hold the requested change" in str(settled.error_detail)
+
+    def test_a_claimed_edit_of_a_grant_that_is_gone_fails_by_name(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path)
+        op, _ = h.loop.operations.accept(
+            spec(
+                action="grant.update",
+                target_kind="grant",
+                target_key="grant_gone",
+                request={"changes": {"enabled": False}},
+                expected_revision=1,
+            ),
+            now=1.0,
+        )
+        h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        settled = h.loop.operations.get(op.id)
+        assert settled is not None
+        assert (settled.state, settled.error_code) == ("failed", "unknown_target")
+
+    @pytest.mark.parametrize(("removed", "expected"), [(True, "succeeded"), (False, "failed")])
+    def test_a_claimed_grant_delete_is_judged_from_the_grant_being_gone(
+        self, tmp_path: Path, removed: bool, expected: str
+    ) -> None:
+        h = Harness(tmp_path)
+        grant = _grant(h)
+        if removed:
+            h.loop.delegation.delete_grant(grant.id)
+        op, _ = h.loop.operations.accept(
+            spec(action="grant.delete", target_kind="grant", target_key=grant.id), now=1.0
+        )
+        h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        settled = h.loop.operations.get(op.id)
+        assert settled is not None and settled.state == expected
+        if not removed:
+            assert settled.error_code == "interrupted_before_effect"
+            assert settled.error_detail == "the grant is still there"
+
+    def test_no_grant_write_is_left_reconciling(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path)
+        for action in ("grant.create", "grant.update", "grant.delete"):
+            op, _ = h.loop.operations.accept(
+                spec(action=action, target_kind="grant", target_key="grant_x"), now=1.0
+            )
+            assert op.effect
+            h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        assert "reconciling" not in {o.state for o in h.loop.operations.recent()}
 
     def test_what_evidence_cannot_decide_is_reconciling_never_succeeded(
         self, tmp_path: Path

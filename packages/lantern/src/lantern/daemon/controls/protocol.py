@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from lantern.config import ScheduleConfig
+from lantern.daemon.controls.delegation import Conditions, Grant
 from lantern.daemon.controls.results import (
     CancelOutcome,
     DeleteOutcome,
@@ -80,6 +81,28 @@ class ControlLoop(Protocol):
     def remove_schedule(self, name: str, by: str | None) -> str: ...
     def pause_schedule(self, name: str, by: str | None) -> str: ...
     def resume_schedule(self, name: str, by: str | None) -> str: ...
+    def add_grant(
+        self,
+        *,
+        grant_id: str,
+        agent_slug: str,
+        action: str,
+        conditions: Conditions,
+        daily_limit: int | None,
+        enabled: bool,
+        note: str | None,
+        created_by: str | None,
+        by: str | None,
+    ) -> tuple[Grant, str]: ...
+    def update_grant(
+        self,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        by: str | None,
+    ) -> tuple[Grant, str]: ...
+    def remove_grant(self, grant_id: str, *, by: str | None) -> tuple[Grant, str]: ...
     def request_stop(self) -> None: ...
     def supervisor(self) -> str | None: ...
     def request_restart(

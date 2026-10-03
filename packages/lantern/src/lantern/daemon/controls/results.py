@@ -160,6 +160,16 @@ class ScheduleOutcome(Outcome):
     message: str
 
 
+class GrantOutcome(Outcome):
+    """A grant written, edited or removed; ``revision`` is the grant's
+    after the write (``None`` once it is removed)."""
+
+    verb: Literal["add", "update", "remove"]
+    grant_id: str
+    revision: int | None = None
+    message: str
+
+
 class RepositoryOutcome(Outcome):
     """A registration added, changed or removed; ``repo`` as registered."""
 

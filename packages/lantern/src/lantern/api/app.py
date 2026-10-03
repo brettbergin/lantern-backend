@@ -37,6 +37,7 @@ from lantern.api.routes import (
     collaboration,
     connections,
     control,
+    delegation,
     diagnostics,
     events,
     health,
@@ -200,4 +201,5 @@ def create_app(ctx: ApiContext) -> FastAPI:
     app.include_router(push.router)
     app.include_router(plans.router)
     app.include_router(plan_runs.router)
+    app.include_router(delegation.router)
     return app

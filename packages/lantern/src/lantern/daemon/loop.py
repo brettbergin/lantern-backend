@@ -59,6 +59,8 @@ from lantern.config import (
     ScheduleConfig,
     VcsKind,
 )
+from lantern.daemon.controls.delegation import Conditions, Grant, describe as describe_grant
+from lantern.daemon.controls.delegation_store import DelegationStore, GrantGone
 from lantern.daemon.controls.eligibility import Subject, check as check_eligibility
 from lantern.daemon.controls.generation import (
     GENERATION_KEY,
@@ -567,6 +569,10 @@ class DaemonLoop:
         # Epic runs (#2347): a plan's epic whose ready tasks this loop
         # admits as issue runs, in dependency order, on every tick.
         self.epic_runs = EpicRunDriver(self)
+        # Delegation: the grants an owner wrote and the ledger of what was
+        # decided under them. Nothing in this loop judges an act against
+        # them yet; the API writes grants and reads both.
+        self.delegation = DelegationStore(dstore)
 
     # -- external control ---------------------------------------------------------
 
@@ -2864,6 +2870,95 @@ class DaemonLoop:
             profile=spec.profile,
         )
         return f"schedule {spec.name} updated: {spec.cadence_text}, profile `{spec.profile}`."
+
+    # -- delegation: the grants an owner writes --------------------------------------
+    #
+    # Nothing here judges anything: these write the standing rules and say
+    # so. No chat tool, `ctl` verb or socket command reaches them — policy
+    # is edited through the API's grant routes, under `policy:manage`.
+
+    def add_grant(
+        self,
+        *,
+        grant_id: str,
+        agent_slug: str,
+        action: str,
+        conditions: Conditions,
+        daily_limit: int | None,
+        enabled: bool,
+        note: str | None,
+        created_by: str | None,
+        by: str | None,
+    ) -> tuple[Grant, str]:
+        """Store a grant the caller validated; the grant and the line to
+        answer with."""
+        grant = self.delegation.create_grant(
+            grant_id=grant_id,
+            agent_slug=agent_slug,
+            action=action,
+            conditions=conditions,
+            daily_limit=daily_limit,
+            enabled=enabled,
+            note=note,
+            created_by=created_by,
+            created_by_display=by,
+            now=self.clock(),
+        )
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_added",
+            f"grant {grant.id} written by {who}: {describe_grant(grant)}",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+        )
+        return grant, f"grant {grant.id} written: {describe_grant(grant)}."
+
+    def update_grant(
+        self,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        by: str | None,
+    ) -> tuple[Grant, str]:
+        """Edit a grant against the revision the caller read. ``GrantGone``
+        and ``StaleGrant`` are the store's."""
+        grant = self.delegation.update_grant(
+            grant_id, changes, expected_revision=expected_revision, now=self.clock()
+        )
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_updated",
+            f"grant {grant.id} edited by {who}: {describe_grant(grant)}",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+            revision=grant.revision,
+        )
+        return grant, f"grant {grant.id} edited: {describe_grant(grant)}."
+
+    def remove_grant(self, grant_id: str, *, by: str | None) -> tuple[Grant, str]:
+        """Delete a grant; ``GrantGone`` when there is none. The decisions
+        it allowed stay in the ledger."""
+        grant = self.delegation.delete_grant(grant_id)
+        if grant is None:
+            raise GrantGone(grant_id)
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_removed",
+            f"grant {grant.id} removed by {who}: {grant.agent_slug} no longer takes "
+            f"{grant.action} under it",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+        )
+        return grant, (
+            f"grant {grant.id} removed; {grant.agent_slug} no longer takes {grant.action} under it."
+        )
 
     # -- the registered repositories ------------------------------------------------
 

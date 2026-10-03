@@ -55,6 +55,8 @@ DAEMON_TABLES = (
     "daemon_plan_epic_runs",
     "daemon_plan_epic_run_tasks",
     "daemon_work_marks",
+    "daemon_grants",
+    "daemon_decisions",
 )
 API_TABLES = (
     "api_operations",

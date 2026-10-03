@@ -24,6 +24,20 @@ from typing import Any, Literal, TypeVar, cast
 
 from lantern.agents.registry import AgentRegistry, default_registry
 from lantern.config import ScheduleConfig
+from lantern.daemon.controls.delegation import (
+    Conditions,
+    GrantInvalid,
+    check_action,
+    check_daily_limit,
+    parse_conditions,
+)
+from lantern.daemon.controls.delegation_store import (
+    EDITABLE,
+    DelegationStore,
+    GrantGone,
+    StaleGrant,
+    new_grant_id,
+)
 from lantern.daemon.controls.intake import (
     AdmitRequest,
     IssueAdmission,
@@ -51,6 +65,7 @@ from lantern.daemon.controls.results import (
     DismissedTarget,
     DismissOutcome,
     GateOutcome,
+    GrantOutcome,
     GrantRoundsOutcome,
     ItemOutcome,
     ItemsOutcome,
@@ -102,6 +117,9 @@ def require(principal: Principal, capability: Capability) -> None:
 
 
 OutcomeT = TypeVar("OutcomeT", bound=Outcome)
+
+#: The longest note a grant carries: a line saying why it was written.
+GRANT_NOTE_MAX = 500
 
 
 class ControlService:
@@ -1209,6 +1227,215 @@ class ControlService:
             return ScheduleOutcome(verb=verb, name=name, message=message)
 
         spec = self._spec(f"schedule.{verb}", principal, "schedule", name, idempotency=idempotency)
+        return self._record(spec, apply)
+
+    # -- grants: the standing rules that let agents take decisions ------------------
+    #
+    # ``policy:manage`` and nothing else: an owner's, never an admin's, never
+    # an agent's. Each write is validated before it is recorded, so a grant
+    # that cannot be written leaves no operation behind it.
+
+    def _grant_subject(self, agent_slug: object) -> str:
+        """The agent a grant names, by its own slug: one the registry
+        knows and that can act (enabled, not archived)."""
+        slug = agent_slug.strip().casefold() if isinstance(agent_slug, str) else ""
+        if not slug:
+            raise GrantInvalid("agent_slug", "agent_slug must name an agent")
+        agent = self._agents().get(slug)
+        if agent is None:
+            raise GrantInvalid("agent_slug", f"no agent is called {slug!r}")
+        if agent.slug != slug:
+            raise GrantInvalid(
+                "agent_slug",
+                f"{slug!r} is another name for {agent.slug!r}; a grant names an agent by its slug",
+            )
+        if not agent.active:
+            raise GrantInvalid(
+                "agent_slug", f"agent {slug!r} is disabled; a grant names an agent that can act"
+            )
+        return agent.slug
+
+    @staticmethod
+    def _grant_note(note: object) -> str | None:
+        if note is None:
+            return None
+        if not isinstance(note, str) or len(note) > GRANT_NOTE_MAX:
+            raise GrantInvalid("note", f"note is text of at most {GRANT_NOTE_MAX} characters")
+        return note.strip() or None
+
+    def add_grant(
+        self,
+        principal: Principal,
+        *,
+        agent_slug: str,
+        action: str,
+        conditions: Mapping[str, Any] | Conditions | None = None,
+        daily_limit: int | None = None,
+        enabled: bool = True,
+        note: str | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Write a grant: ``agent_slug`` may take ``action`` under
+        ``conditions``. ``invalid_argument`` names the field that is wrong
+        (``detail["field"]``): an action outside the closed list, a
+        condition that does not apply to it, an agent the registry does
+        not know or that is disabled, a daily limit that is not positive."""
+        require(principal, "policy:manage")
+        try:
+            check_action(action)
+            parsed = parse_conditions(action, conditions)
+            check_daily_limit(daily_limit)
+            slug = self._grant_subject(agent_slug)
+            text = self._grant_note(note)
+        except GrantInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        grant_id = new_grant_id()
+
+        def apply(_: str | None) -> GrantOutcome:
+            grant, message = self.loop.add_grant(
+                grant_id=grant_id,
+                agent_slug=slug,
+                action=action,
+                conditions=parsed,
+                daily_limit=daily_limit,
+                enabled=bool(enabled),
+                note=text,
+                created_by=principal.id,
+                by=principal.attribution(),
+            )
+            return GrantOutcome(
+                verb="add", grant_id=grant.id, revision=grant.revision, message=message
+            )
+
+        # Built by hand: the request names the grant's `action`, which is
+        # also the name of `_spec`'s own first argument.
+        spec = OperationSpec(
+            action="grant.create",
+            target_kind="grant",
+            target_key=grant_id,
+            principal=principal,
+            request={
+                "agent_slug": slug,
+                "action": action,
+                "conditions": parsed.as_dict(),
+                "daily_limit": daily_limit,
+                "enabled": bool(enabled),
+                "note": text,
+            },
+            idempotency=idempotency,
+        )
+        return self._record(spec, apply)
+
+    def update_grant(
+        self,
+        principal: Principal,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Edit a grant's ``conditions``, ``daily_limit``, ``enabled`` or
+        ``note`` against the revision the caller read (``stale_revision``
+        when it moved on). Its agent and action are its identity and are
+        not edited: the ledger's rows name the grant. Switching a grant on
+        checks again that its agent can act."""
+        require(principal, "policy:manage")
+        existing = DelegationStore(self.loop.dstore).grant(grant_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no grant {grant_id}")
+        try:
+            unknown = sorted(set(changes) - EDITABLE)
+            if unknown:
+                raise GrantInvalid(
+                    unknown[0],
+                    f"{unknown[0]} cannot be edited; an edit may change "
+                    f"{', '.join(sorted(EDITABLE))}",
+                )
+            clean: dict[str, Any] = dict(changes)
+            if "conditions" in clean:
+                clean["conditions"] = parse_conditions(existing.action, clean["conditions"])
+            if "daily_limit" in clean:
+                check_daily_limit(clean["daily_limit"])
+            if "enabled" in clean:
+                if not isinstance(clean["enabled"], bool):
+                    raise GrantInvalid("enabled", "enabled is true or false")
+                if clean["enabled"] and not existing.enabled:
+                    self._grant_subject(existing.agent_slug)
+            if "note" in clean:
+                clean["note"] = self._grant_note(clean["note"])
+        except GrantInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        if not clean:
+            raise ControlError(
+                "invalid_argument",
+                f"the edit changes nothing; name one of {', '.join(sorted(EDITABLE))}",
+            )
+
+        def apply(_: str | None) -> GrantOutcome:
+            try:
+                grant, message = self.loop.update_grant(
+                    grant_id,
+                    clean,
+                    expected_revision=expected_revision,
+                    by=principal.attribution(),
+                )
+            except GrantGone as exc:
+                raise ControlError("unknown_target", f"no grant {grant_id}") from exc
+            except StaleGrant as exc:
+                raise ControlError(
+                    "stale_revision",
+                    f"the grant changed since it was read; it is at revision {exc.current}",
+                    current_revision=exc.current,
+                ) from exc
+            return GrantOutcome(
+                verb="update", grant_id=grant.id, revision=grant.revision, message=message
+            )
+
+        recorded = {
+            key: (value.as_dict() if isinstance(value, Conditions) else value)
+            for key, value in clean.items()
+        }
+        spec = self._spec(
+            "grant.update",
+            principal,
+            "grant",
+            grant_id,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            changes=recorded,
+        )
+        return self._record(spec, apply)
+
+    def remove_grant(
+        self,
+        principal: Principal,
+        grant_id: str,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Delete a grant. Nothing more is allowed under it; the decisions
+        it already allowed stay in the ledger."""
+        require(principal, "policy:manage")
+        existing = DelegationStore(self.loop.dstore).grant(grant_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no grant {grant_id}")
+
+        def apply(_: str | None) -> GrantOutcome:
+            try:
+                grant, message = self.loop.remove_grant(grant_id, by=principal.attribution())
+            except GrantGone as exc:
+                raise ControlError("unknown_target", f"no grant {grant_id}") from exc
+            return GrantOutcome(verb="remove", grant_id=grant.id, message=message)
+
+        spec = OperationSpec(
+            action="grant.delete",
+            target_kind="grant",
+            target_key=grant_id,
+            principal=principal,
+            request={"agent_slug": existing.agent_slug, "action": existing.action},
+            idempotency=idempotency,
+        )
         return self._record(spec, apply)
 
     def stop(

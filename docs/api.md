@@ -1753,14 +1753,14 @@ Rules a client can rely on:
 | `gates:approve`          | `POST /v1/gates/{id}/approve`                                                               |
 | `daemon:manage`          | Holds, stop, restart, repository resume, schedules                                          |
 | `artifacts:read`         | Artifact catalogs and downloads                                                             |
-| `audit:read`             | `GET /v1/operations`                                                                        |
+| `audit:read`             | `GET /v1/operations`, `GET /v1/grants`, `GET /v1/decisions`                                 |
 | `diagnostics:read`       | `GET /v1/logs`, `GET /v1/configuration`                                                     |
 | `collaboration:read`     | Local profile, agent/team catalogs, channels, messages, preferences, workflows, connections |
 | `collaboration:write`    | Local profile, teams, channels, preferences, and workflow mutations                         |
 | `collaboration:delegate` | Accept a conversational or delegated channel turn                                           |
 | `plans:create`           | Draft plans and edit their unpublished nodes                                                |
 | `plans:publish`          | Publish a plan level to the forge, edit published nodes, run an epic                        |
-| `policy:manage`          | Edit the standing rules that let agents take decisions; only an owner holds it              |
+| `policy:manage`          | Write, edit and delete grants (`/v1/grants`); only an owner holds it                        |
 
 A refusal names the capability it needed (`403 forbidden` with
 `"capability"`), before the target is looked at.
@@ -1776,8 +1776,8 @@ member holds neither. An agent acting for itself never holds it, whoever it
 is working for. A plain API client holds it only when the host operator
 registered it with `--cap policy:manage`: counting as an owner where a route
 asks for a role (a client holding `daemon:manage` does) is not holding the
-capability. No route asks for it yet; the routes that will are gated on the
-capability, never on a role.
+capability. The routes that write a grant (see Delegation below) ask for the
+capability, never for a role.
 
 ## Capability discovery
 
@@ -1806,7 +1806,8 @@ Every id is opaque and stable; none is an issue number, a host path or an
 `owner/name`. `itm_…` a work item, `run_…` a run, `repo_…` a configured
 repository, `gate_…` a merge or publication gate, `op_…` an operation,
 `str_…` a steering record, `art_…` an artifact, `plan_…` a plan,
-`node_…` one of its nodes and `erun_…` an epic run, `evt_<n>` an event (and the
+`node_…` one of its nodes and `erun_…` an epic run, `grant_…` a grant and
+`dec_…` a decision, `evt_<n>` an event (and the
 cursor into the chronology), `cli_…` a client. An unknown id of any kind is
 a plain `404 not_found`. Each resource carries `workspace_id` (`"local"` on
 a single installation), RFC 3339 UTC timestamps, `available_actions` (what
@@ -1870,6 +1871,11 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/usage/pool`                                                 | `runs:read`            | Today's runs and tokens against the daily cap and budget                    |
 | `GET`    | `/v1/analytics`                                                  | `runs:read`            | A window of runs folded: outcomes, time to land and parked, turns, causes   |
 | `GET`    | `/v1/operations[/{id}]`                                          | `audit:read`           | Every command any surface recorded                                          |
+| `GET`    | `/v1/grants[/{id}]`                                              | `audit:read`           | The standing rules that let agents take decisions, with today's use         |
+| `POST`   | `/v1/grants`                                                     | `policy:manage`        | Let an agent take a delegable action, under conditions                      |
+| `PATCH`  | `/v1/grants/{id}`                                                | `policy:manage`        | Edit a grant's conditions, limit, note or switch at the revision read       |
+| `DELETE` | `/v1/grants/{id}`                                                | `policy:manage`        | Delete a grant; the decisions it allowed stay in the ledger                 |
+| `GET`    | `/v1/decisions`                                                  | `audit:read`           | What was decided for agents: allowed, denied or escalated to a person       |
 | `GET`    | `/v1/repositories`, `/profiles`, `/recipes`                      | `runs:read`            | What work may be admitted against                                           |
 | `POST`   | `/v1/repositories/{id}/resume`                                   | `daemon:manage`        | Poll a suspended repository again                                           |
 | `POST`   | `/v1/repositories/{id}/labels/sync`                              | `daemon:manage`        | Create the labels the loop applies that the repository is missing           |
@@ -2246,6 +2252,186 @@ one page badges every tab.
 per-channel filter. `channel_id` alone is withheld — it is set only when the
 caller can read that conversation, as on `GET /v1/items`.
 
+## Delegation
+
+When `/v1/capabilities` lists `delegation`, an owner can state once that an
+agent may take an action under conditions — a **grant** — and read the ledger
+of what was decided under the grants. Grants ship empty: a fresh installation,
+and one upgraded to this release, delegates nothing until an owner writes one.
+Nothing in the daemon acts on a grant yet: this release stores them, judges
+nothing, and the ledger stays empty until the release that drives plans from
+them.
+
+A grant never widens what an agent's principal holds. An agent acting for
+itself still carries `items:create` and nothing else; a grant is a rule the
+daemon consults when *it* is about to act for that agent, with the resource in
+hand.
+
+**What can be delegated** is a closed list. A grant names exactly one of:
+
+| Action             | The act                                               |
+| ------------------ | ----------------------------------------------------- |
+| `plan.propose`     | Draft a plan and queue the run that proposes its root |
+| `plan.breakdown`   | Queue the run that proposes a node's next level       |
+| `plan.approve`     | Approve a node's proposed children                    |
+| `plan.publish`     | Publish an approved level to the forge                |
+| `plan.run`         | Start an epic run                                     |
+| `plan.run.retry`   | Retry a failed task of an epic run                    |
+| `item.retry`       | Retry a failed work item                              |
+| `run.grant_rounds` | Give an exhausted run more review rounds              |
+
+Nothing else can be granted, and that is what keeps the rest with people:
+writing or editing grants, credentials, daemon management (holds, stop,
+restart, schedules, repositories) and configuration are not on the list, so no
+grant can hand them to an agent.
+
+**Conditions** are six optional keys, never an expression. One left out (or
+`null`; `false` for `require_review`) constrains nothing. Each action accepts
+only the keys that mean something for it; one that does not apply is refused
+when the grant is written.
+
+| Action             | `repositories` | `levels` | `max_children` | `require_review` | `causes` | `max_retries` |
+| ------------------ | -------------- | -------- | -------------- | ---------------- | -------- | ------------- |
+| `plan.propose`     | yes            | yes      |                |                  |          |               |
+| `plan.breakdown`   | yes            | yes      |                |                  |          |               |
+| `plan.approve`     | yes            | yes      | yes            | yes              |          |               |
+| `plan.publish`     | yes            | yes      | yes            | yes              |          |               |
+| `plan.run`         | yes            |          | yes            |                  |          |               |
+| `plan.run.retry`   | yes            |          |                |                  | yes      | yes           |
+| `item.retry`       | yes            |          |                |                  | yes      | yes           |
+| `run.grant_rounds` | yes            |          |                |                  | yes      | yes           |
+
+| Key              | Value                                  | Holds when                                                      |
+| ---------------- | -------------------------------------- | --------------------------------------------------------------- |
+| `repositories`   | a list of `owner/name`                 | the act's repository is one of them (case is ignored)           |
+| `levels`         | a list of `initiative`, `epic`, `task` | the level of the plan node acted on is one of them              |
+| `max_children`   | a whole number, 1 or more              | the level has at most that many children                        |
+| `require_review` | `true`                                 | the level's stored review verdict is `approve`                  |
+| `causes`         | a list of failure-cause names          | the failure's cause is one of them (`unknown` cannot be listed) |
+| `max_retries`    | a whole number, 1 or more              | fewer retries than that were already made                       |
+
+**Three outcomes.** Every act the daemon considers taking for an agent is
+judged against the grants from facts the host established (never from what the
+agent says about itself), and the answer is one of:
+
+- `allow` — an enabled grant for that agent and action covers it: every
+  condition holds and its `daily_limit` is not spent. When several do, the
+  oldest (by `created_at`, then id) is the one named.
+- `deny` — the action is not on the closed list; or it is `plan.approve` and
+  the agent is the one that proposed the level. An agent never approves its
+  own proposal, whatever the grants say.
+- `escalate` — a person decides. No enabled grant names the agent and action;
+  or a condition is not met (the reason names it and the value); or a fact a
+  condition needs is missing or unreadable (the reason names what was needed —
+  "could not tell" is never treated as met); or the grant's `daily_limit` is
+  spent. An escalation waits: it never turns into a yes or a no by itself.
+
+The cap day a `daily_limit` counts in is the one `[daemon] run_cap_timezone`
+defines, the same day the run cap uses. `used_today` on a grant is counted from
+the ledger's `allow` rows, not kept on the grant.
+
+`GET /v1/grants` and `GET /v1/grants/{id}` (`audit:read`) return grants, oldest
+first:
+
+```json
+{
+  "id": "grant_…",
+  "workspace_id": "local",
+  "agent_slug": "critic",
+  "action": "plan.approve",
+  "conditions": {
+    "repositories": ["acme/shop"],
+    "levels": null,
+    "max_children": 8,
+    "require_review": true,
+    "causes": null,
+    "max_retries": null
+  },
+  "daily_limit": 5,
+  "used_today": 0,
+  "enabled": true,
+  "note": "small reviewed levels",
+  "created_by": "cli_…",
+  "created_by_display": "olive",
+  "created_at": "…",
+  "updated_at": "…",
+  "revision": 1
+}
+```
+
+`POST /v1/grants` (`policy:manage`) takes `agent_slug`, `action`, and
+optionally `conditions`, `daily_limit` (`null` or absent is unlimited),
+`enabled` (true when absent) and `note` (at most 500 characters), and answers
+`201` with `{"grant": …, "message": "…", "operation": …}`.
+`PATCH /v1/grants/{id}` takes `expected_revision` and any of `conditions` (the
+whole set is replaced), `daily_limit`, `enabled` and `note`; only the fields
+sent change, `409 stale_revision` (with `current_revision`) when the grant was
+edited since it was read. A grant's agent and action are its identity and are
+not edited — the ledger's rows name the grant — so changing either is a delete
+and a new grant. `DELETE /v1/grants/{id}` removes one (`"grant": null` in the
+reply); the decisions it allowed stay in the ledger. Each takes an optional
+`Idempotency-Key`.
+
+A write is refused with `422` naming the field:
+
+- `invalid_argument` with `"field"` — `action` is not on the closed list;
+  `conditions.<key>` does not apply to the action or holds a value that makes
+  no sense; `agent_slug` names no agent the registry knows, names one by an
+  alias, or names one that is disabled or archived (checked when a grant is
+  created and again when a disabled grant is switched on); `daily_limit` is
+  not a positive whole number.
+- `invalid_request` with `"errors"` (each with its `loc`) — the body itself
+  is malformed: an unknown key, a wrong type, a number below 1.
+
+The write routes ask for `policy:manage` as a capability and never for a
+role, so an admin is refused (`403 forbidden`, `"capability": "policy:manage"`), and so is a plain API client that counts as an owner
+elsewhere because it holds `daemon:manage`. Each write is one operation
+(`grant.create`, `grant.update`, `grant.delete`, target kind `grant`) with its
+`operation.*` events, and the daemon narrates it as a `daemon.notice`
+(`daemon.grant_added`, `daemon.grant_updated`, `daemon.grant_removed`), the
+same two records a schedule write leaves. A write a restart interrupted is
+settled from the stored grant at recovery — it is there, it holds the change,
+or it is gone — and is never left `reconciling`.
+
+Grants are edited here and nowhere else: there is no `command` for them on the
+WebSocket, no chat tool and no `ctl` verb. An owner's chat turn carries
+`policy:manage`, and editing policy from a conversation is deliberately not
+offered.
+
+`GET /v1/decisions` (`audit:read`) is the ledger, newest first, paged by
+`limit` and `cursor`. Filters: `outcome` (`allow`, `deny`, `escalate`),
+`unresolved=true` (escalations still waiting for a person), `agent` (a slug)
+and `since` (RFC 3339 or epoch seconds).
+
+```json
+{
+  "id": "dec_…",
+  "workspace_id": "local",
+  "grant_id": "grant_…",
+  "agent_slug": "critic",
+  "action": "plan.approve",
+  "outcome": "allow",
+  "reason": "grant grant_… lets critic take plan.approve",
+  "plan_id": "plan_…",
+  "node_id": "node_…",
+  "item_id": null,
+  "run_id": null,
+  "epic_run_id": null,
+  "repository": "acme/shop",
+  "operation_id": "op_…",
+  "attrs": {"repository": "acme/shop", "level": "epic", "child_count": 4, "proposer": "planner", "review_verdict": "approve"},
+  "at": "…",
+  "resolved_at": null,
+  "resolved_by": null,
+  "resolution": null
+}
+```
+
+`grant_id` is set only on an `allow`. `attrs` are the facts the act was judged
+on, kept for audit. An `escalate` row carries `resolved_at`, `resolved_by` and
+`resolution` once it ends: `acted` (the step happened, whoever took it),
+`declined` (a person said no) or `superseded` (what it was about changed).
+
 ## Fleet analytics
 
 When `/v1/capabilities` lists `analytics`, `GET /v1/analytics` (`runs:read`)
@@ -2400,6 +2586,8 @@ directories and sandboxes; the retention sweep and every other sandbox are
 still the host's. Repository registration has one (see
 Repositories above); a repository's other settings are still the file's. A tool run takes no
 steering, no round grants and no gate: a fixed recipe has nothing to steer.
+Grants are written through `/v1/grants` only (see Delegation above): not from
+the WebSocket's commands and not from a conversation.
 
 ## Readiness criteria for a hosted service
 
