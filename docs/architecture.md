@@ -3038,6 +3038,30 @@ is reached and returns. Controls address a run by id (`cancel_run`,
 `steer_run`); a bare `cancel` means the oldest run, which is also what
 `status()["current"]` reports beside the full `runs` list.
 
+A notice about a run only a person can move names the people. `_run_notify`
+is the one list for it — the item's requester, then the run's watchers
+(`daemon_run_watches`, every backend's), each once, empty ids skipped. It
+rides `DaemonNotice.mention_ids` on `run.blocked`, `run.abandoned` and the
+handed-over `run.exhausted`, as it does on `run.awaiting_answers`; the
+merge and publish gates persist it as their notify list, and the review
+hold persists it with `review_notify` appended. A bridge puts the
+mentions in front of the line where it lands — the run's thread and, for a
+terminal kind, its control-channel mirror — and renders only the ids that
+are its own (`_owns_user_id`), so a requester from another service is left
+out rather than written as a mention that resolves to nobody. `requested_by`
+is the chat user a concierge turn was asked by and nothing else, so a
+labelled issue, an API admission or a schedule names nobody and the line
+goes out as it always did. What the loop will move by itself names nobody
+either: a failed attempt it retries (`run.failed`), the first exhaustion it
+resumes with `retry_rounds`; nor does the record of a person's own decision
+(`item.abandoned`, `run.cancelled`). The list is read before
+`_frontend_finished`, because a bridge's finish path drains the run's watch
+registry for its own watch notice — the control-channel
+`run … finished: **<state>**` line that already pings the same people, and
+that reads the same for an attempt the loop retries as for one it gave up
+on; these mentions come on top of it, on the line that says what to do. The
+public `daemon.notice` event carries no mentions.
+
 Discovery polls each enabled repository in turn, and every work item
 carries the `owner/name` it came from, so a run's clone, branch, draft PR,
 review, CI polling, merge and issue comments/labels all target that
