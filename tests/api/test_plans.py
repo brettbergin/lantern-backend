@@ -760,3 +760,37 @@ class TestAnswers:
         api.loop.dstore._update(item_id, 7.0, state="failed")
         refused = self._answer(api, plan, api.bearer(DRAFT), skip=True)
         assert refused.status_code == 409 and refused.json()["code"] == "not_awaiting_answers"
+
+
+class TestListing:
+    def test_the_list_is_paged_most_recent_first(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        for index in range(3):
+            api.harness.clock.t += 1
+            _create(api, headers, title=f"Plan {index}")
+
+        first = api.client.get("/v1/plans?limit=2", headers=headers)
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert [p["title"] for p in body["data"]] == ["Plan 2", "Plan 1"]
+        assert body["has_more"] and body["next_cursor"]
+
+        second = api.client.get(f"/v1/plans?limit=2&cursor={body['next_cursor']}", headers=headers)
+        assert second.status_code == 200, second.text
+        rest = second.json()
+        assert [p["title"] for p in rest["data"]] == ["Plan 0"]
+        assert not rest["has_more"] and rest["next_cursor"] is None
+
+        everything = api.client.get("/v1/plans", headers=headers).json()
+        assert len(everything["data"]) == 3 and not everything["has_more"]
+
+    def test_a_cursor_from_other_filters_is_refused(self, api: Api) -> None:
+        headers = api.bearer(DRAFT)
+        for index in range(2):
+            api.harness.clock.t += 1
+            _create(api, headers, title=f"Plan {index}")
+        cursor = api.client.get("/v1/plans?limit=1", headers=headers).json()["next_cursor"]
+        refused = api.client.get(f"/v1/plans?limit=1&level=epic&cursor={cursor}", headers=headers)
+        assert refused.status_code == 400 and refused.json()["code"] == "invalid_cursor"
+        garbage = api.client.get("/v1/plans?cursor=not-a-cursor", headers=headers)
+        assert garbage.status_code == 400 and garbage.json()["code"] == "invalid_cursor"
