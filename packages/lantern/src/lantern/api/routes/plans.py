@@ -30,11 +30,6 @@ from lantern.api.errors import Problem
 from lantern.api.models import rfc3339
 from lantern.api.pagination import Page
 from lantern.api.plan_schemas import (
-    EpicRunChanged,
-    EpicRunOut,
-    EpicRunStart,
-    EpicRunStarted,
-    EpicRunTaskOut,
     PlanAnswerOut,
     PlanAnswers,
     PlanAnswersAccepted,
@@ -80,21 +75,20 @@ from lantern.daemon.controls.operations import (
 )
 from lantern.engine.planning import Clarification, PlanAnswer
 from lantern.plans import Plan, PlanNode, PlanRefusal
-from lantern.plans.epicrun import EpicRun
 from lantern.plans.model import content_version
 from lantern.plans.reconcile import Reconciliation
 from lantern.plans.service import SECTIONS
 
 router = APIRouter(prefix="/v1/plans", tags=["plans"])
 
-_PROBLEM = {"description": "A refusal, as `application/problem+json`."}
+PROBLEM = {"description": "A refusal, as `application/problem+json`."}
 
 
-def _problem(exc: PlanRefusal) -> Problem:
+def problem_of(exc: PlanRefusal) -> Problem:
     return Problem(exc.status, exc.code, exc.detail, **exc.extra)
 
 
-def _actor(auth: Authenticated) -> dict[str, Any]:
+def actor_of(auth: Authenticated) -> dict[str, Any]:
     principal = auth.principal
     return {
         "kind": principal.kind,
@@ -284,7 +278,7 @@ async def list_plans(
     response_model=PlanOut,
     status_code=201,
     summary="Draft a plan",
-    responses={409: _PROBLEM, 422: _PROBLEM},
+    responses={409: PROBLEM, 422: PROBLEM},
 )
 async def create_plan(
     body: PlanCreate,
@@ -300,15 +294,15 @@ async def create_plan(
             repository=body.repository,
             sections=_sections(body),
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
 
-@router.get("/{plan_id}", response_model=PlanOut, summary="Read a plan", responses={404: _PROBLEM})
+@router.get("/{plan_id}", response_model=PlanOut, summary="Read a plan", responses={404: PROBLEM})
 async def get_plan(
     plan_id: str,
     ctx: ApiContext = Depends(get_ctx),  # noqa: B008
@@ -325,11 +319,11 @@ async def get_plan(
             ctx.plans.open,
             plan_id,
             ready=bool(getattr(forge, "provisioned", True)),
-            actor=_actor(auth),
+            actor=actor_of(auth),
             **_forge_args(ctx),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     if result.changes:
         ctx.hub.notify()
     return _reconciled(result)
@@ -339,7 +333,7 @@ async def get_plan(
     "/{plan_id}/sync",
     response_model=PlanOut,
     summary="Reconcile a plan from the forge now",
-    responses={404: _PROBLEM, 409: _PROBLEM, 503: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 503: PROBLEM},
 )
 async def sync_plan(
     plan_id: str,
@@ -355,10 +349,10 @@ async def sync_plan(
     being published or read right now ``409 already_in_progress``."""
     try:
         result = await ctx.call(
-            ctx.plans.reconcile, plan_id, actor=_actor(auth), force=True, **_forge_args(ctx)
+            ctx.plans.reconcile, plan_id, actor=actor_of(auth), force=True, **_forge_args(ctx)
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     if result.changes:
         ctx.hub.notify()
     return _reconciled(result)
@@ -368,7 +362,7 @@ async def sync_plan(
     "/{plan_id}/drift/ack",
     response_model=PlanOut,
     summary="Mark the forge's changes to a plan seen",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def ack_drift(
     plan_id: str,
@@ -386,10 +380,10 @@ async def ack_drift(
             expected_revision=body.expected_revision,
             node_ids=body.node_ids,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
@@ -398,7 +392,7 @@ async def ack_drift(
     "/{plan_id}",
     response_model=PlanOut,
     summary="Edit a plan",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def update_plan(
     plan_id: str,
@@ -414,10 +408,10 @@ async def update_plan(
             expected_revision=body.expected_revision,
             sections=_sections(body),
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
@@ -426,7 +420,7 @@ async def update_plan(
     "/{plan_id}",
     response_model=PlanDeleted,
     summary="Delete a draft plan or archive a published one",
-    responses={404: _PROBLEM, 409: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM},
 )
 async def delete_plan(
     plan_id: str,
@@ -442,10 +436,10 @@ async def delete_plan(
             plan_id,
             expected_revision=expected_revision,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return PlanDeleted(id=plan_id, outcome=outcome)  # type: ignore[arg-type]
 
@@ -455,7 +449,7 @@ async def delete_plan(
     response_model=PlanOut,
     status_code=201,
     summary="Add a node to a plan",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def add_node(
     plan_id: str,
@@ -478,10 +472,10 @@ async def add_node(
             sections=_sections(body),
             position=body.position,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}"
     ctx.hub.notify()
     return plan_out(plan)
@@ -492,12 +486,12 @@ async def add_node(
     response_model=PlanOut,
     summary="Edit or move a node",
     responses={
-        403: _PROBLEM,
-        404: _PROBLEM,
-        409: _PROBLEM,
-        422: _PROBLEM,
-        502: _PROBLEM,
-        503: _PROBLEM,
+        403: PROBLEM,
+        404: PROBLEM,
+        409: PROBLEM,
+        422: PROBLEM,
+        502: PROBLEM,
+        503: PROBLEM,
     },
 )
 async def update_node(
@@ -521,7 +515,7 @@ async def update_node(
     sections as read) and nothing is written. The edit is recorded as
     ``plan.node.changed`` with ``change: issue_edited``."""
     sections = _sections(body)
-    actor = _actor(auth)
+    actor = actor_of(auth)
 
     def run() -> Plan:
         node = ctx.plans.get(plan_id).node(node_id)
@@ -557,7 +551,7 @@ async def update_node(
     try:
         plan = await ctx.call(run)
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
@@ -566,7 +560,7 @@ async def update_node(
     "/{plan_id}/nodes/{node_id}/attach",
     response_model=PlanAttached,
     summary="Attach an existing issue as a child",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 502: _PROBLEM, 503: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM, 502: PROBLEM, 503: PROBLEM},
 )
 async def attach_issue(
     plan_id: str,
@@ -596,11 +590,11 @@ async def attach_issue(
             repository=body.repository,
             number=body.number,
             url=body.url,
-            actor=_actor(auth),
+            actor=actor_of(auth),
             **_forge_args(ctx),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{attached.node_id}"
     ctx.hub.notify()
     return PlanAttached(
@@ -615,7 +609,7 @@ async def attach_issue(
     "/{plan_id}/nodes/{node_id}/detach",
     response_model=PlanOut,
     summary="Detach a child from its parent",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 502: _PROBLEM, 503: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM, 502: PROBLEM, 503: PROBLEM},
 )
 async def detach_issue(
     plan_id: str,
@@ -635,11 +629,11 @@ async def detach_issue(
             plan_id,
             node_id,
             expected_revision=body.expected_revision,
-            actor=_actor(auth),
+            actor=actor_of(auth),
             **_forge_args(ctx),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
@@ -648,7 +642,7 @@ async def detach_issue(
     "/{plan_id}/nodes/{node_id}",
     response_model=PlanOut,
     summary="Remove a node",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def remove_node(
     plan_id: str,
@@ -666,10 +660,10 @@ async def remove_node(
             node_id,
             expected_revision=expected_revision,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
@@ -678,7 +672,7 @@ async def remove_node(
     "/{plan_id}/nodes/{node_id}/approve",
     response_model=PlanOut,
     summary="Approve a node's children",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def approve_children(
     plan_id: str,
@@ -698,15 +692,93 @@ async def approve_children(
             expected_revision=body.expected_revision,
             node_ids=body.node_ids,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
 
 PUBLISH_ACTION = "plan.publish"
+
+
+def replayed_refusal(op: Operation) -> None:
+    """What an earlier call under the same key recorded, when that was a
+    refusal (raised again with its status and code) or the call still
+    runs (``409``); nothing when it succeeded and its result replays."""
+    if op.state == "failed" and op.result and "status" in op.result:
+        raise Problem(
+            int(op.result["status"]),
+            op.error_code or "failed",
+            op.error_detail or "the earlier attempt was refused",
+            **dict(op.result.get("extra") or {}),
+            operation_id=op.id,
+        )
+    problem = replayed_problem(op)
+    if problem is not None:
+        raise problem
+
+
+def recorded[R, T](
+    ctx: ApiContext,
+    spec: OperationSpec,
+    *,
+    replay: Callable[[Operation], T],
+    call: Callable[[], R],
+    result: Callable[[R], dict[str, Any]],
+    out: Callable[[R, str], T],
+) -> T:
+    """One write to the plan or the forge as a recorded operation: accept
+    ``spec`` under its idempotency key (a replay answers ``replay`` of the
+    earlier operation; a different request under the same key is ``409
+    idempotency_conflict``), claim it, make the ``call``, and finish the
+    operation as succeeded with ``result`` of what came back — or failed
+    with the refusal (raised on as a ``Problem`` naming the operation) or
+    the crash. Every operation route in this module and the epic runs'
+    comes here, so a daemon that dies mid-call leaves the same record
+    whichever route was running."""
+    store = getattr(ctx.loop, "operations", None)
+    if not isinstance(store, OperationStore):
+        raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+    try:
+        op, created = store.accept(spec, ctx.clock())
+    except IdempotencyConflict as exc:
+        raise Problem(
+            409,
+            "idempotency_conflict",
+            "the idempotency key was already used with a different request",
+            operation_id=exc.existing.id,
+        ) from exc
+    if not created:
+        try:
+            return replay(op)
+        except PlanRefusal as exc:
+            raise problem_of(exc) from exc
+    store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
+    try:
+        value = call()
+    except PlanRefusal as exc:
+        store.finish(
+            op.id,
+            ctx.clock(),
+            state="failed",
+            result={"status": exc.status, "extra": exc.extra},
+            error_code=exc.code,
+            error_detail=exc.detail,
+        )
+        raise Problem(exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id) from exc
+    except Exception as exc:
+        store.finish(
+            op.id,
+            ctx.clock(),
+            state="failed",
+            error_code="crashed",
+            error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+        )
+        raise
+    store.finish(op.id, ctx.clock(), state="succeeded", result=result(value))
+    return out(value, op.id)
 
 
 def _published(
@@ -723,21 +795,11 @@ def _published(
 def _replay(ctx: ApiContext, plan_id: str, op: Operation) -> PlanPublished:
     """An earlier call under the same key: its results and the plan as it
     is now, or the refusal it recorded, or ``409`` while it still runs."""
-    if op.state == "failed" and op.result and "status" in op.result:
-        raise Problem(
-            int(op.result["status"]),
-            op.error_code or "failed",
-            op.error_detail or "the earlier attempt was refused",
-            **dict(op.result.get("extra") or {}),
-            operation_id=op.id,
-        )
-    problem = replayed_problem(op)
-    if problem is not None:
-        raise problem
+    replayed_refusal(op)
     try:
         plan = ctx.plans.get(plan_id)
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     return _published(plan, list((op.result or {}).get("results") or []), op.id, replayed=True)
 
 
@@ -745,7 +807,7 @@ def _replay(ctx: ApiContext, plan_id: str, op: Operation) -> PlanPublished:
     "/{plan_id}/nodes/{node_id}/publish",
     response_model=PlanPublished,
     summary="Publish a node's level to the forge",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM, 503: PROBLEM},
 )
 async def publish_children(
     plan_id: str,
@@ -767,40 +829,27 @@ async def publish_children(
     pair = idempotency(
         request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/publish", required=True
     )
-    actor = _actor(auth)
+    actor = actor_of(auth)
 
     def run() -> PlanPublished:
-        store = getattr(ctx.loop, "operations", None)
-        if not isinstance(store, OperationStore):
-            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
-        spec = OperationSpec(
-            action=PUBLISH_ACTION,
-            target_kind="plan",
-            target_key=plan_id,
-            principal=principal,
-            request={
-                "plan_id": plan_id,
-                "node_id": node_id,
-                "expected_revision": body.expected_revision,
-            },
-            idempotency=pair,
-            expected_revision=body.expected_revision,
-        )
-        try:
-            op, created = store.accept(spec, ctx.clock())
-        except IdempotencyConflict as exc:
-            raise Problem(
-                409,
-                "idempotency_conflict",
-                "the idempotency key was already used with a different request",
-                operation_id=exc.existing.id,
-            ) from exc
-        if not created:
-            return _replay(ctx, plan_id, op)
-        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
         forge = ctx.loop.github
-        try:
-            level = ctx.plans.publish(
+        return recorded(
+            ctx,
+            OperationSpec(
+                action=PUBLISH_ACTION,
+                target_kind="plan",
+                target_key=plan_id,
+                principal=principal,
+                request={
+                    "plan_id": plan_id,
+                    "node_id": node_id,
+                    "expected_revision": body.expected_revision,
+                },
+                idempotency=pair,
+                expected_revision=body.expected_revision,
+            ),
+            replay=lambda op: _replay(ctx, plan_id, op),
+            call=lambda: ctx.plans.publish(
                 plan_id,
                 node_id,
                 expected_revision=body.expected_revision,
@@ -808,36 +857,15 @@ async def publish_children(
                 connect=lambda: forge.call(lambda ops: ops),
                 clock=ctx.clock,
                 actor=actor,
-            )
-        except PlanRefusal as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                result={"status": exc.status, "extra": exc.extra},
-                error_code=exc.code,
-                error_detail=exc.detail,
-            )
-            raise Problem(
-                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
-            ) from exc
-        except Exception as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                error_code="crashed",
-                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
-            )
-            raise
-        results = [r.as_dict() for r in level.results]
-        store.finish(
-            op.id,
-            ctx.clock(),
-            state="succeeded",
-            result={"results": results, "revision": level.plan.revision},
+            ),
+            result=lambda level: {
+                "results": [r.as_dict() for r in level.results],
+                "revision": level.plan.revision,
+            },
+            out=lambda level, op_id: _published(
+                level.plan, [r.as_dict() for r in level.results], op_id, replayed=False
+            ),
         )
-        return _published(level.plan, results, op.id, replayed=False)
 
     published = await ctx.call(run)
     ctx.hub.notify()
@@ -849,7 +877,7 @@ async def publish_children(
     response_model=PlanBreakdownAccepted,
     status_code=202,
     summary="Propose a node's next level",
-    responses={403: _PROBLEM, 404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={403: PROBLEM, 404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def breakdown_node(
     plan_id: str,
@@ -888,7 +916,7 @@ async def breakdown_node(
     try:
         await ctx.call(check)
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     pair = idempotency(
         request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/breakdown", required=False
     )
@@ -917,7 +945,7 @@ async def breakdown_node(
     "/{plan_id}/nodes/{node_id}/answers",
     response_model=PlanAnswersAccepted,
     summary="Answer or skip a breakdown's clarifying questions",
-    responses={403: _PROBLEM, 404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={403: PROBLEM, 404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def answer_node(
     plan_id: str,
@@ -953,7 +981,7 @@ async def answer_node(
             node_id,
             answers=answers,
             skip=body.skip,
-            actor=_actor(auth),
+            actor=actor_of(auth),
             settle=True,
             expected_revision=body.expected_revision,
         )
@@ -961,7 +989,7 @@ async def answer_node(
     try:
         outcome = await ctx.call(apply)
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return PlanAnswersAccepted(
         plan=plan_out(outcome.plan),
@@ -987,21 +1015,11 @@ def _replan_applied(
 def _replay_replan(ctx: ApiContext, plan_id: str, op: Operation) -> PlanReplanApplied:
     """An earlier approval under the same key: its results and the plan as
     it is now, or the refusal it recorded, or ``409`` while it still runs."""
-    if op.state == "failed" and op.result and "status" in op.result:
-        raise Problem(
-            int(op.result["status"]),
-            op.error_code or "failed",
-            op.error_detail or "the earlier attempt was refused",
-            **dict(op.result.get("extra") or {}),
-            operation_id=op.id,
-        )
-    problem = replayed_problem(op)
-    if problem is not None:
-        raise problem
+    replayed_refusal(op)
     try:
         plan = ctx.plans.get(plan_id)
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     return _replan_applied(plan, list((op.result or {}).get("results") or []), op.id, replayed=True)
 
 
@@ -1009,7 +1027,7 @@ def _replay_replan(ctx: ApiContext, plan_id: str, op: Operation) -> PlanReplanAp
     "/{plan_id}/nodes/{node_id}/replan/approve",
     response_model=PlanReplanApplied,
     summary="Apply a re-plan's diff to the forge",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM, 503: PROBLEM},
 )
 async def approve_replan(
     plan_id: str,
@@ -1040,76 +1058,42 @@ async def approve_replan(
         f"/v1/plans/{plan_id}/nodes/{node_id}/replan/approve",
         required=True,
     )
-    actor = _actor(auth)
+    actor = actor_of(auth)
 
     def run() -> PlanReplanApplied:
-        store = getattr(ctx.loop, "operations", None)
-        if not isinstance(store, OperationStore):
-            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
-        spec = OperationSpec(
-            action=REPLAN_ACTION,
-            target_kind="plan",
-            target_key=plan_id,
-            principal=principal,
-            request={
-                "plan_id": plan_id,
-                "node_id": node_id,
-                "expected_revision": body.expected_revision,
-                "entry_ids": body.entry_ids,
-            },
-            idempotency=pair,
-            expected_revision=body.expected_revision,
-        )
-        try:
-            op, created = store.accept(spec, ctx.clock())
-        except IdempotencyConflict as exc:
-            raise Problem(
-                409,
-                "idempotency_conflict",
-                "the idempotency key was already used with a different request",
-                operation_id=exc.existing.id,
-            ) from exc
-        if not created:
-            return _replay_replan(ctx, plan_id, op)
-        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
-        try:
-            applied = ctx.plans.approve_replan(
+        return recorded(
+            ctx,
+            OperationSpec(
+                action=REPLAN_ACTION,
+                target_kind="plan",
+                target_key=plan_id,
+                principal=principal,
+                request={
+                    "plan_id": plan_id,
+                    "node_id": node_id,
+                    "expected_revision": body.expected_revision,
+                    "entry_ids": body.entry_ids,
+                },
+                idempotency=pair,
+                expected_revision=body.expected_revision,
+            ),
+            replay=lambda op: _replay_replan(ctx, plan_id, op),
+            call=lambda: ctx.plans.approve_replan(
                 plan_id,
                 node_id,
                 expected_revision=body.expected_revision,
                 entry_ids=body.entry_ids,
                 actor=actor,
                 **_forge_args(ctx),
-            )
-        except PlanRefusal as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                result={"status": exc.status, "extra": exc.extra},
-                error_code=exc.code,
-                error_detail=exc.detail,
-            )
-            raise Problem(
-                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
-            ) from exc
-        except Exception as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                error_code="crashed",
-                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
-            )
-            raise
-        results = [r.as_dict() for r in applied.results]
-        store.finish(
-            op.id,
-            ctx.clock(),
-            state="succeeded",
-            result={"results": results, "revision": applied.plan.revision},
+            ),
+            result=lambda applied: {
+                "results": [r.as_dict() for r in applied.results],
+                "revision": applied.plan.revision,
+            },
+            out=lambda applied, op_id: _replan_applied(
+                applied.plan, [r.as_dict() for r in applied.results], op_id, replayed=False
+            ),
         )
-        return _replan_applied(applied.plan, results, op.id, replayed=False)
 
     applied = await ctx.call(run)
     ctx.hub.notify()
@@ -1120,7 +1104,7 @@ async def approve_replan(
     "/{plan_id}/nodes/{node_id}/replan/discard",
     response_model=PlanOut,
     summary="Discard a re-plan's diff",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM},
+    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def discard_replan(
     plan_id: str,
@@ -1140,439 +1124,12 @@ async def discard_replan(
             expected_revision=body.expected_revision,
             entry_ids=body.entry_ids,
             now=ctx.clock(),
-            actor=_actor(auth),
+            actor=actor_of(auth),
         )
     except PlanRefusal as exc:
-        raise _problem(exc) from exc
+        raise problem_of(exc) from exc
     ctx.hub.notify()
     return plan_out(plan)
 
 
 # -- epic runs (#2347) -------------------------------------------------------------
-
-RUN_ACTION = "plan.run"
-
-
-def epic_run_out(run: EpicRun, plan: Plan | None) -> dict[str, Any]:
-    """An epic run's fields, each task named from the plan as it is now."""
-    tasks: list[EpicRunTaskOut] = []
-    for task in run.tasks:
-        node = plan.node(task.node_id) if plan is not None else None
-        tasks.append(
-            EpicRunTaskOut(
-                node_id=task.node_id,
-                title=node.title if node is not None else task.node_id,
-                kind=node.kind if node is not None else None,
-                workload_profile=node.workload_profile if node is not None else None,
-                depends_on=list(node.depends_on) if node is not None else [],
-                forge=(
-                    None
-                    if node is None or node.forge is None
-                    else PlanForge(
-                        number=node.forge.number, url=node.forge.url, state=node.forge.state
-                    )
-                ),
-                state=task.state,
-                item_id=task.item_id,
-                run_id=task.run_id,
-                reason=task.reason,
-                admitted_at=rfc3339(task.admitted_at),
-                updated_at=rfc3339(task.updated_at) or "",
-            )
-        )
-    return {
-        "id": run.id,
-        "plan_id": run.plan_id,
-        "node_id": run.node_id,
-        "state": run.state,
-        "started_by": run.started_by,
-        "started_by_display": run.started_by_display,
-        "created_at": rfc3339(run.created_at) or "",
-        "updated_at": rfc3339(run.updated_at) or "",
-        "completed_at": rfc3339(run.completed_at),
-        "tasks": tasks,
-    }
-
-
-def _driver(ctx: ApiContext) -> Any:
-    driver = getattr(ctx.loop, "epic_runs", None)
-    if driver is None:
-        raise Problem(503, "daemon_not_ready", "this daemon runs no epic runs")
-    return driver
-
-
-@router.get(
-    "/{plan_id}/nodes/{node_id}/run",
-    response_model=EpicRunOut,
-    summary="Read an epic's run",
-    responses={404: _PROBLEM},
-)
-async def get_epic_run(
-    plan_id: str,
-    node_id: str,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    _auth: Authenticated = Depends(require("runs:read")),  # noqa: B008
-) -> EpicRunOut:
-    """The epic's most recent run, each task's state and the item and run
-    it became, so a client links each task to its run's thread."""
-
-    def read() -> EpicRunOut:
-        plan = ctx.plans.get(plan_id)
-        run = _driver(ctx).latest(plan_id, node_id)
-        return EpicRunOut(**epic_run_out(run, plan))
-
-    try:
-        return await ctx.call(read)
-    except PlanRefusal as exc:
-        raise _problem(exc) from exc
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run",
-    response_model=EpicRunStarted,
-    status_code=201,
-    summary="Run an epic",
-    responses={404: _PROBLEM, 409: _PROBLEM, 422: _PROBLEM, 503: _PROBLEM},
-)
-async def run_epic(
-    plan_id: str,
-    node_id: str,
-    body: EpicRunStart,
-    request: Request,
-    response: Response,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunStarted:
-    """Start an epic run on a published epic whose tasks are on the forge.
-    The daemon owns it from here: every task whose dependencies are closed
-    is admitted through the same issue admission as ``POST /v1/items``
-    (never by the trigger label) with ``parent_item_id`` naming the run — a
-    code task as a code run, a workload task as a workload run under its
-    profile — and each one that lands or delivers makes its dependents
-    ready. A failed task's dependents are not admitted. The
-    ``Idempotency-Key`` header is required: a replay answers the run as it
-    is now; a different body under the same key is ``409
-    idempotency_conflict``."""
-    principal = auth.principal
-    pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run", required=True
-    )
-    actor = _actor(auth)
-
-    def replay(op: Operation) -> EpicRunStarted:
-        if op.state == "failed" and op.result and "status" in op.result:
-            raise Problem(
-                int(op.result["status"]),
-                op.error_code or "failed",
-                op.error_detail or "the earlier attempt was refused",
-                **dict(op.result.get("extra") or {}),
-                operation_id=op.id,
-            )
-        problem = replayed_problem(op)
-        if problem is not None:
-            raise problem
-        driver = _driver(ctx)
-        run = driver.runs.get(str((op.result or {}).get("epic_run_id") or ""))
-        if run is None:
-            run = driver.latest(plan_id, node_id)
-        response.status_code = 200
-        return EpicRunStarted(
-            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=True
-        )
-
-    def start() -> EpicRunStarted:
-        store = getattr(ctx.loop, "operations", None)
-        if not isinstance(store, OperationStore):
-            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
-        driver = _driver(ctx)
-        spec = OperationSpec(
-            action=RUN_ACTION,
-            target_kind="plan",
-            target_key=plan_id,
-            principal=principal,
-            request={
-                "plan_id": plan_id,
-                "node_id": node_id,
-                "expected_revision": body.expected_revision,
-            },
-            idempotency=pair,
-            expected_revision=body.expected_revision,
-        )
-        try:
-            op, created = store.accept(spec, ctx.clock())
-        except IdempotencyConflict as exc:
-            raise Problem(
-                409,
-                "idempotency_conflict",
-                "the idempotency key was already used with a different request",
-                operation_id=exc.existing.id,
-            ) from exc
-        if not created:
-            try:
-                return replay(op)
-            except PlanRefusal as exc:
-                raise _problem(exc) from exc
-        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
-        try:
-            run = driver.start(
-                plan_id,
-                node_id,
-                expected_revision=body.expected_revision,
-                actor=actor,
-                now=ctx.clock(),
-            )
-        except PlanRefusal as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                result={"status": exc.status, "extra": exc.extra},
-                error_code=exc.code,
-                error_detail=exc.detail,
-            )
-            raise Problem(
-                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
-            ) from exc
-        except Exception as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                error_code="crashed",
-                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
-            )
-            raise
-        store.finish(op.id, ctx.clock(), state="succeeded", result={"epic_run_id": run.id})
-        return EpicRunStarted(
-            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=False
-        )
-
-    started = await ctx.call(start)
-    if not started.replayed:
-        response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}/run"
-    ctx.hub.notify()
-    return started
-
-
-# -- epic run controls (#2348) ----------------------------------------------------
-
-ControlVerb = Literal["pause", "resume", "cancel", "retry", "skip"]
-
-
-async def _control(
-    verb: ControlVerb,
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext,
-    auth: Authenticated,
-) -> EpicRunChanged:
-    """One control on an epic run, recorded as a ``plan.run.<verb>``
-    operation: the ``Idempotency-Key`` header is required, a replay answers
-    the run as it is now (or the refusal it recorded), and a different
-    request under the same key is ``409 idempotency_conflict``."""
-    principal = auth.principal
-    pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run/{verb}", required=True
-    )
-    actor = _actor(auth)
-
-    def replay(op: Operation) -> EpicRunChanged:
-        if op.state == "failed" and op.result and "status" in op.result:
-            raise Problem(
-                int(op.result["status"]),
-                op.error_code or "failed",
-                op.error_detail or "the earlier attempt was refused",
-                **dict(op.result.get("extra") or {}),
-                operation_id=op.id,
-            )
-        problem = replayed_problem(op)
-        if problem is not None:
-            raise problem
-        driver = _driver(ctx)
-        run = driver.runs.get(str((op.result or {}).get("epic_run_id") or ""))
-        if run is None:
-            run = driver.run_for(plan_id, node_id)
-        return EpicRunChanged(
-            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=True
-        )
-
-    def apply() -> EpicRunChanged:
-        store = getattr(ctx.loop, "operations", None)
-        if not isinstance(store, OperationStore):
-            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
-        driver = _driver(ctx)
-        spec = OperationSpec(
-            action=f"{RUN_ACTION}.{verb}",
-            target_kind="plan",
-            target_key=plan_id,
-            principal=principal,
-            request={"plan_id": plan_id, "node_id": node_id},
-            idempotency=pair,
-        )
-        try:
-            op, created = store.accept(spec, ctx.clock())
-        except IdempotencyConflict as exc:
-            raise Problem(
-                409,
-                "idempotency_conflict",
-                "the idempotency key was already used with a different request",
-                operation_id=exc.existing.id,
-            ) from exc
-        if not created:
-            try:
-                return replay(op)
-            except PlanRefusal as exc:
-                raise _problem(exc) from exc
-        store.claim(op.id, getattr(ctx.loop, "generation", None), ctx.clock())
-        control: Callable[..., EpicRun] = getattr(driver, verb)
-        try:
-            run = control(plan_id, node_id, actor=actor, now=ctx.clock())
-        except PlanRefusal as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                result={"status": exc.status, "extra": exc.extra},
-                error_code=exc.code,
-                error_detail=exc.detail,
-            )
-            raise Problem(
-                exc.status, exc.code, exc.detail, **exc.extra, operation_id=op.id
-            ) from exc
-        except Exception as exc:
-            store.finish(
-                op.id,
-                ctx.clock(),
-                state="failed",
-                error_code="crashed",
-                error_detail=f"{type(exc).__name__}: {exc}"[:2000],
-            )
-            raise
-        store.finish(op.id, ctx.clock(), state="succeeded", result={"epic_run_id": run.id})
-        return EpicRunChanged(
-            **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=False
-        )
-
-    changed = await ctx.call(apply)
-    ctx.hub.notify()
-    return changed
-
-
-_CONTROL_RESPONSES: dict[int | str, dict[str, Any]] = {
-    404: _PROBLEM,
-    409: _PROBLEM,
-    422: _PROBLEM,
-    503: _PROBLEM,
-}
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run/pause",
-    response_model=EpicRunChanged,
-    summary="Pause an epic run",
-    responses=_CONTROL_RESPONSES,
-)
-async def pause_epic_run(
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunChanged:
-    """Stop the epic's running run from admitting anything new. Tasks
-    already queued or running are not cancelled: they go on, and the run
-    still follows them. Refused when the run is already paused (``409
-    already_paused``) or has ended (``409 run_ended``). Records
-    ``plan.run.paused`` with ``reason: "person"``."""
-    return await _control("pause", plan_id, node_id, request, ctx, auth)
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run/resume",
-    response_model=EpicRunChanged,
-    summary="Resume an epic run",
-    responses=_CONTROL_RESPONSES,
-)
-async def resume_epic_run(
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunChanged:
-    """Resume a paused epic run: the pass made here admits every ready
-    task at once. Refused when the run is not paused (``409 not_paused``)
-    or has ended (``409 run_ended``). Records ``plan.run.resumed``."""
-    return await _control("resume", plan_id, node_id, request, ctx, auth)
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run/cancel",
-    response_model=EpicRunChanged,
-    summary="Stop an epic run",
-    responses=_CONTROL_RESPONSES,
-)
-async def cancel_epic_run(
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunChanged:
-    """Stop the epic run for good: it is ``cancelled``. A task not yet
-    admitted never is (``cancelled``); a task whose item is still waiting
-    in the queue has the item withdrawn through the item abandon
-    (``cancelled``); a task whose run is under way is not killed — it
-    finishes, the run follows it, and a person cancels that run through
-    ``POST /v1/runs/{run_id}/cancel`` if they want it down. Refused when
-    the run has ended (``409 run_ended``). Records ``plan.run.cancelled``
-    with the task node ids ``withdrawn`` and still ``running``."""
-    return await _control("cancel", plan_id, node_id, request, ctx, auth)
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run/retry",
-    response_model=EpicRunChanged,
-    summary="Retry a failed task of an epic run",
-    responses=_CONTROL_RESPONSES,
-)
-async def retry_epic_run_task(
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunChanged:
-    """Run a failed task again, in the latest epic run that holds it. An
-    item that failed, was blocked or was cancelled is re-queued through the
-    item retry (attempts start over, a fresh run; the issue hears who
-    asked); a task whose admission was refused is admitted afresh. Its
-    dependents wait on it again. Allowed while the run is paused. Refused
-    when the task is blocked by another (``409 task_blocked`` with
-    ``blocked_by``), is not failed (``409 task_not_failed``), or the run
-    has ended (``409 run_ended``). Records ``plan.run.task_retried``."""
-    return await _control("retry", plan_id, node_id, request, ctx, auth)
-
-
-@router.post(
-    "/{plan_id}/nodes/{node_id}/run/skip",
-    response_model=EpicRunChanged,
-    summary="Skip a task of an epic run",
-    responses=_CONTROL_RESPONSES,
-)
-async def skip_epic_run_task(
-    plan_id: str,
-    node_id: str,
-    request: Request,
-    ctx: ApiContext = Depends(get_ctx),  # noqa: B008
-    auth: Authenticated = Depends(require("plans:publish")),  # noqa: B008
-) -> EpicRunChanged:
-    """Treat a task that is not under way — failed, blocked, waiting or
-    ready — as done, so its dependents become ready. The task is
-    ``skipped``; its issue is left exactly as it is (lantern does not
-    close it) and its item is not touched. Refused when the task is queued
-    or running (``409 task_in_progress``), already settled (``409
-    task_settled``) or the run has ended (``409 run_ended``). Records
-    ``plan.run.task_skipped``."""
-    return await _control("skip", plan_id, node_id, request, ctx, auth)
