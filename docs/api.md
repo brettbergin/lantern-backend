@@ -780,7 +780,7 @@ and owners) publishes to the forge and edits, attaches and detaches its issues.
 | `DELETE /v1/plans/{id}/nodes/{node_id}`                               | `?expected_revision=`                                             | `200`, the plan without the node and its subtree                                           |
 | `POST /v1/plans/{id}/nodes/{node_id}/breakdown`                       | `{expected_revision, note?, channel_id?}`                         | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued                    |
 | `POST /v1/plans/{id}/nodes/{node_id}/answers`                         | `{expected_revision?, answers: {id: {value?, text?}}, skip?}`     | `200 {plan, run_id, resumed}`, the waiting run back in the queue                           |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve`                         | `{expected_revision, node_ids?}`                                  | `200`, the plan with those children approved                                               |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve`                         | `{expected_revision, node_ids?}`, `Idempotency-Key` optional      | `200`, the plan with those children approved                                               |
 | `POST /v1/plans/{id}/nodes/{node_id}/publish`                         | `{expected_revision}` and an `Idempotency-Key` header             | `200 {plan, results, operation_id, replayed}`                                              |
 | `POST /v1/plans/{id}/nodes/{node_id}/attach`                          | `{expected_revision, repository?, number?, url?}`                 | `200 {plan, node_id, linked, reason}`                                                      |
 | `POST /v1/plans/{id}/nodes/{node_id}/detach`                          | `{expected_revision}`                                             | `200`, the plan with the child detached                                                    |
@@ -842,7 +842,22 @@ with `number` and `replan_discarded` with `entry_ids`; and `closed`,
 **Approving and publishing a level (#2341).** `approve` (`plans:create`) is
 a person's "this is right": the node's `draft` and `proposed` children —
 every one, or those `node_ids` names (a name that is not a child is `422`) —
-become `approved`; with none left to approve it is `422`. `publish`
+become `approved`; with none left to approve it is `422`. Approving is an
+operation, as publishing is: each call is recorded as `plan.approve` under
+whoever made it (`GET /v1/operations?target_kind=plan&target_id=<plan id>`,
+with the plan, the node, the revision and the `node_ids` asked for), and
+its `operation.accepted` and `operation.finished` ride the chronology. The
+answer on success is the plan, as it always was. A refusal — a stale
+revision, a name that is not a child, nothing to approve — finishes the
+operation `failed` and answers the status, `code` and fields it always did,
+plus `operation_id`; with no operation record to write to it is `503 daemon_not_ready` and nothing is approved. The `Idempotency-Key` header is
+optional: with one, a replay answers the plan as it is now (or the refusal
+the first call recorded) and approves nothing again, and a different body
+under the same key is `409 idempotency_conflict`; without one each call is
+its own operation. An approve the daemon died during is settled at the next
+start from the plan itself: `succeeded` when the plan was written to since
+and the children it named are no longer `draft` or `proposed`, `failed`
+(`interrupted_before_effect`) otherwise — approving again is safe. `publish`
 (`plans:publish`) writes one level to the forge: the node's `approved`
 children, and the node itself first when it is not on the forge yet (the
 root of a fresh plan). Children that are not approved are not published.
@@ -1872,7 +1887,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/logs`, `/v1/configuration`                                  | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance       |
 | `GET`    | `/v1/plans[/{id}]`                                               | `runs:read`            | Plans and their nodes, drafts included                                      |
 | CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`                           | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes                     |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`                         | `plans:create`         | Approve a node's draft and proposed children                                |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`                         | `plans:create`         | Approve a node's draft and proposed children; recorded as an operation      |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`                         | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required                  |
 | `PATCH`  | `/v1/plans/{id}/nodes/{node_id}` (published)                     | `plans:publish`        | Edit a published node's sections: writes its issue                          |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/attach`                          | `plans:publish`        | Attach an existing open issue as a child                                    |

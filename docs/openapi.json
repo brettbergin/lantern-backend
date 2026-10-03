@@ -17740,7 +17740,7 @@
     },
     "/v1/plans/{plan_id}/nodes/{node_id}/approve": {
       "post": {
-        "description": "A person's \"this is right\": the node's draft and proposed children \u2014\nevery one, or those ``node_ids`` names \u2014 become ``approved``, ready to\npublish.",
+        "description": "A person's \"this is right\": the node's draft and proposed children \u2014\nevery one, or those ``node_ids`` names \u2014 become ``approved``, ready to\npublish. Recorded as a ``plan.approve`` operation under whoever made\nit, so a refusal's problem names its ``operation_id``. The\n``Idempotency-Key`` header is optional: with one, a replay answers the\nplan as it is now (or the refusal the first call recorded) and approves\nnothing again, and a different body under the same key is ``409\nidempotency_conflict``; without one, each call is its own operation.",
         "operationId": "approve_children_v1_plans__plan_id__nodes__node_id__approve_post",
         "parameters": [
           {
@@ -17790,6 +17790,9 @@
             "description": "A refusal, as `application/problem+json`."
           },
           "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
             "description": "A refusal, as `application/problem+json`."
           }
         },

@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+**Approving a plan level is on the record.** `POST /v1/plans/{id}/nodes/{node_id}/approve`
+is now a `plan.approve` operation, as publishing already was: who approved
+a level, against which revision and for which children, is in
+`GET /v1/operations` with its `operation.accepted` and `operation.finished`
+events, where before it was only the actor on a `plan.node.changed` event.
+The answer on success is unchanged. A refused approve (a stale revision,
+nothing to approve) answers what it did plus `operation_id`, and is recorded
+`failed`; the `Idempotency-Key` header is optional, and with it a retry
+answers the plan as it is instead of `409 stale_revision`, and a different
+body under the same key is `409 idempotency_conflict`. A daemon with no
+operation record answers `503 daemon_not_ready` and approves nothing. An
+approve the daemon died during is settled from the plan at the next start
+(`succeeded` if it landed, `failed interrupted_before_effect` if not) rather
+than leaving nothing to reconcile.
+
 **The fleet analytics are served over the API.** How the runs of a window
 went — outcomes, time to land, time parked on a person, turns, rework,
 failures by cause — was computed inside the console and nowhere else, so no
