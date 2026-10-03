@@ -376,3 +376,70 @@ class TestGitlabChecklist:
         assert result.ticked == ["a", "b"] and result.closed == []
         assert fake.issues_closed == []
         assert all(e.closed for e in parse_checklist(str(fake.issues[n["e1"]]["description"])))
+
+
+class TestWhatCompletionLeavesAlone:
+    """A node that no longer follows its issue — reconcile detached it, or
+    its marker went — is left as reconcile left it: it neither keeps its
+    parent open nor is pulled back into following when its issue closes."""
+
+    def _detach(self, store: PlanStore, node_id: str, **fields: Any) -> None:
+        from dataclasses import replace
+
+        plan = store.get("plan_1")
+        assert plan is not None
+        node = plan.node(node_id)
+        assert node is not None and node.forge is not None
+        store.apply(
+            plan.id,
+            expected_revision=plan.revision,
+            now=NOW + 1,
+            upsert=[replace(node, forge=replace(node.forge, **fields))],
+        )
+
+    def test_a_detached_task_does_not_keep_its_epic_open(self, tmp_path: Path) -> None:
+        config, fake = _config(tmp_path), FakeGithub()
+        store, n = _published(tmp_path, fake, config, _lone_epic("o/r"))
+        self._detach(store, "b", detached="removed from the epic on the forge")
+        _close_on_github(fake, n["a"])
+
+        result = _completion(fake, store, config).epic("plan_1", "e1")
+
+        assert result.closed == ["e1"] and result.open == []
+        (summary,) = _summaries(fake, n["e1"])
+        assert "(1 task: 1 closed)" in summary
+        assert f"#{n['b']}" not in summary
+
+    def test_a_detached_task_closing_on_the_forge_stays_detached(self, tmp_path: Path) -> None:
+        config, fake = _config(tmp_path), FakeGithub()
+        store, n = _published(tmp_path, fake, config, _lone_epic("o/r"))
+        self._detach(store, "b", detached="removed from the epic on the forge")
+        _close_on_github(fake, n["b"])
+
+        _completion(fake, store, config).epic("plan_1", "e1")
+
+        plan = store.get("plan_1")
+        assert plan is not None
+        b = plan.node("b")
+        assert b is not None and b.forge is not None
+        assert b.forge.detached == "removed from the epic on the forge"
+        assert not b.followed
+
+    def test_recording_a_state_keeps_what_reconcile_knew(self, tmp_path: Path) -> None:
+        """A task whose marker reconcile found missing closes: its state
+        is recorded, and the missing marker is still on record."""
+        config, fake = _config(tmp_path), FakeGithub()
+        store, n = _published(tmp_path, fake, config, _lone_epic("o/r"))
+        self._detach(store, "a", marker_missing=True, updated_at="2026-10-01T00:00:00Z")
+        _close_on_github(fake, n["a"])
+
+        result = _completion(fake, store, config).epic("plan_1", "e1")
+
+        assert result.recorded == ["a"] and result.open == ["b"]
+        plan = store.get("plan_1")
+        assert plan is not None
+        a = plan.node("a")
+        assert a is not None and a.forge is not None
+        assert a.forge.state == "closed"
+        assert a.forge.marker_missing is True
+        assert a.forge.updated_at == "2026-10-01T00:00:00Z"
