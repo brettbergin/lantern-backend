@@ -38,7 +38,7 @@ from lantern.config import Config
 from lantern.errors import LanternError
 from lantern.log import get_logger
 from lantern.plans.epicrun import EpicRun
-from lantern.plans.model import ForgeRef, ForgeState, Plan, PlanNode
+from lantern.plans.model import ForgeState, Plan, PlanNode
 from lantern.plans.render import issue_reference
 from lantern.plans.store import PlanEvent, PlanStore, StaleRevision
 from lantern.vcs.checklist import (
@@ -84,7 +84,11 @@ def _state(row: Mapping[str, Any]) -> ForgeState:
 
 
 def _on_forge(nodes: Sequence[PlanNode]) -> list[PlanNode]:
-    return [n for n in nodes if n.state == "published" and n.forge is not None]
+    """The children a parent's completion is judged by: those on the forge
+    and still following their issue. One reconcile detached (it left its
+    parent there, or the forge) is left as reconcile left it — it neither
+    keeps the parent open nor is ticked, recorded or summarised."""
+    return [n for n in nodes if n.followed and n.forge is not None]
 
 
 def _ref(node: PlanNode) -> str:
@@ -331,7 +335,10 @@ class Completion:
             if node.forge.state == state:
                 return False
             now = self.clock()
-            forge = ForgeRef(number=node.forge.number, url=node.forge.url, state=state)
+            # Only the state moves: what reconcile knew of the issue (its
+            # version, a missing marker, a checklist it could not read)
+            # stays on record.
+            forge = replace(node.forge, state=state)
             try:
                 self.store.apply(
                     plan.id,
