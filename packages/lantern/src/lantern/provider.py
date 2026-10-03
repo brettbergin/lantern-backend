@@ -44,6 +44,9 @@ class ProviderHold:
     next_at: float | None
     attempts: int
     generation: int = 0
+    #: When the hold was last recorded; ``None`` for one built in passing,
+    #: never read back from the store.
+    updated_at: float | None = None
 
     def blocked(self, now: float) -> bool:
         return self.next_at is None or now < self.next_at
@@ -104,6 +107,7 @@ class ProviderRecovery:
                 row.next_at,
                 row.attempts,
                 row.generation,
+                row.updated_at,
             )
 
     def check(self) -> None:

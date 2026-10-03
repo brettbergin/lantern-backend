@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+**What is waiting on a person is one list.** Every client assembled it
+itself — all items, all channels, the open gates, the queue, the plans, then
+each work-bearing channel's jobs — so two clients could disagree at the edges,
+none could badge a count cheaply, and nothing on the server could name "the
+thing waiting on you". `GET /v1/attention` (`runs:read`) answers it, computed
+on read: an open merge or publication gate (one entry with the item it parks),
+an item `awaiting_review`, `paused_review` or `awaiting_answers`, an item that
+ended `failed` or `blocked`, a failed task of a live epic run (one entry with
+its item), a provider hold nothing will retry by itself, and a repository
+whose polling is suspended. Each entry has a stable `id`, a `group`
+(`decision`, `failed`, `paused`), its `title`, `reason` and `since`, the ids
+it is about, the `revision` an act on it is checked against, and `actions` —
+what the server offers on it now, each with the capability it needs and
+whether the caller holds it. A dismissed alert is left out unless
+`include_dismissed`; deleted work never appears; a `cancelled` item is not an
+entry. `counts` (`total` and per group) rides every page, so `?limit=1` is
+enough to badge. Filters: `group`, `repository_id`. Advertised as `attention`.
+
 **A run only a person can move now says so to that person.** When a run
 ended `blocked`, was abandoned after its last attempt, or exhausted its fix
 rounds a second time and was handed over, the notice that says what to do —

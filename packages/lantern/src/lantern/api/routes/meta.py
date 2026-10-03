@@ -83,6 +83,7 @@ FEATURES: tuple[str, ...] = (
     "work.dismiss_all",
     "work.delete",
     "analytics",
+    "attention",
 )
 
 

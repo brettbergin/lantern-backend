@@ -1,0 +1,432 @@
+"""What is waiting on a person, as one list (``GET /v1/attention``).
+
+Every client used to assemble this itself — items, gates, the queue, plans
+and each channel's work, joined by rules of its own — so two clients could
+disagree at the edges and nothing on the server could name "the thing
+waiting on you". Here it is computed on read from what the daemon already
+keeps; nothing is stored.
+
+The read has two halves so its cost does not grow with what is waiting.
+:func:`waiting` finds everything in a fixed number of statements (the open
+gates, the items in the states that ask for someone, the live epic runs,
+the provider hold, the polling health) and keeps only what ordering and
+counting need. :func:`entries` then projects the one page a caller asked
+for: its public ids, its runs, its marks and its conversations, each read
+once for the page.
+
+An entry's actions are the ones eligibility
+(:mod:`lantern.daemon.controls.eligibility`) answers for the work as it
+stands — the same answer the item, run and gate listings advertise — each
+with the capability its route requires and whether this caller holds it.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+from lantern.api.admin import ADMIN_ACTIONS
+from lantern.api.commands import ACTIONS as COMMANDS
+from lantern.api.models import (
+    AttentionAction,
+    AttentionCounts,
+    AttentionEntry,
+    AttentionGroup,
+    rfc3339,
+)
+from lantern.api.projections import Views, item_repository
+from lantern.api.publicids import item_key, run_public_id
+from lantern.daemon.controls.eligibility import Action
+from lantern.daemon.controls.principal import Principal
+from lantern.daemon.model import WorkItem
+from lantern.daemon.store import REVIEW_WAIT_STATES, MergeGate
+from lantern.plans.epicrun import LIVE_RUN_STATES, EpicRun, EpicRunStore, EpicRunTask, from_item
+from lantern.plans.model import PlanNode
+from lantern.plans.store import PlanStore
+from lantern.provider import ProviderHold, ProviderRecovery
+
+if TYPE_CHECKING:
+    from lantern.api.auth.deps import Authenticated
+
+#: The groups, in the order the list shows them: what needs a decision,
+#: what ended needing someone, what is held until someone clears it.
+GROUPS: tuple[AttentionGroup, ...] = ("decision", "failed", "paused")
+_RANK: dict[str, int] = {group: rank for rank, group in enumerate(GROUPS)}
+
+#: Item states parked on a person: a review to give, questions to answer.
+#: A ``gated`` item is not here — its open gate is the entry.
+PARKED_ITEM_STATES: tuple[str, ...] = ("awaiting_review", "paused_review", "awaiting_answers")
+#: Item states that ended needing a person. ``cancelled`` is not one of
+#: them: stopping work is a person's own act, and it rests there without
+#: asking anything — a dismissal is accepted on it, and none is needed.
+ENDED_ITEM_STATES: tuple[str, ...] = ("failed", "blocked")
+
+#: A review hold a run is still parked on (``open``, ``paused``) or just
+#: leaving (``approving``, ``fixing``): the ones a parked item's run has.
+_STANDING_HOLD_STATES: tuple[str, ...] = ("open", "paused", "approving", "fixing")
+
+#: The order an entry lists its actions in: what settles the wait first,
+#: what gives the work up or puts the alert away last.
+ACTION_ORDER: tuple[Action, ...] = (
+    "gate_approve",
+    "review_wait_resume",
+    "grant_rounds",
+    "resume",
+    "retry",
+    "requeue",
+    "steer",
+    "cancel",
+    "abandon",
+    "dismiss",
+    "undismiss",
+    "delete",
+)
+#: Each of those as the command a client sends for it: where its
+#: capability is read from, so the two can never disagree.
+_COMMAND: dict[str, str] = {
+    "gate_approve": "gate.approve",
+    "review_wait_resume": "run.review_resume",
+    "grant_rounds": "run.grant_rounds",
+    "resume": "run.resume",
+    "retry": "item.retry",
+    "requeue": "item.requeue",
+    "steer": "run.steer",
+    "cancel": "run.cancel",
+    "abandon": "item.abandon",
+    "dismiss": "item.dismiss",
+    "undismiss": "item.undismiss",
+    "delete": "item.delete",
+}
+#: What a person does about a failed task of an epic run, through the
+#: run's own routes (``…/run/retry`` and ``…/run/skip``).
+TASK_ACTIONS: tuple[str, ...] = ("task_retry", "task_skip")
+#: What those two routes require (``api/routes/plan_runs.py``).
+_TASK_CAPABILITY = "plans:publish"
+REPOSITORY_ACTIONS: tuple[str, ...] = ("repository_resume",)
+
+
+def capability_for(action: str) -> str:
+    """The capability the route behind ``action`` requires."""
+    if action in TASK_ACTIONS:
+        return _TASK_CAPABILITY
+    if action in REPOSITORY_ACTIONS:
+        return ADMIN_ACTIONS["repository.resume"][0]
+    return COMMANDS[_COMMAND[action]][0]
+
+
+@dataclass(frozen=True, slots=True)
+class Waiting:
+    """One thing waiting on a person, as the first half of the read holds
+    it: enough to filter, count and order, and the records the page's
+    projection starts from."""
+
+    kind: str
+    group: AttentionGroup
+    since: float | None
+    #: The internal natural key: unique within the kind, and what breaks a
+    #: tie and resumes a page. Never shown.
+    key: str
+    repo: str | None = None
+    gate: MergeGate | None = None
+    item: WorkItem | None = None
+    epic_run: EpicRun | None = None
+    task: EpicRunTask | None = None
+    node: PlanNode | None = None
+    hold: ProviderHold | None = None
+    health: Mapping[str, Any] | None = None
+
+    @property
+    def order(self) -> tuple[int, float, str, str]:
+        """Decisions, then failures, then pauses; the longest wait first."""
+        return (_RANK[self.group], self.since or 0.0, self.kind, self.key)
+
+
+def _items_as_stored(dstore: Any, item_ids: Iterable[str]) -> dict[str, WorkItem]:
+    """The items for ids another row names, in one query; an id the table
+    spells the other way is looked up alone."""
+    wanted = list(dict.fromkeys(item_ids))
+    found: dict[str, WorkItem] = dstore.get_many(wanted)
+    for item_id in wanted:
+        if item_id not in found:
+            item = dstore.get(item_id)
+            if item is not None:
+                found[item_id] = item
+    return found
+
+
+def waiting(views: Views, *, include_dismissed: bool = False) -> list[Waiting]:
+    """Everything waiting on a person right now, unordered. A dismissed
+    alert is left out unless ``include_dismissed``; a deleted one always."""
+    dstore = views.dstore
+    found: list[Waiting] = []
+
+    # Open gates. A gate being approved is the daemon's to finish, not a
+    # person's; it is back here if the approval fails and reopens it.
+    gates: list[MergeGate] = dstore.merge_gates(["open"])
+    views.note_parked(gates=gates)
+    gate_items = _items_as_stored(dstore, [gate.item_id for gate in gates])
+    views.load_dismissals(
+        item_ids=[item.item_id for item in gate_items.values()],
+        run_ids=[
+            gate.run_id
+            for gate in gates
+            if gate.item_id in gate_items and gate_items[gate.item_id].run_id != gate.run_id
+        ],
+    )
+    gated: set[str] = set()
+    for gate in gates:
+        item = gate_items.get(gate.item_id)
+        if item is not None:
+            # The gated item and its gate are one waiting thing.
+            gated.add(item.item_id)
+            if views.deleted_at(item, gate.run_id) is not None:
+                continue
+            if not include_dismissed and views.dismissal(item, gate.run_id) is not None:
+                continue
+        repo = gate.repo or (item_repository(item) if item is not None else None)
+        found.append(
+            Waiting("gate", "decision", gate.created_at, gate.run_id, repo, gate=gate, item=item)
+        )
+
+    # Items parked on a person, and items that ended needing one.
+    items: dict[str, WorkItem] = {
+        item.item_id: item
+        for item in dstore.attention_items(
+            (*PARKED_ITEM_STATES, *ENDED_ITEM_STATES), include_dismissed=include_dismissed
+        )
+        if item.item_id not in gated
+    }
+
+    # Failed tasks of live epic runs. A task failure leaves its run
+    # `running`, so the task is the entry, not the run; a task `blocked`
+    # behind it waits on the same decision and is no entry of its own.
+    failed: list[tuple[EpicRun, EpicRunTask, PlanNode | None]] = []
+    plans = PlanStore(dstore)
+    for run in EpicRunStore(dstore).active():
+        if run.state not in LIVE_RUN_STATES:
+            # Stopped, and only followed to its end: its tasks take no
+            # retry and no skip. What failed is still an item entry.
+            continue
+        stuck = [task for task in run.tasks if task.state == "failed"]
+        if not stuck:
+            continue
+        plan = plans.get(run.plan_id)
+        if plan is None or plan.archived:
+            continue
+        failed.extend((run, task, plan.node(task.node_id)) for task in stuck)
+    task_items = _items_as_stored(
+        dstore,
+        [task.item_id for _, task, _ in failed if task.item_id and task.item_id not in items],
+    )
+    for run, task, node in failed:
+        item = None
+        if task.item_id is not None:
+            item = items.get(task.item_id) or task_items.get(task.item_id)
+            seen = from_item(item)
+            if seen is None or seen[0] != "failed":
+                # The item has moved since the run's last pass (retried, or
+                # its row is gone and the task is admitted again): the
+                # driver follows it on its next one.
+                continue
+            # The task's failed item is the same waiting thing: one entry.
+            items.pop(task.item_id, None)
+        found.append(
+            Waiting(
+                "epic_task",
+                "failed",
+                task.updated_at,
+                f"{run.id}:{task.node_id}",
+                node.repository if node is not None else None,
+                item=item,
+                epic_run=run,
+                task=task,
+                node=node,
+            )
+        )
+
+    for item in items.values():
+        group: AttentionGroup = "decision" if item.state in PARKED_ITEM_STATES else "failed"
+        found.append(
+            Waiting(
+                "item", group, item.updated_at, item_key(item), item_repository(item), item=item
+            )
+        )
+
+    # A provider hold with no retry scheduled stands until a person
+    # recovers it; one with a time to try again is the daemon's own wait.
+    backend = str(views.config.agent.backend)
+    hold = ProviderRecovery(views.store, backend, clock=views.ctx.clock).hold()
+    if hold is not None and hold.next_at is None:
+        found.append(
+            Waiting(
+                "provider_hold",
+                "paused",
+                hold.updated_at,
+                f"{backend}:{hold.generation}",
+                hold=hold,
+            )
+        )
+
+    # A repository whose polling is suspended stays so until someone
+    # resumes it; one backing off is tried again by itself. A named pause
+    # hold is a person's own act and is not here.
+    for health in views.status().get("repos") or []:
+        if isinstance(health, dict) and health.get("suspended") and health.get("repo"):
+            repo = str(health["repo"])
+            found.append(
+                Waiting("repository", "paused", health.get("since"), repo, repo, health=health)
+            )
+    return found
+
+
+def counts(found: Sequence[Waiting]) -> AttentionCounts:
+    per_group = {group: sum(1 for w in found if w.group == group) for group in GROUPS}
+    return AttentionCounts(total=len(found), **per_group)
+
+
+def _advertise(actions: Iterable[str], principal: Principal) -> list[AttentionAction]:
+    advertised = []
+    for action in actions:
+        capability = capability_for(action)
+        advertised.append(
+            AttentionAction(
+                action=action,
+                capability=capability,
+                allowed=capability in principal.capabilities,
+            )
+        )
+    return advertised
+
+
+def _ordered(allowed: Iterable[str]) -> list[str]:
+    held = set(allowed)
+    return [action for action in ACTION_ORDER if action in held]
+
+
+def entries(views: Views, page: Sequence[Waiting], auth: Authenticated) -> list[AttentionEntry]:
+    """The page as a client reads it: public ids, references, the actions
+    eligibility answers for each entry and whether the caller may take
+    them. ``channel_id`` is set only where the caller can read the
+    conversation, as the item listing does it."""
+    now = views.now
+    principal = auth.principal
+    items = list({w.item.item_id: w.item for w in page if w.item is not None}.values())
+    gates = [w.gate for w in page if w.gate is not None]
+    item_ids = views.ids.item_ids(items, now) if items else {}
+    gate_ids = views.ids.gate_ids([gate.run_id for gate in gates], now) if gates else {}
+    repos = sorted({w.repo for w in page if w.repo})
+    repo_ids = views.ids.repository_ids(repos, now) if repos else {}
+    runs = views.store.get_runs(
+        [
+            *(item.run_id for item in items if item.run_id),
+            *(gate.run_id for gate in gates),
+        ]
+    )
+    views.load_dismissals(item_ids=[item.item_id for item in items])
+    if any(w.kind == "item" and w.item.state in REVIEW_WAIT_STATES for w in page if w.item):
+        views.note_parked(holds=views.dstore.review_holds(_STANDING_HOLD_STATES))
+    channels = views.visible_item_channels(items, auth.member)
+
+    def base(w: Waiting) -> dict[str, Any]:
+        item = w.item
+        return {
+            "kind": w.kind,
+            "group": w.group,
+            "since": rfc3339(w.since),
+            "repository": w.repo,
+            "repository_id": repo_ids.get(w.repo) if w.repo else None,
+            "item_id": item_ids[item_key(item)] if item is not None else None,
+            "channel_id": channels.get(item.item_id) if item is not None else None,
+        }
+
+    out: list[AttentionEntry] = []
+    for w in page:
+        item = w.item
+        if w.gate is not None:
+            gate = w.gate
+            run = runs.get(gate.run_id)
+            allowed: set[str] = set()
+            if "gate_approve" in views.gate_actions(gate, item, run):
+                allowed.add("gate_approve")
+            if item is not None and item.run_id == gate.run_id:
+                allowed |= views.work_actions(item, run)
+            unnamed = f"Approval in {w.repo}" if w.repo else "Approval requested"
+            out.append(
+                AttentionEntry(
+                    **base(w),
+                    id=f"gate:{gate_ids[gate.run_id]}",
+                    state="gated",
+                    title=item.title if item is not None else unnamed,
+                    reason=gate.detail,
+                    run_id=run_public_id(gate.run_id),
+                    gate_id=gate_ids[gate.run_id],
+                    revision=gate.revision,
+                    actions=_advertise(_ordered(allowed), principal),
+                    dismissal=views.dismissal(item, gate.run_id) if item is not None else None,
+                )
+            )
+        elif w.task is not None and w.epic_run is not None:
+            task, epic_run = w.task, w.epic_run
+            run_id = task.run_id or (item.run_id if item is not None else None)
+            alert = f":{run_public_id(run_id)}" if run_id else ""
+            out.append(
+                AttentionEntry(
+                    **base(w),
+                    id=f"epic_task:{epic_run.id}:{task.node_id}{alert}",
+                    state=task.state,
+                    title=w.node.title if w.node is not None else task.node_id,
+                    reason=task.reason,
+                    run_id=run_public_id(run_id) if run_id else None,
+                    plan_id=epic_run.plan_id,
+                    node_id=task.node_id,
+                    epic_run_id=epic_run.id,
+                    actions=_advertise(TASK_ACTIONS, principal),
+                )
+            )
+        elif item is not None:
+            run = runs.get(item.run_id) if item.run_id else None
+            public = item_ids[item_key(item)]
+            alert = f":{run_public_id(item.run_id)}" if item.run_id else ""
+            out.append(
+                AttentionEntry(
+                    **base(w),
+                    id=f"item:{public}:{item.state}{alert}",
+                    state=item.state,
+                    title=item.title,
+                    reason=item.last_error or (run.reason if run is not None else None),
+                    run_id=run_public_id(item.run_id) if item.run_id else None,
+                    plan_id=item.plan_id,
+                    node_id=item.plan_node_id,
+                    epic_run_id=item.parent_item_id if item.from_epic_run else None,
+                    revision=item.revision,
+                    actions=_advertise(_ordered(views.work_actions(item, run)), principal),
+                    dismissal=views.dismissal(item),
+                )
+            )
+        elif w.hold is not None:
+            backend = w.hold.failure.backend
+            out.append(
+                AttentionEntry(
+                    **base(w),
+                    id=f"provider_hold:{w.key}",
+                    state="provider_held",
+                    title=f"The {backend} provider is held until someone recovers it",
+                    reason=w.hold.summary(),
+                    # No route releases a provider hold: it is recovered
+                    # from the host or a chat (`resume <backend>`).
+                    actions=[],
+                )
+            )
+        elif w.health is not None:
+            out.append(
+                AttentionEntry(
+                    **base(w),
+                    id=f"repository:{repo_ids[w.key]}",
+                    state="suspended",
+                    title=f"{w.key} is no longer polled for work",
+                    reason=str(w.health.get("reason") or "") or None,
+                    actions=_advertise(REPOSITORY_ACTIONS, principal),
+                )
+            )
+    return out

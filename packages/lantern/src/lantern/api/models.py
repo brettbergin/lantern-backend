@@ -846,6 +846,69 @@ class AttentionDismissed(ApiModel):
     results: list[AttentionDismissResult]
 
 
+AttentionGroup = Literal["decision", "failed", "paused"]
+
+
+class AttentionAction(ApiModel):
+    """One action the server offers on an entry right now, the capability
+    it needs, and whether the caller holds that capability."""
+
+    action: str
+    capability: str
+    allowed: bool
+
+
+class AttentionEntry(ApiModel):
+    """One thing waiting on a person. ``id`` is ``<kind>:<natural key>``,
+    opaque and stable while the same thing waits; the reference fields say
+    what it is about. ``kind`` is open: a later release adds kinds, and a
+    client leaves out an entry whose kind it does not know."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    kind: str
+    group: AttentionGroup
+    #: The state word of what waits, in its own resource's vocabulary.
+    state: str
+    title: str
+    reason: str | None = None
+    #: When it started waiting; ``null`` when nothing recorded it.
+    since: str | None = None
+    repository: str | None = None
+    repository_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    gate_id: str | None = None
+    plan_id: str | None = None
+    node_id: str | None = None
+    epic_run_id: str | None = None
+    #: Set only when the caller can read the conversation.
+    channel_id: str | None = None
+    #: The revision of the gate (a ``gate`` entry) or the item (an ``item``
+    #: entry); ``null`` where the thing waiting has none.
+    revision: int | None = None
+    actions: list[AttentionAction] = Field(default_factory=list)
+    #: Set only on an entry listed with ``include_dismissed``.
+    dismissal: Dismissal | None = None
+
+
+class AttentionCounts(ApiModel):
+    """How much is waiting, in every group, whatever the page shows."""
+
+    total: int = 0
+    decision: int = 0
+    failed: int = 0
+    paused: int = 0
+
+
+class AttentionPage(ApiModel):
+    data: list[AttentionEntry]
+    next_cursor: str | None = None
+    has_more: bool = False
+    counts: AttentionCounts
+    observed_at: str
+
+
 class GateResult(ApiModel):
     gate: Gate
     operation: OperationOut

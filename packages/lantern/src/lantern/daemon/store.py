@@ -2517,6 +2517,32 @@ class DaemonStore:
         with self._read() as session:
             return [_row_to_item(row) for row in session.scalars(stmt.limit(limit))]
 
+    def attention_items(
+        self, states: Sequence[str], *, include_dismissed: bool = False
+    ) -> list[WorkItem]:
+        """Every item in ``states`` a person has not put away, oldest change
+        first: never one they deleted, and — unless ``include_dismissed`` —
+        not one whose alert they dismissed. The marks are judged in the
+        query, so the list of what is waiting on someone costs one
+        statement however many alerts were already acknowledged."""
+        hidden = ("deleted",) if include_dismissed else ("deleted", "dismissed")
+        stmt = (
+            select(WorkItemRow)
+            .where(
+                WorkItemRow.state.in_(list(states)),
+                ~select(WorkMarkRow.subject_key)
+                .where(
+                    WorkMarkRow.subject_kind == "item",
+                    WorkMarkRow.subject_key == WorkItemRow.item_id,
+                    WorkMarkRow.mark.in_(hidden),
+                )
+                .exists(),
+            )
+            .order_by(WorkItemRow.updated_at.asc(), WorkItemRow.item_id.asc())
+        )
+        with self._read() as session:
+            return [_row_to_item(row) for row in session.scalars(stmt)]
+
     # -- operator controls (#229) ------------------------------------------------
 
     def abandon(

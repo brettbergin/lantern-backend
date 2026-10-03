@@ -2455,10 +2455,28 @@ admits again is visible again — while a run's `deleted` mark is permanent.
 
 `ControlService.dismiss_all` is the same dismissal over a list of named
 targets under one `attention.dismiss_all` operation. It takes targets, never
-a filter: which work "needs attention" is a client's grouping, and a person
-should clear only what they were shown. Each target goes through
+a filter: what a person was shown may have changed since it was drawn, and
+they should clear only that. Each target goes through
 `DaemonLoop.dismiss_work` as it would alone, and a refusal becomes that
 target's `skipped` result instead of failing the rest.
+
+What is waiting on a person is a read, not a table. `GET /v1/attention`
+(`api/attention.py`) computes it from the records above: the open gates, the
+items parked on a review or on answers, the items that ended `failed` or
+`blocked` and carry neither mark, the failed tasks of live epic runs, a
+provider hold with no retry scheduled and a repository whose polling is
+suspended. A gate and the item it parks, and a failed task and its failed
+item, are one entry each. The read has two halves so a badge poll costs the
+same however much is waiting: `waiting` finds everything in a fixed number of
+statements (`DaemonStore.attention_items` judges the marks in the query) and
+keeps only what counting and ordering need; `entries` projects the one page
+asked for, reading its public ids, runs, marks and conversations once each.
+An entry's actions are not derived there: they are `eligibility`'s answer for
+the work as it stands (`Views.work_actions`, `Views.gate_actions` — the same
+subject the item, run and gate listings judge), each paired with the
+capability its command requires (`api/commands.py:ACTIONS`) and whether the
+caller's principal holds it. Entry kinds are open, so a later one (a plan's
+questions, an escalation) is an addition and not a new contract.
 
 ### Operations: one record for every surface
 

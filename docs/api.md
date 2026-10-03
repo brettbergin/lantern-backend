@@ -1851,6 +1851,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/items/{id}/dismiss`, `…/undismiss`                          | `runs:control`         | Acknowledge the item's alert for everyone; take that back                   |
 | `GET`    | `/v1/runs[/{id}]`, `…/tasks`                                     | `runs:read`            | Runs and their tasks                                                        |
 | `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
+| `GET`    | `/v1/attention`                                                  | `runs:read`            | Everything waiting on a person, with counts and the actions offered         |
 | `POST`   | `/v1/attention/dismiss`                                          | `runs:control`         | Dismiss several named alerts under one operation                            |
 | `POST`   | `/v1/items/{id}/delete`, `/v1/runs/{id}/delete`                  | `runs:control`         | Put finished work away: hidden from listings, run directories removed       |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
@@ -1993,8 +1994,11 @@ actions on `/v1/ws`.
 ```
 
 The request names each alert — the ones the person was looking at; there is no
-"everything", because what needs attention is the client's view and may have
-changed since it was drawn. The answer is `{operation, results}` with one
+"everything", because what they were shown may have changed since it was
+drawn. With `attention`, those are the entries of
+[`GET /v1/attention`](#what-is-waiting-on-a-person) that offer `dismiss`: send
+each one's `item_id` with its `revision`, and the entry leaves the list for
+everyone. The answer is `{operation, results}` with one
 result per target in the request's order: `dismissed`, `already_dismissed`, or
 `skipped` with the `code` and `detail` the single route would have refused
 with (`not_found`, `not_eligible`, `stale_revision`). A skipped target does not
@@ -2146,6 +2150,100 @@ code 4403) and delivers nothing further, even while their access token
 still verifies; it never widens to the unfiltered view a plain API client
 gets. `GET /v1/events` and `GET /v1/events/stream` accept
 `channel_id=<chn_...>` to follow one channel.
+
+## What is waiting on a person
+
+When `/v1/capabilities` lists `attention`, `GET /v1/attention` (`runs:read`)
+answers "what needs someone" as one list, so a client no longer joins items,
+gates, the queue, plans and every channel's work to find out — and two clients
+no longer disagree about it. It is computed on read from what the daemon
+already keeps; nothing is stored, and reading it changes nothing.
+
+One entry per thing a person has to act on:
+
+| `kind`          | What waits                                                                                 | `id`                                           | `group`    |
+| --------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------- | ---------- |
+| `gate`          | An open merge or publication gate. The item it parks is the same entry, never a second one | `gate:<gate id>`                               | `decision` |
+| `item`          | An item `awaiting_review`, `paused_review` or `awaiting_answers`                           | `item:<item id>:<state>[:<run id>]`            | `decision` |
+| `item`          | An item that ended `failed` or `blocked`                                                   | `item:<item id>:<state>[:<run id>]`            | `failed`   |
+| `epic_task`     | A `failed` task of an epic run that is `running` or `paused`                               | `epic_task:<epic run id>:<node id>[:<run id>]` | `failed`   |
+| `provider_hold` | A provider hold with no retry scheduled ("explicit operator recovery required")            | `provider_hold:<backend>:<generation>`         | `paused`   |
+| `repository`    | A repository whose polling is suspended                                                    | `repository:<repository id>`                   | `paused`   |
+
+- **`kind` is open.** A later release adds kinds (a plan's questions and
+  proposals, an agent's escalation). A client leaves out an entry whose `kind`
+  it does not know and still trusts `counts`; it never fails the page.
+- **`id` is opaque and stable.** The same thing waiting keeps its id from one
+  read to the next. When it stops waiting the entry is gone, and when it waits
+  again in a new way — a review wait that paused, a retry that failed on a new
+  run — it is a new entry under a new id. Read the reference fields, not the
+  id.
+- **What is not an entry.** Work that is queued, running or done. A gate being
+  approved (the landing is the daemon's to finish; a failed approval reopens
+  the gate and the entry). A `cancelled` item: stopping work is a person's own
+  act, the item rests there asking nothing, and although `dismiss` is accepted
+  on it none is needed. A task `blocked` behind a failed one (it waits on the
+  same decision). A failed task of a stopped epic run (it takes no retry and
+  no skip; its failed item is still an `item` entry). A provider hold with a
+  time to try again, a repository merely backing off, and a named pause hold
+  — the first two end by themselves and the third is someone's own act.
+- **Dismissed and deleted.** An entry whose item carries a `dismissal` is left
+  out — that includes work a person abandoned, which rests `failed` and
+  dismissed — unless `include_dismissed=true`, which lists it with
+  `dismissal` set (its `cause` tells an acknowledged failure from work given
+  up). Deleted work never appears. An `epic_task` entry is not dismissed with
+  its item: the run still cannot finish until the task is retried or skipped.
+
+Each entry carries:
+
+- `id`, `kind`, `group` (`decision`, `failed` or `paused`) and `state` — the
+  state word of what waits, in its own vocabulary (`gated`, an item state,
+  `failed` for a task, `provider_held`, `suspended`).
+- `title`, `reason` (the gate's detail, the item's last error or its run's
+  reason, the task's reason, the hold's summary, why polling stopped; `null`
+  when nothing was recorded) and `since`, when it started waiting (the gate's
+  creation, the item's or the task's last change, the hold's last failure, the
+  repository's first failed poll).
+- `repository` (`owner/name`) and `repository_id`, `null` for work no
+  repository asked for.
+- References, each `null` when it does not apply: `item_id`, `run_id`,
+  `gate_id`, `plan_id`, `node_id`, `epic_run_id` and `channel_id`. An `item`
+  entry for work an epic run admitted names the run in `epic_run_id`; an
+  `epic_task` entry names its item and that item's run when it has them.
+- `revision`: the gate's for a `gate` entry, the item's for an `item` entry,
+  `null` otherwise — what an act on the entry is checked against.
+- `actions`: `{action, capability, allowed}` for every action the server
+  offers on the entry right now, the act that settles the wait first and the
+  ones that give the work up or put the alert away last. They are what the
+  item, its run and its gate advertise in `available_actions` (`gate_approve`,
+  `review_wait_resume`, `grant_rounds`, `resume`, `retry`, `requeue`, `steer`,
+  `cancel`, `abandon`, `dismiss`, `undismiss`, `delete`), plus `task_retry`
+  and `task_skip` on an `epic_task` (the epic run's `…/run/retry` and
+  `…/run/skip`) and `repository_resume` on a `repository`. `capability` is the
+  one the action's route requires and `allowed` whether the caller holds it,
+  so a client shows a member the decision without offering a button that
+  would be refused. A provider hold lists none: it is recovered from the host
+  or a chat (`resume <backend>`), not over the API.
+- `dismissal`, set only on an entry listed with `include_dismissed`.
+
+| Query               | Default | Meaning                                                      |
+| ------------------- | ------- | ------------------------------------------------------------ |
+| `group`             | all     | Repeatable: only these groups. Anything else is `422`        |
+| `repository_id`     | all     | Only what belongs to this repository; an unknown id is `404` |
+| `include_dismissed` | `false` | Also list entries whose alert was dismissed                  |
+| `limit`, `cursor`   | 50      | As every collection; a cursor is bound to the filters it had |
+
+The response is `{data, next_cursor, has_more, counts, observed_at}`. Entries
+come `decision` first, then `failed`, then `paused`, the longest wait first
+within each. `counts` is `{total, decision, failed, paused}` over everything
+that matches `repository_id` and `include_dismissed` — whatever `group` and
+`limit` the page had — so `GET /v1/attention?limit=1` is enough to badge, and
+one page badges every tab.
+
+**Who sees what.** The list is workspace-wide: exactly the items and gates
+`GET /v1/items` and `GET /v1/gates` already show a `runs:read` holder, with no
+per-channel filter. `channel_id` alone is withheld — it is set only when the
+caller can read that conversation, as on `GET /v1/items`.
 
 ## Fleet analytics
 

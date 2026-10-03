@@ -1438,6 +1438,59 @@
         "title": "ArtifactRefOut",
         "type": "object"
       },
+      "AttentionAction": {
+        "additionalProperties": false,
+        "description": "One action the server offers on an entry right now, the capability\nit needs, and whether the caller holds that capability.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "capability",
+          "allowed"
+        ],
+        "title": "AttentionAction",
+        "type": "object"
+      },
+      "AttentionCounts": {
+        "additionalProperties": false,
+        "description": "How much is waiting, in every group, whatever the page shows.",
+        "properties": {
+          "decision": {
+            "default": 0,
+            "title": "Decision",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "paused": {
+            "default": 0,
+            "title": "Paused",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "AttentionCounts",
+        "type": "object"
+      },
       "AttentionDismissRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1552,6 +1605,242 @@
           "results"
         ],
         "title": "AttentionDismissed",
+        "type": "object"
+      },
+      "AttentionEntry": {
+        "additionalProperties": false,
+        "description": "One thing waiting on a person. ``id`` is ``<kind>:<natural key>``,\nopaque and stable while the same thing waits; the reference fields say\nwhat it is about. ``kind`` is open: a later release adds kinds, and a\nclient leaves out an entry whose kind it does not know.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "gate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Id"
+          },
+          "group": {
+            "enum": [
+              "decision",
+              "failed",
+              "paused"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "group",
+          "state",
+          "title"
+        ],
+        "title": "AttentionEntry",
+        "type": "object"
+      },
+      "AttentionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/AttentionCounts"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionEntry"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "counts",
+          "observed_at"
+        ],
+        "title": "AttentionPage",
         "type": "object"
       },
       "AttentionTarget": {
@@ -13409,6 +13698,113 @@
         "summary": "Download Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/attention": {
+      "get": {
+        "description": "Everything waiting on a person, computed as it stands now: an open\nmerge or publication gate (one entry with the item it parks), an item\nwaiting for a review or for answers, an item that ended `failed` or\n`blocked`, a failed task of a live epic run (one entry with its item),\na provider hold nothing will retry by itself, and a repository whose\npolling is suspended. Decisions first, then failures, then pauses; the\nlongest wait first within each. A dismissed alert is left out unless\n`include_dismissed`; deleted work never appears. Each entry names what\nit is about, carries the revision an act on it is checked against, and\nlists the actions the server offers on it with the capability each\nneeds and whether the caller holds it. `counts` covers every group\nwhatever `group` the page was narrowed to. `kind` is open: leave out\nan entry whose kind you do not know.",
+        "operationId": "list_attention_v1_attention_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repository_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repository Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_dismissed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Dismissed",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Attention",
+        "tags": [
+          "attention"
         ]
       }
     },
