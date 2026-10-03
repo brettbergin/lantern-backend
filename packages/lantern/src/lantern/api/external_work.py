@@ -916,6 +916,13 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
                     ),
                     "historical": bool(binding.historical) if binding else bool(job.historical),
                     "unavailable": unavailable,
+                    # The attempt's own alert: the item's while the item
+                    # still carries this attempt, the run's once it moved on.
+                    "dismissal": run.dismissal
+                    if run
+                    else public_item.dismissal
+                    if public_item and binding is None
+                    else None,
                 }
             )
     represented = {(row["item_id"], row["run_id"]) for row in output}

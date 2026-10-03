@@ -8,7 +8,7 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 
 from lantern.agents.definition import AgentRoleName, AgentSpec, AgentStartKind
-from lantern.api.models import ApiModel
+from lantern.api.models import ApiModel, Dismissal
 
 WorkspaceRole = Literal["owner", "admin", "member"]
 AuthSource = Literal["local", "oidc"]
@@ -484,6 +484,8 @@ class ChannelWorkOut(ApiModel):
     #: Available files the run delivered, by path, at most
     #: ``WORK_ARTIFACTS_MAX``; empty for results written before this field.
     artifacts: list[ArtifactRefOut] = Field(default_factory=list)
+    #: Set while a person's dismissal of this work's alert stands.
+    dismissal: Dismissal | None = None
 
 
 class ChannelArtifactPage(ApiModel):
@@ -516,6 +518,8 @@ class ChannelJobOut(ApiModel):
     historical: bool = False
     #: The durable attempt remains visible after its execution record is gone.
     unavailable: bool = False
+    #: Set while a person's dismissal of this attempt's alert stands.
+    dismissal: Dismissal | None = None
 
 
 class AuthorOut(ApiModel):

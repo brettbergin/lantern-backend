@@ -400,6 +400,39 @@ class TestReconciler:
             "item is failed"
         )
 
+    def test_a_dismissal_is_judged_from_the_mark(self, tmp_path: Path) -> None:
+        """The mark is the effect: a dismiss whose mark stands happened, an
+        undismiss whose mark still stands did not — on the item for a run
+        the item pins, as the verb writes it."""
+        h = Harness(tmp_path)
+        h.dstore.upsert_new(gh_item(), now=1.0)
+        h.dstore.mark_running("gh:issue:1", "r1", now=2.0)
+        h.dstore.mark_blocked("gh:issue:1", "needs a decision", now=3.0)
+        h.dstore.set_work_mark("item", "gh:issue:1", "dismissed", cause="dismissed", at=4.0)
+        ops = {
+            name: h.loop.operations.accept(
+                spec(action=action, target_kind=kind, target_key=key), now=1.0
+            )[0]
+            for name, action, kind, key in (
+                ("item", "item.dismiss", "item", "gh:1"),
+                ("pinned", "run.dismiss", "run", "r1"),
+                ("undone", "item.undismiss", "item", "gh:issue:1"),
+                ("orphan", "run.dismiss", "run", "r_gone"),
+            )
+        }
+        for op in ops.values():
+            h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        judged = {name: h.loop.operations.get(op.id) for name, op in ops.items()}
+        assert judged["item"].state == judged["pinned"].state == "succeeded"  # type: ignore[union-attr]
+        for name, detail in (
+            ("undone", "the alert is still dismissed"),
+            ("orphan", "the alert was not dismissed"),
+        ):
+            lost = judged[name]
+            assert lost is not None and lost.state == "failed"
+            assert lost.error_code == "interrupted_before_effect" and lost.error_detail == detail
+
     @pytest.mark.parametrize(("opened_at", "expected"), [(None, "succeeded"), (5.0, "failed")])
     def test_a_claimed_breaker_reset_is_judged_from_the_breaker(
         self, tmp_path: Path, opened_at: float | None, expected: str

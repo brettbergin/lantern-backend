@@ -1252,6 +1252,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "historical": {
             "default": false,
             "title": "Historical",
@@ -2023,6 +2033,16 @@
             },
             "title": "Artifacts",
             "type": "array"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "item_actions": {
             "items": {
@@ -2805,6 +2825,58 @@
         "title": "DiscoveryCredential",
         "type": "object"
       },
+      "Dismissal": {
+        "additionalProperties": false,
+        "description": "A person acknowledged the alert this work raises: it keeps its state\nand its controls and no longer asks anyone for attention. ``cause`` is\n``dismissed`` for a plain acknowledgement. Gone again the moment the\nwork changes state, so a new failure is a new alert.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Actor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cause": {
+            "default": "dismissed",
+            "title": "Cause",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "title": "Dismissal",
+        "type": "object"
+      },
       "EpicRunChanged": {
         "additionalProperties": false,
         "description": "The epic run after a control \u2014 pause, resume, cancel, or a task's\nretry or skip \u2014 and the pass it made. ``replayed`` is true when the\nanswer is a replay of an earlier call under the same\n``Idempotency-Key`` (the run as it is now).",
@@ -3554,6 +3626,16 @@
             ],
             "title": "Detail"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "head_sha": {
             "anyOf": [
               {
@@ -4017,6 +4099,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4257,6 +4349,16 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "title": "Id",
@@ -9243,6 +9345,16 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "gate": {
             "anyOf": [
@@ -15499,6 +15611,66 @@
         ]
       }
     },
+    "/v1/items/{item_id}/dismiss": {
+      "post": {
+        "description": "Acknowledge the alert this item raises, for everyone: it keeps its\nstate and its controls and stops asking for attention. Refused for an\nitem that raises none (queued, running, done). The dismissal ends by\nitself when the item changes state, so a retry that fails is a new\nalert; dismissing twice answers with the first dismissal.",
+        "operationId": "dismiss_item_v1_items__item_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
     "/v1/items/{item_id}/requeue": {
       "post": {
         "description": "Unpin the item's run so its next dispatch starts fresh, attempts\nintact; the run in flight is cancelled.",
@@ -15614,6 +15786,66 @@
           }
         },
         "summary": "Retry Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
+    "/v1/items/{item_id}/undismiss": {
+      "post": {
+        "description": "Take a dismissal back: the item asks for attention again.",
+        "operationId": "undismiss_item_v1_items__item_id__undismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undismiss Item",
         "tags": [
           "items"
         ]
@@ -18259,6 +18491,66 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/dismiss": {
+      "post": {
+        "description": "Acknowledge the alert this run raises, for everyone. A run its work\nitem pins is dismissed on the item (the same mark ``POST\n/v1/items/{id}/dismiss`` leaves); a run nothing pins carries its own.\nRefused for a run that raises no alert. The dismissal ends by itself\nwhen the work changes state.",
+        "operationId": "dismiss_run_v1_runs__run_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Run",
+        "tags": [
+          "control"
+        ]
+      }
+    },
     "/v1/runs/{run_id}/events": {
       "get": {
         "description": "The run's chronology after a cursor: its own engine events, and the\ndaemon's notices and transitions that name it.",
@@ -18641,6 +18933,66 @@
         "summary": "Get Tasks",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/undismiss": {
+      "post": {
+        "description": "Take a dismissal back: the run's work asks for attention again.",
+        "operationId": "undismiss_run_v1_runs__run_id__undismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undismiss Run",
+        "tags": [
+          "control"
         ]
       }
     },

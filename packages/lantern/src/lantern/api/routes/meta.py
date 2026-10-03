@@ -79,6 +79,7 @@ FEATURES: tuple[str, ...] = (
     "repositories.discover",
     "repositories.manage",
     "repositories.labels",
+    "work.dismiss",
 )
 
 

@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
-from typing import Any, NamedTuple, Protocol, cast
+from typing import Any, Literal, NamedTuple, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from lantern import __version__, hostgit
@@ -70,6 +70,7 @@ from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import (
     CancelOutcome,
     ControlError,
+    DismissOutcome,
     ResumeOutcome,
     SteerOutcome,
 )
@@ -1447,6 +1448,108 @@ class DaemonLoop:
         else:
             self._notice("item.requeued", f"requeue: {item_id} re-queued", item=item_id)
         return fresh
+
+    # -- alerts: dismissed, and asked for again -------------------------------------
+
+    def _alert_subject(
+        self, item_id: str | None, run_id: str | None, expected_revision: int | None
+    ) -> tuple[Literal["item", "run"], str, WorkItem | None, RunRecord | None]:
+        """What an alert stands on: the work item when one was named or
+        pins the named run, the run itself when nothing pins it (its item
+        row is gone, or has moved on to a later attempt). One mark per piece
+        of work, whichever route named it. ``expected_revision`` is checked
+        against the row the caller named."""
+        if item_id is not None:
+            item = self.dstore.get(normalize_item_id(item_id))
+            if item is None:
+                raise ControlError("unknown_target", f"unknown item {item_id}")
+            if expected_revision is not None and item.revision != expected_revision:
+                raise ControlError(
+                    "stale_revision",
+                    f"{item.item_id} is at revision {item.revision}, not {expected_revision}",
+                    revision=item.revision,
+                )
+            record: RunRecord | None = None
+            if item.run_id is not None:
+                try:
+                    record = self.store.get_run(item.run_id)
+                except LanternError:
+                    record = None
+            return "item", item.item_id, item, record
+        if run_id is None:
+            raise ControlError("invalid_argument", "name an item or a run")
+        self._check_revision(run_id, expected_revision)
+        try:
+            record = self.store.get_run(run_id)
+        except LanternError as exc:
+            raise ControlError("unknown_target", f"unknown run {run_id}") from exc
+        owner = self.dstore.item_for_run(run_id)
+        item = self.dstore.get(owner) if owner else None
+        if item is not None and item.run_id == run_id:
+            return "item", item.item_id, item, record
+        return "run", run_id, None, record
+
+    def dismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+    ) -> DismissOutcome:
+        """Acknowledge the alert a piece of work raises, for everyone: the
+        work keeps its state and its controls, it only stops asking for
+        attention. The mark goes by itself when the work moves again, so a
+        retry that fails is a new alert. Refused by name for work that
+        raises none (queued, running, done); dismissing twice is not an
+        error — the first acknowledgement stands."""
+        kind, key, item, record = self._alert_subject(item_id, run_id, expected_revision)
+        if self.dstore.work_mark(kind, key, "dismissed") is not None:
+            return DismissOutcome(
+                verb="dismiss", subject_kind=kind, subject_key=key, fresh=False, item=item
+            )
+        check_eligibility(
+            "dismiss",
+            Subject(
+                run_kind=record.kind if record is not None else item.kind if item else "code",
+                run_state=record.state if record is not None else None,
+                item_state=item.state if item is not None else None,
+                is_current=record is not None and self._live_run(record.run_id) is not None,
+                pinned=item is not None and record is not None and item.run_id == record.run_id,
+            ),
+        )
+        fresh = self.dstore.set_work_mark(
+            kind,
+            key,
+            "dismissed",
+            cause="dismissed",
+            at=self.clock(),
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+        log.info("work.dismissed", kind=kind, key=key, by=(actor or {}).get("id"), fresh=fresh)
+        return DismissOutcome(
+            verb="dismiss", subject_kind=kind, subject_key=key, fresh=fresh, item=item
+        )
+
+    def undismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        expected_revision: int | None = None,
+    ) -> DismissOutcome:
+        """Take a dismissal back: the work asks for attention again."""
+        kind, key, item, _record = self._alert_subject(item_id, run_id, expected_revision)
+        fresh = self.dstore.clear_work_mark(kind, key, "dismissed")
+        log.info("work.undismissed", kind=kind, key=key, by=(actor or {}).get("id"), fresh=fresh)
+        return DismissOutcome(
+            verb="undismiss", subject_kind=kind, subject_key=key, fresh=fresh, item=item
+        )
 
     def _close_dead_run(
         self, run_id: str, result: str, now: float, *, repo: str | None = None

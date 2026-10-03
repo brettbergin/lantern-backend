@@ -156,7 +156,7 @@ async def admit_item(
 
 
 async def _item_command(
-    verb: Literal["retry", "requeue", "abandon"],
+    verb: Literal["retry", "requeue", "abandon", "dismiss", "undismiss"],
     public_id: str,
     body: ItemCommand | None,
     request: Request,
@@ -204,3 +204,31 @@ async def abandon_item(
     """Give the item up with an attributed reason; the source hears the
     ordinary abandon report."""
     return await _item_command("abandon", item_id, body, request, ctx, auth)
+
+
+@router.post("/items/{item_id}/dismiss", response_model=ItemCommandResult)
+async def dismiss_item(
+    item_id: str,
+    request: Request,
+    body: ItemCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> ItemCommandResult:
+    """Acknowledge the alert this item raises, for everyone: it keeps its
+    state and its controls and stops asking for attention. Refused for an
+    item that raises none (queued, running, done). The dismissal ends by
+    itself when the item changes state, so a retry that fails is a new
+    alert; dismissing twice answers with the first dismissal."""
+    return await _item_command("dismiss", item_id, body, request, ctx, auth)
+
+
+@router.post("/items/{item_id}/undismiss", response_model=ItemCommandResult)
+async def undismiss_item(
+    item_id: str,
+    request: Request,
+    body: ItemCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> ItemCommandResult:
+    """Take a dismissal back: the item asks for attention again."""
+    return await _item_command("undismiss", item_id, body, request, ctx, auth)

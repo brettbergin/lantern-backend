@@ -228,6 +228,20 @@ class ItemOutcome(Outcome):
     item: WorkItem
 
 
+class DismissOutcome(Outcome):
+    """An alert acknowledged, or the acknowledgement taken back. The mark
+    stands on the work item when one pins the run, on the run otherwise;
+    ``item`` is that item, for a surface that answers with it."""
+
+    verb: Literal["dismiss", "undismiss"]
+    subject_kind: Literal["item", "run"]
+    subject_key: str
+    #: ``False`` when nothing changed: the alert was already dismissed (or,
+    #: for ``undismiss``, was not) — idempotent per subject.
+    fresh: bool = True
+    item: WorkItem | None = None
+
+
 class AdmitOutcome(Outcome):
     """Work admitted through its source's rules (#1036): the item as the
     queue holds it, and whether this request created it — ``False`` when

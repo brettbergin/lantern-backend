@@ -48,7 +48,7 @@ from lantern.daemon.controls.intake import (
 )
 from lantern.daemon.controls.operations import IdempotencyConflict, Operation, OperationReplay
 from lantern.daemon.controls.principal import Capability as PrincipalCapability, Principal
-from lantern.daemon.controls.results import AdmitOutcome, ItemOutcome, Outcome
+from lantern.daemon.controls.results import AdmitOutcome, DismissOutcome, ItemOutcome, Outcome
 from lantern.daemon.controls.steering import SteeringStore
 from lantern.db.collaboration_models import ChannelRow
 from lantern.vcs.protocol import Capability
@@ -276,7 +276,7 @@ async def _admitted(ctx: ApiContext, apply: Callable[[], AdmitOutcome]) -> Admit
     return Admitted(item=view, operation=OperationOut.from_operation(op), created=outcome.fresh)
 
 
-ItemVerb = Literal["retry", "requeue", "abandon"]
+ItemVerb = Literal["retry", "requeue", "abandon", "dismiss", "undismiss"]
 
 
 async def item_command(
@@ -287,14 +287,24 @@ async def item_command(
     body: ItemCommand | None,
     pair: tuple[str, str] | None,
 ) -> ItemCommandResult:
-    """Retry, requeue or abandon an item through the shared service."""
+    """Retry, requeue or abandon an item, or dismiss its alert (and take
+    that back), through the shared service."""
     principal = auth.principal
     command = body or ItemCommand()
     service = ctx.service()
 
-    def apply() -> ItemOutcome:
+    def apply() -> ItemOutcome | DismissOutcome:
         views = Views(ctx)
         item = views.item_by_public_id(public_id)
+        if verb in ("dismiss", "undismiss"):
+            return service.dismiss(
+                principal,
+                item_id=item.item_id,
+                reason=command.reason,
+                undo=verb == "undismiss",
+                expected_revision=command.expected_revision,
+                idempotency=pair,
+            )
         if verb == "abandon":
             return service.abandon(
                 principal,
@@ -332,8 +342,9 @@ async def item_command(
         return await ctx.call(reread)
 
     def project() -> ItemCommandResult:
+        views = Views(ctx)
         return ItemCommandResult(
-            item=Views(ctx).item(outcome.item),
+            item=views.item(outcome.item or views.item_by_public_id(public_id)),
             operation=OperationOut.from_operation(_operation(ctx, outcome.operation_id)),
         )
 
@@ -344,13 +355,15 @@ async def item_command(
 
 # -- runs: cancel, resume, round grants, the review wait ---------------------------
 
-RunVerb = Literal["cancel", "resume", "grant_rounds", "review_resume"]
+RunVerb = Literal["cancel", "resume", "grant_rounds", "review_resume", "dismiss", "undismiss"]
 
 RUN_ACTIONS: dict[RunVerb, str] = {
     "cancel": "run.cancel",
     "resume": "run.resume",
     "grant_rounds": "run.grant_rounds",
     "review_resume": "run.review_resume",
+    "dismiss": "run.dismiss",
+    "undismiss": "run.undismiss",
 }
 
 
@@ -362,8 +375,9 @@ async def run_verb(
     body: RunCommand | RoundGrant | None,
     pair: tuple[str, str] | None,
 ) -> RunCommandResult:
-    """Cancel, resume, grant rounds to, or re-arm the review wait of a run,
-    through the shared service verbs ctl and chat use."""
+    """Cancel, resume, grant rounds to, re-arm the review wait of a run, or
+    dismiss its alert (and take that back), through the shared service
+    verbs ctl and chat use."""
     principal = auth.principal
     service = ctx.service()
     command = body if isinstance(body, RunCommand) else RunCommand()
@@ -384,6 +398,15 @@ async def run_verb(
         if verb == "resume":
             return service.resume_run(
                 principal, run_id, expected_revision=command.expected_revision, idempotency=pair
+            )
+        if verb in ("dismiss", "undismiss"):
+            return service.dismiss(
+                principal,
+                run_id=run_id,
+                reason=command.reason,
+                undo=verb == "undismiss",
+                expected_revision=command.expected_revision,
+                idempotency=pair,
             )
         if verb == "grant_rounds":
             if grant is None:
@@ -584,8 +607,12 @@ ACTIONS: dict[str, tuple[str, str]] = {
     "item.retry": ("runs:control", "/v1/items/{id}/retry"),
     "item.requeue": ("runs:control", "/v1/items/{id}/requeue"),
     "item.abandon": ("runs:control", "/v1/items/{id}/abandon"),
+    "item.dismiss": ("runs:control", "/v1/items/{id}/dismiss"),
+    "item.undismiss": ("runs:control", "/v1/items/{id}/undismiss"),
     "run.cancel": ("runs:control", "/v1/runs/{id}/cancel"),
     "run.resume": ("runs:control", "/v1/runs/{id}/resume"),
+    "run.dismiss": ("runs:control", "/v1/runs/{id}/dismiss"),
+    "run.undismiss": ("runs:control", "/v1/runs/{id}/undismiss"),
     "run.steer": ("runs:steer", "/v1/runs/{id}/steering"),
     "run.grant_rounds": ("budgets:grant", "/v1/runs/{id}/round-grants"),
     "run.review_resume": ("runs:control", "/v1/runs/{id}/review-wait/resume"),
