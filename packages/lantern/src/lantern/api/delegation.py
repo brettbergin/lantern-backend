@@ -32,6 +32,7 @@ from lantern.api.projections import not_found
 from lantern.api.publicids import run_public_id
 from lantern.daemon.controls.delegation import Grant
 from lantern.daemon.controls.delegation_store import DecisionRecord, DelegationStore
+from lantern.daemon.controls.operations import Operation
 from lantern.daemon.controls.results import Outcome
 from lantern.ghids import normalize_item_id
 
@@ -118,7 +119,7 @@ def decision_out(ctx: ApiContext, row: DecisionRecord) -> DecisionOut:
     )
 
 
-def _result(ctx: ApiContext, grant_id: str, message: str, operation: Any) -> GrantResult:
+def _result(ctx: ApiContext, grant_id: str, message: str, operation: Operation) -> GrantResult:
     grant = store_of(ctx).grant(grant_id)
     return GrantResult(
         grant=None if grant is None else grant_out(grant, _used_today(ctx).get(grant.id, 0)),

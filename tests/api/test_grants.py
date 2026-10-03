@@ -365,13 +365,23 @@ class TestWhatMayBeWritten:
         assert api.loop.delegation.grants() == []
 
     def test_an_alias_or_a_disabled_agent_is_not_a_subject(self, tmp_path: Path) -> None:
-        api = build(tmp_path, config={"agents": [{"slug": "critic", "enabled": False}]})
+        agents = [
+            {"slug": "critic", "enabled": False},
+            {"slug": "planner", "aliases": ["architect"]},
+        ]
+        api = build(tmp_path, config={"agents": agents})
         with api.client:
             refused = _create(api, api.bearer(WRITE))
             assert refused.status_code == 422, refused.text
             assert refused.json()["field"] == "agent_slug"
             assert "disabled" in refused.json()["detail"]
-            assert _create(api, api.bearer(WRITE), agent_slug="planner").status_code == 201
+            alias = _create(api, api.bearer(WRITE), agent_slug="architect")
+            assert alias.status_code == 422, alias.text
+            assert alias.json()["field"] == "agent_slug"
+            assert "planner" in alias.json()["detail"]
+            created = _create(api, api.bearer(WRITE), agent_slug="Planner")
+            assert created.status_code == 201, created.text
+            assert created.json()["grant"]["agent_slug"] == "planner"
         api.ctx.close()
 
     def test_every_delegable_action_can_be_granted(self, api: Api) -> None:
