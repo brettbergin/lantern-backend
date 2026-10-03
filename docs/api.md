@@ -1826,6 +1826,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `POST`   | `/v1/items/{id}/dismiss`, `…/undismiss`                          | `runs:control`         | Acknowledge the item's alert for everyone; take that back                   |
 | `GET`    | `/v1/runs[/{id}]`, `…/tasks`                                     | `runs:read`            | Runs and their tasks                                                        |
 | `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
+| `POST`   | `/v1/attention/dismiss`                                          | `runs:control`         | Dismiss several named alerts under one operation                            |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
 | `POST`   | `/v1/runs/{id}/steering`                                         | `runs:steer`           | Direction for the run in flight                                             |
 | `GET`    | `/v1/runs/{id}/steering`                                         | `runs:read`            | Every instruction and its fate                                              |
@@ -1949,6 +1950,28 @@ dismissed row out of whatever it shows as needing attention.
 The operation (`item.dismiss`, `item.undismiss`, `run.dismiss`,
 `run.undismiss`) is the record of who and when; the same four are command
 actions on `/v1/ws`.
+
+**Several at once.** `POST /v1/attention/dismiss` (feature
+`work.dismiss_all`; `runs:control`) dismisses up to 200 alerts under one
+`attention.dismiss_all` operation:
+
+```json
+{
+  "reason": "cleared the board",
+  "targets": [
+    {"item_id": "itm_…", "expected_revision": 7},
+    {"run_id": "run_…"}
+  ]
+}
+```
+
+The request names each alert — the ones the person was looking at; there is no
+"everything", because what needs attention is the client's view and may have
+changed since it was drawn. The answer is `{operation, results}` with one
+result per target in the request's order: `dismissed`, `already_dismissed`, or
+`skipped` with the `code` and `detail` the single route would have refused
+with (`not_found`, `not_eligible`, `stale_revision`). A skipped target does not
+fail the others.
 
 ## Following the work: events, SSE and the WebSocket
 

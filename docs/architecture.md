@@ -2437,6 +2437,13 @@ CLI and console verb, an epic run's stop), after the transition so the
 trigger has already run, and never inside `DaemonStore.abandon`: the daemon
 calls that itself for a pull request closed unmerged, which nobody has seen.
 
+`ControlService.dismiss_all` is the same dismissal over a list of named
+targets under one `attention.dismiss_all` operation. It takes targets, never
+a filter: which work "needs attention" is a client's grouping, and a person
+should clear only what they were shown. Each target goes through
+`DaemonLoop.dismiss_work` as it would alone, and a refusal becomes that
+target's `skipped` result instead of failing the rest.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

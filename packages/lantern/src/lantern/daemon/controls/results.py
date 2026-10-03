@@ -242,6 +242,27 @@ class DismissOutcome(Outcome):
     item: WorkItem | None = None
 
 
+class DismissedTarget(BaseModel):
+    """What became of one alert a bulk dismissal named, by its place in
+    the request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    index: int
+    outcome: Literal["dismissed", "already_dismissed", "skipped"]
+    #: Why it was skipped: the refusal's code and the sentence to show.
+    code: str | None = None
+    detail: str | None = None
+
+
+class DismissAllOutcome(Outcome):
+    """Several alerts dismissed under one operation. A target that could
+    not be dismissed — it moved since the person looked, or raises no
+    alert — is skipped by name, never fatal to the rest."""
+
+    results: list[DismissedTarget]
+
+
 class AdmitOutcome(Outcome):
     """Work admitted through its source's rules (#1036): the item as the
     queue holds it, and whether this request created it — ``False`` when

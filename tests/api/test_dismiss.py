@@ -283,6 +283,104 @@ class TestAChannelsJobs:
         assert job["dismissal"] == dismissed.json()["run"]["dismissal"]
 
 
+class TestSeveralAtOnce:
+    def _alerts(self, api: Api, headers: dict[str, str]) -> dict[str, dict[str, Any]]:
+        """Three items by issue number: 1 and 2 blocked, 3 still queued."""
+        for key in ("1", "2", "3"):
+            api.clock.t += 1
+            api.harness.dstore.upsert_new(gh_item(key), api.clock())
+        for key in ("1", "2"):
+            api.harness.dstore.mark_blocked(f"gh:issue:{key}", "needs a decision", api.clock())
+        listed = api.client.get("/v1/items", headers=headers).json()["data"]
+        return {str(row["origin"]["number"]): row for row in listed}
+
+    def test_each_named_alert_is_dismissed_or_skipped_by_name(self, api: Api) -> None:
+        headers = api.bearer()
+        items = self._alerts(api, headers)
+        api.loop.store.create_run("standalone", "Compile a report", kind="tool")
+        api.loop.store.set_run_state("standalone", "failed")
+        api.client.post(f"/v1/items/{items['2']['id']}/dismiss", headers=headers)
+        response = api.client.post(
+            "/v1/attention/dismiss",
+            json={
+                "reason": "cleared the board",
+                "targets": [
+                    {"item_id": items["1"]["id"], "expected_revision": items["1"]["revision"]},
+                    {"item_id": items["2"]["id"]},
+                    {"item_id": items["3"]["id"]},
+                    {"item_id": "itm_nope"},
+                    {"run_id": run_public("standalone")},
+                    {"item_id": items["1"]["id"], "expected_revision": 999},
+                ],
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["operation"]["action"] == "attention.dismiss_all"
+        assert body["operation"]["state"] == "succeeded"
+        assert [(r["outcome"], r["code"]) for r in body["results"]] == [
+            ("dismissed", None),
+            ("already_dismissed", None),
+            ("skipped", "not_eligible"),
+            ("skipped", "not_found"),
+            ("dismissed", None),
+            ("skipped", "stale_revision"),
+        ]
+        # The answer is in the request's order and names what was asked.
+        assert [r["item_id"] for r in body["results"]][:4] == [
+            items["1"]["id"],
+            items["2"]["id"],
+            items["3"]["id"],
+            "itm_nope",
+        ]
+        assert body["results"][4]["run_id"] == run_public("standalone")
+        assert body["results"][2]["detail"] == "nothing needs attention: work item is queued"
+        # Each alert carries the one operation that dismissed it.
+        one = _item(api, items["1"]["id"], headers)["dismissal"]
+        assert one["operation_id"] == body["operation"]["id"]
+        assert one["reason"] == "cleared the board"
+        run = api.client.get(f"/v1/runs/{run_public('standalone')}", headers=headers).json()
+        assert run["dismissal"]["operation_id"] == body["operation"]["id"]
+        assert _item(api, items["3"]["id"], headers)["dismissal"] is None
+
+    def test_a_keyed_request_replays_its_answer(self, api: Api) -> None:
+        headers = {**api.bearer(), "Idempotency-Key": "all-1"}
+        items = self._alerts(api, headers)
+        request = {"targets": [{"item_id": items["1"]["id"]}, {"item_id": "itm_nope"}]}
+        first = api.client.post("/v1/attention/dismiss", json=request, headers=headers)
+        replay = api.client.post("/v1/attention/dismiss", json=request, headers=headers)
+        assert first.status_code == replay.status_code == 200, replay.text
+        assert first.json() == replay.json()
+        assert [r["outcome"] for r in replay.json()["results"]] == ["dismissed", "skipped"]
+        other = api.client.post(
+            "/v1/attention/dismiss",
+            json={"targets": [{"item_id": items["2"]["id"]}]},
+            headers=headers,
+        )
+        assert other.status_code == 409 and other.json()["code"] == "idempotency_conflict"
+
+    def test_the_request_names_its_alerts(self, api: Api) -> None:
+        headers = api.bearer()
+        items = self._alerts(api, headers)
+        for body in (
+            {"targets": []},
+            {"targets": [{}]},
+            {"targets": [{"item_id": items["1"]["id"], "run_id": "run_x"}]},
+            {"targets": [{"item_id": items["1"]["id"]}] * 201},
+        ):
+            refused = api.client.post("/v1/attention/dismiss", json=body, headers=headers)
+            assert refused.status_code == 422, body
+        reader = api.bearer(frozenset({"runs:read"}))
+        forbidden = api.client.post(
+            "/v1/attention/dismiss",
+            json={"targets": [{"item_id": items["1"]["id"]}]},
+            headers=reader,
+        )
+        assert forbidden.status_code == 403 and forbidden.json()["capability"] == "runs:control"
+        assert _item(api, items["1"]["id"], headers)["dismissal"] is None
+
+
 def test_the_socket_takes_the_same_command(api: Api) -> None:
     item = _blocked(api)
     headers = api.bearer()
@@ -310,4 +408,4 @@ def test_the_socket_takes_the_same_command(api: Api) -> None:
 
 def test_the_feature_is_advertised(api: Api) -> None:
     features = api.client.get("/v1/capabilities", headers=api.bearer()).json()["features"]
-    assert "work.dismiss" in features
+    assert "work.dismiss" in features and "work.dismiss_all" in features
