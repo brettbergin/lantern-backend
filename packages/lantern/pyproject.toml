@@ -49,7 +49,7 @@ dependencies = [
     # The data layer. One WAL-mode SQLite file holds every table; SQLAlchemy
     # owns the mapping and Alembic owns the upgrade path, applied on open so
     # an unattended daemon still migrates itself (#539).
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.1.1",
     "alembic>=1.13",
     # `zoneinfo` reads the *system* tz database, and Windows ships none, so
     # `ZoneInfo("UTC")` raises there. `daemon.run_cap_timezone` defaults to
