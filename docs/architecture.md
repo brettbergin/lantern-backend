@@ -2429,6 +2429,14 @@ CLI's process or a rolled-back release, and a retry that fails again is a new
 alert without any code remembering to say so. `Subject.dismissed` is how
 eligibility swaps `dismiss` for `undismiss`; no other control reads it.
 
+A person's abandon writes the same mark with `cause = "abandoned"`
+(`DaemonStore.dismiss_abandoned`), because an abandoned item rests in
+`failed` — the state an unattended failure rests in. It is written by the
+surfaces a person abandons through (`ControlService.abandon`, the row-only
+CLI and console verb, an epic run's stop), after the transition so the
+trigger has already run, and never inside `DaemonStore.abandon`: the daemon
+calls that itself for a pull request closed unmerged, which nobody has seen.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

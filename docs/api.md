@@ -1932,6 +1932,13 @@ dismissed row out of whatever it shows as needing attention.
   gone: a retry that fails again is a new alert. `POST …/undismiss` takes it
   back by hand; `undismiss` replaces `dismiss` in `available_actions` while a
   dismissal stands.
+- **Giving work up dismisses it.** A person's abandon — the item's
+  `abandon` route, the chat and `ctl` verbs, the CLI, stopping an epic run
+  that withdraws its queued items — leaves the item `failed` *and*
+  dismissed, with `cause: "abandoned"`: the person has seen what they gave up.
+  The daemon's own abandon (a pull request closed unmerged) dismisses nothing;
+  nobody has looked at that yet. A cancelled run needs no dismissal: it rests
+  in `cancelled`, which is not a failure.
 - **A run without an item.** Work an item carries is dismissed through the
   item; `POST /v1/runs/{id}/dismiss` on such a run leaves the same mark. A run
   nothing pins — its item row is gone, or has moved on to a later attempt —

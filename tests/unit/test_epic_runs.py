@@ -583,6 +583,12 @@ class TestCancel:
         assert cancelled.task("a").reason.startswith("withdrawn: ")  # type: ignore[union-attr]
         assert cancelled.task("c").reason.startswith("never admitted: ")  # type: ignore[union-attr]
         assert {i.source_key: i.state for i in h.dstore.items()} == {"11": "failed", "12": "failed"}
+        # The person who stopped the run has seen what they stopped: the
+        # withdrawn items rest in `failed` without asking for attention.
+        marks = h.dstore.work_marks(item_ids=[i.item_id for i in h.dstore.items()])
+        assert len(marks) == 2
+        assert {(m.mark, m.cause) for m in marks.values()} == {("dismissed", "abandoned")}
+        assert all(m.actor == dict(ACTOR) for m in marks.values())
         # Nothing had been written to the issues, and nothing is now.
         assert [c for c in ops.raw_calls[len(before) :] if c[0] != "GET"] == []
         events = _events(h)[since:]

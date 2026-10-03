@@ -3250,6 +3250,14 @@ def _item_control(action: str, item_id: str, reason: str | None) -> None:
         now = time.time()
         if action == "abandon":
             item = dstore.abandon(item_id, reason or "abandoned by operator", now)
+            # Giving the item up is the acknowledgement: it must not go on
+            # asking for attention as an unattended failure would.
+            dstore.dismiss_abandoned(
+                item.item_id,
+                now,
+                actor={"kind": "operator", "id": "cli", "display": "operator (CLI)", "via": "cli"},
+                reason=reason,
+            )
         else:
             item = apply_item_verb(dstore, action, item_id, now=now, by="operator (CLI)")
     except KeyError:
