@@ -2181,7 +2181,13 @@ recipe there is. The reply is `201` with the item and its `item.admit`
 operation, `200` when the same work was already queued. `POST /v1/items/{id}/retry`, `/requeue` and `/abandon` (`runs:control`; body
 `{"reason": …, "expected_revision": …}`, both optional) are the ctl verbs of
 the same names through the same service, each answered with the item as it
-stands and the operation that changed it.
+stands and the operation that changed it. `POST /v1/items/{id}/dismiss`
+(`runs:control`, same body) acknowledges the alert a failed, blocked or parked
+item raises without touching the work: every client sees the item's
+`dismissal` and stops listing it as needing attention, and the dismissal ends
+by itself when the item changes state — a retry that fails again asks again.
+`/undismiss` takes it back; `POST /v1/runs/{id}/dismiss` does the same for a
+run no work item carries.
 
 **Following the work.** Every public event — the daemon's notices, a run's
 start and finish, its engine chronology (every persisted event, `worker.stdout`
@@ -2197,7 +2203,7 @@ does when the daemon stops or the token is revoked; it says why in a
 `stream.closed` frame). `/v1/ws` multiplexes the same events and the same
 typed commands on one WebSocket — a bearer token in the `Authorization` header
 or an `auth{token}` first frame (never the query string), `subscribe{after, run_id, type_prefix}`, and `command{id, action, target, params, idempotency_key, expected_revision}` for `item.admit`, `item.retry`,
-`item.requeue` and `item.abandon`, answered by `reply{id, ok, result | problem}` with the same body and the same idempotency the REST route has.
+`item.requeue`, `item.abandon`, `item.dismiss` and `item.undismiss`, answered by `reply{id, ok, result | problem}` with the same body and the same idempotency the REST route has.
 History is kept for `[api] replay_retention_s`; a cursor below what remains is
 `410 cursor_expired` with a pointer to the snapshot, never a silent skip. A
 read of one run is refused only when that run itself lost events to the

@@ -28,6 +28,8 @@ Action = Literal[
     "retry",
     "requeue",
     "abandon",
+    "dismiss",
+    "undismiss",
 ]
 ACTIONS: tuple[Action, ...] = get_args(Action)
 
@@ -55,6 +57,32 @@ _ITEM_TRANSITIONS: dict[Action, frozenset[str]] = {
     "requeue": frozenset({"running", "queued"}),
 }
 _RESUMABLE_ITEM_STATES: frozenset[str] = frozenset({"queued", "cancelled", "failed"})
+#: The states that ask a person to look: finished without success, or parked
+#: on a decision. Only these have an alert to dismiss — work that is queued,
+#: running or done has nothing to acknowledge.
+_ATTENTION_ITEM_STATES: frozenset[str] = frozenset(
+    {
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "paused_review",
+        "awaiting_answers",
+    }
+)
+_ATTENTION_RUN_STATES: frozenset[str] = frozenset(
+    {
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "held",
+        "provider_held",
+        "awaiting_answers",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +106,8 @@ class Subject:
     gate_state: str | None = None
     review_hold_state: str | None = None
     forge: Capability | None = None
+    #: A person already dismissed the alert this work raises.
+    dismissed: bool = False
 
 
 def check(action: Action, subject: Subject) -> None:
@@ -157,4 +187,32 @@ def _refusal(action: Action, s: Subject) -> str | None:
         if s.item_state not in _ITEM_TRANSITIONS[action]:
             return f"work item is {s.item_state}"
         return None
+    if action == "dismiss":
+        if s.dismissed:
+            return "already dismissed"
+        return _nothing_to_dismiss(s)
+    if action == "undismiss":
+        return None if s.dismissed else "not dismissed"
+    return None
+
+
+def _nothing_to_dismiss(s: Subject) -> str | None:
+    """Why the work raises no alert a person could dismiss, or ``None``
+    when it does. The work item decides when it carries the work — it pins
+    the run, or there is no run yet; a run nothing pins (its item row is
+    gone, or has moved on to a later attempt) is judged on its own state."""
+    if s.is_current:
+        return "run is in flight"
+    if s.item_state is not None and (s.pinned or s.run_state is None):
+        if s.item_state in _ATTENTION_ITEM_STATES:
+            return None
+        if s.item_state == "queued" and s.pinned and s.run_state == "provider_held":
+            # Parked on a provider outage: the item waits in the queue, the
+            # run is what asks for attention.
+            return None
+        return f"nothing needs attention: work item is {s.item_state}"
+    if s.run_state is None:
+        return "no work to dismiss"
+    if s.run_state not in _ATTENTION_RUN_STATES:
+        return f"nothing needs attention: run is {s.run_state}"
     return None

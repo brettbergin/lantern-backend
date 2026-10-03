@@ -234,6 +234,8 @@ class TestCapabilities:
             (lambda s: s.abandon(READER, "gh:issue:1", None), "runs:control"),
             (lambda s: s.retry(READER, "gh:issue:1"), "runs:control"),
             (lambda s: s.requeue(READER, "gh:issue:1"), "runs:control"),
+            (lambda s: s.dismiss(READER, item_id="gh:issue:1"), "runs:control"),
+            (lambda s: s.dismiss(READER, run_id="r1", undo=True), "runs:control"),
             (lambda s: s.resume_repo(READER, "o/r"), "daemon:manage"),
             (lambda s: s.reset_breaker(READER), "daemon:manage"),
             (lambda s: s.schedule_control(READER, "pause", "n"), "daemon:manage"),

@@ -21,6 +21,7 @@ from lantern.api.context import ApiContext
 from lantern.api.errors import Problem
 from lantern.api.models import (
     Actor,
+    Dismissal,
     Gate,
     GateSummary,
     Hold,
@@ -69,7 +70,7 @@ from lantern.vcs.github.labels import lifecycle_specs
 if TYPE_CHECKING:
     from lantern.api.collaboration import Member
 
-ITEM_ACTIONS: tuple[str, ...] = ("retry", "requeue", "abandon")
+ITEM_ACTIONS: tuple[str, ...] = ("retry", "requeue", "abandon", "dismiss", "undismiss")
 RUN_ACTIONS: tuple[str, ...] = (
     "cancel",
     "resume",
@@ -78,6 +79,9 @@ RUN_ACTIONS: tuple[str, ...] = (
     "gate_approve",
     "review_wait_resume",
 )
+#: Advertised on a run only when no work item pins it: work an item carries
+#: is dismissed through the item, so every alert has one place to call.
+RUN_ALERT_ACTIONS: tuple[str, ...] = ("dismiss", "undismiss")
 _REVIEW_WAIT_ITEM_STATES = frozenset({"awaiting_review", "paused_review"})
 
 NOT_FOUND = "no such resource"
@@ -99,6 +103,19 @@ def _assignment_fields(item: WorkItem) -> dict[str, Any]:
     return {"lead_agent": lead, "assignment": roles or None}
 
 
+def _mark_actor(actor: dict[str, Any]) -> Actor | None:
+    """Who left a mark, from the audit fields stored with it; ``None`` for
+    a mark written without one."""
+    if not actor.get("id"):
+        return None
+    return Actor(
+        kind=str(actor.get("kind", "operator")),
+        id=str(actor["id"]),
+        display=actor.get("display"),
+        via=str(actor.get("via", "")),
+    )
+
+
 def not_found() -> Problem:
     """One answer for an id of any kind that names nothing: never which
     kind it was not."""
@@ -117,6 +134,7 @@ class Views:
         self.ids: PublicIds = ctx.public_ids
         self.now = ctx.clock()
         self._status: dict[str, Any] | None = None
+        self._dismissals: dict[tuple[str, str], Dismissal | None] = {}
 
     # -- live state ----------------------------------------------------------------
 
@@ -168,6 +186,48 @@ class Views:
             raise not_found()
         return entry
 
+    # -- dismissals ----------------------------------------------------------------
+
+    def load_dismissals(self, *, item_ids: Sequence[str] = (), run_ids: Sequence[str] = ()) -> None:
+        """Read a page's dismissals in one query, so a listing costs one
+        statement for its marks however long it is. Ids as stored."""
+        items = [key for key in dict.fromkeys(item_ids) if ("item", key) not in self._dismissals]
+        runs = [key for key in dict.fromkeys(run_ids) if ("run", key) not in self._dismissals]
+        if not items and not runs:
+            return
+        found = self.dstore.work_marks(item_ids=items, run_ids=runs)
+        for kind, keys in (("item", items), ("run", runs)):
+            for key in keys:
+                mark = found.get((kind, key, "dismissed"))
+                self._dismissals[(kind, key)] = (
+                    None
+                    if mark is None
+                    else Dismissal(
+                        at=rfc3339(mark.at) or "",
+                        by=_mark_actor(mark.actor),
+                        cause=mark.cause,
+                        reason=mark.reason,
+                        operation_id=mark.operation_id,
+                    )
+                )
+
+    def dismissal(self, item: WorkItem | None, run_id: str | None = None) -> Dismissal | None:
+        """The dismissal standing on a piece of work: the item's when one
+        was named or pins ``run_id``, the run's own otherwise — the same
+        rule the dismiss control writes by."""
+        if item is not None and (run_id is None or item.run_id == run_id):
+            kind, key = "item", item.item_id
+        elif run_id is not None:
+            kind, key = "run", run_id
+        else:
+            return None
+        if (kind, key) not in self._dismissals:
+            if kind == "item":
+                self.load_dismissals(item_ids=[key])
+            else:
+                self.load_dismissals(run_ids=[key])
+        return self._dismissals[(kind, key)]
+
     # -- eligibility ---------------------------------------------------------------
 
     def _subject(self, item: WorkItem | None, run: RunRecord | None) -> Subject:
@@ -189,6 +249,7 @@ class Views:
             exhausted=run is not None and run.exhausted is not None,
             gate_state=gate_state,
             review_hold_state=hold_state,
+            dismissed=self.dismissal(item, run_id) is not None,
         )
 
     # -- items ---------------------------------------------------------------------
@@ -225,6 +286,7 @@ class Views:
             if r
         }
         repo_ids = self.ids.repository_ids(repos, self.now) if repos else {}
+        self.load_dismissals(item_ids=[item.item_id for item in rows])
         return [self._item(item, public[item_key(item)], repo_ids) for item in rows]
 
     def item(self, item: WorkItem) -> Item:
@@ -273,6 +335,7 @@ class Views:
             updated_at=rfc3339(item.updated_at) or "",
             revision=item.revision,
             available_actions=[a for a in ITEM_ACTIONS if a in actions],
+            dismissal=self.dismissal(item),
             **_assignment_fields(item),
         )
 
@@ -338,6 +401,7 @@ class Views:
     # -- runs ----------------------------------------------------------------------
 
     def runs(self, rows: Sequence[RunRecord]) -> list[Run]:
+        self.load_dismissals(run_ids=[record.run_id for record in rows])
         return [self.run(record) for record in rows]
 
     def run(self, record: RunRecord) -> Run:
@@ -353,6 +417,7 @@ class Views:
             if item.state in _REVIEW_WAIT_ITEM_STATES:
                 hold = self.dstore.review_hold_for(record.run_id)
                 review_wait = hold.state if hold is not None else None
+        pinned = item is not None and item.run_id == record.run_id
         actions = available_actions(self._subject(item, record))
         pr = (
             PullRequest(
@@ -389,7 +454,11 @@ class Views:
             gate=gate,
             review_wait=review_wait,
             revision=record.revision,
-            available_actions=[a for a in RUN_ACTIONS if a in actions],
+            available_actions=[
+                *(a for a in RUN_ACTIONS if a in actions),
+                *(a for a in RUN_ALERT_ACTIONS if a in actions and not pinned),
+            ],
+            dismissal=self.dismissal(item, record.run_id),
         )
 
     def tasks(self, run_id: str) -> list[Task]:
@@ -442,6 +511,7 @@ class Views:
             pinned=item is not None and item.run_id == gate.run_id,
             gate_state=gate.state,
         )
+        dismissal = self.dismissal(item, gate.run_id) if item is not None else None
         actions = available_actions(subject)
         return Gate(
             id=public_id,
@@ -462,6 +532,7 @@ class Views:
             detail=gate.detail,
             revision=gate.revision,
             available_actions=["approve"] if "gate_approve" in actions else [],
+            dismissal=dismissal,
         )
 
     def steering(self, record: SteeringRecord) -> Steering:
