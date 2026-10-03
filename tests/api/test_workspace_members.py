@@ -282,7 +282,12 @@ def test_accepting_an_invite_adds_an_existing_user_once(api: Any) -> None:
 
 def test_role_capabilities_follow_the_documented_mapping() -> None:
     assert ROLE_CAPABILITIES["owner"] == ALL_CAPABILITIES
-    assert ROLE_CAPABILITIES["admin"] == ALL_CAPABILITIES - {"credentials:manage"}
+    assert ROLE_CAPABILITIES["admin"] == ALL_CAPABILITIES - {
+        "credentials:manage",
+        "policy:manage",
+    }
+    assert "policy:manage" in ROLE_CAPABILITIES["owner"]
+    assert "policy:manage" not in ROLE_CAPABILITIES["member"]
     assert "artifacts:read" not in ROLE_CAPABILITIES["member"]
     assert "daemon:manage" not in ROLE_CAPABILITIES["member"]
 
