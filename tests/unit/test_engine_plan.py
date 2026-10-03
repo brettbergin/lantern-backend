@@ -37,7 +37,7 @@ from lantern.events import HostEventTypes
 from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
-from tests.fakes.gitrepo import make_repo
+from tests.fakes.gitrepo import commit_files, make_repo, open_repo
 from tests.unit.test_engine import Harness
 
 PLAN_STATES = ["provisioning", "proposing", "completed"]
@@ -423,7 +423,7 @@ class TestClarify:
         assert len(upstream) == 1
 
     def test_questions_park_the_run_and_the_answers_reach_the_proposal(
-        self, harness: Harness, upstream: list[tuple[str, str]]
+        self, harness: Harness, upstream: list[tuple[str, str]], tmp_path: Path
     ) -> None:
         desk = RecordingDesk(plan_brief=epic_brief(max_questions=3))
         harness.script(
@@ -455,8 +455,11 @@ class TestClarify:
         record = harness.engine().store.get_run(parked.run_id)
         assert record.state == "awaiting_answers" and record.stage == "clarifying"
 
-        # A person answers: a choice, and their own words.
+        # A person answers: a choice, and their own words. The repository
+        # moved on meanwhile.
         desk.answer(fmt=PlanAnswer(value="pdf"), who=PlanAnswer(text="the finance team"))
+        with open_repo(tmp_path / "upstream") as origin:
+            commit_files(origin, {"README.md": "# app, with exports\n"}, "exports")
         harness.script([answer(code_task("c1"))])
         harness.events.clear()
         resumed = engine(harness, desk, keep_sandboxes=True).resume(parked.run_id)
@@ -472,7 +475,7 @@ class TestClarify:
         assert "- **Which formats?**\n  Answer: PDF (`pdf`)" in prompt
         assert "- **Who downloads them?**\n  Answer: in their words: the finance team" in prompt
         assert len(desk.delivered) == 1 and len(desk.asked) == 1
-        assert upstream and len(upstream) == 1, "the parked run's checkout is reused"
+        assert len(upstream) == 2, "a resume re-cuts the checkout: the planner reads today's tree"
 
     def test_a_skip_proposes_with_no_answers(
         self, harness: Harness, upstream: list[tuple[str, str]]

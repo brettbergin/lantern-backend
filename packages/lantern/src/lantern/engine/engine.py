@@ -59,7 +59,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from lantern import hostgit, repofiles
 from lantern.agentmodels import model_for_phase, refreshed_models, run_model_repo
@@ -2180,19 +2180,23 @@ class LoopEngine:
         re-enters, and a proposal already validated and persisted is
         delivered without a second turn.
         """
+        # A resume re-cuts the checkout: a run parked for days on its
+        # questions proposes from the repository as it is now, not as it
+        # was when it asked.
+        fresh = stage is not None
         try:
             if stage != "proposing":
-                parked = self._stage_clarify(p)
+                parked = self._stage_clarify(p, fresh=fresh)
                 if parked is not None:
                     return parked
-            reason = self._stage_propose(p)
+            reason = self._stage_propose(p, fresh=fresh)
         finally:
             self._plan_cut.pop(p.run_id, None)
         if reason is not None:
             return "failed", reason
         return "completed", None
 
-    def _stage_clarify(self, p: Pipeline) -> tuple[RunState, str] | None:
+    def _stage_clarify(self, p: Pipeline, *, fresh: bool = False) -> tuple[RunState, str] | None:
         """Ask the planner whether it knows enough to propose, and park the
         run on its questions when it does not. None to go on and propose;
         otherwise the state the run ends in and why.
@@ -2222,28 +2226,20 @@ class LoopEngine:
             return None
         self._set_run_state(run_id, "clarifying")
         self._check_cancelled_and_clock(run_id, p.deadline)
-        reason, checkouts, home = self._plan_checkouts(p, brief)
+        reason, checkouts, home = self._plan_checkouts(p, brief, fresh=fresh)
         if reason is not None:
             return "failed", reason
         self._process_chat(run_id, p.phases, None, stage="reading the repository")
         self._check_cancelled_and_clock(run_id, p.deadline)
-        started = time.time()
-        try:
-            answer = p.phases.clarify_plan(brief, checkouts=checkouts, home=home)
-        except InvalidOutputTwice as exc:
-            spend = p.phases.drain_spend()
-            self._record_phase(
-                run_id,
-                "clarify",
-                task_id=PROPOSE_TASK_ID,
-                attempt=1,
-                status="failed",
-                output_json=json.dumps({"error": str(exc)}),
-                started_at=started,
-                usage=spend.usage,
-                turns=spend.turns,
-            )
-            why = _invalid_twice_reason(exc, "questions")
+        answer = self._plan_turn(
+            run_id,
+            "clarify",
+            PROPOSE_TASK_ID,
+            p.phases,
+            lambda: p.phases.clarify_plan(brief, checkouts=checkouts, home=home),
+        )
+        if isinstance(answer, InvalidOutputTwice):
+            why = _invalid_twice_reason(answer, "questions")
             self.bus.emit(
                 HostEventTypes.PHASE_END,
                 run_id,
@@ -2253,18 +2249,6 @@ class LoopEngine:
                 message=why,
             )
             return "failed", why
-        spend = p.phases.drain_spend()
-        self._record_phase(
-            run_id,
-            "clarify",
-            task_id=PROPOSE_TASK_ID,
-            attempt=1,
-            status="ok",
-            output_json=answer.model_dump_json(),
-            started_at=started,
-            usage=spend.usage,
-            turns=spend.turns,
-        )
         if answer.ready:
             self.bus.emit(
                 HostEventTypes.PHASE_END,
@@ -2298,7 +2282,7 @@ class LoopEngine:
         log.info("run.awaiting_answers", run=run_id, questions=count)
         return "awaiting_answers", _awaiting_reason(count)
 
-    def _stage_propose(self, p: Pipeline) -> str | None:
+    def _stage_propose(self, p: Pipeline, *, fresh: bool = False) -> str | None:
         """Read the brief, cut the checkouts, ask the planner once (with the
         one validation retry every JSON phase has), persist the answer on
         the run's task, and deliver it. Returns the reason the run failed,
@@ -2332,47 +2316,26 @@ class LoopEngine:
             self.bus.emit(
                 HostEventTypes.TASK_START, run_id, task_id=task.spec.id, title=task.spec.title
             )
-            reason, checkouts, home = self._plan_checkouts(p, brief)
+            reason, checkouts, home = self._plan_checkouts(p, brief, fresh=fresh)
             if reason is not None:
                 return self._propose_failed(run_id, task, reason)
             # A message that arrived while the checkout was cut steers the
             # proposal: a run-level answer becomes guidance the prompt carries.
             self._process_chat(run_id, phases, None, stage="reading the repository")
             self._check_cancelled_and_clock(run_id, p.deadline)
-            started = time.time()
-            try:
+
+            def turn() -> PlanProposal | PlanReplan:
                 if replan:
-                    answer = phases.replan_plan(brief, checkouts=checkouts, home=home)
-                else:
-                    answer = phases.propose_plan(brief, checkouts=checkouts, home=home)
-                    if brief.generate_root:
-                        answer.source_input = dict(brief.input)
-            except InvalidOutputTwice as exc:
-                spend = phases.drain_spend()
-                self._record_phase(
-                    run_id,
-                    "propose",
-                    task_id=task.spec.id,
-                    attempt=1,
-                    status="failed",
-                    output_json=json.dumps({"error": str(exc)}),
-                    started_at=started,
-                    usage=spend.usage,
-                    turns=spend.turns,
-                )
-                return self._propose_failed(run_id, task, _invalid_twice_reason(exc))
-            spend = phases.drain_spend()
-            self._record_phase(
-                run_id,
-                "propose",
-                task_id=task.spec.id,
-                attempt=1,
-                status="ok",
-                output_json=answer.model_dump_json(),
-                started_at=started,
-                usage=spend.usage,
-                turns=spend.turns,
-            )
+                    return phases.replan_plan(brief, checkouts=checkouts, home=home)
+                proposed = phases.propose_plan(brief, checkouts=checkouts, home=home)
+                if brief.generate_root:
+                    proposed.source_input = dict(brief.input)
+                return proposed
+
+            turned = self._plan_turn(run_id, "propose", task.spec.id, phases, turn)
+            if isinstance(turned, InvalidOutputTwice):
+                return self._propose_failed(run_id, task, _invalid_twice_reason(turned))
+            answer = turned
             task.output = TaskOutput(
                 summary=_plan_summary(brief, answer),
                 data={key: answer.model_dump(mode="json")},
@@ -2419,6 +2382,49 @@ class LoopEngine:
         )
         return None
 
+    def _plan_turn[A: BaseModel](
+        self,
+        run_id: str,
+        phase: str,
+        task_id: str,
+        phases: PhaseRunner,
+        turn: Callable[[], A],
+    ) -> A | InvalidOutputTwice:
+        """One planner turn recorded as a phase row with its spend: the
+        answer, or — when the planner's answer was invalid twice — the
+        refusal, after a failed row. The stage says what that means for
+        the run (its PHASE_END and its reason differ)."""
+        started = time.time()
+        try:
+            answer = turn()
+        except InvalidOutputTwice as exc:
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                phase,
+                task_id=task_id,
+                attempt=1,
+                status="failed",
+                output_json=json.dumps({"error": str(exc)}),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            return exc
+        spend = phases.drain_spend()
+        self._record_phase(
+            run_id,
+            phase,
+            task_id=task_id,
+            attempt=1,
+            status="ok",
+            output_json=answer.model_dump_json(),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        return answer
+
     def _propose_failed(self, run_id: str, task: TaskRecord, reason: str) -> str:
         task.last_feedback = reason
         self.bus.emit(
@@ -2434,7 +2440,7 @@ class LoopEngine:
         return reason
 
     def _plan_checkouts(
-        self, p: Pipeline, brief: PlanBrief
+        self, p: Pipeline, brief: PlanBrief, *, fresh: bool = False
     ) -> tuple[str | None, list[tuple[str, str]], Path | None]:
         """Cut a checkout of the node's repository into the data directory,
         on the host, under the host's own credential: the agent sandbox is
@@ -2444,7 +2450,8 @@ class LoopEngine:
         named to the planner by the brief, not checked out. Returns the
         reason the run cannot read, the (repository, in-sandbox path)
         pairs, and the host path of the checkout. The clarifying turn and
-        the proposal of one segment read the same cut."""
+        the proposal of one segment read the same cut; ``fresh`` (a resume)
+        cuts it again so the planner reads the repository as it is now."""
         cut = self._plan_cut.get(p.run_id)
         if cut is not None:
             return None, list(cut[0]), cut[1]
@@ -2460,7 +2467,9 @@ class LoopEngine:
         if self.config.find_repo(repo) is None:
             return f"repository `{repo}` is not configured on this server", [], None
         try:
-            path = p.provisioner.clone_repo_into_data_dir(p.run_id, p.pair.workspace, repo)
+            path = p.provisioner.clone_repo_into_data_dir(
+                p.run_id, p.pair.workspace, repo, fresh=fresh
+            )
         except ProvisionError as exc:
             return str(exc), [], None
         where = str(PurePosixPath(p.pair.agent_workdir) / path.relative_to(p.pair.workspace))
