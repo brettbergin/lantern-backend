@@ -2830,7 +2830,12 @@ is closed and `[planning] close_completed` is on for the node's repository —
 comments the summary (found again by its `sbx-plan-summary` marker, so it
 is written once) and closes the issue, then looks at the parent. "Closed"
 is the forge's word, not the run's: a skipped task whose issue is open
-holds its epic. The driver decides when to look, under a lock of its own
+holds its epic. Only children that still follow their issue count: one a
+reconcile detached (it left its parent on the forge, or the forge) is left
+as reconcile left it — it neither holds the parent open nor is ticked,
+recorded or summarised — and recording a state moves nothing else on the
+node's forge reference (its version, a missing marker, a checklist error
+stay). The driver decides when to look, under a lock of its own
 (`_completing`) so the tick and a report cannot both comment: after a pass
 in which a task landed or closed or the run completed; in a sweep every
 `SWEEP_S` over runs completed within `SWEEP_WINDOW_S` whose epic is still
