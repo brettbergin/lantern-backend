@@ -18,8 +18,9 @@ from lantern.api.usage import parse_when
 
 router = APIRouter(prefix="/v1", tags=["analytics"])
 
-#: The first instant past year 9999: the last a timestamp can name.
-UNTIL_MAX = 253402300800.0
+#: The year 3000. A window begins at or after 1970 and ends before this:
+#: the span every host this daemon runs on can turn into a timestamp.
+UNTIL_MAX = 32503680000.0
 
 
 @router.get("/analytics", response_model=AnalyticsWindow)
@@ -41,9 +42,11 @@ async def get_analytics(
         end = parse_when(until, default=now)
     except ValueError as exc:
         raise Problem(422, "invalid_request", str(exc)) from exc
-    if not 0 <= end < UNTIL_MAX:
+    if not window_s <= end < UNTIL_MAX:
         # Also what a NaN fails: a bound that is not a time has no window.
-        raise Problem(422, "invalid_request", "until is not a time a window can end at")
+        raise Problem(
+            422, "invalid_request", "the window must begin in 1970 or later and end before 3000"
+        )
 
     def read() -> AnalyticsWindow:
         return window_analytics(

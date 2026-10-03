@@ -261,6 +261,9 @@ class TestTheContract:
             {"until": "nan"},
             {"until": "1e300"},
             {"until": -1},
+            # A week ending an hour into 1970 would begin in 1969.
+            {"until": 3600},
+            {"until": "3000-01-01T00:00:00Z"},
         ):
             refused = api.client.get("/v1/analytics", params=params, headers=headers)
             assert refused.status_code == 422, (params, refused.text)

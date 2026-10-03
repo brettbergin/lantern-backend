@@ -2139,11 +2139,11 @@ answers "is this performing well" for a window of runs: the same fold the
 console's Overview draws, with every derived value as a field so a client
 never recomputes one. A run belongs whole to the window it **began** in.
 
-| Query      | Default | Bounds                                           |
-| ---------- | ------- | ------------------------------------------------ |
-| `window_s` | 604800  | 60 to 7776000 (90 days)                          |
-| `buckets`  | 7       | 1 to 90 equal slices of the window               |
-| `until`    | now     | RFC 3339 or epoch seconds: where the window ends |
+| Query      | Default | Bounds                                                                               |
+| ---------- | ------- | ------------------------------------------------------------------------------------ |
+| `window_s` | 604800  | 60 to 7776000 (90 days)                                                              |
+| `buckets`  | 7       | 1 to 90 equal slices of the window                                                   |
+| `until`    | now     | RFC 3339 or epoch seconds: where the window ends; the window begins in 1970 or later |
 
 A value outside these is `422 invalid_request`. The response:
 
