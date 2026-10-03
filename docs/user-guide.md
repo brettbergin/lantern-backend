@@ -2330,6 +2330,49 @@ repository is registered" below. Not offered remotely, by design:
 configuration writes, backup and restore, garbage collection and sandbox
 deletion stay on the host's own CLI.
 
+#### Letting an agent decide: grants
+
+A workspace **owner** can state once that an agent may take a decision that
+otherwise waits for a person. That statement is a grant, and it is written
+through the API (`policy:manage`, which only an owner holds — an admin can read
+grants and cannot write them):
+
+```sh
+curl -X POST "$LANTERN/v1/grants" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "agent_slug": "critic",
+    "action": "plan.approve",
+    "conditions": {"repositories": ["acme/shop"], "max_children": 8, "require_review": true},
+    "daily_limit": 5,
+    "note": "small reviewed levels in the shop"
+  }'
+```
+
+`agent_slug` is one of the agents `GET /v1/agents` lists, by its slug, and it
+must be enabled. `action` is one of `plan.propose`, `plan.breakdown`,
+`plan.approve`, `plan.publish`, `plan.run`, `plan.run.retry`, `item.retry` and
+`run.grant_rounds`; nothing else can be delegated, so no grant can let an agent
+edit grants, credentials, the daemon or its configuration. `conditions` narrow
+the grant (`repositories`, `levels`, `max_children`, `require_review`,
+`causes`, `max_retries` — each only on the actions it means something for;
+`docs/api.md` "Delegation" has the table), `daily_limit` caps how many times a
+day it may be used, and `note` is yours. A grant that makes no sense is
+refused with the field named.
+
+`GET /v1/grants` lists them with `used_today`; `PATCH /v1/grants/{id}` with
+the `revision` you read as `expected_revision` changes the conditions, the
+limit, the note or `enabled` (switch one off without losing it);
+`DELETE /v1/grants/{id}` removes it. `GET /v1/decisions` is the ledger of what
+was decided: allowed under which grant, denied, or escalated to a person and
+why.
+
+Three things to know. A fresh installation has no grants and delegates
+nothing. Grants are edited through these routes only: not from chat, not from
+`lantern daemon ctl`, not from the WebSocket. And in this release nothing acts
+on a grant yet — they are stored and can be reviewed, and the daemon starts
+consulting them in the release that lets a plan advance by itself. There is
+no configuration key for any of this: grants live in the daemon's database.
+
 #### Sign in with an OIDC provider (Authentik)
 
 A browser client such as Lantern can sign people in through an OpenID Connect

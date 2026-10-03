@@ -1302,3 +1302,93 @@ class ScheduleResult(ApiModel):
     schedule: Schedule | None = None
     message: str
     operation: OperationOut
+
+
+class GrantConditions(ApiModel):
+    """What must hold for a grant to cover an act. A key left out (or
+    ``null``, or ``false`` for ``require_review``) constrains nothing; which
+    keys an action accepts is checked when the grant is written."""
+
+    repositories: list[str] | None = None
+    levels: list[str] | None = None
+    max_children: int | None = Field(default=None, ge=1)
+    require_review: bool = False
+    causes: list[str] | None = None
+    max_retries: int | None = Field(default=None, ge=1)
+
+
+class GrantOut(ApiModel):
+    """A standing rule: ``agent_slug`` may take ``action`` while
+    ``conditions`` hold, at most ``daily_limit`` times a day (``null`` is
+    unlimited). ``used_today`` is how many acts it allowed in the current
+    cap day, counted from the decisions ledger."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    agent_slug: str
+    action: str
+    conditions: GrantConditions
+    daily_limit: int | None = None
+    used_today: int = 0
+    enabled: bool = True
+    note: str | None = None
+    created_by: str | None = None
+    created_by_display: str | None = None
+    created_at: str
+    updated_at: str
+    revision: int
+
+
+class GrantCreate(ApiModel):
+    agent_slug: str
+    action: str
+    conditions: GrantConditions = Field(default_factory=GrantConditions)
+    daily_limit: int | None = Field(default=None, ge=1)
+    enabled: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class GrantUpdate(ApiModel):
+    """An edit against the revision the client read. Only the fields sent
+    change: ``daily_limit: null`` lifts the limit, ``note: null`` clears the
+    note, and ``conditions`` replaces the whole set. A grant's agent and
+    action are not edited."""
+
+    expected_revision: int
+    conditions: GrantConditions | None = None
+    daily_limit: int | None = Field(default=None, ge=1)
+    enabled: bool | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class GrantResult(ApiModel):
+    grant: GrantOut | None = None
+    message: str
+    operation: OperationOut
+
+
+class DecisionOut(ApiModel):
+    """One judged act from the ledger: who asked to take what, the outcome
+    (``allow``, ``deny`` or ``escalate``) and why, the grant that allowed it,
+    what it was about, and the facts it was judged on. An escalation carries
+    how it was resolved once it is."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    grant_id: str | None = None
+    agent_slug: str
+    action: str
+    outcome: str
+    reason: str
+    plan_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    epic_run_id: str | None = None
+    repository: str | None = None
+    operation_id: str | None = None
+    attrs: dict[str, Any] = Field(default_factory=dict)
+    at: str
+    resolved_at: str | None = None
+    resolved_by: str | None = None
+    resolution: str | None = None

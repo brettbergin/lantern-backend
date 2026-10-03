@@ -84,6 +84,9 @@ EFFECTS: dict[str, str] = {
     "plan.run.cancel": "the epic run is cancelled and its queued items withdrawn",
     "plan.run.retry": "the task is re-queued or admitted afresh",
     "plan.run.skip": "the task is recorded as skipped",
+    "grant.create": "the grant is stored and judged from the next decision",
+    "grant.update": "the grant holds the requested change",
+    "grant.delete": "the grant is gone; what it allowed stays in the ledger",
 }
 
 
@@ -807,9 +810,49 @@ def _judge(
                 return "succeeded", None, None
         done = "skipped" if verb == "skip" else "retried"
         return "failed", "interrupted_before_effect", f"the task was not {done}"
+    if op.action.startswith("grant."):
+        return _judge_grant(loop, op)
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the breaker is still open"
+    return "reconciling", None, "the effect could not be established from the record"
+
+
+def _judge_grant(
+    loop: Any, op: Operation
+) -> tuple[Literal["succeeded", "failed", "reconciling"], str | None, str | None]:
+    """A grant write is one transaction, so the stored grant says whether
+    it happened: it is there, it holds the change, or it is gone."""
+    from lantern.daemon.controls.delegation_store import DelegationStore
+
+    grant = DelegationStore(loop.dstore).grant(op.target_key)
+    if op.action == "grant.create":
+        if grant is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the grant was not written"
+    if op.action == "grant.delete":
+        if grant is None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the grant is still there"
+    if op.action == "grant.update":
+        if grant is None:
+            return "failed", "unknown_target", "no such grant"
+        changes = dict((op.request or {}).get("changes") or {})
+        held = {
+            "conditions": grant.conditions.as_dict(),
+            "daily_limit": grant.daily_limit,
+            "enabled": grant.enabled,
+            "note": grant.note,
+        }
+        moved = op.expected_revision is None or grant.revision > op.expected_revision
+        if changes and moved and all(held.get(key) == value for key, value in changes.items()):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the grant does not hold the requested change (it is at revision {grant.revision}); "
+            "read it and send the change again if it is still wanted",
+        )
     return "reconciling", None, "the effect could not be established from the record"

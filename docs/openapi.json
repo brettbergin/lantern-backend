@@ -3639,6 +3639,177 @@
         "title": "DaemonCommandResult",
         "type": "object"
       },
+      "DecisionOut": {
+        "additionalProperties": false,
+        "description": "One judged act from the ledger: who asked to take what, the outcome\n(``allow``, ``deny`` or ``escalate``) and why, the grant that allowed it,\nwhat it was about, and the facts it was judged on. An escalation carries\nhow it was resolved once it is.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "attrs": {
+            "additionalProperties": true,
+            "title": "Attrs",
+            "type": "object"
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "outcome",
+          "reason",
+          "at"
+        ],
+        "title": "DecisionOut",
+        "type": "object"
+      },
       "DetailOut": {
         "additionalProperties": false,
         "properties": {
@@ -4865,6 +5036,327 @@
           "state"
         ],
         "title": "GateSummary",
+        "type": "object"
+      },
+      "GrantConditions": {
+        "additionalProperties": false,
+        "description": "What must hold for a grant to cover an act. A key left out (or\n``null``, or ``false`` for ``require_review``) constrains nothing; which\nkeys an action accepts is checked when the grant is written.",
+        "properties": {
+          "causes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Causes"
+          },
+          "levels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Levels"
+          },
+          "max_children": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Children"
+          },
+          "max_retries": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Retries"
+          },
+          "repositories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repositories"
+          },
+          "require_review": {
+            "default": false,
+            "title": "Require Review",
+            "type": "boolean"
+          }
+        },
+        "title": "GrantConditions",
+        "type": "object"
+      },
+      "GrantCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/GrantConditions"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "agent_slug",
+          "action"
+        ],
+        "title": "GrantCreate",
+        "type": "object"
+      },
+      "GrantOut": {
+        "additionalProperties": false,
+        "description": "A standing rule: ``agent_slug`` may take ``action`` while\n``conditions`` hold, at most ``daily_limit`` times a day (``null`` is\nunlimited). ``used_today`` is how many acts it allowed in the current\ncap day, counted from the decisions ledger.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/GrantConditions"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Display"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "used_today": {
+            "default": 0,
+            "title": "Used Today",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "conditions",
+          "created_at",
+          "updated_at",
+          "revision"
+        ],
+        "title": "GrantOut",
+        "type": "object"
+      },
+      "GrantResult": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          }
+        },
+        "required": [
+          "message",
+          "operation"
+        ],
+        "title": "GrantResult",
+        "type": "object"
+      },
+      "GrantUpdate": {
+        "additionalProperties": false,
+        "description": "An edit against the revision the client read. Only the fields sent\nchange: ``daily_limit: null`` lifts the limit, ``note: null`` clears the\nnote, and ``conditions`` replaces the whole set. A grant's agent and\naction are not edited.",
+        "properties": {
+          "conditions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "GrantUpdate",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -6775,6 +7267,38 @@
         "title": "Origin",
         "type": "object"
       },
+      "Page_DecisionOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[DecisionOut]",
+        "type": "object"
+      },
       "Page_EventOut_": {
         "properties": {
           "data": {
@@ -6837,6 +7361,38 @@
           "data"
         ],
         "title": "Page[Gate]",
+        "type": "object"
+      },
+      "Page_GrantOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/GrantOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[GrantOut]",
         "type": "object"
       },
       "Page_Hold_": {
@@ -16314,6 +16870,128 @@
         ]
       }
     },
+    "/v1/decisions": {
+      "get": {
+        "description": "What was decided for agents, newest first: filter by `outcome`\n(`allow`, `deny`, `escalate`), `unresolved=true` (escalations still\nwaiting for a person), `agent` (a slug) and `since` (RFC 3339 or\nepoch).",
+        "operationId": "list_decisions_v1_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unresolved",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unresolved",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DecisionOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Decisions",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "description": "Every public event after ``after`` (an event id, or omitted for\nthe oldest held), oldest first, in the order it was recorded.\n``latest`` instead returns the newest bounded snapshot, oldest first;\nit works after retention and cannot be combined with ``after``.\n``channel_id`` narrows to one channel's events (and its runs'). A\nworkspace member sees only what they may: see ``events.scoped``.",
@@ -16680,6 +17358,202 @@
         "summary": "Approve",
         "tags": [
           "control"
+        ]
+      }
+    },
+    "/v1/grants": {
+      "get": {
+        "description": "Every grant, oldest first, with how many acts each allowed today.\nEmpty until an owner writes one: a fresh installation delegates\nnothing.",
+        "operationId": "list_grants_v1_grants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_GrantOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Grants",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "post": {
+        "description": "Let an agent take one of the delegable actions, under conditions.\n`422` names the field: an action that cannot be delegated, a condition\nthe action does not accept, an agent that is unknown or disabled, a\ndaily limit that is not positive.",
+        "operationId": "create_grant_v1_grants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Grant",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
+    "/v1/grants/{grant_id}": {
+      "delete": {
+        "description": "Delete a grant. The decisions it allowed stay in the ledger.",
+        "operationId": "remove_grant_v1_grants__grant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Grant",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "get": {
+        "operationId": "get_grant_v1_grants__grant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grant",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "patch": {
+        "description": "Edit a grant's conditions, daily limit, note or whether it is\nenabled, against `expected_revision` (`409 stale_revision` when it\nmoved on). Its agent and action are not edited.",
+        "operationId": "update_grant_v1_grants__grant_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Grant",
+        "tags": [
+          "delegation"
         ]
       }
     },

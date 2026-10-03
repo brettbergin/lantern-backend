@@ -1,5 +1,25 @@
 ## [Unreleased]
 
+**An owner can write the rules that will let agents take decisions.** Every
+plan level needs a person to approve it, publish it and start it, and there
+was no way to say once "this agent may do that, under these conditions". A
+**grant** now says it: an agent (`agent_slug`), one action from a closed list
+(`plan.propose`, `plan.breakdown`, `plan.approve`, `plan.publish`, `plan.run`,
+`plan.run.retry`, `item.retry`, `run.grant_rounds`), optional conditions
+(`repositories`, `levels`, `max_children`, `require_review`, `causes`,
+`max_retries` — each accepted only by the actions it means something for) and
+a `daily_limit`. `GET /v1/grants` and `GET /v1/decisions` (`audit:read`) read
+the grants and the ledger of what was decided; `POST`, `PATCH` and `DELETE /v1/grants` take `policy:manage`, which only an owner holds — an admin, and a
+plain client that counts as an owner because it holds `daemon:manage`, are
+refused by name. Each write is a recorded operation (`grant.create`,
+`grant.update`, `grant.delete`) that recovery settles from the stored grant,
+and is narrated as a daemon notice. The judge is one pure function with three
+answers — allow, deny, or escalate to a person — that fails closed on a fact
+it could not read and never lets an agent approve its own proposal. Grants
+ship empty, nothing in the daemon acts on one yet, and they are edited through
+the API only: no chat tool, `ctl` verb or WebSocket command. Advertised as
+`delegation`; the tables arrive with revision 0050.
+
 **What is waiting on a person is one list.** Every client assembled it
 itself — all items, all channels, the open gates, the queue, the plans, then
 each work-bearing channel's jobs — so two clients could disagree at the edges,
