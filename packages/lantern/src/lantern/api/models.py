@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lantern.daemon.controls.operations import Operation
 from lantern.daemon.controls.principal import WORKSPACE_ID, Capability
@@ -789,6 +789,47 @@ class Gate(ApiModel):
 
 class GateApproval(ApiModel):
     expected_revision: int = Field(ge=0)
+
+
+#: The most alerts one bulk dismissal may name: a page of them.
+ATTENTION_DISMISS_MAX = 200
+
+
+class AttentionTarget(ApiModel):
+    """One alert a bulk dismissal names: an item, or a run no item
+    carries. ``expected_revision`` pins the state the person was shown."""
+
+    item_id: str | None = None
+    run_id: str | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_subject(self) -> AttentionTarget:
+        if (self.item_id is None) == (self.run_id is None):
+            raise ValueError("name item_id or run_id, not both")
+        return self
+
+
+class AttentionDismissRequest(ApiModel):
+    targets: list[AttentionTarget] = Field(min_length=1, max_length=ATTENTION_DISMISS_MAX)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class AttentionDismissResult(ApiModel):
+    """What became of one named alert. ``skipped`` carries the refusal the
+    same dismissal would have had on its own route."""
+
+    item_id: str | None = None
+    run_id: str | None = None
+    outcome: Literal["dismissed", "already_dismissed", "skipped"]
+    code: str | None = None
+    detail: str | None = None
+
+
+class AttentionDismissed(ApiModel):
+    operation: OperationOut
+    #: One entry per target, in the order the request named them.
+    results: list[AttentionDismissResult]
 
 
 class GateResult(ApiModel):

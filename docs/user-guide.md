@@ -2187,7 +2187,8 @@ item raises without touching the work: every client sees the item's
 `dismissal` and stops listing it as needing attention, and the dismissal ends
 by itself when the item changes state — a retry that fails again asks again.
 `/undismiss` takes it back; `POST /v1/runs/{id}/dismiss` does the same for a
-run no work item carries.
+run no work item carries, and `POST /v1/attention/dismiss` dismisses up to 200
+named alerts under one operation, skipping by name any that moved on.
 
 **Following the work.** Every public event — the daemon's notices, a run's
 start and finish, its engine chronology (every persisted event, `worker.stdout`

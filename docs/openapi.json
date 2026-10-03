@@ -828,6 +828,164 @@
         "title": "ArtifactRefOut",
         "type": "object"
       },
+      "AttentionDismissRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionTarget"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "AttentionDismissRequest",
+        "type": "object"
+      },
+      "AttentionDismissResult": {
+        "additionalProperties": false,
+        "description": "What became of one named alert. ``skipped`` carries the refusal the\nsame dismissal would have had on its own route.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "outcome": {
+            "enum": [
+              "dismissed",
+              "already_dismissed",
+              "skipped"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "AttentionDismissResult",
+        "type": "object"
+      },
+      "AttentionDismissed": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionDismissResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation",
+          "results"
+        ],
+        "title": "AttentionDismissed",
+        "type": "object"
+      },
+      "AttentionTarget": {
+        "additionalProperties": false,
+        "description": "One alert a bulk dismissal names: an item, or a run no item\ncarries. ``expected_revision`` pins the state the person was shown.",
+        "properties": {
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "title": "AttentionTarget",
+        "type": "object"
+      },
       "AuthProviders": {
         "additionalProperties": false,
         "properties": {
@@ -12497,6 +12655,48 @@
         "summary": "Download Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/attention/dismiss": {
+      "post": {
+        "description": "Dismiss several alerts at once, under one operation. The request\nnames each alert \u2014 the ones the person was looking at, never \"all\" \u2014\nby its item, or by its run when no item carries the work. Each is\ndismissed as its own route would dismiss it; one that cannot be (an\nunknown id, a stale ``expected_revision``, work that raises no alert)\nis ``skipped`` with the reason and does not fail the rest. ``results``\nanswers in the request's order.",
+        "operationId": "dismiss_attention_v1_attention_dismiss_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttentionDismissRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionDismissed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Attention",
+        "tags": [
+          "control"
         ]
       }
     },
