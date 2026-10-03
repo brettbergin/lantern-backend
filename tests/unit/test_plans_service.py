@@ -11,7 +11,7 @@ import pytest
 from lantern.config import Config
 from lantern.daemon.store import DaemonStore
 from lantern.engine.planning import PlanProposal, ProposedChild
-from lantern.plans import PlanService
+from lantern.plans import PlanRefusal, PlanService
 from lantern.plans.store import PlanStore
 
 PERSON = {"kind": "person", "id": "p1", "display": "Pat"}
@@ -145,3 +145,116 @@ class TestWhatABreakdownReplaces:
 
         cap = plans.brief(plan_id, root).room + 1
         assert cap == plans._cap(plans.get(plan_id).root)
+
+
+def _plans_with(tmp_path: Path, **planning: object) -> PlanService:
+    config = Config.model_validate(
+        {"home": str(tmp_path / "state"), "github": {"repo": REPO}, "planning": planning}
+    )
+    return PlanService(PlanStore(DaemonStore(config.paths.state_db)), lambda: config)
+
+
+def _on_forge(plans: PlanService, plan_id: str, node_id: str, number: int, **forge: object) -> None:
+    from lantern.plans.model import ForgeRef
+
+    plan = plans.get(plan_id)
+    node = plan.node(node_id)
+    assert node is not None
+    ref = ForgeRef(number=number, url=f"https://github.com/o/r/issues/{number}", state="open")
+    plans.store.apply(
+        plan.id,
+        expected_revision=plan.revision,
+        now=4.0,
+        upsert=[replace(node, state="published", forge=replace(ref, **forge))],  # type: ignore[arg-type]
+    )
+
+
+class TestOneCapRule:
+    """What occupies a place under ``[planning]``'s cap is one rule for
+    every path — drafting, the planner's room, a re-plan's room, attaching
+    and publishing: every child that stays, unless it has left its parent
+    on the forge. A planner's proposed child with nothing under it is
+    replaceable and takes no place; a detached one has gone."""
+
+    def _epic(self, plans: PlanService) -> tuple[str, str]:
+        plan = plans.create(
+            level="epic",
+            repository=REPO,
+            sections={"title": "Export", "goal": "exports work"},
+            now=1.0,
+            actor=PERSON,
+        )
+        plans.store.apply(
+            plan.id,
+            expected_revision=plan.revision,
+            now=1.5,
+            upsert=[replace(plan.root, origin="planner")],
+        )
+        return plan.id, plan.root_id
+
+    def test_drafting_is_refused_at_the_cap_not_at_publish(self, tmp_path: Path) -> None:
+        plans = _plans_with(tmp_path, max_tasks_per_epic=2)
+        plan_id, epic = self._epic(plans)
+        _add(plans, plan_id, epic, "One", kind="code")
+        _add(plans, plan_id, epic, "Two", kind="code")
+        with pytest.raises(PlanRefusal) as caught:
+            _add(plans, plan_id, epic, "Three", kind="code")
+        assert (caught.value.status, caught.value.code) == (409, "level_full")
+        assert "2 of the 2 tasks" in caught.value.detail
+
+    def test_a_child_that_left_its_parent_on_the_forge_frees_its_place(
+        self, tmp_path: Path
+    ) -> None:
+        plans = _plans_with(tmp_path, max_tasks_per_epic=2)
+        plan_id, epic = self._epic(plans)
+        gone = _add(plans, plan_id, epic, "Gone", kind="code")
+        _on_forge(plans, plan_id, gone, 7, detached="removed from the epic on the forge")
+        _add(plans, plan_id, epic, "Stays", kind="code")
+        # One place is taken, so one is left — for a draft and for the planner alike.
+        assert plans.brief(plan_id, epic).room == 1
+        _add(plans, plan_id, epic, "Fills", kind="code")
+        with pytest.raises(PlanRefusal) as caught:
+            _add(plans, plan_id, epic, "One too many", kind="code")
+        assert caught.value.code == "level_full"
+        with pytest.raises(PlanRefusal) as caught:
+            plans.brief(plan_id, epic)
+        assert caught.value.code == "level_full"
+
+    def test_a_replaceable_proposed_child_takes_no_place_in_a_replan(self, tmp_path: Path) -> None:
+        """A re-plan's room was counted over every child, a proposed one
+        the next proposal would replace included; it is the same count
+        as everywhere else now."""
+        from lantern.engine.planning import PlanReplan, ReplanAddition
+
+        plans = _plans_with(tmp_path, max_tasks_per_epic=3)
+        plan_id, epic = self._epic(plans)
+        _on_forge(plans, plan_id, epic, 1)
+        kept = _add(plans, plan_id, epic, "Kept", kind="code")
+        _on_forge(plans, plan_id, kept, 2)
+        stale = _add(plans, plan_id, epic, "Stale proposal", kind="code")
+        _proposed(plans, plan_id, stale)
+
+        replan = PlanReplan(
+            add=[
+                ReplanAddition(
+                    title="New one",
+                    goal="g",
+                    context="c",
+                    acceptance_criteria=["a"],
+                    kind="code",
+                    verify_commands=["make test"],
+                    rationale="r",
+                ),
+                ReplanAddition(
+                    title="New two",
+                    goal="g",
+                    context="c",
+                    acceptance_criteria=["a"],
+                    kind="code",
+                    verify_commands=["make test"],
+                    rationale="r",
+                ),
+            ]
+        )
+        _, added = plans.deliver_replan(plan_id, epic, replan, run_id="run_2", now=9.0)
+        assert added == 2

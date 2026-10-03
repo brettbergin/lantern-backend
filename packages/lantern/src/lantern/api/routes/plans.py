@@ -465,7 +465,9 @@ async def add_node(
     auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
 ) -> PlanOut:
     """A new child one level under ``parent_id``; the plan as it now is,
-    with the new node's id in the ``Location`` header."""
+    with the new node's id in the ``Location`` header. A parent at
+    ``[planning]``'s cap refuses it (``409 level_full``) — the same count
+    the planner's room, attaching and publishing are held to."""
     try:
         plan, node_id = await ctx.call(
             ctx.plans.add_node,

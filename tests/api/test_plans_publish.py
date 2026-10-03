@@ -326,11 +326,29 @@ class TestRefusals:
         assert refused.status_code == 409 and refused.json()["code"] == "repository_disabled"
 
     def test_more_children_than_the_cap_is_refused(self, tmp_path: Path) -> None:
-        built = build(tmp_path, config={"planning": {"max_tasks_per_epic": 1}})
+        """The cap holds when a child is drafted, so a person hears about
+        it then — and publish checks it again, for a cap lowered since."""
+        built = build(tmp_path, config={"planning": {"max_tasks_per_epic": 2}})
         with built.client:
             _forge(built)
             headers = built.bearer(PUBLISH)
             plan = _epic_with_tasks(built, headers)
+            refused = built.client.post(
+                f"/v1/plans/{plan['id']}/nodes",
+                json={
+                    "expected_revision": plan["revision"],
+                    "parent_id": plan["root_id"],
+                    "title": "C",
+                    "kind": "code",
+                },
+                headers=headers,
+            )
+            assert refused.status_code == 409, refused.text
+            assert refused.json()["code"] == "level_full"
+
+            lowered = built.harness.loop.config.model_copy(deep=True)
+            lowered.planning.max_tasks_per_epic = 1
+            built.harness.loop.config = lowered
             refused = _publish(built, headers, plan)
             assert refused.status_code == 409, refused.text
             assert refused.json()["code"] == "too_many_children"
