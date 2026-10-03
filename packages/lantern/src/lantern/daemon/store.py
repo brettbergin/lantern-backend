@@ -2480,13 +2480,26 @@ class DaemonStore:
         repo: str | None = None,
         after: tuple[float, str] | None = None,
         limit: int = 50,
+        include_deleted: bool = True,
     ) -> list[WorkItem]:
         """A page of items, newest first, keyed on ``(created_at, item_id)``
         so a reader paging while discovery inserts sees no gap and no
-        repeat (#1036). ``after`` is the key of the last item read."""
+        repeat (#1036). ``after`` is the key of the last item read.
+        ``include_deleted=False`` leaves out items a person deleted — in
+        the query, so a page is still full."""
         stmt = select(WorkItemRow).order_by(
             WorkItemRow.created_at.desc(), WorkItemRow.item_id.desc()
         )
+        if not include_deleted:
+            stmt = stmt.where(
+                ~select(WorkMarkRow.subject_key)
+                .where(
+                    WorkMarkRow.subject_kind == "item",
+                    WorkMarkRow.subject_key == WorkItemRow.item_id,
+                    WorkMarkRow.mark == "deleted",
+                )
+                .exists()
+            )
         if states:
             stmt = stmt.where(WorkItemRow.state.in_(list(states)))
         if kinds:
@@ -2720,6 +2733,60 @@ class DaemonStore:
             reason=reason,
             operation_id=operation_id,
         )
+
+    def mark_deleted(
+        self,
+        item_id: str | None,
+        run_ids: Sequence[str],
+        at: float,
+        *,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Hide a piece of work from every listing: the item (when it has
+        one, by its id as stored) and each of its runs, in one transaction
+        so a reader never sees the item gone and its runs still listed.
+        False when the work was already hidden. The item's mark goes if the
+        item is ever admitted again; the runs' stay — a hidden attempt
+        stays hidden."""
+        subjects = [("run", run_id) for run_id in dict.fromkeys(run_ids)]
+        if item_id is not None:
+            subjects.insert(0, ("item", item_id))
+        if not subjects:
+            return False
+        values = [
+            {
+                "subject_kind": kind,
+                "subject_key": key,
+                "mark": "deleted",
+                "cause": "deleted",
+                "at": at,
+                "actor_json": json.dumps(dict(actor or {}), sort_keys=True),
+                "reason": reason[:2000] if reason else None,
+                "operation_id": operation_id,
+            }
+            for kind, key in subjects
+        ]
+        with self._write() as session:
+            result = session.execute(
+                sqlite_insert(WorkMarkRow).values(values).on_conflict_do_nothing()
+            )
+            fresh = _rowcount(result) > 0
+        log.debug("store.work_deleted", item=item_id, runs=len(run_ids), fresh=fresh)
+        return fresh
+
+    def deleted_run_ids(self) -> set[str]:
+        """Every run a person deleted: what a run listing leaves out."""
+        with self._read() as session:
+            return {
+                str(key)
+                for key in session.scalars(
+                    select(WorkMarkRow.subject_key).where(
+                        WorkMarkRow.subject_kind == "run", WorkMarkRow.mark == "deleted"
+                    )
+                )
+            }
 
     def clear_work_mark(self, subject_kind: str, subject_key: str, mark: str) -> bool:
         """Take ``mark`` off the work; False when none stood."""

@@ -433,6 +433,26 @@ class TestReconciler:
             assert lost is not None and lost.state == "failed"
             assert lost.error_code == "interrupted_before_effect" and lost.error_detail == detail
 
+    def test_a_delete_is_judged_from_the_mark_written_last(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path)
+        for key in ("1", "2"):
+            h.dstore.upsert_new(gh_item(key), now=1.0)
+            h.dstore.mark_blocked(f"gh:issue:{key}", "needs a decision", now=2.0)
+        h.dstore.mark_deleted("gh:issue:1", [], 3.0)
+        done, _ = h.loop.operations.accept(
+            spec(action="item.delete", target_kind="item", target_key="gh:1"), now=1.0
+        )
+        lost, _ = h.loop.operations.accept(
+            spec(action="item.delete", target_kind="item", target_key="gh:issue:2"), now=1.0
+        )
+        for op in (done, lost):
+            h.loop.operations.claim(op.id, "g_dead", now=2.0)
+        h.loop.recover()
+        assert h.loop.operations.get(done.id).state == "succeeded"  # type: ignore[union-attr]
+        judged = h.loop.operations.get(lost.id)
+        assert judged is not None and judged.state == "failed"
+        assert judged.error_detail == "the delete was interrupted; sending it again finishes it"
+
     def test_an_interrupted_bulk_dismissal_says_it_is_safe_to_send_again(
         self, tmp_path: Path
     ) -> None:

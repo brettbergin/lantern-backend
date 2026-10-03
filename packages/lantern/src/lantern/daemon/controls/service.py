@@ -46,6 +46,7 @@ from lantern.daemon.controls.results import (
     BreakerResetOutcome,
     CancelOutcome,
     ControlError,
+    DeleteOutcome,
     DismissAllOutcome,
     DismissedTarget,
     DismissOutcome,
@@ -529,6 +530,7 @@ class ControlService:
         require(principal, "runs:control")
 
         def apply(_: str | None) -> ResumeOutcome:
+            self._refuse_deleted(run_id=run_id)
             return self.loop.resume_run(
                 run_id, by=principal.attribution(), expected_revision=expected_revision
             )
@@ -558,6 +560,7 @@ class ControlService:
             raise ControlError("invalid_argument", f"rounds must be at least 1, not {rounds}")
 
         def apply(_: str | None) -> GrantRoundsOutcome:
+            self._refuse_deleted(run_id=run_id)
             self._check_run_revision(run_id, expected_revision)
             try:
                 item = self.loop.grant_rounds(run_id, rounds, principal.attribution())
@@ -682,6 +685,21 @@ class ControlService:
         )
         return self._record(spec, apply)
 
+    def _refuse_deleted(self, *, item_id: str | None = None, run_id: str | None = None) -> None:
+        """Deleted work takes no further command: it is hidden, and its run
+        directories are gone. Checked here because a store transition knows
+        nothing of marks — a retry would otherwise quietly bring back work
+        nobody can see. (The source asking for the work again is not a
+        command: admission re-queues it, and that un-hides it.)"""
+        dstore = self.loop.dstore
+        if item_id is not None:
+            item = dstore.get(item_id)
+            gone = item is not None and dstore.work_mark("item", item.item_id, "deleted")
+        else:
+            gone = dstore.work_mark("run", str(run_id), "deleted")
+        if gone:
+            raise ControlError("not_eligible", "work was deleted")
+
     def _check_item_revision(self, item_id: str, expected: int | None) -> None:
         """``stale_revision`` when the item has moved past what the caller
         acted on. Checked just before the transition rather than inside
@@ -713,6 +731,7 @@ class ControlService:
         item_id = normalize_item_id(item_id)
 
         def apply(op_id: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.abandon_item(item_id, reason)
@@ -753,6 +772,7 @@ class ControlService:
         item_id = normalize_item_id(item_id)
 
         def apply(_: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.retry_item(item_id, principal.attribution())
@@ -782,6 +802,7 @@ class ControlService:
         item_id = normalize_item_id(item_id)
 
         def apply(_: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.requeue_item(item_id)
@@ -844,6 +865,50 @@ class ControlService:
             idempotency=idempotency,
             expected_revision=expected_revision,
             reason=reason,
+        )
+        return self._record(spec, apply)
+
+    def delete(
+        self,
+        principal: Principal,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        reason: str | None = None,
+        discard_undelivered: bool = False,
+        expected_revision: int | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DeleteOutcome:
+        """Put finished work away: hidden from every listing, its run
+        directories and sandboxes removed, its rows kept. Name the work by
+        its item, or by a run when no item carries it. Needs
+        ``runs:control``; refused for work that is not at rest."""
+        require(principal, "runs:control")
+        if (item_id is None) == (run_id is None):
+            raise ControlError("invalid_argument", "name an item or a run, not both")
+        kind = "item" if item_id is not None else "run"
+        target = normalize_item_id(item_id) if item_id is not None else str(run_id)
+        named: dict[str, Any] = {"item_id": target} if kind == "item" else {"run_id": target}
+
+        def apply(op_id: str | None) -> DeleteOutcome:
+            return self.loop.delete_work(
+                **named,
+                actor=principal.audit(),
+                reason=reason,
+                expected_revision=expected_revision,
+                operation_id=op_id,
+                discard_undelivered=discard_undelivered,
+            )
+
+        spec = self._spec(
+            f"{kind}.delete",
+            principal,
+            kind,
+            target,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            reason=reason,
+            discard_undelivered=discard_undelivered,
         )
         return self._record(spec, apply)
 

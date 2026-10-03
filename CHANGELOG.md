@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+**An alert can be dismissed, and finished work deleted.** A failed item
+offered one control, retry, so work nobody meant to retry asked for attention
+for good. `POST /v1/items/{id}/dismiss` (and `/v1/runs/{id}/dismiss` for a run
+no item carries; `runs:control`) acknowledges the alert for everyone: the
+item, its run, its gate and its rows in a channel's `/work` and `/jobs` carry
+`dismissal`, the work keeps its state, its revision and its other controls,
+and the dismissal ends by itself when the work changes state — a retry that
+fails again is a new alert. `/undismiss` takes it back, and `POST /v1/attention/dismiss` dismisses up to 200 named alerts under one operation.
+A person's abandon — from the API, chat, `ctl`, the CLI or an epic run's stop
+— now leaves the item dismissed (`cause: "abandoned"`) as well as `failed`.
+`POST /v1/items/{id}/delete` (and `/v1/runs/{id}/delete`) puts work at rest
+away: it and its runs leave `GET /v1/items`, `GET /v1/runs` and a channel's
+lists (`?include_deleted=true` shows them), and their sandboxes and run
+directories are removed now instead of at the `gc` sweep; the rows and the
+event trail stay, and nothing on the forge is touched. Work still in play is
+refused (abandon or cancel it first), and a run whose workspace is the only
+copy of undelivered work is kept unless the request says
+`discard_undelivered`. An item's `available_actions` gains `dismiss`,
+`undismiss` and `delete`, so a client that checks action names against a
+closed list has to accept them; `GET /v1/capabilities` lists `work.dismiss`,
+`work.dismiss_all` and `work.delete`. Revision 0049 adds one table,
+`daemon_work_marks`, and three triggers; nothing an older release reads
+changes.
+
 **A new capability, `policy:manage`, belongs to the workspace owner alone.**
 It will guard editing the standing rules that let agents take decisions on
 their own; the routes follow, and nothing asks for it yet. An owner holds

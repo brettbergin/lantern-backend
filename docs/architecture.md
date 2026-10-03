@@ -2437,6 +2437,22 @@ CLI and console verb, an epic run's stop), after the transition so the
 trigger has already run, and never inside `DaemonStore.abandon`: the daemon
 calls that itself for a pull request closed unmerged, which nobody has seen.
 
+`delete` is the third mark-writing control and the only one with effects
+outside the table. `DaemonLoop.delete_work` refuses work that is not at rest,
+refuses a run whose workspace is the only copy of undelivered work unless told
+to discard it, then removes each run's sandboxes and — through
+`gc.remove_run_dir`, the sweep's own marker-then-rename step for one run — its
+run directory, and writes the `deleted` marks last (`DaemonStore.mark_deleted`,
+the item and its runs in one transaction). An interruption before the marks
+leaves the work visible and every earlier step safe to repeat. The rows are
+never deleted: they are the audit trail `gc` already keeps. Listings filter on
+the marks (`page_items(include_deleted=False)` in the query,
+`page_runs(exclude=…)` in the same read, so a page stays full), and
+`ControlService._refuse_deleted` keeps the item and run verbs off deleted work,
+because a store transition knows nothing of marks. The item's mark is dropped
+by the same trigger when the item leaves its resting states — work the source
+admits again is visible again — while a run's `deleted` mark is permanent.
+
 `ControlService.dismiss_all` is the same dismissal over a list of named
 targets under one `attention.dismiss_all` operation. It takes targets, never
 a filter: which work "needs attention" is a client's grouping, and a person

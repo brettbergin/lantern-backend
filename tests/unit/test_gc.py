@@ -22,6 +22,7 @@ from lantern.gc import (
     dir_size,
     format_bytes,
     prune_run_dirs,
+    remove_run_dir,
     workspace_pruned,
 )
 from lantern.paths import LanternHome
@@ -277,6 +278,50 @@ class TestPrune:
         assert format_bytes(0) == "0 B"
         assert format_bytes(1536) == "1.5 KB"
         assert format_bytes(3 * 1024**3) == "3.0 GB"
+
+
+class TestRemoveOne:
+    """One run's directory removed on a person's word, whatever its age —
+    the same marker, so a resume is refused as it is after a sweep."""
+
+    def test_a_terminal_run_s_directory_goes_inside_retention(
+        self, store: StateStore, state_dir: LanternHome
+    ) -> None:
+        run_dir = seed_run(store, state_dir, "rdddddd01", state="failed", age_days=0)
+        other = seed_run(store, state_dir, "rdddddd02", state="failed", age_days=0)
+        assert remove_run_dir(store, state_dir, "rdddddd01", now=NOW, actor="Sam") == "removed"
+        assert not run_dir.exists() and other.exists()
+        (_seq, event) = list(store.events("rdddddd01", type_prefix=HostEventTypes.DAEMON_GC))[-1]
+        assert event.data["by"] == "Sam" and event.data["workspace_removed"] is True
+        assert workspace_pruned(store, "rdddddd01") and not workspace_pruned(store, "rdddddd02")
+
+    def test_a_run_that_is_not_terminal_is_kept(
+        self, store: StateStore, state_dir: LanternHome
+    ) -> None:
+        run_dir = seed_run(store, state_dir, "rdddddd03", state="building")
+        assert remove_run_dir(store, state_dir, "rdddddd03", now=NOW) == "kept"
+        assert run_dir.exists() and not workspace_pruned(store, "rdddddd03")
+
+    def test_nothing_to_remove_is_absent_not_an_error(
+        self, store: StateStore, state_dir: LanternHome
+    ) -> None:
+        seed_run(store, state_dir, "rdddddd04", state="failed")
+        assert remove_run_dir(store, state_dir, "rdddddd04", now=NOW) == "removed"
+        assert remove_run_dir(store, state_dir, "rdddddd04", now=NOW) == "absent"
+        assert remove_run_dir(store, state_dir, "rdddddd05", now=NOW) == "absent"
+        # A name that is not a run id never becomes a path.
+        (state_dir.runs / "notes").mkdir(parents=True, exist_ok=True)
+        assert remove_run_dir(store, state_dir, "notes", now=NOW) == "absent"
+        assert remove_run_dir(store, state_dir, "../state", now=NOW) == "absent"
+        assert (state_dir.runs / "notes").is_dir()
+
+    def test_a_failed_removal_leaves_the_marker(
+        self, store: StateStore, state_dir: LanternHome, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seed_run(store, state_dir, "rdddddd06", state="failed")
+        monkeypatch.setattr("lantern.gc._remove", lambda path, home: False)
+        assert remove_run_dir(store, state_dir, "rdddddd06", now=NOW) == "failed"
+        assert workspace_pruned(store, "rdddddd06")
 
 
 class TestResumeGuard:

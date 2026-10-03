@@ -70,7 +70,14 @@ from lantern.vcs.github.labels import lifecycle_specs
 if TYPE_CHECKING:
     from lantern.api.collaboration import Member
 
-ITEM_ACTIONS: tuple[str, ...] = ("retry", "requeue", "abandon", "dismiss", "undismiss")
+ITEM_ACTIONS: tuple[str, ...] = (
+    "retry",
+    "requeue",
+    "abandon",
+    "dismiss",
+    "undismiss",
+    "delete",
+)
 RUN_ACTIONS: tuple[str, ...] = (
     "cancel",
     "resume",
@@ -80,8 +87,8 @@ RUN_ACTIONS: tuple[str, ...] = (
     "review_wait_resume",
 )
 #: Advertised on a run only when no work item pins it: work an item carries
-#: is dismissed through the item, so every alert has one place to call.
-RUN_ALERT_ACTIONS: tuple[str, ...] = ("dismiss", "undismiss")
+#: is dismissed and deleted through the item, so each has one place to call.
+RUN_ALERT_ACTIONS: tuple[str, ...] = ("dismiss", "undismiss", "delete")
 _REVIEW_WAIT_ITEM_STATES = frozenset({"awaiting_review", "paused_review"})
 
 NOT_FOUND = "no such resource"
@@ -135,6 +142,7 @@ class Views:
         self.now = ctx.clock()
         self._status: dict[str, Any] | None = None
         self._dismissals: dict[tuple[str, str], Dismissal | None] = {}
+        self._deleted: dict[tuple[str, str], float | None] = {}
 
     # -- live state ----------------------------------------------------------------
 
@@ -189,8 +197,9 @@ class Views:
     # -- dismissals ----------------------------------------------------------------
 
     def load_dismissals(self, *, item_ids: Sequence[str] = (), run_ids: Sequence[str] = ()) -> None:
-        """Read a page's dismissals in one query, so a listing costs one
-        statement for its marks however long it is. Ids as stored."""
+        """Read a page's marks — dismissed and deleted — in one query, so a
+        listing costs one statement for them however long it is. Ids as
+        stored."""
         items = [key for key in dict.fromkeys(item_ids) if ("item", key) not in self._dismissals]
         runs = [key for key in dict.fromkeys(run_ids) if ("run", key) not in self._dismissals]
         if not items and not runs:
@@ -198,6 +207,8 @@ class Views:
         found = self.dstore.work_marks(item_ids=items, run_ids=runs)
         for kind, keys in (("item", items), ("run", runs)):
             for key in keys:
+                gone = found.get((kind, key, "deleted"))
+                self._deleted[(kind, key)] = gone.at if gone is not None else None
                 mark = found.get((kind, key, "dismissed"))
                 self._dismissals[(kind, key)] = (
                     None
@@ -228,6 +239,24 @@ class Views:
                 self.load_dismissals(run_ids=[key])
         return self._dismissals[(kind, key)]
 
+    def deleted_at(self, item: WorkItem | None, run_id: str | None = None) -> float | None:
+        """When a person deleted this work, or ``None``. The item's mark
+        while the item carries the work — it goes if the item is admitted
+        again — and the run's own otherwise: a deleted attempt stays
+        deleted."""
+        if item is not None and (run_id is None or item.run_id == run_id):
+            kind, key = "item", item.item_id
+        elif run_id is not None:
+            kind, key = "run", run_id
+        else:
+            return None
+        if (kind, key) not in self._deleted:
+            if kind == "item":
+                self.load_dismissals(item_ids=[key])
+            else:
+                self.load_dismissals(run_ids=[key])
+        return self._deleted[(kind, key)]
+
     # -- eligibility ---------------------------------------------------------------
 
     def _subject(self, item: WorkItem | None, run: RunRecord | None) -> Subject:
@@ -250,6 +279,7 @@ class Views:
             gate_state=gate_state,
             review_hold_state=hold_state,
             dismissed=self.dismissal(item, run_id) is not None,
+            deleted=self.deleted_at(item, run_id) is not None,
         )
 
     # -- items ---------------------------------------------------------------------
@@ -336,6 +366,7 @@ class Views:
             revision=item.revision,
             available_actions=[a for a in ITEM_ACTIONS if a in actions],
             dismissal=self.dismissal(item),
+            deleted_at=rfc3339(self.deleted_at(item)),
             **_assignment_fields(item),
         )
 
@@ -459,6 +490,7 @@ class Views:
                 *(a for a in RUN_ALERT_ACTIONS if a in actions and not pinned),
             ],
             dismissal=self.dismissal(item, record.run_id),
+            deleted_at=rfc3339(self.deleted_at(item, record.run_id)),
         )
 
     def tasks(self, run_id: str) -> list[Task]:

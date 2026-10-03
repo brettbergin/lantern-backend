@@ -383,6 +383,8 @@ def project_work(ctx: Any, channel_id: str | None = None) -> list[dict[str, Any]
                     }
                 )
             continue
+        if views.deleted_at(item) is not None:
+            continue
         public_item = views.item(item)
         run = runs.get(item.run_id) if item.run_id else None
         public_run = None

@@ -23,6 +23,7 @@ from lantern.api.models import (
     Steering,
     SteerRequest,
     SteerResult,
+    WorkDeleteCommand,
 )
 from lantern.api.pagination import Page
 from lantern.api.projections import Views
@@ -73,6 +74,22 @@ async def dismiss_run(
     when the work changes state."""
     pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/dismiss", required=False)
     return await run_verb(ctx, auth, "dismiss", run_id, body, pair)
+
+
+@router.post("/runs/{run_id}/delete", response_model=RunCommandResult)
+async def delete_run(
+    run_id: str,
+    request: Request,
+    body: WorkDeleteCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Put a finished run away. A run its work item pins deletes the item
+    with every run it had (the same as ``POST /v1/items/{id}/delete``); a
+    run nothing pins is deleted alone. Refused for a run that is not at
+    rest (cancel it first)."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/delete", required=False)
+    return await run_verb(ctx, auth, "delete", run_id, body, pair)
 
 
 @router.post("/runs/{run_id}/undismiss", response_model=RunCommandResult)

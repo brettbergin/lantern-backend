@@ -241,6 +241,47 @@ class TestDismiss:
         assert refused("dismiss", Subject(pinned=False)).message == "no work to dismiss"
 
 
+class TestDelete:
+    """Only work at rest is deleted: a delete never doubles as a way to
+    stop something."""
+
+    @pytest.mark.parametrize("state", ["done", "failed", "blocked", "cancelled"])
+    def test_an_item_at_rest(self, state: str) -> None:
+        assert "delete" in available_actions(Subject(run_state="failed", item_state=state))
+        assert "delete" in available_actions(Subject(item_state=state, pinned=False))
+
+    @pytest.mark.parametrize(
+        "state",
+        ["queued", "running", "gated", "awaiting_review", "paused_review", "awaiting_answers"],
+    )
+    def test_an_item_still_in_play_is_abandoned_first(self, state: str) -> None:
+        err = refused("delete", Subject(run_state="building", item_state=state))
+        assert err.code == "not_eligible"
+        assert err.message == f"work item is {state}; abandon it first"
+
+    def test_the_run_in_flight(self) -> None:
+        live = Subject(run_state="building", item_state="running", is_current=True)
+        assert refused("delete", live).message == "run is in flight"
+
+    @pytest.mark.parametrize("state", ["merged", "completed", "failed", "blocked", "cancelled"])
+    def test_a_run_nothing_pins_at_rest(self, state: str) -> None:
+        assert "delete" in available_actions(Subject(run_state=state, pinned=False))
+
+    @pytest.mark.parametrize("state", ["building", "gated", "held", "provider_held"])
+    def test_a_run_nothing_pins_still_in_play(self, state: str) -> None:
+        err = refused("delete", Subject(run_state=state, pinned=False))
+        assert err.message == f"run is {state}; cancel it first"
+
+    def test_nothing_at_all(self) -> None:
+        assert refused("delete", Subject(pinned=False)).message == "no work to delete"
+
+    def test_deleted_work_takes_no_further_command(self) -> None:
+        subject = Subject(run_state="failed", item_state="failed", deleted=True)
+        assert available_actions(subject) == frozenset()
+        for action in ("retry", "resume", "dismiss", "delete"):
+            assert refused(action, subject).message == "work was deleted"
+
+
 def test_available_actions_is_exactly_what_check_allows() -> None:
     subject = Subject(run_state="building", item_state="running", is_current=True)
     expected = set()
