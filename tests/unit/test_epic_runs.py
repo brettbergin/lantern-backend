@@ -763,3 +763,32 @@ class TestClosingTheEpic:
         (summary,) = _summaries(ops)
         assert "No epic run took part" in summary and "- #11 A — closed" in summary
         assert len(_epic_closes(ops)) == 1
+
+
+class TestATaskThatJoinsMidRun:
+    def test_a_task_published_under_a_running_epic_is_admitted(self, tmp_path: Path) -> None:
+        """An approved re-plan adds a task to a running epic (or an issue
+        is attached to it): the run picks it up on its next pass, waits
+        on its dependencies like any other, and does not complete without
+        it."""
+        ops = _issues(1, 2)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 1))
+        run = _start(h)
+        assert _states(h, run) == {"a": "queued"}
+
+        store = PlanStore(h.dstore)
+        plan = store.get("plan_1")
+        assert plan is not None
+        store.apply(
+            plan.id,
+            expected_revision=plan.revision,
+            now=h.clock(),
+            upsert=[_node("b", 2, depends_on=("a",))],
+        )
+
+        h.loop.epic_runs.tick(h.clock())
+        assert _states(h, run) == {"a": "queued", "b": "waiting"}
+        after = h.loop.epic_runs.runs.get(run.id)
+        assert after is not None and after.state == "running"
+        assert any(d.get("task_node_id") == "b" for _, d in _events(h)), _events(h)
