@@ -33,10 +33,11 @@ from typing import Any, Literal
 
 from lantern.config import Config
 from lantern.errors import LanternError
+from lantern.plans.forgeread import refs, say
 from lantern.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from lantern.plans.model import ForgeRef, ForgeState, Plan, PlanNode
 from lantern.plans.render import markers, render_body, repo_of
-from lantern.plans.store import PlanEvent, PlanStore, StaleRevision
+from lantern.plans.store import PlanEvent, PlanStore, StaleRevision, retry_stale
 from lantern.vcs.checklist import ChecklistEntry, add_child, update_checklist
 from lantern.vcs.github.labels import LEVEL_DESCRIPTORS, LabelSpec, ensure_label
 from lantern.vcs.protocol import IssueOps
@@ -46,8 +47,6 @@ Linked = Literal["native", "checklist", "none"]
 
 #: How many issues one marker lookup reads per page.
 PAGE = 100
-#: How long an error from the forge may run in a result.
-ERROR_MAX = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +120,6 @@ def level_targets(
     return out
 
 
-def _say(exc: BaseException) -> str:
-    text = " ".join(str(exc).split()) or type(exc).__name__
-    return text[:ERROR_MAX]
-
-
 class _Walk:
     """One level's walk: the caches it keeps and the steps per node."""
 
@@ -146,11 +140,7 @@ class _Walk:
         self.clock = clock
         self.actor = None if actor is None else dict(actor)
         # Every node already on the forge, and each one this walk publishes.
-        self.refs: dict[str, tuple[str, ForgeRef]] = {
-            n.id: (n.repository, n.forge)
-            for n in plan.nodes
-            if n.state == "published" and n.forge is not None
-        }
+        self.refs: dict[str, tuple[str, ForgeRef]] = refs(plan)
         self.labels: dict[tuple[str, str], str] = {}
         self.issues: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
         self.children: dict[tuple[str, int], set[tuple[str, int]]] = {}
@@ -225,7 +215,7 @@ class _Walk:
                     raise
                 forge = FORGE_NAMES.get(str(self.config.vcs_kind_for(parent_repo)), "the forge")
                 reason = (
-                    f"{forge} refused the cross-repository sub-issue ({_say(exc)}); "
+                    f"{forge} refused the cross-repository sub-issue ({say(exc)}); "
                     "it is listed in the parent's checklist instead"
                 )
         elif planning.hierarchy == "checklist":
@@ -252,34 +242,36 @@ class _Walk:
     def record(self, node_id: str, ref: ForgeRef) -> Plan:
         """The node published, in one write against the plan as it is now
         (someone else's edit between two nodes is not a conflict here)."""
-        for _ in range(3):
+
+        def attempt() -> Plan:
             plan = self.store.get(self.plan_id)
             node = None if plan is None else plan.node(node_id)
             if plan is None or node is None:
                 raise _Failed(f"{node_id} was removed from the plan while it was published")
             now = self.clock()
-            try:
-                return self.store.apply(
-                    plan.id,
-                    expected_revision=plan.revision,
-                    now=now,
-                    upsert=[replace(node, state="published", forge=ref, updated_at=now)],
-                    events=[
-                        PlanEvent(
-                            "plan.node.changed",
-                            {
-                                "plan_id": plan.id,
-                                "node_id": node_id,
-                                "change": "published",
-                                "number": ref.number,
-                            },
-                        )
-                    ],
-                    actor=self.actor,
-                )
-            except StaleRevision:
-                continue
-        raise _Failed(f"{node_id} could not be recorded: the plan kept changing")
+            return self.store.apply(
+                plan.id,
+                expected_revision=plan.revision,
+                now=now,
+                upsert=[replace(node, state="published", forge=ref, updated_at=now)],
+                events=[
+                    PlanEvent(
+                        "plan.node.changed",
+                        {
+                            "plan_id": plan.id,
+                            "node_id": node_id,
+                            "change": "published",
+                            "number": ref.number,
+                        },
+                    )
+                ],
+                actor=self.actor,
+            )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise _Failed(f"{node_id} could not be recorded: the plan kept changing") from exc
 
     # -- the walk --------------------------------------------------------------
 
@@ -302,7 +294,7 @@ class _Walk:
                 "failed",
                 number=None if ref is None else ref.number,
                 url=None if ref is None else ref.url,
-                error=_say(exc),
+                error=say(exc),
             )
         self.refs[node.id] = (node.repository, ref)
         return NodeResult(node.id, outcome, ref.number, ref.url, linked, None, reason)

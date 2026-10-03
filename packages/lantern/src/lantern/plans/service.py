@@ -41,14 +41,13 @@ from lantern.plans.direct import (
     Linked,
     LinkRefused,
     add_level_label,
-    gone,
     issue_write,
     labelled,
     link_child,
-    say,
     unlink_child,
     without_dependency,
 )
+from lantern.plans.forgeread import Seen, gone, say, seen_of
 from lantern.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from lantern.plans.model import (
     CONTENT_FIELDS,
@@ -61,15 +60,14 @@ from lantern.plans.model import (
     child_level,
     content,
     content_version,
+    plain,
 )
 from lantern.plans.publish import LevelResult, level_targets, publish_level
 from lantern.plans.reconcile import (
     Reconciliation,
-    Seen,
     as_forge_has_it,
     key_of,
     reconcile_plan,
-    seen_of,
 )
 from lantern.plans.render import drop_reference, markers, parse_issue_url
 from lantern.plans.replan import AppliedReplan, EntryRefused, apply_replan
@@ -80,6 +78,7 @@ from lantern.plans.store import (
     Reconciled,
     StaleRevision,
     new_id,
+    retry_stale,
 )
 from lantern.vcs.checklist import ChecklistMangled
 from lantern.vcs.protocol import IssueOps
@@ -222,7 +221,7 @@ class PlanService:
         )
         requested = self._with_sections(root, sections, siblings=[])
         brief = {
-            key: _plain(getattr(requested, key)) for key in SECTIONS if key not in TASK_SECTIONS
+            key: plain(getattr(requested, key)) for key in SECTIONS if key not in TASK_SECTIONS
         }
         root = replace(root, title=f"Unplanned {level}")
         plan = Plan(
@@ -354,7 +353,7 @@ class PlanService:
                 expected_revision,
                 now,
                 input={
-                    key: _plain(getattr(requested, key))
+                    key: plain(getattr(requested, key))
                     for key in SECTIONS
                     if key not in TASK_SECTIONS
                 },
@@ -909,7 +908,8 @@ class PlanService:
         answer, replacing any earlier generation's, with
         ``plan.generation.questions`` in the same write. Written against the
         revision it reads, and read again when another write won."""
-        for _ in range(3):
+
+        def attempt() -> Plan:
             plan, node = self.breakdown_target(plan_id, node_id)
             asked = Clarification(run_id=run_id, questions=list(questions), asked_at=now)
             try:
@@ -934,13 +934,15 @@ class PlanService:
                     ],
                     actor=dict(PLANNER),
                 )
-            except StaleRevision:
-                continue
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
-        raise PlanRefusal(
-            409, "stale_revision", "the plan kept changing while the questions were written"
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409, "stale_revision", "the plan kept changing while the questions were written"
+            ) from exc
 
     def record_question_posts(
         self,
@@ -957,7 +959,8 @@ class PlanService:
         record after a restart. Nothing when the questions are no longer
         waiting or another run asked them; no event — nothing a person
         reads changed."""
-        for _ in range(3):
+
+        def attempt() -> None:
             plan = self.get(plan_id)
             node = self._node(plan, node_id)
             waiting = node.generation
@@ -974,14 +977,16 @@ class PlanService:
                     now=now,
                     upsert=[replace(node, generation=remembered)],
                 )
-            except StaleRevision:
-                continue
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
             return
-        raise PlanRefusal(
-            409, "stale_revision", "the plan kept changing while the posts were recorded"
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409, "stale_revision", "the plan kept changing while the posts were recorded"
+            ) from exc
 
     def waiting_questions(self, plan_id: str, node_id: str) -> Clarification:
         """The node's clarifying questions while they wait for a person,
@@ -1023,7 +1028,8 @@ class PlanService:
         ``run_id``, when given, is the run the caller is answering: an
         answer meant for questions another run has since replaced is
         refused rather than recorded against them."""
-        for _ in range(3):
+
+        def attempt() -> tuple[Plan, Clarification]:
             plan = self.get(plan_id)
             if expected_revision is not None:
                 self._check_revision(plan, expected_revision)
@@ -1097,13 +1103,17 @@ class PlanService:
             except StaleRevision as exc:
                 if expected_revision is not None:
                     raise _stale(exc) from exc
-                continue
+                raise
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
             return changed, updated
-        raise PlanRefusal(
-            409, "stale_revision", "the plan kept changing while the answers were written"
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409, "stale_revision", "the plan kept changing while the answers were written"
+            ) from exc
 
     def withdraw_questions(
         self,
@@ -1120,7 +1130,8 @@ class PlanService:
         person answered: the questions are withdrawn, so no client keeps
         offering them, and the generation ends ``plan.generation.failed``.
         Nothing when the questions are another run's or already settled."""
-        for _ in range(3):
+
+        def attempt() -> None:
             plan = self.store.get(plan_id)
             node = plan.node(node_id) if plan is not None else None
             if plan is None or node is None:
@@ -1152,11 +1163,14 @@ class PlanService:
                     ],
                     actor=dict(PLANNER),
                 )
-            except StaleRevision:
-                continue
             except PlanGone:
                 return
             return
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision:
+            return None
 
     def deliver_proposal(
         self,
@@ -1177,7 +1191,8 @@ class PlanService:
         revision, held to the same rules a person's edit is. The plan may
         have moved while the planner worked, so the write is made against
         the revision it reads, and read again when another write won."""
-        for _ in range(3):
+
+        def attempt() -> tuple[Plan, int]:
             plan, node = self.breakdown_target(plan_id, node_id)
             if replanned(plan, node):
                 raise PlanRefusal(
@@ -1232,14 +1247,16 @@ class PlanService:
                     ],
                     actor=dict(PLANNER),
                 )
-            except StaleRevision:
-                continue
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
             return changed, len(proposal.children)
-        raise PlanRefusal(
-            409, "stale_revision", "the plan kept changing while the proposal was written"
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409, "stale_revision", "the plan kept changing while the proposal was written"
+            ) from exc
 
     def deliver_replan(
         self,
@@ -1259,7 +1276,8 @@ class PlanService:
         entry whose child left the forge while the planner worked, are left
         out and counted as ``skipped``; an empty diff clears the node's.
         Recorded as ``plan.generation.proposed`` with ``kind: "replan"``."""
-        for _ in range(3):
+
+        def attempt() -> tuple[Plan, int]:
             plan, node = self.breakdown_target(plan_id, node_id)
             if not replanned(plan, node):
                 raise PlanRefusal(
@@ -1294,14 +1312,16 @@ class PlanService:
                     ],
                     actor=dict(PLANNER),
                 )
-            except StaleRevision:
-                continue
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
             return changed, 0 if pending is None else len(pending.entries)
-        raise PlanRefusal(
-            409, "stale_revision", "the plan kept changing while the re-plan was written"
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409, "stale_revision", "the plan kept changing while the re-plan was written"
+            ) from exc
 
     def _replan_entries(
         self, plan: Plan, node: PlanNode, replan: PlanReplan, run_id: str, now: float
@@ -1377,7 +1397,7 @@ class PlanService:
                 fields["verify_commands"] = []
             if fields.get("kind") == "code" and "workload_profile" not in fields:
                 fields["workload_profile"] = None
-            fields = {k: v for k, v in fields.items() if _plain(getattr(target, k)) != _plain(v)}
+            fields = {k: v for k, v in fields.items() if plain(getattr(target, k)) != plain(v)}
             if not fields:
                 skipped += 1
                 continue
@@ -1388,8 +1408,8 @@ class PlanService:
                     id=new_id("rpe_"),
                     action="modify",
                     node_id=target.id,
-                    sections={k: _plain(v) for k, v in fields.items()},
-                    before={k: _plain(getattr(target, k)) for k in fields},
+                    sections={k: plain(v) for k, v in fields.items()},
+                    before={k: plain(getattr(target, k)) for k in fields},
                     rationale=change.rationale,
                     forge_version=content_version(target),
                 )
@@ -2234,7 +2254,8 @@ class PlanService:
         """Record what was just written to the forge, against the plan as
         it now is: the forge already has it, so another edit of the plan
         meanwhile is not a reason to lose it."""
-        for _ in range(3):
+
+        def attempt() -> Plan:
             latest = self.get(plan_id)
             now = clock()
             try:
@@ -2246,16 +2267,18 @@ class PlanService:
                     events=[PlanEvent("plan.node.changed", {"plan_id": plan_id, **event})],
                     actor=dict(actor),
                 )
-            except StaleRevision:
-                continue
             except PlanGone as exc:
                 raise _not_found(plan_id) from exc
-        raise PlanRefusal(
-            409,
-            "already_in_progress",
-            "the forge was written but the plan kept changing while it was recorded; "
-            "a sync reads it back",
-        )
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision as exc:
+            raise PlanRefusal(
+                409,
+                "already_in_progress",
+                "the forge was written but the plan kept changing while it was recorded; "
+                "a sync reads it back",
+            ) from exc
 
     @staticmethod
     def _followed(plan: Plan, node_id: str) -> PlanNode:
@@ -2632,10 +2655,6 @@ def replanned(plan: Plan, node: PlanNode) -> bool:
 def _changeable(node: PlanNode) -> bool:
     """On the forge, followed and open: a re-plan may change or close it."""
     return node.followed and node.forge is not None and node.forge.state != "closed"
-
-
-def _plain(value: Any) -> Any:
-    return list(value) if isinstance(value, tuple) else value
 
 
 def _current(child: PlanNode) -> CurrentChild:

@@ -27,8 +27,9 @@ from typing import Any, Literal
 
 from lantern.config import Config
 from lantern.errors import LanternError
+from lantern.plans.forgeread import refs, say
 from lantern.plans.hierarchy import FORGE_NAMES, repository_planning
-from lantern.plans.model import ForgeRef, Plan, PlanNode
+from lantern.plans.model import Plan, PlanNode
 from lantern.plans.reconcile import key_of
 from lantern.plans.render import (
     HEADINGS,
@@ -50,20 +51,6 @@ from lantern.vcs.protocol import IssueOps
 
 Linked = Literal["native", "checklist"]
 
-#: How long an error from the forge may run in a refusal.
-ERROR_MAX = 300
-#: What the forge answers for an issue that is not there: GitHub's 410 for
-#: a deleted one, 404 on both forges for one it cannot find.
-GONE = frozenset({404, 410})
-
-
-def say(exc: BaseException) -> str:
-    return (" ".join(str(exc).split()) or type(exc).__name__)[:ERROR_MAX]
-
-
-def gone(exc: BaseException) -> bool:
-    return getattr(exc, "http_status", None) in GONE
-
 
 class LinkRefused(Exception):
     """The forge will not take the child under this parent; ``code`` names
@@ -79,16 +66,6 @@ def _hierarchy(config: Config, repo: str) -> str:
     """How ``repo``'s forge links children: by the backend's capability,
     as a reconcile reads them."""
     return repository_planning(str(config.vcs_kind_for(repo))).hierarchy
-
-
-def refs(plan: Plan) -> dict[str, tuple[str, ForgeRef]]:
-    """Every published node's repository and issue, by node id: what a
-    ``Depends on`` section renders."""
-    return {
-        n.id: (n.repository, n.forge)
-        for n in plan.nodes
-        if n.state == "published" and n.forge is not None
-    }
 
 
 # -- edit ----------------------------------------------------------------------
@@ -210,18 +187,20 @@ def unlink_child(
                 child_number=child.forge.number,
             )
             unlinked.append("native")
-    body = str(ops.issue_get(parent_repo, parent_number).get("body") or "")
+
+    def change(body: str) -> str:
+        for entry in parse_checklist(body):
+            if _entry_key(entry.ref) == key:
+                return remove_child(body, entry.ref)
+        return body
+
     try:
-        entries = parse_checklist(body)
+        if update_checklist(ops, parent_repo, parent_number, change):
+            unlinked.append("checklist")
     except ChecklistMangled:
         if unlinked:
             return unlinked
         raise
-    for entry in entries:
-        if _entry_key(entry.ref) == key:
-            ops.issue_update(parent_repo, parent_number, body=remove_child(body, entry.ref))
-            unlinked.append("checklist")
-            break
     return unlinked
 
 

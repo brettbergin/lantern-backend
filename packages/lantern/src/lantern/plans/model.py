@@ -284,6 +284,11 @@ def content(node: PlanNode) -> dict[str, Any]:
     }
 
 
+def plain(value: Any) -> Any:
+    """A node's field as an entry or a section holds it: tuples as lists."""
+    return list(value) if isinstance(value, tuple) else value
+
+
 def content_version(node: PlanNode) -> str:
     """The version of a published node's issue a direct edit names (#2350):
     a digest of the title and sections as the node holds them — which is
