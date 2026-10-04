@@ -203,10 +203,9 @@ def gone(dstore: Any, escalation: Escalation) -> bool:
     round grants), which knows its own situation; an escalation whose
     target still stands waits for them or for a person."""
     record, plan = escalation.record, escalation.plan
-    if record.action.startswith("plan.") and record.action != "plan.propose":
-        # A plan step names its plan: one that names none has no target.
-        if not record.plan_id:
-            return True
+    # A plan step names its plan: one that names none has no target.
+    if record.action.startswith("plan.") and record.action != "plan.propose" and not record.plan_id:
+        return True
     if record.plan_id:
         if plan is None or plan.archived:
             return True
