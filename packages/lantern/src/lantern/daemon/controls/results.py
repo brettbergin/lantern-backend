@@ -170,6 +170,16 @@ class GrantOutcome(Outcome):
     message: str
 
 
+class GoalOutcome(Outcome):
+    """A goal written, edited or removed; ``revision`` is the goal's after
+    the write (``None`` once it is removed)."""
+
+    verb: Literal["add", "update", "remove"]
+    goal_id: str
+    revision: int | None = None
+    message: str
+
+
 class RepositoryOutcome(Outcome):
     """A registration added, changed or removed; ``repo`` as registered."""
 

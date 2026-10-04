@@ -88,6 +88,9 @@ EFFECTS: dict[str, str] = {
     "grant.update": "the grant holds the requested change",
     "grant.delete": "the grant is gone; what it allowed stays in the ledger",
     "decision.decline": "the escalation is resolved; a person declined it unless it was already",
+    "goal.create": "the goal is stored for its repository",
+    "goal.update": "the goal holds the requested change",
+    "goal.delete": "the goal is gone; the plans proposed from it keep naming it",
 }
 
 
@@ -842,6 +845,8 @@ def _judge(
         if decision.resolved_at is not None:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the escalation is still waiting"
+    if op.action.startswith("goal."):
+        return _judge_goal(loop, op)
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:
@@ -883,6 +888,39 @@ def _judge_grant(
             "failed",
             "interrupted_before_effect",
             f"the grant does not hold the requested change (it is at revision {grant.revision}); "
+            "read it and send the change again if it is still wanted",
+        )
+    return "reconciling", None, "the effect could not be established from the record"
+
+
+def _judge_goal(
+    loop: Any, op: Operation
+) -> tuple[Literal["succeeded", "failed", "reconciling"], str | None, str | None]:
+    """A goal write is one transaction, so the stored goal says whether it
+    happened: it is there, it holds the change, or it is gone."""
+    from lantern.daemon.goals import GoalStore
+
+    goal = GoalStore(loop.dstore).goal(op.target_key)
+    if op.action == "goal.create":
+        if goal is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the goal was not written"
+    if op.action == "goal.delete":
+        if goal is None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the goal is still there"
+    if op.action == "goal.update":
+        if goal is None:
+            return "failed", "unknown_target", "no such goal"
+        changes = dict((op.request or {}).get("changes") or {})
+        held = {"title": goal.title, "text": goal.text, "state": goal.state}
+        moved = op.expected_revision is None or goal.revision > op.expected_revision
+        if changes and moved and all(held.get(key) == value for key, value in changes.items()):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the goal does not hold the requested change (it is at revision {goal.revision}); "
             "read it and send the change again if it is still wanted",
         )
     return "reconciling", None, "the effect could not be established from the record"

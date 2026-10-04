@@ -2458,6 +2458,32 @@ failure past three retries. A failure you dismissed or abandoned is left
 alone. Every retry shows in `GET /v1/decisions` and in the operations log as
 the operator agent's; while the daemon is paused, triage does nothing.
 
+#### Goals: the direction an owner sets
+
+A goal is an objective for one repository, in your own words: "cut the build
+time in half without dropping a check", "every public endpoint documented".
+An owner or an admin writes one (`plans:publish`; a member reads goals but does
+not set them):
+
+```sh
+curl -X POST "$LANTERN/v1/goals" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"repository": "acme/shop", "title": "Faster builds",
+       "text": "Cut the build time in half without dropping a check."}'
+```
+
+The repository must be configured, enabled and able to hold a plan; one that
+is not is refused with `"field": "repository"`. The title is at most 200
+characters and the text at most 4000. A goal is `active` until you set it
+`paused` or `done` with `PATCH /v1/goals/{id}` (send the `revision` you read as
+`expected_revision`); `DELETE /v1/goals/{id}` removes it.
+
+`GET /v1/goals` lists every goal with the plans proposed from it and
+`open_plan_id`, the one currently serving it. In this release nothing proposes
+a plan from a goal yet: goals are stored and read, and the release that lets
+agents propose work starts drafting plans from the active ones. Like grants,
+goals are written through these routes only and have no configuration key.
+
 #### Sign in with an OIDC provider (Authentik)
 
 A browser client such as Lantern can sign people in through an OpenID Connect

@@ -2880,6 +2880,18 @@ plan's waiting questions and proposed levels are entries too
 (`plan_questions`, `plan_proposal`, read by `PlanStore.waiting_on_people` in
 two statements); a plan that advances itself shows neither.
 
+**Goals** are the direction an owner sets for a repository: a title, the
+objective in the owner's words, and `active`, `paused` or `done`. They live in
+`daemon_goals` (revision 0053) behind `GoalStore` (`daemon/goals.py`), held
+as `loop.goals`. A plan proposed from a goal names it in `daemon_plans.goal_id`
+(revision 0051, indexed by 0053); `GoalStore.plans_by_goal` reads the plans
+serving any number of goals in one query over those rows, never by loading
+every plan, and the one that is not archived and changed last is the goal's
+open plan. Writing a goal takes `plans:publish` and goes through
+`ControlService` as a recorded operation (`goal.create`, `goal.update`,
+`goal.delete`) that recovery settles from the stored goal. The API's
+`/v1/goals` is the only surface; nothing proposes a plan from a goal yet.
+
 ### The remote API listener
 
 External job conversations are a durable read-side projection in

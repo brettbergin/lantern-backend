@@ -90,6 +90,24 @@ keeps its id. A plan that advances itself shows neither. Reminders carry
 `action_capabilities`, so an escalation's reminder (`time_sensitive`)
 reaches whoever could take its step — the owners alone for a proposal.
 
+**An owner can set goals for a repository.** There was nowhere to say what a
+repository's work is for: every plan began with a person drafting it. A
+goal is a standing objective for one repository — a title and the objective
+in the owner's words, `active`, `paused` or `done` — written by an owner or
+an admin through `POST /v1/goals` (`plans:publish`; a member reads goals
+with `runs:read` but is refused a write naming the capability), edited
+against its revision with `PATCH /v1/goals/{id}` and removed with
+`DELETE /v1/goals/{id}`. The repository must be configured, enabled and
+able to hold a plan (`422` with `"field": "repository"` otherwise). Each
+goal reads with the plans proposed from it (`plans`, each with its id,
+title, state and `advance`) and `open_plan_id`, the one currently serving
+it. Each write is a recorded operation (`goal.create`, `goal.update`,
+`goal.delete`) settled from the stored goal at recovery. `/v1/capabilities`
+lists `goals` beside `planning`. Migration 0053 adds `daemon_goals` and an
+index on `daemon_plans.goal_id`; nothing is written, and nothing proposes a
+plan from a goal yet. No chat tool, `ctl` verb or WebSocket command writes
+one.
+
 **A push says which decision it is about, and what you may do about it.** A
 device could only show a push's text: to approve a gate or retry a failed
 run a person had to open the app and find the thing again. The stored
