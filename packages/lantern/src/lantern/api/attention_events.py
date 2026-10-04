@@ -36,6 +36,10 @@ traffic), or when :data:`SWEEP_S` has gone by since it last looked, for
 the changes that record nothing (polling that stopped, a provider hold).
 A pass with nothing new runs no statement; reminders are judged on the
 passes that read the list anyway, and a sweep with none due writes nothing.
+
+**The daily digest** (:mod:`lantern.api.digest`) rides the same passes:
+with ``[attention] digest_at`` set, the first pass at or after that time
+of day records the day's ``briefing.digest``; unset, it costs nothing.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from lantern.api.attention import entries, subject, waiting
 from lantern.api.chronology import DAEMON_ACTOR
+from lantern.api.digest import Digest
 from lantern.api.models import AttentionEntry
 from lantern.api.projections import Views
 from lantern.log import get_logger
@@ -103,6 +108,8 @@ class AttentionTracker:
     def __init__(self, ctx: ApiContext, *, sweep_s: float = SWEEP_S) -> None:
         self.ctx = ctx
         self.sweep_s = sweep_s
+        #: The daily digest rides the same passes (``[attention] digest_at``).
+        self.digest = Digest(ctx)
         #: The chronology's high-water mark at the last pass.
         self._seen: int | None = None
         #: When the list was last read; ``None`` until it has been.
@@ -116,14 +123,19 @@ class AttentionTracker:
         if not ctx.ready.is_set() or ctx.stopping.is_set():
             # Recovery is still settling what the last process left.
             return 0
+        try:
+            digested = self.digest.step(now)
+        except Exception:
+            log.warning("attention.digest_failed", exc_info=True)
+            digested = 0
         seen, self._seen = self._seen, mark
         if self._swept is not None and now - self._swept < self.sweep_s:
             if mark == seen:
-                return 0
+                return digested
             if not ctx.chronology.recorded_after(seen or 0, TRIGGERS):
-                return 0
+                return digested
         self._swept = now
-        return self.diff(now)
+        return digested + self.diff(now)
 
     def diff(self, now: float) -> int:
         """Compare the list with the set last seen and record the

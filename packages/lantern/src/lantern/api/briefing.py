@@ -166,8 +166,10 @@ def _grants(ledger: DelegationStore, *, day_start: float) -> BriefingGrants:
     return BriefingGrants(enabled=len(enabled), at_limit=at_limit)
 
 
-def briefing(views: Views, auth: Authenticated, *, since: float) -> Briefing:
-    """The briefing for ``[since, now)`` as ``auth`` may read it."""
+def briefing(views: Views, auth: Authenticated | None, *, since: float) -> Briefing:
+    """The briefing for ``[since, now)`` as ``auth`` may read it. ``None``
+    is the summary anyone may read (the daily digest's): every count, and
+    nothing of what was decided."""
     now = views.now
     loop = views.loop
     ledger: DelegationStore = loop.delegation
@@ -206,7 +208,7 @@ def briefing(views: Views, auth: Authenticated, *, since: float) -> Briefing:
             views,
             ledger,
             since=since,
-            detailed=DECISIONS_CAPABILITY in auth.principal.capabilities,
+            detailed=auth is not None and DECISIONS_CAPABILITY in auth.principal.capabilities,
         ),
         supply=BriefingSupply(
             proposed=supply.proposed,

@@ -922,7 +922,11 @@ def test_example_attention_section_documents_the_defaults() -> None:
         elif in_block and not line.strip():
             break
     block = tomllib.loads(text)
-    assert set(block) == set(AttentionConfig.model_fields) == {"remind_after_s", "remind_every_s"}
+    assert (
+        set(block)
+        == set(AttentionConfig.model_fields)
+        == {"remind_after_s", "remind_every_s", "digest_at"}
+    )
     assert Config.model_validate({"attention": block}).attention == Config().attention
 
 

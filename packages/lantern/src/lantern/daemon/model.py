@@ -392,6 +392,7 @@ NoticeKind = Literal[
     "daemon.holds_restored",
     "daemon.daily_cap",
     "daemon.token_budget",
+    "daemon.digest",
     "daemon.gc",
     "daemon.state_archived",
     "daemon.repoless_items_stranded",

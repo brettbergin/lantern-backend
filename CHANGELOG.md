@@ -47,6 +47,23 @@ agent assignment, so a daemon restart and a resume keep it. A breakdown of a
 rule is one function, `binds_without_memories`, for every admission a
 delegated decision will depend on.
 
+**A daily digest arrives on its own.** A person who stopped watching heard
+nothing until something waited on them; the briefing answered only when
+asked. Set `[attention] digest_at` (`"HH:MM"`, 24-hour, in `[daemon] run_cap_timezone`; off by default, and anything that is not a time of day
+is refused at load, naming the key) and once a day, at or after that time,
+the attention tracker computes the briefing since the previous digest (a
+day, the first time) with the route's own code, as the summary anyone may
+read, and records `briefing.digest` — `landed`, `failed`, `waiting`,
+`decided_allow`, `decided_escalate`, `runway_days`, `since`, `until`, the
+`day` and the `timezone`; no titles, no reasons — with no run, item or
+channel, so every member sees it. The control channel gets one line
+(`daemon.digest`, `info`, nobody mentioned): `Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; 9 decided under grants; runway 2.5 days.` With push on, every member with a device gets one `work` push titled
+`Your Lantern briefing` with the same line, deduped by the day; the device's
+`work` switch applies. The day is kept in `daemon_state` in the event's own
+transaction: a restart repeats nothing, a daemon down at the time sends it
+once on return the same day, and a day missed entirely is skipped, never
+made up. With the digest off, the tracker's pass does no extra work.
+
 **What waits on a person is reminded about.** A merge gate, a publish hold,
 a plan's clarifying questions and a blocked run announced themselves once and
 then waited in silence, for as long as it took; the only repeated signal in

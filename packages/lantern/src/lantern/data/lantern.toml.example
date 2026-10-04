@@ -1093,6 +1093,13 @@ service_memory = "2g"
 # there). Workspace-wide: an entry need not belong to a repository.
 # remind_after_s = 14400           # first reminder after 4 hours; 0 = no reminders
 # remind_every_s = 86400           # then one a day
+# The daily digest: at digest_at ("HH:MM", 24-hour, read in [daemon]
+# run_cap_timezone) the chronology records a briefing.digest event with
+# what finished, what waits and what was decided since the last one (a day,
+# the first time), the control channel gets one line saying so, and every
+# member with a device gets one work push. Once a day: a daemon down at the
+# time sends it when it is back that day; a day missed entirely is skipped.
+# digest_at = ""                   # e.g. "07:00"; empty = no digest
 
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask
