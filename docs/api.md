@@ -2798,7 +2798,7 @@ The window ends now. The response:
 - `budget`: `runs_today` against `max_runs_per_day` and `tokens_today`
   against `daily_token_budget` (`null` when no budget is configured), with
   `resets_at` — the figures of
-  [`GET /v1/usage/pool`](#fleet-analytics), for the pool's calendar day.
+  `GET /v1/usage/pool`, for the pool's calendar day.
 - `grants`: how many grants are `enabled`, and how many of those are
   `at_limit`, having allowed as many acts today as their `daily_limit`.
 
