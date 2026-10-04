@@ -143,6 +143,8 @@ class TestAnOwnerSetsGoals:
     def test_the_list_narrows_by_repository_and_state(self, api: Api) -> None:
         headers = api.bearer(WRITE)
         active = _goal(api, headers)
+        # The harness clock stands still: move it so "oldest first" is decided.
+        api.clock.t += 1  # type: ignore[attr-defined]
         paused = _goal(api, headers, title="Docs", state="paused")
         listed = api.client.get("/v1/goals?state=paused", headers=headers).json()["data"]
         assert [g["id"] for g in listed] == [paused["id"]]
