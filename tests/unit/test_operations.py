@@ -879,6 +879,48 @@ class TestReconciler:
         assert settled is not None
         assert (settled.state, settled.error_code) == ("failed", "unknown_target")
 
+    def test_claimed_goal_writes_are_judged_from_the_stored_goal(self, tmp_path: Path) -> None:
+        h = Harness(tmp_path)
+        goal = h.loop.goals.create(
+            repository="o/r",
+            title="Faster builds",
+            text="Halve it.",
+            created_by=None,
+            created_by_display=None,
+            now=1.0,
+        )
+        edited = h.loop.goals.update(goal.id, {"state": "done"}, expected_revision=1, now=1.5)
+        cases = {
+            ("goal.create", goal.id, None, None): ("succeeded", None),
+            ("goal.create", "goal_lost", None, None): ("failed", "interrupted_before_effect"),
+            ("goal.update", goal.id, 1, "done"): ("succeeded", None),
+            ("goal.update", goal.id, 1, "paused"): ("failed", "interrupted_before_effect"),
+            ("goal.update", "goal_gone", 1, "done"): ("failed", "unknown_target"),
+            ("goal.delete", goal.id, None, None): ("failed", "interrupted_before_effect"),
+            ("goal.delete", "goal_gone", None, None): ("succeeded", None),
+        }
+        accepted = {}
+        for (action, key, revision, state), wanted in cases.items():
+            request = {} if state is None else {"changes": {"state": state}}
+            op, _ = h.loop.operations.accept(
+                spec(
+                    action=action,
+                    target_kind="goal",
+                    target_key=key,
+                    request=request,
+                    expected_revision=revision,
+                ),
+                now=2.0,
+            )
+            h.loop.operations.claim(op.id, "g_dead", now=2.0)
+            accepted[op.id] = wanted
+        h.loop.recover()
+        assert edited.revision == 2
+        for op_id, wanted in accepted.items():
+            settled = h.loop.operations.get(op_id)
+            assert settled is not None
+            assert (settled.state, settled.error_code) == wanted, settled
+
     @pytest.mark.parametrize(("removed", "expected"), [(True, "succeeded"), (False, "failed")])
     def test_a_claimed_grant_delete_is_judged_from_the_grant_being_gone(
         self, tmp_path: Path, removed: bool, expected: str

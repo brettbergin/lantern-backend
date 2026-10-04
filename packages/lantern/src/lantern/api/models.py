@@ -1548,3 +1548,61 @@ class DecisionOut(ApiModel):
     resolved_at: str | None = None
     resolved_by: str | None = None
     resolution: str | None = None
+
+
+GoalStateName = Literal["active", "paused", "done"]
+
+
+class GoalPlanOut(ApiModel):
+    """A plan proposed from a goal: its id, title, the state a plan reads as
+    and its ``advance`` switch."""
+
+    plan_id: str
+    title: str
+    state: Literal["draft", "published", "archived"]
+    advance: Literal["manual", "auto"]
+
+
+class GoalOut(ApiModel):
+    """A standing objective an owner wrote for one repository. ``plans`` are
+    the plans proposed from it, most recently changed first;
+    ``open_plan_id`` is the one currently serving it (the most recently
+    changed plan that is not archived), or ``null``."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    repository: str
+    title: str
+    text: str
+    state: GoalStateName
+    created_by: str | None = None
+    created_by_display: str | None = None
+    created_at: str
+    updated_at: str
+    revision: int
+    plans: list[GoalPlanOut] = Field(default_factory=list)
+    open_plan_id: str | None = None
+
+
+class GoalCreate(ApiModel):
+    repository: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    #: The objective, in the owner's words.
+    text: str = Field(min_length=1, max_length=4000)
+    state: GoalStateName = "active"
+
+
+class GoalUpdate(ApiModel):
+    """An edit against the revision the client read. Only the fields sent
+    change. A goal's repository is not edited."""
+
+    expected_revision: int
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    text: str | None = Field(default=None, min_length=1, max_length=4000)
+    state: GoalStateName | None = None
+
+
+class GoalResult(ApiModel):
+    goal: GoalOut | None = None
+    message: str
+    operation: OperationOut

@@ -120,6 +120,9 @@ def features(config: Config) -> list[str]:
         # driver under the owner's grants: approved, published and run as
         # an agent, every judgement on the decisions ledger.
         served.append("planning.driver")
+        # Goals (`/v1/goals`): the standing objectives an owner sets for a
+        # repository that can hold a plan, and the plans proposed from each.
+        served.append("goals")
     return served
 
 
