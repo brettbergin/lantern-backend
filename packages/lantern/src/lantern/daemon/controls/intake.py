@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from lantern.agents.assignment import RUN_ROLES
 from lantern.config import SINK_NAMES, Config
 from lantern.daemon.controls.results import ControlError, ErrorCode
-from lantern.daemon.model import WorkItem, requested_roles_json
+from lantern.daemon.model import WorkItem, binds_without_memories, requested_roles_json
 from lantern.daemon.sources import IssueNotOpen
 from lantern.engine.model import RunKind
 from lantern.entrygraph import resolve_targets
@@ -324,7 +324,12 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     plan service's rules — a task has no children, planning must be on for
     its repository, a breakdown's level must have room — and against a
     breakdown of it already queued or running. A node on the forge with
-    children there is re-planned: its run proposes a diff (#2346)."""
+    children there is re-planned: its run proposes a diff (#2346).
+
+    A breakdown of a plan that advances itself is a run a delegated
+    decision depends on: its agents are bound without memories
+    (:func:`binds_without_memories`), and the item says so in its
+    assignment request, so dispatch, a restart and a resume all keep it."""
     from lantern.plans.service import PlanRefusal
 
     service = loop.plans
@@ -356,6 +361,11 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
         repo=node.repository,
         plan_id=plan.id,
         plan_node_id=node.id,
+        assignment_json=(
+            requested_roles_json({}, memoryless=True)
+            if binds_without_memories("plan", advance=plan.advance)
+            else None
+        ),
     )
 
 

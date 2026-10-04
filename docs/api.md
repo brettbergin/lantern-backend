@@ -628,7 +628,10 @@ when the run is planned and kept across a resume, and an agent whose `tools`
 names `memory` gets the same tools, writing with the run's id and channel; a
 read-only session, and a critic whatever its session, gets `recall` alone, as
 a read-only chat turn does. With `[memory] enabled = false` no memory reaches
-a prompt and no tool is offered.
+a prompt and no tool is offered. A run that a delegated decision depends on
+binds its agents with no memory at all — no block, no memory tools, resume
+included: today that is the breakdown of a plan whose `advance` is `auto`. A
+breakdown of a `manual` plan, and every other run, takes memories as above.
 
 A run started from a channel keeps what its agents remember for that channel.
 A run with no channel — one a labelled issue, a schedule or the CLI started —

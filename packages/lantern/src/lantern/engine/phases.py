@@ -625,12 +625,19 @@ class PhaseRunner:
         """``binding`` when it changes anything about a session, else None."""
         return binding if binding is not None and not binding.is_default() else None
 
+    @property
+    def _memoryless(self) -> bool:
+        """Whether the run binds its agents without memories."""
+        return self.assignment is not None and self.assignment.memoryless
+
     def _system_message(self, phase: str, extra: str | None, binding: AgentBinding | None) -> str:
-        """The phase's briefing, then a custom agent's persona and memory."""
+        """The phase's briefing, then a custom agent's persona and memory —
+        no memory in a run that binds its agents without it, whatever its
+        bindings carry."""
         text = brief_for_phase(self.config, phase, extra)
         custom = self._custom(binding)
         if custom is not None:
-            text += custom.persona + custom.memory_block
+            text += custom.persona + ("" if self._memoryless else custom.memory_block)
         return text
 
     def _selection(self, phase: str, binding: AgentBinding | None) -> ModelSelection:
@@ -688,9 +695,11 @@ class PhaseRunner:
         A session that may change nothing gets ``recall`` alone — a critic,
         whatever it was asked to do, and any read-only session — exactly as
         a read-only chat turn does: judging the work is not an occasion to
-        rewrite what the agent remembers of it."""
+        rewrite what the agent remembers of it. A run that binds its agents
+        without memories offers none: recalling would read them back."""
         if (
             self.memory is None
+            or self._memoryless
             or custom is None
             or custom.tools is None
             or MEMORY_TOOL_GROUP not in custom.tools

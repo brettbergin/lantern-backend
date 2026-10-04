@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+**A plan that advances itself is broken down by agents with no memories.**
+Any workspace member may write a memory on any agent, and a run's agents
+carried those memories into their system messages — so a member who cannot
+publish a plan could tell the planner, or the critic, what to conclude about
+a level that an owner's grant would later act on without a person. The
+breakdown of a plan whose `advance` is `auto` now binds every agent with no
+memory block and offers no memory tools; the switch rides the item's stored
+agent assignment, so a daemon restart and a resume keep it. A breakdown of a
+`manual` plan, and every other run, renders memories exactly as before. The
+rule is one function, `binds_without_memories`, for every admission a
+delegated decision will depend on.
+
 **What waits on a person is reminded about.** A merge gate, a publish hold,
 a plan's clarifying questions and a blocked run announced themselves once and
 then waited in silence, for as long as it took; the only repeated signal in

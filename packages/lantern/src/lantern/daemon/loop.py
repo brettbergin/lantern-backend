@@ -92,6 +92,7 @@ from lantern.daemon.model import (
     WorkItem,
     is_planned_assignment,
     requested_roles,
+    requests_memoryless,
 )
 from lantern.daemon.repositories import RepositoryRegistry
 from lantern.daemon.schedule import Cadence, ScheduleRow, format_due
@@ -3429,17 +3430,24 @@ class DaemonLoop:
         assignment is planned from the lead and roles asked for at
         admission (none: the built-in team) and stored on the item. Each
         binding snapshots its agent's memory block here (S-A5), taken in
-        the channel the item names."""
+        the channel the item names — none at all when the admission asked
+        for a run without memories (``binds_without_memories``), which the
+        stored assignment then says, so a restart and a resume keep it."""
         if is_planned_assignment(item.assignment_json):
             return item
         requested = cast("dict[RunRole, str]", requested_roles(item.assignment_json))
+        memoryless = requests_memoryless(item.assignment_json)
+        memory: MemoryBlocks | None = None
+        if not memoryless:
+            memory = self.memory if self.memory is not None else self._memory(item)
         planned = plan_assignment(
             self.agents,
             kind=item.kind,
             lead=item.lead_agent,
             requested=requested,
-            memory=self.memory if self.memory is not None else self._memory(item),
+            memory=memory,
             channel_id=item.channel_id,
+            memoryless=memoryless,
         )
         if item.origin_agent is not None or item.chain_depth:
             planned = AgentAssignment(
@@ -3449,6 +3457,7 @@ class DaemonLoop:
                 channel_id=planned.channel_id,
                 origin_agent=item.origin_agent,
                 chain_depth=item.chain_depth,
+                memoryless=planned.memoryless,
             )
         text = planned.to_json()
         self.dstore.set_item_assignment(item.item_id, text, now)
