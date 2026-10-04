@@ -362,14 +362,16 @@ class TestSupply:
         supply = _briefing(api)["supply"]
         # The published plan's A and B are on the forge, open, and no epic
         # run has admitted them; the second plan's A waits for approval and
-        # its B for publication; the archived plan counts for nothing.
+        # its B for publication; the archived plan counts for nothing. The
+        # proposed level is a decision on the attention list: parked on a
+        # person.
         assert supply == {
             "proposed": 1,
             "approved": 1,
             "ready_tasks": 2,
             "queued": 0,
             "running": 0,
-            "parked": 0,
+            "parked": 1,
         }
         # Starting the epic admits A (B depends on it): A is queued, no
         # longer lined up; B still is.
