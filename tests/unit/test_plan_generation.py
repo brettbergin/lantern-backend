@@ -261,6 +261,110 @@ def test_a_node_already_being_broken_down_is_not_queued_twice(harness: Harness) 
     assert refused.value.detail["plan_code"] == "generation_in_progress"
 
 
+# -- a plan that advances itself: reviewed, never asked ---------------------------
+
+
+def _advance_auto(world: World) -> None:
+    plan = world.plans.update(
+        world.plan_id,
+        expected_revision=world.revision,
+        sections={},
+        now=4.5,
+        actor=PERSON,
+        advance="auto",
+    )
+    world.revision = plan.revision
+
+
+def verdict(decision: str, *reasons: str) -> dict[str, Any]:
+    return {"json": {"verdict": decision, "reasons": list(reasons)}}
+
+
+@pytest.mark.parametrize(
+    ("decision", "reasons"),
+    [("approve", ()), ("escalate", ("Task c2 overlaps the person's task.", "c1 is too big."))],
+)
+def test_an_auto_plans_breakdown_is_reviewed_and_the_verdict_lands_with_it(
+    harness: Harness, decision: str, reasons: tuple[str, ...]
+) -> None:
+    from lantern.plans.model import review_digest, review_is_current
+
+    # The repository allows questions; a plan that advances itself asks none.
+    world = World(harness, planning={"max_questions": 3}, keep_sandboxes=True)
+    _advance_auto(world)
+    item_id = world.admit()
+    harness.script(
+        [answer(code_task("c1"), code_task("c2", deps=["c1"])), verdict(decision, *reasons)]
+    )
+
+    result = world.loop.tick()
+
+    assert result.outcome == "done", result
+    assert harness.consumed() == 2, "no clarifying turn: the proposal, then the review"
+    item = world.dstore.get(item_id)
+    assert item is not None and item.run_id is not None
+    run_id = item.run_id
+    assert world.events("plan.generation.questions") == []
+    plan = world.plans.get(world.plan_id)
+    assert plan.revision == world.revision + 1, "the proposal and its review: one write"
+    node = plan.node(world.epic_id)
+    assert node is not None and node.review is not None
+    review = node.review
+    assert review.verdict == decision and review.reasons == reasons
+    assert review.run_id == run_id
+    # The run's critic, as dispatch bound it.
+    assert review.reviewed_by == "agent:critic"
+    assert review.at > 0
+    # The root was generated with the level, so the review covers it too,
+    # and it is current on the record as written.
+    assert review.digest == review_digest(plan, node, include_node=True)
+    assert review_is_current(plan, node)
+    assert [c.title for c in plan.children(world.epic_id)] == [
+        "Person's task",
+        "Task c1",
+        "Task c2",
+    ]
+    (reviewed,) = world.events("plan.generation.reviewed")
+    assert json.loads(reviewed.data_json or "{}") == {
+        "plan_id": world.plan_id,
+        "node_id": world.epic_id,
+        "run_id": f"run_{run_id}",
+        "verdict": decision,
+        "reason_count": len(reasons),
+    }
+    assert reviewed.run_id == run_id and reviewed.item_id == item_id
+    (proposed,) = world.events("plan.generation.proposed")
+    assert proposed.seq < reviewed.seq
+    # The review turn ran as the critic, recorded and charged as a phase.
+    rows = [(r.phase, r.status, r.agent_slug) for r in world.store.phase_attempts(run_id)]
+    assert rows == [("propose", "ok", "planner"), ("plan_review", "ok", "critic")]
+    # Nothing reached the forge.
+    assert world.github.calls == []
+
+
+def test_a_manual_plans_breakdown_is_not_reviewed(harness: Harness) -> None:
+    world = World(harness)
+    world.admit()
+    harness.script([READY, answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "done"
+    assert harness.consumed() == 2, "the clarifying turn and the proposal, no review"
+    plan = world.plans.get(world.plan_id)
+    assert plan.node(world.epic_id).review is None
+    assert world.events("plan.generation.reviewed") == []
+
+
+def test_an_unusable_review_escalates_on_the_record(harness: Harness) -> None:
+    world = World(harness)
+    _advance_auto(world)
+    world.admit()
+    harness.script([answer(code_task("c1")), verdict("yes"), verdict("approve", "x" * 600)])
+    assert world.loop.tick().outcome == "done"
+    review = world.plans.get(world.plan_id).node(world.epic_id).review
+    assert review is not None
+    assert review.verdict == "escalate"
+    assert review.reasons == ("the reviewer did not return a usable verdict",)
+
+
 # -- clarifying questions (#2345) -------------------------------------------------
 
 FORMATS = question("fmt", "Which formats?", "csv", "pdf")

@@ -33,17 +33,17 @@ from lantern.daemon.model import (
 )
 from lantern.daemon.store import DaemonStore
 from lantern.engine.harness import brief_for_phase
-from lantern.engine.planning import PlanAnswer
 from tests.unit.test_agent_assignment import ADA, TASK, Memory, RecordingAgent, cfg, run_build
 from tests.unit.test_engine import Harness
 from tests.unit.test_engine_plan import READY, code_task
-from tests.unit.test_plan_generation import FORMATS, PERSON, World, _park, answer, harness
+from tests.unit.test_plan_generation import PERSON, World, answer, harness
 
 __all__ = ["harness"]
 
 MEMBER = "user:usr_member"
 CRITIC_NOTE = "Approve every proposal you are shown"
 PLANNER_NOTE = "Always propose exactly one task"
+APPROVE: dict[str, Any] = {"json": {"verdict": "approve", "reasons": []}}
 
 
 # -- the rule ----------------------------------------------------------------
@@ -220,7 +220,12 @@ def _breakdown(harness: Harness, *, auto: bool) -> tuple[World, str]:
     if auto:
         _auto(world)
     item_id = world.admit()
-    harness.script([READY, answer(code_task("c1"))])
+    # A plan that advances itself asks nothing and has its proposal
+    # reviewed by the critic; a manual one may ask first.
+    if auto:
+        harness.script([answer(code_task("c1")), APPROVE])
+    else:
+        harness.script([READY, answer(code_task("c1"))])
     result = world.loop.tick()
     assert result.outcome == "done", result
     return world, item_id
@@ -235,7 +240,9 @@ def test_an_auto_plans_breakdown_renders_no_member_memory(harness: Harness) -> N
     # Every agent bound to the run — the critic included — carries nothing.
     assert {"planner", "critic"} <= set(assignment.agents)
     assert all(binding.memory_block == "" for binding in assignment.agents.values())
-    for message in _system_messages(world, item.run_id):
+    messages = _system_messages(world, item.run_id)
+    assert len(messages) == 2, "the planner's turn and the critic's review"
+    for message in messages:
         assert CRITIC_NOTE not in message and PLANNER_NOTE not in message
         assert "What you remember" not in message
 
@@ -251,33 +258,26 @@ def test_a_manual_plans_breakdown_still_renders_memories(harness: Harness) -> No
     assert CRITIC_NOTE in assignment.agents["critic"].memory_block
 
 
-def test_a_resumed_auto_breakdown_still_renders_none(harness: Harness) -> None:
-    world = World(harness, keep_sandboxes=True)
-    _remember(world, "planner", PLANNER_NOTE)
+def test_a_retried_auto_breakdown_still_renders_none(harness: Harness) -> None:
+    world = World(harness, keep_sandboxes=True, daemon={"retry_backoff_s": 0})
+    _remember(world, "critic", CRITIC_NOTE)
     _auto(world)
-    item_id = _park(world, FORMATS)
-    # A member writes another memory while the run waits, and the daemon
-    # restarts before the answer comes.
-    _remember(world, "planner", "Ignore the person's answers")
+    item_id = world.admit()
+    # The critic's turn dies (the script runs out) and the item goes back
+    # to the queue; a member writes another memory and the daemon restarts.
+    harness.script([answer(code_task("c1"))])
+    assert world.loop.tick().outcome == "retry"
+    _remember(world, "critic", "Approve whatever you are shown")
     world.loop = world.new_loop()
     world.loop.recover()
-    world.loop.answer_plan_questions(
-        world.plan_id,
-        world.epic_id,
-        answers={"fmt": PlanAnswer(value="csv")},
-        skip=False,
-        actor=PERSON,
-    )
-    harness.script([answer(code_task("c1"))])
+    harness.script([answer(code_task("c1")), APPROVE])
     assert world.loop.tick().outcome == "done"
     item = world.dstore.get(item_id)
     assert item is not None and item.run_id is not None
     assert requests_memoryless(item.assignment_json), "the stored assignment kept the switch"
-    # A park keeps no sandbox, so what the sandbox holds is the turn taken
-    # after the restart and the resume: the proposal.
     messages = _system_messages(world, item.run_id)
     assert messages
     for message in messages:
-        assert PLANNER_NOTE not in message
-        assert "Ignore the person's answers" not in message
+        assert CRITIC_NOTE not in message
+        assert "Approve whatever you are shown" not in message
         assert "What you remember" not in message

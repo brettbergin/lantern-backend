@@ -368,6 +368,14 @@ RENDER_CONTEXTS: dict[str, dict[str, str]] = {
         "work_dir": "`/data`",
         "user_guidance": "(none)",
     },
+    # The critic's review of a proposed level, for a plan that advances itself.
+    "plan_review": {
+        "level": "epic",
+        "children": "tasks",
+        "node": "**Epic:** Export reports\n\n**Repository:** o/app",
+        "kept": "- Person's task",
+        "proposed": "### 1. Export as CSV\n\n#### Goal\n\nReports download as CSV",
+    },
 }
 
 
@@ -1042,3 +1050,20 @@ def test_plan_replan_carries_the_task_rules() -> None:
     assert "**workspace root**" in plain and "**no shell variables**" in plain
     assert "(no `sh -c`, `bash -c`)" in plain
     assert "- `research` — reads the web" in plain
+
+
+def test_plan_review_fails_closed_and_explains() -> None:
+    """The reviewer of a level no person reads first: it changes nothing,
+    approves only when every rule holds, escalates whenever it cannot
+    tell, and says why in sentences a person reads."""
+    text = render("plan_review", **RENDER_CONTEXTS["plan_review"])
+    plain = " ".join(text.split())
+    assert text.startswith("# Review the proposed tasks of one epic")
+    assert "**changes nothing**" in plain
+    assert "Approve only when every one of these holds" in plain
+    assert "**or you cannot tell**" in plain and "never to approve" in plain
+    assert "short plain sentences a person will read" in plain
+    for rule in ("overlap", "non-goals and constraints", "delivered on its own", "Dependencies"):
+        assert rule in plain, rule
+    assert "### 1. Export as CSV" in text and "- Person's task" in text
+    assert '"verdict": "escalate"' in plain

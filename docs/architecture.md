@@ -1173,7 +1173,11 @@ change what you propose"; then one level of a plan node, read-only
 ("changes nothing", "writes nothing to the forge"), a person's answers
 followed as decisions, each task sized to "one run" and its verify commands
 authored under decompose.md's rules ("workspace root", "no shell
-variables"). The one ecosystem-specific example — the config-override that decompose.md warns
+variables"). A breakdown of a plan that advances itself then renders
+plan_review.md as the `review` phase (the critic's briefing and
+`[agent.models] review`): the proposed level judged against the node, read
+only ("changes nothing"), `escalate` whenever a rule fails "or you cannot
+tell", reasons in sentences a person reads. The one ecosystem-specific example — the config-override that decompose.md warns
 against and review.md's wrong-check section describes — is rendered per run:
 `verifylint.config_override_example` picks the story for the first resolved
 language that has one (mypy `files`; `tsc` ignoring `tsconfig.json` when
@@ -1633,7 +1637,10 @@ provision (agent box only, data dir mounted, no toolchains)
        └─ questions ─▶ desk.ask (on the plan node) ─▶ AWAITING_ANSWERS (parked)
                          … a person answers or skips ─▶ resume ┤
   ─▶ PROPOSING: brief (answers in it) ─▶ plan_propose (read-only, validated,
-       one retry) ─▶ persist on the task ─▶ deliver to the plan record ─▶ completed
+       one retry) ─▶ persist on the task
+       ─▶ [advance = auto] plan_review (critic, read-only, one retry;
+            unusable twice = escalate) ─▶ persist on the task
+       ─▶ deliver to the plan record (with the verdict) ─▶ completed
 ```
 
 - **Read-only, no credential.** Provisioning treats it like a workload or
@@ -1702,6 +1709,32 @@ provision (agent box only, data dir mounted, no toolchains)
   `plan.generation.failed` when the run ends any other way (a provider hold
   is a pause, not an end), each scoped to the run, its item and its
   channel.
+
+- **The review turn.** A breakdown of a plan whose `advance` is `auto`
+  is briefed differently by `PlanService.brief`: `max_questions = 0` (no
+  clarifying turn, whatever `[planning] max_questions` says — nobody is
+  there to answer) and `review = True` (a re-plan never: its diff waits
+  for a person). After the proposal is validated and persisted,
+  `_stage_plan_review` runs one more agent turn, `plan_review.md`, as the
+  `review` phase — the run's critic binding (without memories, as every
+  agent of that run is) on the `[agent.models] review` key — recorded as
+  a `plan_review` phase row with its spend, like the planner's turns. It
+  reads the node (or the root the planner generated, with the brief),
+  the children that stay, and the proposed children rendered through
+  `plans.render.section_blocks`, the publish path's own render; no
+  checkout. The answer is a `PlanVerdict` (`approve` | `escalate`,
+  reasons), held to its shape with the one retry; unusable twice, it
+  stands for `escalate` with "the reviewer did not return a usable
+  verdict" — a failed review never approves, and the proposal is still
+  delivered for a person. The verdict is kept on the proposal task's
+  output (`review`, beside `proposal`) before delivery, so a resume
+  neither asks again nor loses it, and is delivered with the proposal:
+  `PlanDesk.deliver(..., review=)` → `deliver_proposal` writes it onto
+  the node as a `PlanReview` — its digest the level's as that write
+  leaves it (the root covered when it was generated), `reviewed_by` the
+  critic — with `plan.generation.reviewed` in the same transaction. The
+  record never holds the proposal without its review or the reverse. The
+  turn emits `phase.end` only: a plan trail carries no `review.*` event.
 
 - **Clarifying, and the park.** With `[planning] max_questions` above 0
   (the repository's own under `[vcs.repos.planning]`, carried on the
@@ -2957,11 +2990,14 @@ approving and publishing a level leave it standing while an edit, an
 addition, a removal or a reorder makes it stale; `include_node` covers the
 node too, for a generated root, which is published with its level and never
 approved. `review_is_current` is the one question callers ask. A stored
-review this build cannot read is no review. Nothing writes one yet.
+review this build cannot read is no review. The breakdown of an `auto`
+plan writes one, in the proposal's own write (see the review turn under
+[Plan runs](#plan-runs)); nothing else does.
 
 A plan carries `advance` (`manual` or `auto`) and `goal_id`. `advance` is
-whether the plan may move itself forward; today only the breakdown's
-admission reads it, to bind an `auto` plan's agents without memories
+whether the plan may move itself forward; today only the breakdown reads
+it — its admission, to bind an `auto` plan's agents without memories, and
+its brief, to ask no questions and review the proposal
 ([Plan runs](#plan-runs)). What is
 settled is who may set it: plan edits take `plans:create`, which members
 hold, and the switch says a plan may be moved forward — published included

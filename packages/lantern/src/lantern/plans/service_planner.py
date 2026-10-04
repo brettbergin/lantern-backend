@@ -14,6 +14,7 @@ from lantern.engine.planning import (
     PlanBrief,
     PlanProposal,
     PlanReplan,
+    PlanVerdict,
     ProfileRef,
     fold_title,
 )
@@ -21,11 +22,13 @@ from lantern.log import get_logger
 from lantern.plans.model import (
     Plan,
     PlanNode,
+    PlanReview,
     Replan,
     ReplanEntry,
     child_level,
     content_version,
     plain,
+    review_digest,
 )
 from lantern.plans.reconcile import (
     reconcile_plan,
@@ -68,6 +71,12 @@ class _Planning(_ServiceBase):
         kept = children if replan else _kept(plan, node)
         parent = plan.node(node.parent_id) if node.parent_id else None
         cap = self._cap(node)
+        # A plan that advances itself is never waited on: its breakdown asks
+        # no questions, whatever the repository's cap, and an independent
+        # reviewer judges the proposal before it is delivered (a re-plan's
+        # diff still waits for a person and is not reviewed). A manual
+        # plan's brief is exactly what it was.
+        auto = plan.advance == "auto"
         return PlanBrief(
             input=plan.input,
             generate_root=plan.generation_pending and node.id == plan.root_id,
@@ -106,9 +115,18 @@ class _Planning(_ServiceBase):
                 key=str.casefold,
             ),
             note=note,
-            max_questions=self._config().planning_for(node.repository).max_questions,
+            max_questions=self._max_questions(node, auto=auto),
             clarification=node.generation,
+            review=auto and not replan,
         )
+
+    def _max_questions(self, node: PlanNode, *, auto: bool) -> int:
+        """How many questions a breakdown of ``node`` may ask: the
+        repository's ``[planning] max_questions``, or none at all for a
+        plan that advances itself — nobody is there to answer."""
+        if auto:
+            return 0
+        return self._config().planning_for(node.repository).max_questions
 
     def deliver_proposal(
         self,
@@ -121,6 +139,8 @@ class _Planning(_ServiceBase):
         item_id: str | None = None,
         channel_id: str | None = None,
         proposed_by: str | None = None,
+        review: PlanVerdict | None = None,
+        reviewed_by: str | None = None,
     ) -> tuple[Plan, int]:
         """Write a plan run's proposal under its node: the node's previous
         ``proposed`` children (and anything under them) are replaced, the
@@ -135,7 +155,15 @@ class _Planning(_ServiceBase):
         (``agent:<slug>``), recorded on every node the proposal writes — its
         children, and the root it generates; ``None`` (a run that names no
         agent) records nobody rather than a guess. The event stays the
-        planner's, a system actor, as it always was."""
+        planner's, a system actor, as it always was.
+
+        ``review`` is the critic's verdict on the proposal (a reviewed
+        breakdown), written onto the node in the same write as a
+        :class:`PlanReview` whose digest is the level's as this write
+        leaves it — the root covered too when the proposal generated it —
+        with ``plan.generation.reviewed`` beside ``.proposed``; so the plan
+        never holds the proposal without its review, or the review without
+        the proposal. ``reviewed_by`` is the critic bound to the run."""
 
         def attempt() -> tuple[Plan, int]:
             plan, node = self.breakdown_target(plan_id, node_id)
@@ -156,7 +184,8 @@ class _Planning(_ServiceBase):
                     "the planning brief changed during generation; generate again",
                 )
             upsert, remove = self._proposed_children(plan, node, proposal, now, proposed_by)
-            if plan.generation_pending and node.id == plan.root_id:
+            generated = plan.generation_pending and node.id == plan.root_id
+            if generated:
                 if proposal.root is None:
                     raise PlanRefusal(
                         422, "invalid_proposal", "the planner must generate the root from the brief"
@@ -164,16 +193,63 @@ class _Planning(_ServiceBase):
                 problems = proposal.root.problems()
                 if problems:
                     raise PlanRefusal(422, "invalid_proposal", "; ".join(problems))
-                generated = self._with_sections(node, proposal.root.model_dump(), siblings=[])
+                root = self._with_sections(node, proposal.root.model_dump(), siblings=[])
                 # The content is the planner's now, not the person's whose
                 # placeholder it replaces.
                 upsert.append(
                     replace(
-                        generated,
+                        root,
                         origin="planner",
                         state="proposed",
                         proposed_by=proposed_by,
                         updated_at=now,
+                    )
+                )
+            events = [
+                PlanEvent(
+                    "plan.generation.proposed",
+                    {
+                        "plan_id": plan.id,
+                        "node_id": node.id,
+                        "run_id": run_public_id(run_id),
+                        "kind": "breakdown",
+                        "count": len(proposal.children),
+                    },
+                    run_id=run_id,
+                    item_id=item_id,
+                    channel_id=channel_id,
+                )
+            ]
+            if review is not None:
+                upsert = _reviewed(
+                    plan,
+                    node,
+                    upsert,
+                    remove,
+                    PlanReview(
+                        run_id=run_id,
+                        verdict=review.verdict,
+                        digest="",
+                        reasons=tuple(review.reasons),
+                        reviewed_by=reviewed_by,
+                        at=now,
+                    ),
+                    include_node=generated,
+                    now=now,
+                )
+                events.append(
+                    PlanEvent(
+                        "plan.generation.reviewed",
+                        {
+                            "plan_id": plan.id,
+                            "node_id": node.id,
+                            "run_id": run_public_id(run_id),
+                            "verdict": review.verdict,
+                            "reason_count": len(review.reasons),
+                        },
+                        run_id=run_id,
+                        item_id=item_id,
+                        channel_id=channel_id,
                     )
                 )
             try:
@@ -183,21 +259,7 @@ class _Planning(_ServiceBase):
                     now=now,
                     upsert=upsert,
                     remove=remove,
-                    events=[
-                        PlanEvent(
-                            "plan.generation.proposed",
-                            {
-                                "plan_id": plan.id,
-                                "node_id": node.id,
-                                "run_id": run_public_id(run_id),
-                                "kind": "breakdown",
-                                "count": len(proposal.children),
-                            },
-                            run_id=run_id,
-                            item_id=item_id,
-                            channel_id=channel_id,
-                        )
-                    ],
+                    events=events,
                     actor=dict(PLANNER),
                 )
             except PlanGone as exc:
@@ -725,3 +787,30 @@ class _Planning(_ServiceBase):
                 f"approve what these additions depend on with them: {named}",
                 entry_ids=sorted(missing),
             )
+
+
+def _reviewed(
+    plan: Plan,
+    node: PlanNode,
+    upsert: list[PlanNode],
+    remove: Sequence[str],
+    review: PlanReview,
+    *,
+    include_node: bool,
+    now: float,
+) -> list[PlanNode]:
+    """``upsert`` with ``review`` on ``node``, its digest the level's as
+    the write of ``upsert`` and ``remove`` leaves it: the plan is read as
+    it will be, so the digest is the one :func:`review_is_current` computes
+    on the record right after the write."""
+    gone = set(remove)
+    written = {n.id: n for n in upsert}
+    after_nodes = [written.pop(n.id, n) for n in plan.nodes if n.id not in gone]
+    after = replace(plan, nodes=(*after_nodes, *written.values()))
+    reviewed = after.node(node.id)
+    assert reviewed is not None  # nosec B101 - the node is never removed by its own breakdown
+    digest = review_digest(after, reviewed, include_node=include_node)
+    stamped = replace(reviewed, review=replace(review, digest=digest))
+    if any(n.id == node.id for n in upsert):
+        return [stamped if n.id == node.id else n for n in upsert]
+    return [*upsert, replace(stamped, updated_at=now)]

@@ -3,7 +3,8 @@
 The engine knows a plan only as a :class:`~lantern.engine.planning.PlanDesk`;
 this is the daemon's, one per plan work item: the brief is read from the
 plan service as the plan is when the run proposes, the planner's
-clarifying questions and its proposal are written through the service's
+clarifying questions and its proposal (with the critic's verdict on it,
+for a plan that advances itself) are written through the service's
 rules, and the generation's start and failure are
 recorded as ``plan.generation.*`` events scoped to the run, its item and its
 channel. Nothing here writes to the forge: a re-plan's brief (#2346) is
@@ -25,6 +26,7 @@ from lantern.engine.planning import (
     PlanProposal,
     PlanQuestion,
     PlanReplan,
+    PlanVerdict,
 )
 from lantern.errors import PlanDeliveryError
 from lantern.log import get_logger
@@ -40,11 +42,22 @@ def planner_of(item: WorkItem) -> str | None:
     this is the agent that actually takes the turn. ``None`` when the item
     carries no planned assignment (or one that cannot be read, or binds
     nobody to the phase): nobody is recorded rather than a guess."""
+    return _bound(item, "plan")
+
+
+def reviewer_of(item: WorkItem) -> str | None:
+    """Who a plan item's run reviews its proposal as: ``agent:<slug>`` of
+    the critic its assignment binds to the ``review`` phase, the phase the
+    review turn runs as; ``None`` on the same terms as :func:`planner_of`."""
+    return _bound(item, "review")
+
+
+def _bound(item: WorkItem, phase: str) -> str | None:
     if not is_planned_assignment(item.assignment_json):
         return None
     assert item.assignment_json is not None  # nosec B101 - checked above
     try:
-        binding = AgentAssignment.from_json(item.assignment_json).binding_for("plan")
+        binding = AgentAssignment.from_json(item.assignment_json).binding_for(phase)
     except (KeyError, TypeError, ValueError):
         return None
     return None if binding is None else f"agent:{binding.slug}"
@@ -132,7 +145,9 @@ class PlanGeneration:
         except PlanRefusal as exc:
             raise PlanDeliveryError(exc.detail) from exc
 
-    def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery:
+    def deliver(
+        self, run_id: str, proposal: PlanProposal, *, review: PlanVerdict | None = None
+    ) -> PlanDelivery:
         try:
             plan, count = self.service.deliver_proposal(
                 self.plan_id,
@@ -143,6 +158,8 @@ class PlanGeneration:
                 item_id=self.item.item_id,
                 channel_id=self.item.channel_id,
                 proposed_by=self.planner,
+                review=review,
+                reviewed_by=None if review is None else reviewer_of(self.item),
             )
         except PlanRefusal as exc:
             raise PlanDeliveryError(exc.detail) from exc
