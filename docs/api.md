@@ -2676,14 +2676,48 @@ when the grant is written.
 | `item.retry`       | yes            |          |                |                  | yes      | yes           |
 | `run.grant_rounds` | yes            |          |                |                  | yes      | yes           |
 
-| Key              | Value                                  | Holds when                                                      |
-| ---------------- | -------------------------------------- | --------------------------------------------------------------- |
-| `repositories`   | a list of `owner/name`                 | the act's repository is one of them (case is ignored)           |
-| `levels`         | a list of `initiative`, `epic`, `task` | the plan level the act is about is one of them (see below)      |
-| `max_children`   | a whole number, 1 or more              | the level has at most that many children                        |
-| `require_review` | `true`                                 | the level's stored review verdict is `approve`                  |
-| `causes`         | a list of failure-cause names          | the failure's cause is one of them (`unknown` cannot be listed) |
-| `max_retries`    | a whole number, 1 or more              | fewer retries than that were already made                       |
+| Key              | Value                                  | Holds when                                                 |
+| ---------------- | -------------------------------------- | ---------------------------------------------------------- |
+| `repositories`   | a list of `owner/name`                 | the act's repository is one of them (case is ignored)      |
+| `levels`         | a list of `initiative`, `epic`, `task` | the plan level the act is about is one of them (see below) |
+| `max_children`   | a whole number, 1 or more              | the level has at most that many children                   |
+| `require_review` | `true`                                 | the level's stored review verdict is `approve`             |
+| `causes`         | a list of failure-cause names          | the failure's cause is one of them (see below)             |
+| `max_retries`    | a whole number, 1 or more              | fewer retries than that were already made                  |
+
+**Failure causes.** When `/v1/capabilities` lists `delegation.triage`, the
+daemon's `operator` agent picks failures back up under its grants
+(`item.retry`, `run.grant_rounds`, `plan.run.retry`), and `failure_cause` is
+one of a closed set the daemon derives from the run's state, the budget it
+exhausted and its tasks first, and from the recorded reason only as a last
+resort:
+
+| Cause                     | What it means                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| `ci_timeout`              | CI or the landing did not settle within `[landing] ci_timeout_s`                     |
+| `provider_throttle`       | the model provider held the run, or answered with a rate or usage limit              |
+| `sandbox_resource`        | the sandbox ran out of disk or memory                                                |
+| `forge_transient`         | the forge answered a 5xx, or the network to it failed                                |
+| `verify_failed`           | a task's verify commands failed                                                      |
+| `review_rounds_exhausted` | the run spent every review fix round it had                                          |
+| `ci_rounds_exhausted`     | the run spent every CI fix round it had                                              |
+| `merge_conflict`          | the pull request conflicts with its base                                             |
+| `needs_person`            | the run stopped at something only a person can settle (an approval, a permission, …) |
+| `unknown`                 | nothing recognisable                                                                 |
+
+A grant's `causes` may list any of the first eight; `needs_person` and
+`unknown` always go to a person and are refused in a grant, as is any other
+name. `run.grant_rounds` is the act for the two exhausted causes (it grants two
+more rounds on the same pull request); `plan.run.retry` for an epic run's
+task; `item.retry` for any other failed or blocked item. `retries` is how many
+times the ledger says that act was already allowed on that target, and triage
+never takes it more than three times on one target whatever `max_retries`
+says. Each act is an operation whose actor is the agent (`"kind": "agent"`,
+`"id": "agent:operator"`), and its decision names the `item_id`, `run_id` or
+`epic_run_id` and task `node_id` it was about. An escalation is written once
+per situation and is resolved `acted` when the work is under way again,
+`declined` when a person dismissed or abandoned it, and `superseded` when it
+moved on otherwise.
 
 For the plan steps, the level an act is about is the level it proposes,
 approves, publishes or runs: an epic's breakdown, the approval and the

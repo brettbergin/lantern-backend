@@ -45,7 +45,7 @@ APPROVAL: dict[str, object] = {
     "proposer": "planner",
     "review_verdict": "approve",
 }
-RETRY: dict[str, object] = {"repository": "o/r", "failure_cause": "timeout", "retries": 0}
+RETRY: dict[str, object] = {"repository": "o/r", "failure_cause": "ci_timeout", "retries": 0}
 
 
 class TestTheClosedList:
@@ -106,7 +106,7 @@ class TestConditions:
         "levels": ["epic"],
         "max_children": 5,
         "require_review": True,
-        "causes": ["timeout"],
+        "causes": ["ci_timeout"],
         "max_retries": 2,
     }
 
@@ -155,6 +155,8 @@ class TestConditions:
             ("plan.approve", {"require_review": "yes please"}, "conditions.require_review"),
             ("item.retry", {"causes": []}, "conditions.causes"),
             ("item.retry", {"causes": ["unknown"]}, "conditions.causes"),
+            ("item.retry", {"causes": ["needs_person"]}, "conditions.causes"),
+            ("item.retry", {"causes": ["timeout"]}, "conditions.causes"),
             ("item.retry", {"max_retries": 0}, "conditions.max_retries"),
             ("item.retry", {"max_retries": -1}, "conditions.max_retries"),
         ],
@@ -288,7 +290,11 @@ class TestEscalate:
     @pytest.mark.parametrize(
         ("conditions", "attrs", "names"),
         [
-            ({"causes": ["timeout"]}, without(RETRY, failure_cause="oom"), ("causes", "oom")),
+            (
+                {"causes": ["ci_timeout"]},
+                without(RETRY, failure_cause="merge_conflict"),
+                ("causes", "merge_conflict"),
+            ),
             (
                 {"max_retries": 2},
                 without(RETRY, retries=2),
@@ -348,9 +354,9 @@ class TestEscalate:
     @pytest.mark.parametrize(
         ("conditions", "attr", "value"),
         [
-            ({"causes": ["timeout"]}, "failure_cause", None),
-            ({"causes": ["timeout"]}, "failure_cause", "unknown"),
-            ({"causes": ["timeout"]}, "failure_cause", "Unknown"),
+            ({"causes": ["ci_timeout"]}, "failure_cause", None),
+            ({"causes": ["ci_timeout"]}, "failure_cause", "unknown"),
+            ({"causes": ["ci_timeout"]}, "failure_cause", "Unknown"),
             ({"max_retries": 2}, "retries", None),
             ({"max_retries": 2}, "retries", "one"),
         ],
@@ -418,7 +424,7 @@ class TestAllow:
         retry = grant(
             agent_slug="operator",
             action="item.retry",
-            conditions={"causes": ["Timeout"], "max_retries": 2},
+            conditions={"causes": ["CI_Timeout"], "max_retries": 2},
         )
         outcome, grant_id, _ = judge(
             [retry], agent="operator", action="item.retry", attrs=without(RETRY, retries=1)

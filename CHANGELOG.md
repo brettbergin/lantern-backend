@@ -42,6 +42,28 @@ so a restart neither shortens nor restarts it; readable on
 `planning.driver`. A breakdown admission cut short by a restart is now
 settled from the queue (`item.admit` for a plan), not left `reconciling`.
 
+**The operator agent picks failures back up under an owner's grants.** A
+failed or blocked run waited for a person even when an owner would always
+have said "retry it": a CI timeout, a forge hiccup, a run one fix round
+short. A new triage pass (`daemon/triage.py`, ticked after the epic runs,
+never while the daemon is paused) looks at the work that stopped in the
+last day, derives a failure cause from the run's state, its exhausted
+budget and its tasks first and its reason only as a last resort (`ci_timeout`,
+`provider_throttle`, `sandbox_resource`, `forge_transient`, `verify_failed`,
+`review_rounds_exhausted`, `ci_rounds_exhausted`, `merge_conflict`,
+`needs_person`, `unknown`), and, under an enabled `operator` grant, takes one
+act per target: `run.grant_rounds` (two more rounds) for an exhausted run,
+`plan.run.retry` for an epic run's failed task, `item.retry` otherwise. Each
+is judged on `repository`, `failure_cause` and `retries` (counted from the
+ledger), recorded once per situation, and taken as `agent:operator` through
+a recorded operation; at most three acts a pass and three per target ever.
+`needs_person` and `unknown` always escalate, a dismissed or abandoned item is
+never touched, and a person's later retry, dismissal or abandon resolves the
+escalation. With no operator grant nothing is read past the grants and
+nothing is written. A grant's `causes` is now checked against that set when
+it is written (`needs_person` and any other name are refused with the field
+named; a stored grant still loads). New feature `delegation.triage`.
+
 **A push says which decision it is about, and what you may do about it.** A
 device could only show a push's text: to approve a gate or retry a failed
 run a person had to open the app and find the thing again. The stored

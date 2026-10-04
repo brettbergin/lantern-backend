@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from lantern.config import Config
-from lantern.daemon.controls.delegation import parse_conditions
+from lantern.daemon.controls.delegation import Decision, parse_conditions
 from lantern.daemon.controls.delegation_store import DecisionRecord
 from lantern.daemon.controls.operations import Operation, reconcile_operations
 from lantern.daemon.plandriver import PlanDriver
@@ -429,6 +429,31 @@ class TestNoGrantsLeft:
         assert (closed.resolution, closed.resolved_by) == ("acted", "usr_pat")
         assert len(w.decisions()) == before[0], "the driver judged nothing"
         assert w.get(plan).root.state != "published"
+
+
+class TestTriageEscalations:
+    def test_an_escalation_triage_wrote_on_a_plan_is_not_the_drivers_to_close(
+        self, world: World
+    ) -> None:
+        """Triage's ``plan.run.retry`` names the plan and the task node; the
+        driver resolves only the steps it takes itself."""
+        w = world
+        w.grants()
+        plan = w.plan()
+        theirs = w.loop.delegation.record(
+            Decision(outcome="escalate", reason="the failure says a person must look at it"),
+            agent_slug="operator",
+            action="plan.run.retry",
+            attrs={"repository": "o/r", "failure_cause": "needs_person", "retries": 0},
+            now=w.now(),
+            plan_id=plan.id,
+            node_id=plan.root_id,
+            epic_run_id="erun_x",
+        )
+        for _ in range(3):
+            w.tick()
+        still = w.loop.delegation.decision(theirs.id)
+        assert still is not None and still.unresolved
 
 
 class TestEscalations:

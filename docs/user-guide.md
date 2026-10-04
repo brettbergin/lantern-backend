@@ -2428,6 +2428,36 @@ workspace-wide — narrow a repository with a grant's `repositories` — and is
 never changed from chat: the concierge is an agent, and agents do not edit
 the rules they are judged by.
 
+#### Letting the operator pick failures back up
+
+A grant to the `operator`
+agent on `item.retry`, `run.grant_rounds` or `plan.run.retry` lets the daemon
+retry a failure on its own, as long as the failure's cause is one you listed:
+
+```sh
+curl -X POST "$LANTERN/v1/grants" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "agent_slug": "operator",
+    "action": "item.retry",
+    "conditions": {"repositories": ["acme/shop"], "causes": ["ci_timeout", "forge_transient"], "max_retries": 2},
+    "daily_limit": 10,
+    "note": "flaky CI and forge hiccups"
+  }'
+```
+
+The causes are `ci_timeout`, `provider_throttle`, `sandbox_resource`,
+`forge_transient`, `verify_failed`, `review_rounds_exhausted`,
+`ci_rounds_exhausted` and `merge_conflict` (`docs/api.md` "Delegation" says
+what each means). A run that ran out of fix rounds is continued with
+`run.grant_rounds` — two more rounds on the same pull request — rather than
+retried; a failed task of an epic run with `plan.run.retry`. A failure the
+daemon cannot place, or one that says a person must look (a maintainer's
+workflow approval, a reviewer's standing changes request, a missing
+permission), always comes to you, whatever the grants say, and so does any
+failure past three retries. A failure you dismissed or abandoned is left
+alone. Every retry shows in `GET /v1/decisions` and in the operations log as
+the operator agent's; while the daemon is paused, triage does nothing.
+
 #### Sign in with an OIDC provider (Authentik)
 
 A browser client such as Lantern can sign people in through an OpenID Connect

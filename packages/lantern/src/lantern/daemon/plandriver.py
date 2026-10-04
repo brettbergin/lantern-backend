@@ -618,6 +618,9 @@ class PlanDriver:
         took it — and ``superseded`` when the level changed under it. One
         still at the same step is left for the judgement to compare."""
         for escalation in self.delegation.unresolved_for_plan(plan.id):
+            if escalation.action not in OPERATION_FOR:
+                # Another judge's (triage's ``plan.run.retry``): its own to close.
+                continue
             node = plan.node(escalation.node_id or "")
             if node is None:
                 self._close(escalation, by=None, resolution="superseded", now=now)

@@ -2706,8 +2706,8 @@ owner's alone, checked as a capability, never inferred from a role — and goes
 through `ControlService` as a recorded operation (`grant.create`,
 `grant.update`, `grant.delete`) that recovery settles from the stored grant.
 The only surface that writes one is the API's `/v1/grants`; chat, `ctl` and
-the WebSocket's commands deliberately do not. Grants ship empty; the one
-caller of `decide` in the loop is the plan driver, below.
+the WebSocket's commands deliberately do not. Grants ship empty; the callers
+of `decide` in the loop are the plan driver and triage, below.
 
 ### The plan driver
 
@@ -2810,9 +2810,53 @@ With no enabled grant the driver takes no step. When nothing is
 escalated either it returns before reading a plan, so an installation that
 delegates nothing behaves exactly as before; when escalations are still
 open (an owner removed or disabled the grants) it runs the resolution pass
-alone, so one whose step a person has since taken is closed `acted`. Not in this
-driver yet: retrying failed epic tasks or items (`plan.run.retry`,
-`item.retry`), and proposing plans from goals (`plan.propose`).
+alone, so one whose step a person has since taken is closed `acted`. Retrying
+failed epic tasks and items is triage's (below); proposing plans from goals
+(`plan.propose`) is not in this driver yet.
+
+### Triage
+
+`daemon/triage.py`'s `Triage`, held as `loop.triage`, judges the failures the
+`operator` agent may pick back up. It is ticked right after the epic runs, and
+only while the daemon holds no pause; each pass takes a non-blocking lock, and
+one target that raises is logged and skipped. It weighs only the actions the
+operator holds an enabled grant for: with none on `item.retry`,
+`run.grant_rounds` or `plan.run.retry` the pass reads nothing past the grants
+and writes nothing.
+
+A pass looks at the work that stopped in the last day and matches each piece to
+one act: an item whose run exhausted its fix rounds (`runs.exhausted`) to
+`run.grant_rounds` (two more rounds on the same pull request, through
+`DaemonLoop.grant_rounds`); a failed task of an active epic run to
+`plan.run.retry` (`EpicRunDriver.retry`); any other `failed` (attempts spent)
+or `blocked` item to `item.retry` (`DaemonLoop.retry_item`). A `plan` item, a
+`cancelled` one, one a person dismissed or abandoned and deleted work are never
+touched.
+
+The **failure cause** a grant's `causes` names is derived by a pure
+`classify(FailureFacts)`: the run held by its provider is `provider_throttle`;
+an exhausted review or CI budget is `review_rounds_exhausted` /
+`ci_rounds_exhausted`; a task whose verify commands failed is `verify_failed`;
+then, from the recorded reason only as a last resort, `needs_person` (a
+maintainer must approve a workflow, a human's changes-requested review stands,
+a permission is missing, nothing to deliver, a protection rule, …),
+`ci_timeout`, `merge_conflict`, `sandbox_resource`, `provider_throttle` and
+`forge_transient` (a 5xx or network error naming the forge). Anything else is
+`unknown`. `needs_person` and `unknown` always go to a person — triage writes
+the escalation without asking the judge — and a grant cannot list either.
+
+Each act is judged on `repository`, `failure_cause` and `retries` — the
+ledger's earlier `allow` rows for that act on that target, never the item's
+attempt count, which a retry resets — and is never taken on one target more
+than three times whatever the grant says. An allowed act runs as
+`Principal.for_agent("operator")` through `record_plan_operation`, so the
+operations log names the agent; at most one act per target and three per pass.
+An escalation is written once per situation (the newest row on the target and
+action is the reference, and the target's state and when it last moved are
+among the facts), so a restart repeats nothing, and it is resolved by what
+happens next: `acted` when the work is under way again, `declined` when a
+person dismissed or abandoned it, `superseded` when it failed again
+differently, was deleted or is gone.
 
 ### The remote API listener
 
