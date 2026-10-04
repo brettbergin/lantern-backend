@@ -996,8 +996,9 @@ outcome ─▶ DECOMPOSE (task DAG) ─▶ per task, dependency order:
   `followup` phase row before the next is filed (a resume between filing
   and recording finds it on the repository by marker), the count is capped
   by `[landing] max_followups_per_run`, and the label is
-  `followup_label`, **never** the trigger label — the 1.0 rule that the
-  loop files no work of its own stands; a human promotes a follow-up.
+  `followup_label`, **never** the trigger label — the loop never promotes a
+  follow-up to work: a person labels it, and outside a plan an owner set to
+  advance on its own nothing else does.
   `FollowupFiler` does the filing for the engine and the daemon alike: a
   parked run the daemon lands with gh ops alone (an approved merge gate or
   review wait) files its follow-ups once the merge succeeds, and the phase
@@ -2312,12 +2313,31 @@ issue/PR URL the body and kept comments mention, read for its title,
 state and the head of its body. The block is what `[budgets] outcome_max_chars` cuts, with a note naming the budget; the title, body
 and provenance are always whole. A comment read that fails becomes one
 explicit line in the outcome — the run goes on with the ask itself.
-It never files work of its own: only a human labelling an issue — directly,
-or by asking the Discord concierge, which files the issue *with* the label —
-starts a run. Everything else the daemon does is a guardrail or a
+It starts nothing on its own account. An issue becomes work only when a
+person labels it — directly, or by asking the chat concierge, which files
+the issue *with* the label; an unlabeled issue is never picked up. Work also
+reaches the queue from a schedule someone created, an epic run someone
+started, and a step an owner's grant allows an agent on a plan the owner set
+to advance on its own (see [Delegation](#delegation)). Everything else the daemon does is a guardrail or a
 recovery: the calendar-day run cap, the circuit breaker, the resume cap,
 pause and cancel, startup and staleness reconciliation, run-directory
 retention.
+
+**Delegation, in one place.** A person is never a required step, and can
+always take one. An owner writes **grants** — standing rules for what an
+agent may decide, and how often ([Delegation](#delegation),
+`daemon/controls/delegation.py`); the daemon asks the pure `decide` before
+it acts for an agent and gets `allow`, `deny` or `escalate`, each written to
+the **decisions ledger** (`GET /v1/decisions`). The steps it takes for a
+plan an owner set to `advance = "auto"` are
+[the plan driver's](#the-plan-driver) (`daemon/plandriver.py`), and a level is
+approved only after the run's **critic review** (`plan_review`, see
+[Plan runs](#plan-runs)) has passed it. Whatever no grant covers is an
+escalation, and lands on the one list of **what is waiting on a person**
+(`GET /v1/attention`, under [Typed controls](#typed-controls)), with
+reminders, until someone takes or declines it. Grants ship empty and agents'
+capability sets are never widened, so a fresh install behaves as if none of
+this existed.
 
 **Workload intake (#760)** rides the same machinery with a second label and
 a second source. `GitHubIssueSource.poll` runs two searches, the trigger

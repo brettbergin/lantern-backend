@@ -2,7 +2,8 @@
 as issue runs, in dependency order, and following them to the end.
 
 A person starts the run (``POST /v1/plans/{id}/nodes/{epic}/run``,
-``plans:publish``); the loop drives it on every tick from then on. One
+``plans:publish``), or the plan driver does under an owner's ``plan.run``
+grant on a plan set to advance on its own; the loop drives it on every tick from then on. One
 pass:
 
 1. follows each admitted task's item as the queue holds it — ``done`` is

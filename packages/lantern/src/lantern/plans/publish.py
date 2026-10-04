@@ -10,7 +10,8 @@ dependency order:
 2. is created when absent, with its rendered body and its level label on
    the create itself, so an issue of ours is never on the forge without the
    label the lookup filters on. Never the trigger or the workload label: a
-   published task is inert until a person starts it;
+   published task is inert until an epic run admits it or a person labels
+   it;
 3. is linked under its parent: a native sub-issue where the parent's forge
    has them (a child already linked is not linked twice), else a line in
    the parent's managed checklist. A cross-repository sub-issue the forge

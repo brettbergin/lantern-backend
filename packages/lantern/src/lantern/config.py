@@ -1032,8 +1032,11 @@ class PlanningConfig(_ConfigModel):
     """Planning work into the forge: initiatives, epics and tasks (#2343).
 
     On by default wherever the forge can hold a plan. The caps bound what
-    one breakdown may propose and what one parent may hold; a person still
-    publishes every level and starts every epic run. ``close_completed``
+    one breakdown may propose and what one parent may hold. On a ``manual``
+    plan (the default) a person takes every step — approving and publishing
+    each level, starting each epic run; on a plan an owner set to
+    ``advance = "auto"`` an agent may take a step an owner's grant allows,
+    and any step no grant covers waits for a person. ``close_completed``
     comments a summary on an epic whose tasks are all closed and closes it,
     and does the same for an initiative whose epics are all closed.
     ``reconcile_interval_s`` is how stale a published plan may be before
@@ -2015,9 +2018,12 @@ class DaemonConfig(_ConfigModel):
     ``[landing]``) and reports the outcome back on the issue: closed with
     ``completed_label`` when the PR merged, ``failed_label`` when the run
     gave up, ``blocked_label`` when GitHub would not let the loop finish
-    and a human has to look. The daemon never files work of its own; only
-    a human labelling an issue (directly, or through the Discord concierge)
-    starts a run.
+    and a human has to look. Nothing starts a run without a person's act or
+    an owner's standing word: a person labelling an issue (directly, or
+    through the chat concierge), a schedule a person created, or a step an
+    owner's grant allows an agent on a plan the owner set to advance on its
+    own. Grants ship empty, so a fresh install starts only what a person
+    asked for, and an unlabeled issue is never picked up.
 
     It is fully autonomous — a label alone starts a run — so the spend
     guardrails here are the only thing standing between a mislabeled issue

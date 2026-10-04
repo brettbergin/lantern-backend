@@ -13,12 +13,15 @@ bodies and the PR checklist, and files them (:class:`FollowupFiler`). The
 engine files them when its landing clears every bar; the daemon files them
 again when it completes a parked landing (a merge gate or a review wait)
 with gh ops alone. Never for a failed or blocked run, so it litters
-nothing, and never with the trigger label: a human promotes a follow-up to
-work.
+nothing, and never with the trigger label: the loop never promotes a
+follow-up to work. A person does, by labelling it; outside a plan an owner
+set to advance on its own, nothing else does.
 
 That last rule is load-bearing. The 1.0 cutover removed every path by which
 the loop filed its own work, because issues used to force the loop forward
-had become a spiral (#498). A follow-up is filed with its own label, capped
+had become a spiral (#498). Work the daemon now starts unattended comes only
+under an owner's grants, which ship empty, are capped per day and are
+recorded decision by decision. A follow-up is filed with its own label, capped
 per run, deduplicated by title within the run and by marker across runs,
 and left for a person. Creation also requires the reviewer's completed
 issue lookup (``issue_lookup.py``); unchecked notes remain on the PR.

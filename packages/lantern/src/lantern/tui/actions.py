@@ -458,9 +458,9 @@ def run_text(deps: Deps, text: str) -> Action:
 
 
 def ask_concierge_to_file(deps: Deps, text: str) -> Action:
-    """The daemon's way to a run: a human asks the concierge in the control
-    channel, which files the issue with the trigger label — the daemon
-    never files work for itself."""
+    """The console's way to a daemon run: a human asks the concierge in the
+    control channel, which files the issue with the trigger label, and the
+    daemon claims it like any labelled issue."""
     message = f"@sbx please file this as an issue for the daemon to run: {text}"
 
     def post() -> Outcome:

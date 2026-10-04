@@ -959,8 +959,10 @@ criteria, verify commands (code) or workload profile (workload) and what it
 depends on. It is ordinary work otherwise: in the queue and History as
 `kind: plan`, cancellable, resumable (a proposal already made is delivered
 without a second turn), steerable from the channel it was started in,
-metered to the usage pool, and run on `[agent.models] plan`. A person still
-reviews, edits and publishes the level.
+metered to the usage pool, and run on `[agent.models] plan`. On a `manual`
+plan a person reviews, edits and publishes the level; on a plan an owner set
+to advance on its own, an agent may take a step an owner's grant allows, and
+a step no grant covers waits for a person.
 
 Before it proposes, the planner may ask. Its first turn (`clarifying`)
 reads the same checkout and either says it is ready or asks up to
@@ -1468,10 +1470,15 @@ repository (`--repo`, or the `[[vcs.repos]]` entries) for open
 issues carrying the trigger label (`lantern:run`), claims each one, runs it
 as **one** engine run — task graph, gate, draft PR, review, fix rounds, CI,
 merge — and settles the outcome on the issue. One labeled issue is one run
-is one pull request. There is no other work source, and the daemon **never
-files work of its own**: only a human labelling an issue — directly, or by
-asking the chat concierge, which files the issue *with* the label —
-starts a run.
+is one pull request. The daemon **starts nothing on its own account**: an
+issue becomes work only when a person labels it — directly, or by asking
+the chat concierge, which files the issue *with* the label. The other ways
+work reaches the queue trace to a person too: a schedule someone created,
+an epic run someone started, and a step an owner's grant allows an agent on
+a plan the owner set to advance on its own (see
+[Letting an agent decide: grants](#letting-an-agent-decide-grants)). Grants
+ship empty, so a fresh install runs only what a person asked for, and
+anything a grant does not cover waits for a person.
 
 The labels are the state machine, and every transition is visible on the
 issue:
@@ -3209,7 +3216,7 @@ required_checks = []            # the checks that gate the merge; empty = what t
 ignore_checks = []              # fnmatch patterns never waited on, fixed or reported (e.g. "codecov/*")
 ignore_reviewers = []           # User-type logins treated as automated reviewers: one fix round, never a block
 followups = "issues"            # after the merge, the review's out-of-scope notes: issues | comment | off
-followup_label = "lantern:follow-up"  # never the trigger label — a human promotes a follow-up to work
+followup_label = "lantern:follow-up"  # never the trigger label — the loop never promotes a follow-up to work
 max_followups_per_run = 5
 review_diff_max_chars = 150000  # the diff shown inline to the reviewer; past it, the reviewer reads the tree
 ```

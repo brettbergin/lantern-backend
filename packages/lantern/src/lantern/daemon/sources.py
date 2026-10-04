@@ -5,9 +5,11 @@ label (a code run) or the workload label (#760, a workload run whose result
 comes back as a comment) and drives their lifecycle with labels and
 comments — every mutation goes through the daemon's github-ops sandbox via
 :class:`IssueOps`, using ``raw.api`` for label add/remove and issue close,
-so no new worker ops are needed. The source never files work of its own:
-an issue enters the queue only because a human labelled it (directly, or
-through the Discord concierge). ``ChatSource`` is the queue the concierge
+so no new worker ops are needed. The source files nothing itself: an
+issue enters the queue through it only because a person labelled it
+(directly, or through the chat concierge), and an unlabeled issue is never
+work. Schedules and epic runs queue their items without passing through a
+source. ``ChatSource`` is the queue the concierge
 feeds directly — a workload asked for in chat has no issue to label, so it
 is claimed by construction and reported only to the log; the run's chat
 thread carries its chronology. ``CompositeSource`` routes between the two
