@@ -2508,6 +2508,21 @@ traffic), or once a minute for the changes that record nothing; an idle pass
 runs no statement. Each event is recorded against the entry's run and item,
 so `visibility` scopes it as it scopes that work's own events.
 
+An entry never expires to yes or to no, so the same tracker reminds. Each
+`attention.open:<id>` value also keeps when the entry was first announced,
+when it was last reminded about and how many times; on the passes that read
+the list anyway, an entry open at least `[attention] remind_after_s` and not
+reminded within `remind_every_s` gets one `attention.reminder` — the
+opening's data plus `waiting_s`, `reminders` and the `capabilities` its
+actions need — with the clock moved in the event's own transaction, so a
+restart repeats nothing and a long stop yields one reminder, not a burst. A
+value the previous release wrote has no clock and is stamped as first seen
+now. The push rules (`api/push/rules.py:_reminder`) turn the event into a
+`gate` or `failure` notice for the members who can see where the entry is
+and hold one of those capabilities (the owners when it has none), under a
+dedupe key that counts the reminders. The tracker lives in the API's
+projector, so a chat-only installation has no reminders.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

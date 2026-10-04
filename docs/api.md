@@ -1730,6 +1730,19 @@ workspace (a host-trusted operator, say) pushes nothing. The breakdown
 notices carry the channel the breakdown was asked in when the asker can
 open it (so per-channel preferences apply); the epic-run notice has none.
 
+A thing that keeps waiting on a person is reminded about, on the existing
+kinds again:
+
+| Notice        | Event                | `kind`                                                                  | Who                                                                                                                                                                                                                                                                                                                                                                                            | Title                    |
+| ------------- | -------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Still waiting | `attention.reminder` | `gate` for a `decision` entry; `failure` for a `failed` or `paused` one | Among the people who can see where it is (a channel's readers for work it asked for; owners and admins for work nobody did; every member for a block on the daemon itself), those who hold the capability of at least one of the entry's actions (`capabilities` in the event) — or the owners, for an entry nobody below owner can act on. Never the whole workspace regardless of capability | `Still waiting: <title>` |
+
+The body says how long it has waited and which reminder this is (`A decision has been waiting 4 hours. First reminder.`; `It ended blocked 2 days ago and still needs someone. Reminder 2.`). Each reminder is its own notice — the
+second is not swallowed by the one-hour dedupe of the first — and the same
+one is never pushed twice. The notice carries the entry's channel when it has
+one, so per-channel preferences apply, and a device's `gates` or `failures`
+switch governs it as it governs the kind.
+
 Only live events are pushed: the dispatcher reads the chronology from where
 it stood when the daemon started, so historical events and a restart's replay
 never are. Delivery retries a relay's retryable `502`, a `429` (at least its
@@ -2092,9 +2105,9 @@ The **chronology** is one durable, ordered stream: the daemon's notices, a
 run's start and finish, its engine events (every persisted one, `worker.stdout`
 included — filter with `type_prefix`), gate transitions, steering receipts,
 every operation any surface recorded, and — with `attention.act` —
-[`attention.opened` and `attention.resolved`](#hearing-that-an-entry-appeared-or-left)
-when something starts and stops waiting on a person. Each event's `id`
-(`evt_<n>`) is also the cursor.
+[`attention.opened`, `attention.resolved` and `attention.reminder`](#hearing-that-an-entry-appeared-or-left)
+when something starts and stops waiting on a person, and while it still
+does. Each event's `id` (`evt_<n>`) is also the cursor.
 
 1. Read a snapshot: `GET /v1/status` reports `watermark`.
 2. Read what came after it: `GET /v1/events?after=evt_<watermark>` — pages
@@ -2219,8 +2232,10 @@ One entry per thing a person has to act on:
 | `repository`    | A repository whose polling is suspended                                                    | `repository:<repository id>`                   | `paused`   |
 
 - **`kind` is open.** A later release adds kinds (a plan's questions and
-  proposals, an agent's escalation). A client leaves out an entry whose `kind`
-  it does not know rather than failing the page; `counts` still includes it.
+  proposals, an agent's escalation). A client still shows an entry whose
+  `kind` it does not know — as a plain row with its `title` and `reason` and
+  no controls — rather than hiding it or failing the page: something that
+  waits on a person is worse hidden than plain. `counts` includes it.
 - **`id` is opaque and stable.** The same thing waiting keeps its id from one
   read to the next. When it stops waiting the entry is gone, and when it waits
   again in a new way — a review wait that paused, a retry that failed on a new
@@ -2403,17 +2418,20 @@ the actions' own names (`gate.approve`, `item.retry`, …) as before.
 
 ### Hearing that an entry appeared or left
 
-With `attention.act`, the chronology carries two durable events, so a client
-— or a notification rule — no longer polls the list and compares:
+With `attention.act`, the chronology carries three durable events, so a
+client — or a notification rule — no longer polls the list and compares:
 
 - `attention.opened` when an entry appears on the default list (dismissed
   alerts left out);
 - `attention.resolved` when it leaves: it was approved, retried, skipped,
-  resumed, dismissed, deleted, or its work moved by itself.
+  resumed, dismissed, deleted, or its work moved by itself;
+- `attention.reminder` while it is still there: once it has been open
+  `[attention] remind_after_s` (4 hours by default), and again every
+  `remind_every_s` (a day) — see [Still waiting](#still-waiting) below.
 
 An `undismiss` opens the entry again under the same id; work that fails
 again is a new entry and a new `attention.opened`. `data` is the same in
-both:
+the first two:
 
 ```json
 {
@@ -2452,6 +2470,42 @@ own `run_id` and `item_id` are set where the entry has them.
 - **On upgrade.** The first comparison records what is already waiting
   without announcing it: there is no burst of `attention.opened` for old
   entries. Their `attention.resolved` is still recorded when they leave.
+
+#### Still waiting
+
+An entry never expires to yes or to no: a merge gate, a publish hold, a
+plan's questions or a blocked run waits until someone acts. So that it does
+not wait in silence, the daemon records `attention.reminder` for an entry
+that has been on the default list at least `[attention] remind_after_s` and
+has not been reminded about within `remind_every_s`. Its `data` is the
+opening's, plus:
+
+```json
+{
+  "…": "the fields of attention.opened, as the list has them now",
+  "waiting_s": 14400,
+  "reminders": 1,
+  "capabilities": ["gates:approve", "runs:control"]
+}
+```
+
+- `waiting_s` is how long the entry has been announced (whole seconds);
+  `since` still says when the thing itself started waiting.
+- `reminders` counts the reminders sent for this entry, this one included.
+- `capabilities` are the ones the entry's actions need, as
+  [`GET /v1/attention`](#what-is-waiting-on-a-person) lists them, without
+  the per-reader `allowed`: who could act. An entry with no action (a
+  provider hold) has `[]`.
+
+It is scoped as the opening was (the same `run_id` and `item_id`, so the
+same people see it). An entry that leaves the list and comes back — a
+dismissal taken back, work that fails again under a new id — starts its
+clock over. A restart repeats nothing and resets nothing: a daemon that was
+down past several intervals records one reminder on return, not one per
+interval missed. `remind_after_s = 0` records none. Reminders are judged on
+the same passes that compare the list (within a minute), so a reminder is
+due on the minute, not the second. A dismissed entry is off the default
+list and gets none.
 
 ## Delegation
 

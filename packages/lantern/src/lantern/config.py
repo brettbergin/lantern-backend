@@ -1051,6 +1051,48 @@ class PlanningConfig(_ConfigModel):
     reconcile_interval_s: int = Field(default=120, ge=0, le=86400)
 
 
+#: The least either reminder interval may be: well above the attention
+#: tracker's own once-a-minute sweep, so a reminder is never due on every
+#: pass. And the most, so a typo does not silence reminders for a year.
+ATTENTION_REMIND_FLOOR_S = 300
+ATTENTION_REMIND_CEILING_S = 30 * 86400
+
+
+class AttentionConfig(_ConfigModel):
+    """When something that waits on a person is reminded about.
+
+    An entry of the attention list — a merge gate, a publish hold, a plan's
+    questions, a blocked run — never expires to yes or to no: it waits
+    until someone acts. ``remind_after_s`` is how long it may wait before
+    the chronology records an ``attention.reminder`` for it (and the push
+    rules remind the people who can act on it), and ``remind_every_s`` how
+    long until the next one. ``remind_after_s = 0`` sends none. A daemon
+    that was down past several intervals sends one reminder on return.
+    Workspace-wide, not per repository: an entry need not have one.
+    """
+
+    remind_after_s: int = 14400
+    remind_every_s: int = 86400
+
+    @field_validator("remind_after_s", "remind_every_s")
+    @classmethod
+    def _an_interval_the_tracker_can_honour(cls, value: int, info: ValidationInfo) -> int:
+        floor, ceiling = ATTENTION_REMIND_FLOOR_S, ATTENTION_REMIND_CEILING_S
+        if info.field_name == "remind_after_s" and value == 0:
+            return value
+        if not floor <= value <= ceiling:
+            none = " (or 0 for no reminders)" if info.field_name == "remind_after_s" else ""
+            raise ValueError(
+                f"attention.{info.field_name} must be between {floor} and {ceiling} "
+                f"seconds{none}, got {value}"
+            )
+        return value
+
+    @property
+    def enabled(self) -> bool:
+        return self.remind_after_s > 0
+
+
 class PlanningOverride(_ConfigModel):
     """`[vcs.repos.planning]`: sparse per-repository overrides of
     `[planning]`; omit a key to inherit."""
@@ -3321,6 +3363,8 @@ class Config(_ConfigModel):
     push: PushConfig = Field(default_factory=PushConfig)
     # Planning initiatives, epics and tasks into the forge (#2343).
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
+    # When what waits on a person is reminded about.
+    attention: AttentionConfig = Field(default_factory=AttentionConfig)
     entrygraph: EntrygraphConfig = Field(default_factory=EntrygraphConfig)
     # Named bounds for workload runs (#758) and the one a run gets by
     # default; a code run ignores both.
