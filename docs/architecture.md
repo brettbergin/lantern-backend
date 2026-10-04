@@ -2542,6 +2542,20 @@ and hold one of those capabilities (the owners when it has none), under a
 dedupe key that counts the reminders. The tracker lives in the API's
 projector, so a chat-only installation has no reminders.
 
+The daily digest rides the same passes (`api/digest.py`, `Digest`, held by
+the tracker). With `[attention] digest_at` unset a pass reads one attribute;
+set, the first pass at or after that local time (in `[daemon] run_cap_timezone`) whose day differs from the one kept under
+`briefing.digest.last` in `daemon_state` computes `api/briefing.py:briefing`
+with no principal (the counts anyone may read) since the previous digest's
+time, records `briefing.digest` — numbers only, no run, item or channel, so
+`visibility` shows it to every member — with the day kept in the event's own
+transaction, and hands one `daemon.digest` notice to `loop.frontend` from
+the projector thread (the fan-out list is fixed at start and bridges only
+queue). The day is then held in memory, so later passes run no statement. A
+restart repeats nothing; a daemon down at the time sends one on return the
+same day; a missed day is skipped. `api/push/rules.py:_digest` turns the
+event into one `work` notice per active member, deduped by the day.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever

@@ -30,6 +30,7 @@ import re
 import string
 import tomllib
 from collections.abc import Mapping, Sequence
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast, get_args
 from urllib.parse import urlsplit
@@ -1056,6 +1057,18 @@ class PlanningConfig(_ConfigModel):
 #: pass. And the most, so a typo does not silence reminders for a year.
 ATTENTION_REMIND_FLOOR_S = 300
 ATTENTION_REMIND_CEILING_S = 30 * 86400
+_TIME_OF_DAY = re.compile(r"(\d{1,2}):(\d{2})")
+
+
+def _time_of_day(value: str) -> dtime | None:
+    """``HH:MM`` (24-hour) as a time of day; ``None`` when it is not one."""
+    match = _TIME_OF_DAY.fullmatch(value)
+    if match is None:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return dtime(hour, minute)
 
 
 class AttentionConfig(_ConfigModel):
@@ -1069,10 +1082,32 @@ class AttentionConfig(_ConfigModel):
     long until the next one. ``remind_after_s = 0`` sends none. A daemon
     that was down past several intervals sends one reminder on return.
     Workspace-wide, not per repository: an entry need not have one.
+
+    ``digest_at`` is the local time of day (``HH:MM``, 24-hour, read in
+    ``[daemon] run_cap_timezone``) of the daily digest — a
+    ``briefing.digest`` event, one control-channel line and a ``work`` push
+    to every member saying what happened since the last one. Empty (the
+    default) sends none.
     """
 
     remind_after_s: int = 14400
     remind_every_s: int = 86400
+    digest_at: str = ""
+
+    @field_validator("digest_at")
+    @classmethod
+    def _a_time_of_day(cls, value: str) -> str:
+        if value == "" or _time_of_day(value) is not None:
+            return value
+        raise ValueError(
+            "attention.digest_at must be a time of day as HH:MM (24-hour, 00:00 to 23:59) "
+            f"or empty for no digest, got {value!r}"
+        )
+
+    @property
+    def digest_time(self) -> dtime | None:
+        """``digest_at`` as a time of day; ``None`` when there is no digest."""
+        return _time_of_day(self.digest_at) if self.digest_at else None
 
     @field_validator("remind_after_s", "remind_every_s")
     @classmethod
