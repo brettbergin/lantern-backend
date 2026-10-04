@@ -132,12 +132,15 @@ from lantern.engine.phases import (
     verify_suspect_feedback,
 )
 from lantern.engine.planning import (
+    PLAN_REVIEW_KEY,
     PLAN_SINK,
     PROPOSE_TASK_ID,
+    REVIEW_UNUSABLE,
     PlanBrief,
     PlanDesk,
     PlanProposal,
     PlanReplan,
+    PlanVerdict,
     plan_task,
 )
 from lantern.engine.reconcile import (
@@ -343,9 +346,11 @@ _PROMPT_BY_RECORDED_PHASE: dict[str, str] = {
     "judge": "operator_judge",
     "review": "review",
     "steer": "steer",
-    # A plan run's turns: its clarifying questions and its proposal.
+    # A plan run's turns: its clarifying questions and its proposal, and the
+    # critic's review of the proposal (it runs as the `review` phase).
     "clarify": "plan",
     "propose": "plan",
+    "plan_review": "review",
 }
 
 
@@ -2358,10 +2363,15 @@ class LoopEngine:
                 files=0,
             )
             self._emit_task_end(run_id, task)
+        review: PlanVerdict | None = None
+        if brief.review and isinstance(answer, PlanProposal):
+            review = self._stage_plan_review(p, task, brief, answer)
         self._check_cancelled_and_clock(run_id, p.deadline)
         try:
             if isinstance(answer, PlanReplan):
                 delivered = desk.deliver_replan(run_id, answer)
+            elif review is not None:
+                delivered = desk.deliver(run_id, answer, review=review)
             else:
                 delivered = desk.deliver(run_id, answer)
         except PlanDeliveryError as exc:
@@ -2381,6 +2391,56 @@ class LoopEngine:
             message=task.output.summary if task.output is not None else "proposal delivered",
         )
         return None
+
+    def _stage_plan_review(
+        self, p: Pipeline, task: TaskRecord, brief: PlanBrief, proposal: PlanProposal
+    ) -> PlanVerdict:
+        """The critic's verdict on the proposal, before it is delivered (a
+        breakdown of a plan that advances itself): one ``plan_review`` turn,
+        recorded and charged as the planner's turns are, its verdict kept on
+        the proposal task beside the proposal so a resume delivers both
+        without asking again. Fails closed: an answer unusable twice stands
+        for ``escalate``, never for an approval, and the run still delivers
+        — the level then waits for a person, which is what ``escalate``
+        means. Emits ``phase.end`` and nothing of a code run's review."""
+        run_id = p.run_id
+        saved = task.output.data.get(PLAN_REVIEW_KEY) if task.output is not None else None
+        if saved is not None:
+            return PlanVerdict.model_validate(saved)
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        turned = self._plan_turn(
+            run_id,
+            "plan_review",
+            task.spec.id,
+            p.phases,
+            lambda: p.phases.review_plan(brief, proposal),
+        )
+        if isinstance(turned, InvalidOutputTwice):
+            verdict = PlanVerdict.unusable()
+            status, message = "failed", f"{REVIEW_UNUSABLE}, so a person decides: {turned}"
+        else:
+            verdict = turned
+            status = "ok"
+            count = len(verdict.reasons)
+            said = f" ({count} reason{'s' if count != 1 else ''})" if count else ""
+            message = (
+                "the reviewer approved the proposal"
+                if verdict.verdict == "approve"
+                else "the reviewer escalated the proposal to a person"
+            ) + said
+        output = task.output or TaskOutput(summary=_plan_summary(brief, proposal))
+        output.data[PLAN_REVIEW_KEY] = verdict.model_dump(mode="json")
+        task.output = output
+        self.store.update_task(run_id, task)
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="plan_review",
+            status=status,
+            message=message,
+        )
+        return verdict
 
     def _plan_turn[A: BaseModel](
         self,

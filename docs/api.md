@@ -848,7 +848,12 @@ level still reads so: an edit of a child's title or sections, a child added,
 removed, moved or replaced, or a changed repository makes it `false`, and a
 review that is not current says nothing about the level as it is now.
 Approving and publishing the level do not move it. The daemon writes
-`review`; no route does, and nothing writes one in this release.
+`review`; no route does. A breakdown of a plan whose `advance` is `auto`
+fills it: the run's critic reviews the proposed level before it is
+delivered, and the verdict lands on the node in the proposal's own write,
+`current: true` until the level changes (see the breakdown route below).
+`reviewed_by` is the critic, `agent:<slug>`; a review whose answer was
+unusable reads `escalate` with the reason `the reviewer did not return a usable verdict`. A `manual` plan's breakdown never writes one.
 
 A plan carries `advance`: `manual` (the default — a person takes every
 step) or `auto`, and `goal_id`, the goal it was proposed from (`null` for a
@@ -1030,6 +1035,19 @@ repository planning is off for or no longer configured (`409 planning_unsupporte
 `plan.generation.proposed` `{plan_id, node_id, run_id, kind: "breakdown", count}` when the plan holds the proposal, or `plan.generation.failed`
 `{plan_id, node_id, run_id, reason}` when the run ends without one; each is
 scoped to the run, its item and its channel.
+
+**A reviewed breakdown.** On a plan whose `advance` is `auto` the planner
+asks no clarifying questions, whatever `[planning] max_questions` says, and
+the run's critic reviews the proposal before it is delivered: it reads the
+node (or the root the planner generated), the children that stay and the
+proposed children as their issues will read, and answers `approve` or
+`escalate` with short reasons. The verdict is written to the node's
+`review` in the same write as the proposal, and
+`plan.generation.reviewed` `{plan_id, node_id, run_id, verdict, reason_count}` follows `plan.generation.proposed` in that write, scoped
+the same way (the reasons themselves are on the node, not in the event).
+A reviewer whose answer is unusable twice stands for `escalate`; the
+proposal is still delivered and waits for a person. A re-plan is not
+reviewed: its diff already waits for a person.
 
 **Clarifying questions** (feature `planning.clarify`, advertised with
 `planning`). Before it proposes, the planner reads the checkout and either

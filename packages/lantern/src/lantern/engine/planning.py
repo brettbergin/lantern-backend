@@ -30,6 +30,13 @@ forge last had them), and the answer is a :class:`PlanReplan` — a diff of
 replacement. A child is named by its node id, and an ``add`` that repeats
 a child that exists is sent back, so nothing the forge has is proposed
 twice. The diff waits on the plan for a person's approval.
+
+A breakdown of a plan that advances itself is **reviewed** before it is
+delivered: the brief says so (``review``), the critic judges the proposed
+level once and answers a :class:`PlanVerdict` — ``approve`` or
+``escalate`` with its reasons — and the verdict is delivered with the
+proposal, in the same write. A reviewer whose answer is unusable twice
+stands for ``escalate``: a failed review never approves.
 """
 
 from __future__ import annotations
@@ -48,6 +55,10 @@ from lantern.engine.model import TaskSpec
 #: holds the validated answer, so a resume after the turn delivers without
 #: asking again.
 PROPOSE_TASK_ID = "propose"
+
+#: Where the proposal task's output keeps a reviewed breakdown's verdict,
+#: beside the proposal, so a resume delivers both without a second turn.
+PLAN_REVIEW_KEY = "review"
 
 #: The sink a plan run's result goes to: the plan record.
 PLAN_SINK = "plan"
@@ -305,6 +316,10 @@ class PlanBrief(_Model):
     #: The node's latest clarifying questions and a person's answers — this
     #: run's, or an earlier generation's the planner should not ask again.
     clarification: Clarification | None = None
+    #: Whether an independent reviewer judges the proposal before it is
+    #: delivered (a breakdown of a plan that advances itself). False keeps
+    #: the run exactly as it was: the planner proposes, a person decides.
+    review: bool = False
 
     def clarification_for(self, run_id: str) -> Clarification | None:
         """The questions ``run_id`` itself asked, when it asked any."""
@@ -888,6 +903,51 @@ def _change_problems(
     return problems
 
 
+# -- the reviewer's verdict on a proposed level ----------------------------------
+
+#: The verdict a review that produced nothing usable stands for: never an
+#: approval — a review that failed is a level a person has to look at.
+REVIEW_UNUSABLE = "the reviewer did not return a usable verdict"
+#: How many findings a verdict may carry, and how long each may be: a
+#: person reads them, so they are short sentences, not a report.
+MAX_REVIEW_REASONS = 10
+MAX_REVIEW_REASON_CHARS = 500
+
+
+class PlanVerdict(_Model):
+    """The reviewer's answer on one proposed level: ``approve`` when it is a
+    sound decomposition, ``escalate`` when a person should look (always
+    with the reasons why), and the findings a person reads either way."""
+
+    verdict: Literal["approve", "escalate"]
+    reasons: list[str] = Field(default_factory=list, max_length=MAX_REVIEW_REASONS)
+
+    @field_validator("reasons")
+    @classmethod
+    def _sentences(cls, value: list[str]) -> list[str]:
+        folded = [" ".join(str(reason).split()) for reason in value]
+        folded = [reason for reason in folded if reason]
+        for reason in folded:
+            if len(reason) > MAX_REVIEW_REASON_CHARS:
+                raise ValueError(
+                    f"keep each reason under {MAX_REVIEW_REASON_CHARS} characters; "
+                    f"one has {len(reason)}"
+                )
+        return folded
+
+    @model_validator(mode="after")
+    def _said_why(self) -> PlanVerdict:
+        if self.verdict == "escalate" and not self.reasons:
+            raise ValueError("an `escalate` verdict needs at least one reason")
+        return self
+
+    @classmethod
+    def unusable(cls) -> PlanVerdict:
+        """The verdict a review stands for when the reviewer's answer was
+        invalid twice: escalate, never approve."""
+        return cls(verdict="escalate", reasons=[REVIEW_UNUSABLE])
+
+
 @dataclass(frozen=True, slots=True)
 class PlanDelivery:
     """What the plan record took: how many children, and where."""
@@ -921,7 +981,13 @@ class PlanDesk(Protocol):
         take them."""
         ...
 
-    def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery: ...
+    def deliver(
+        self, run_id: str, proposal: PlanProposal, *, review: PlanVerdict | None = None
+    ) -> PlanDelivery:
+        """Write the proposal under the node. ``review`` (a reviewed
+        breakdown's verdict) is written with it, in the same write, so the
+        record never holds the proposal without its review or the reverse."""
+        ...
 
     def deliver_replan(self, run_id: str, replan: PlanReplan) -> PlanDelivery: ...
 

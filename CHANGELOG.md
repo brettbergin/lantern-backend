@@ -16,6 +16,25 @@ Migration 0052 adds the three nullable columns to `api_push_notifications`;
 a notification recorded before it reads about no entry, with no actions, at
 `active`. The relay's payload, its kinds and the relay itself are unchanged.
 
+**A plan that advances itself has its proposals reviewed.** A plan run's
+proposal went to the plan with nobody but the planner behind it: a person
+read it before anything moved. A plan whose `advance` is `auto` will be
+moved forward under an owner's grant, so something independent has to
+judge each level first. Its breakdown now asks no clarifying questions
+(nobody is there to answer, whatever `[planning] max_questions` says) and
+adds one turn after the proposal: the run's critic, on the `[agent.models] review` model, reads the node, the children that stay and the proposed
+children as their issues will read, and answers `approve` or `escalate`
+with short reasons (`plan_review.md`). The verdict is written onto the
+node's `review` in the same write as the proposal — its digest the level as
+delivered, so `current` is true until a person changes it — with a new
+`plan.generation.reviewed` event `{plan_id, node_id, run_id, verdict, reason_count}`. It fails closed: an answer unusable twice reads
+`escalate`, "the reviewer did not return a usable verdict", and the level
+waits for a person. The verdict is kept on the run's task before delivery,
+so a resume neither asks again nor loses it. The turn is a `plan_review`
+phase row with its spend and emits `phase.end` only. A `manual` plan's run
+is byte-identical, and a re-plan is not reviewed. Nothing approves or
+publishes on a verdict yet.
+
 **A plan that advances itself is broken down by agents with no memories.**
 Any workspace member may write a memory on any agent, and a run's agents
 carried those memories into their system messages — so a member who cannot

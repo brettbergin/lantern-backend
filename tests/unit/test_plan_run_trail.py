@@ -4,10 +4,12 @@ A plan run's promise is narrow: one sandbox, a checkout the host cut, one
 planner turn (two when the first answer is sent back), and a delivery to the
 plan record — never a github sandbox, never a forge write. A run allowed to
 ask first adds one clarifying turn over the same checkout, and parks on its
-questions holding nothing. This test drives the canonical plan scripts (a
+questions holding nothing. A breakdown of a plan that advances itself
+asks nothing and adds one turn after the proposal: the critic's review,
+delivered with it. This test drives the canonical plan scripts (a
 proposal delivered, a proposal invalid twice, a clarifying turn that is
-ready, one that parks on its questions) and compares the ordered trail each leaves against
-``tests/fixtures/plan_run_trail/<scenario>.json``, the way
+ready, one that parks on its questions, a reviewed proposal) and compares
+the ordered trail each leaves against ``tests/fixtures/plan_run_trail/<scenario>.json``, the way
 ``test_code_run_trail.py`` holds a code run and ``test_tool_run_trail.py`` a
 tool run.
 
@@ -39,6 +41,8 @@ from tests.unit.test_engine_plan import (
     engine,
     epic_brief,
     question,
+    reviewed_brief,
+    verdict,
 )
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "plan_run_trail"
@@ -86,11 +90,28 @@ def scenario_parked_for_answers(harness: Harness) -> str:
     return result.run_id
 
 
+def scenario_reviewed_proposal(harness: Harness) -> str:
+    """A breakdown of a plan that advances itself: no clarifying turn, the
+    proposal, then the critic's review of it before the delivery."""
+    harness.script(
+        [
+            answer(code_task("c1"), code_task("c2", deps=["c1"])),
+            verdict("escalate", "The second task cannot be checked on its own."),
+        ]
+    )
+    desk = RecordingDesk(plan_brief=reviewed_brief(max_questions=0))
+    result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+    assert result.state == "completed", result.reason
+    assert [r is not None for r in desk.reviews] == [True]
+    return result.run_id
+
+
 SCENARIOS = {
     "proposal_delivered": scenario_proposal_delivered,
     "invalid_twice": scenario_invalid_twice,
     "clarified_ready": scenario_clarified_ready,
     "parked_for_answers": scenario_parked_for_answers,
+    "reviewed_proposal": scenario_reviewed_proposal,
 }
 
 

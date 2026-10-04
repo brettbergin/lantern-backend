@@ -20,6 +20,7 @@ from sqlalchemy import select
 
 from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Capability
 from lantern.db.api_models import ApiEventRow
+from lantern.engine.planning import PlanProposal, PlanVerdict
 from lantern.plans.model import PlanReview, review_digest
 from tests.api.conftest import Api
 from tests.api.test_plans_publish import _forge
@@ -314,6 +315,72 @@ class TestTheNode:
         )
         assert edited.status_code == 200, edited.text
         assert edited.json()["nodes"][0]["review"]["current"] is False
+
+    def test_a_reviewed_proposal_is_read_current_until_a_person_edits_it(self, api: Api) -> None:
+        """The delivery a reviewed breakdown makes: the proposal and its
+        verdict in one write, read current, then stale after an edit."""
+        headers = api.bearer(ADMIN)
+        plan = _create(api, headers, advance="auto")
+        plan = _generate(api, plan)
+        proposal = PlanProposal.model_validate(
+            {
+                "children": [
+                    {
+                        "id": "c1",
+                        "title": "Export as CSV",
+                        "goal": "reports download as CSV",
+                        "context": "the reports module",
+                        "acceptance_criteria": ["a report downloads as CSV"],
+                        "kind": "code",
+                        "verify_commands": ["make test"],
+                    },
+                    {
+                        "id": "c2",
+                        "title": "Link the export",
+                        "goal": "the report page links the export",
+                        "context": "the report page",
+                        "acceptance_criteria": ["the page links it"],
+                        "kind": "code",
+                        "verify_commands": ["make test"],
+                        "depends_on": ["c1"],
+                    },
+                ]
+            }
+        )
+        api.ctx.plans.deliver_proposal(
+            plan["id"],
+            plan["root_id"],
+            proposal,
+            run_id="r1review",
+            now=api.clock(),
+            proposed_by="agent:planner",
+            review=PlanVerdict(verdict="escalate", reasons=["c2 cannot be checked alone."]),
+            reviewed_by="agent:critic",
+        )
+        read = _read(api, plan)
+        root = next(n for n in read["nodes"] if n["id"] == plan["root_id"])
+        got = root["review"]
+        assert got["verdict"] == "escalate" and got["reasons"] == ["c2 cannot be checked alone."]
+        assert got["run_id"] == "run_r1review" and got["reviewed_by"] == "agent:critic"
+        assert got["current"] is True
+        (event,) = _events(api, "plan.generation.reviewed")
+        assert event[0] == {
+            "plan_id": plan["id"],
+            "node_id": plan["root_id"],
+            "run_id": "run_r1review",
+            "verdict": "escalate",
+            "reason_count": 1,
+        }
+        child = next(n for n in read["nodes"] if n["title"] == "Link the export")
+        edited = api.client.patch(
+            f"/v1/plans/{plan['id']}/nodes/{child['id']}",
+            json={"expected_revision": read["revision"], "goal": "something else"},
+            headers=headers,
+        )
+        assert edited.status_code == 200, edited.text
+        after = next(n for n in edited.json()["nodes"] if n["id"] == plan["root_id"])
+        assert after["review"]["current"] is False
+        assert after["review"]["verdict"] == "escalate", "the verdict stays, now stale"
 
 
 class TestAdvertised:

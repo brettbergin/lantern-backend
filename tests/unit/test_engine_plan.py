@@ -28,11 +28,12 @@ from lantern.engine.planning import (
     PlanProposal,
     PlanQuestion,
     PlanReplan,
+    PlanVerdict,
     ProfileRef,
     proposal_problems,
     replan_problems,
 )
-from lantern.errors import ConfigError, PlanDeliveryError
+from lantern.errors import ConfigError, PlanDeliveryError, WorkerError
 from lantern.events import HostEventTypes
 from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
@@ -123,6 +124,8 @@ class RecordingDesk:
     #: Each brief asked for, and whether it was the fresh one the planner
     #: is about to be given.
     briefs: list[bool] = field(default_factory=list)
+    #: The verdict delivered with each proposal (None: not reviewed).
+    reviews: list[PlanVerdict | None] = field(default_factory=list)
 
     def brief(self, *, fresh: bool = False) -> PlanBrief:
         self.briefs.append(fresh)
@@ -144,10 +147,13 @@ class RecordingDesk:
             update={"answers": answers, "status": "skipped" if skip else "answered"}
         )
 
-    def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery:
+    def deliver(
+        self, run_id: str, proposal: PlanProposal, *, review: PlanVerdict | None = None
+    ) -> PlanDelivery:
         if self.refuse is not None:
             raise PlanDeliveryError(self.refuse)
         self.delivered.append((run_id, proposal))
+        self.reviews.append(review)
         return PlanDelivery(len(proposal.children), f"plan plan_1/{self.plan_brief.node_id}")
 
     def deliver_replan(self, run_id: str, replan: PlanReplan) -> PlanDelivery:
@@ -656,6 +662,202 @@ class TestTheModel:
         assert result.state == "completed", result.reason
         (job,) = [j for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"]
         assert job["model"] == "planner-model"
+
+
+def verdict(decision: str, *reasons: str) -> dict[str, Any]:
+    return {"json": {"verdict": decision, "reasons": list(reasons)}}
+
+
+def reviewed_brief(**over: Any) -> PlanBrief:
+    """A breakdown of a plan that advances itself, as the service briefs it."""
+    return epic_brief(review=True, **over)
+
+
+def _sessions(harness: Harness, run_id: str) -> list[dict[str, Any]]:
+    """The run's agent sessions, the planner's before the reviewer's."""
+    jobs = [j for j in harness.agent_jobs(run_id) if j["kind"] == "agent.session"]
+    return sorted(jobs, key=lambda j: j["prompt"].startswith("# Review"))
+
+
+class TestPlanReview:
+    """The critic's turn between the proposal and its delivery, for a plan
+    that advances itself: its verdict is delivered with the proposal, it
+    fails closed, and it is never taken twice."""
+
+    @pytest.mark.parametrize(
+        ("decision", "reasons"),
+        [("approve", ()), ("escalate", ("The second task repeats the first.",))],
+    )
+    def test_the_verdict_is_delivered_with_the_proposal(
+        self,
+        harness: Harness,
+        upstream: list[tuple[str, str]],
+        decision: str,
+        reasons: tuple[str, ...],
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        harness.script(
+            [answer(code_task("c1"), code_task("c2", deps=["c1"])), verdict(decision, *reasons)]
+        )
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 2
+        assert len(desk.delivered) == 1
+        assert desk.reviews == [PlanVerdict(verdict=decision, reasons=list(reasons))]  # type: ignore[arg-type]
+        # One row per turn, each charged, and the verdict on the task.
+        rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
+        assert rows == [("propose", "ok"), ("plan_review", "ok")]
+        (task,) = result.tasks
+        assert task.output is not None
+        assert task.output.data["review"] == {"verdict": decision, "reasons": list(reasons)}
+        assert "proposal" in task.output.data
+        # phase.end for the review; nothing of a code run's review.
+        ends = [e for e in harness.events if e.type == HostEventTypes.PHASE_END]
+        assert [e.data["phase"] for e in ends] == ["propose", "plan_review"]
+        assert not [e for e in harness.events if e.type.startswith("review.")]
+        # The reviewer read the level as it will be published, read-only.
+        propose, review = _sessions(harness, result.run_id)
+        assert propose["prompt"].startswith("# Propose the tasks of one epic")
+        assert review["permission_mode"] == "read_only"
+        prompt = review["prompt"]
+        assert prompt.startswith("# Review the proposed tasks of one epic")
+        assert "People can download their reports as CSV" in prompt, "the node's goal"
+        assert "### 1. Task c1" in prompt and "### 2. Task c2" in prompt
+        assert "#### Acceptance criteria\n\n- [ ] c1 works" in prompt, "the publish render"
+        assert "#### Depends on\n\n- `1`" in prompt
+
+    def test_an_unusable_verdict_twice_escalates_and_still_delivers(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        bad = verdict("maybe")
+        harness.script([answer(code_task("c1")), bad, verdict("escalate")])
+        built = engine(harness, desk)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 3, "one retry, as every structured answer gets"
+        (review,) = desk.reviews
+        assert review == PlanVerdict(
+            verdict="escalate", reasons=["the reviewer did not return a usable verdict"]
+        )
+        rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
+        assert rows == [("propose", "ok"), ("plan_review", "failed")]
+        (end,) = [
+            e
+            for e in harness.events
+            if e.type == HostEventTypes.PHASE_END and e.data["phase"] == "plan_review"
+        ]
+        assert end.data["status"] == "failed"
+        assert end.data["message"].startswith("the reviewer did not return a usable verdict")
+
+    def test_a_resume_after_the_review_delivers_without_another_turn(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief(), refuse="the plan is busy")
+        harness.script([answer(code_task("c1")), verdict("approve")])
+        first = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert first.state == "failed"
+        desk.refuse = None
+        harness.script([])
+        harness.events.clear()
+        resumed = engine(harness, desk).resume(first.run_id)
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 0, "neither the proposal nor the review is asked again"
+        assert desk.reviews == [PlanVerdict(verdict="approve")]
+        assert not [e for e in harness.events if e.type == HostEventTypes.PHASE_END]
+
+    def test_a_resume_between_the_proposal_and_the_review_asks_only_the_reviewer(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        # The reviewer's job dies (the script runs out): the proposal is kept.
+        harness.script([answer(code_task("c1"))])
+        built = engine(harness, desk)
+        with pytest.raises(WorkerError, match="echo script exhausted"):
+            built.start("plan", repo=REPO, kind="plan")
+        run_id = built.store.list_runs()[0].run_id
+        assert desk.delivered == [], "a proposal never lands without its review"
+        harness.script([verdict("escalate", "Too coarse to deliver in one run.")])
+        resumed = engine(harness, desk, keep_sandboxes=True).resume(run_id)
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 1
+        (session,) = _sessions(harness, run_id)
+        assert session["prompt"].startswith("# Review the proposed")
+        assert desk.reviews == [
+            PlanVerdict(verdict="escalate", reasons=["Too coarse to deliver in one run."])
+        ]
+
+    def test_the_reviewer_is_the_critic_on_the_review_model(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        harness.script([answer(code_task("c1")), verdict("approve")])
+        built = engine(
+            harness,
+            RecordingDesk(plan_brief=reviewed_brief()),
+            keep_sandboxes=True,
+            agent={"models": {"plan": "planner-model", "review": "review-model"}},
+        )
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        propose, review = _sessions(harness, result.run_id)
+        assert propose["model"] == "planner-model"
+        assert review["model"] == "review-model"
+        # The critic's briefing: a read-only session that judges.
+        assert "You are a critic" in (review["system_message"] or "")
+
+    def test_a_brief_without_review_never_reviews(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk()
+        harness.script([answer(code_task("c1"))])
+        built = engine(harness, desk)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 1
+        assert desk.reviews == [None]
+        rows = [r.phase for r in built.store.phase_attempts(result.run_id)]
+        assert rows == ["propose"]
+
+    def test_a_replan_is_not_reviewed(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        """The brief never asks it (a re-plan's diff waits for a person),
+        and the engine would not review a diff if it did."""
+        brief = reviewed_brief(
+            mode="replan",
+            current=[
+                CurrentChild(
+                    id="node_a", title="Export as CSV", state="published", origin="planner"
+                )
+            ],
+        )
+        desk = RecordingDesk(plan_brief=brief)
+        harness.script([{"json": {"add": [], "modify": [], "suggest_close": []}}])
+        result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 1 and len(desk.replans) == 1
+
+
+class TestVerdictShape:
+    def test_escalate_says_why(self) -> None:
+        with pytest.raises(ValueError, match="needs at least one reason"):
+            PlanVerdict.model_validate({"verdict": "escalate", "reasons": []})
+
+    def test_only_two_verdicts(self) -> None:
+        with pytest.raises(ValueError):
+            PlanVerdict.model_validate({"verdict": "approve with changes", "reasons": ["x"]})
+
+    def test_reasons_are_folded_and_short(self) -> None:
+        folded = PlanVerdict.model_validate({"verdict": "approve", "reasons": ["  a\n b ", " "]})
+        assert folded.reasons == ["a b"]
+        with pytest.raises(ValueError, match="under 500 characters"):
+            PlanVerdict.model_validate({"verdict": "approve", "reasons": ["x" * 501]})
+        with pytest.raises(ValueError):
+            PlanVerdict.model_validate({"verdict": "approve", "reasons": ["x"] * 11})
+
+    def test_an_unusable_review_stands_for_escalate(self) -> None:
+        assert PlanVerdict.unusable().verdict == "escalate"
 
 
 class TestProposalRules:
