@@ -1476,9 +1476,12 @@ the chat concierge, which files the issue *with* the label. The other ways
 work reaches the queue trace to a person too: a schedule someone created,
 an epic run someone started, and a step an owner's grant allows an agent on
 a plan the owner set to advance on its own (see
-[Letting an agent decide: grants](#letting-an-agent-decide-grants)). Grants
-ship empty, so a fresh install runs only what a person asked for, and
-anything a grant does not cover waits for a person.
+[Letting an agent decide: grants](#letting-an-agent-decide-grants)). Every
+install starts with Lantern's default grants, but no plan advances until a
+person sets it to Auto, and anything a grant does not cover waits for a
+person. What the defaults do from the first tick is triage: a recently failed
+item whose cause was transient is retried once (see
+[Default grants](#default-grants)).
 
 The labels are the state machine, and every transition is visible on the
 issue:
@@ -2374,17 +2377,69 @@ limit, the note or `enabled` (switch one off without losing it);
 was decided: allowed under which grant, denied, or escalated to a person and
 why.
 
-Three things to know. A fresh installation has no grants and delegates
-nothing. Grants are edited through these routes only: not from chat, not from
-`lantern daemon ctl`, not from the WebSocket. And they live in the daemon's
-database, not in `lantern.toml`; the one key beside them is
-`[delegation] publish_delay_s` (below).
+Three things to know. Every installation starts with Lantern's default
+grants (next), so you mostly add to them or tune them. Grants are edited
+through these routes only: not from chat, not from `lantern daemon ctl`, not
+from the WebSocket. And they live in the daemon's database, not in
+`lantern.toml`; the keys beside them are `[delegation] publish_delay_s` and
+`propose_every` (below).
+
+#### Default grants
+
+Grants do not ship empty. The first time a daemon of this release starts — on
+a fresh install or on an upgrade — it writes these grants, enabled, listed
+first in `GET /v1/grants` with `"source": "default"` and the `default_key`
+shown:
+
+| `default_key`                  | What it lets happen                                                                                                 | Per day |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------- |
+| `plan.breakdown:planner:v1`    | the planner breaks down an epic or an initiative of a plan set to Auto                                              | 10      |
+| `plan.approve:critic:v1`       | the critic approves a level of at most 8 children its review passed                                                 | 5       |
+| `plan.publish:critic:v1`       | the critic publishes that level to the forge, after `publish_delay_s`                                               | 5       |
+| `plan.run:critic:v1`           | the critic starts an epic of at most 12 tasks                                                                       | 3       |
+| `plan.propose:planner:v1`      | the planner drafts a plan from an active goal, when `[delegation] propose_every` is set                             | 2       |
+| `item.retry:operator:v1`       | triage retries, once, an item that failed in the last day on `ci_timeout`, `forge_transient` or `provider_throttle` | 5       |
+| `run.grant_rounds:operator:v1` | triage gives a run that spent its review or CI fix rounds two more rounds, once                                     | 3       |
+
+What that means on your installation:
+
+- **Plans.** Nothing agent-driven happens to a plan until a person sets its
+  `advance` to `auto`; a manual plan, and every code, workload and tool run,
+  is untouched. Proposing also needs `[delegation] propose_every` and an
+  active goal.
+- **Triage acts at once.** From the first tick the `operator` agent retries
+  recent failures with one of the three transient causes and grants more
+  rounds to runs that spent theirs, once per item or run, within the daily
+  limits above. An upgraded installation starts doing this for the failures
+  of its last day. A recent failure with any other cause, or past those
+  limits, is written once to `GET /v1/decisions` as an escalation for you.
+  Pause `item.retry:operator:v1` and `run.grant_rounds:operator:v1` if you
+  want every failure to wait for you unjudged.
+- **No token budget is set for you.** `[daemon] daily_token_budget` stays
+  unset; each default's daily limit is its spend guard.
+
+Each default is written once, ever. Pause one (`PATCH` with
+`"enabled": false`), tighten it (`conditions`, `daily_limit`) or delete it,
+and a restart leaves your change alone — a deleted default is not written
+again. `POST /v1/grants/defaults/restore` (owner only) writes back every
+default you deleted, as shipped, and leaves the ones still there, edited or
+paused, as they are:
+
+```sh
+curl -X POST "$LANTERN/v1/grants/defaults/restore" -H "Authorization: Bearer $TOKEN"
+```
+
+Your own grants sit beside the defaults; when two allow the same act, the
+older one is the one named in the ledger, so a grant you wrote before
+upgrading keeps winning.
 
 #### Letting a plan advance by itself
 
-Grants act on plans whose **`advance`** is `auto`; nothing else in the
-daemon acts on them yet. To let a plan go from its brief to a running epic
-with nobody in the loop, an owner writes four grants, once:
+Grants act on plans whose **`advance`** is `auto`. The
+[default grants](#default-grants) already cover every step for levels the
+critic's review passed and that fit their `max_children`; to narrow them to
+one repository, or to replace them, an owner pauses the defaults and writes
+grants of their own, once — for example:
 
 ```sh
 for grant in \

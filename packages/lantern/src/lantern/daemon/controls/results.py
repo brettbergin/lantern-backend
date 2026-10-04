@@ -170,6 +170,15 @@ class GrantOutcome(Outcome):
     message: str
 
 
+class GrantsRestoredOutcome(Outcome):
+    """Lantern's default grants written again: ``grant_ids`` are the ones
+    this restore wrote, in the table's order (empty when every default was
+    already in place)."""
+
+    grant_ids: list[str]
+    message: str
+
+
 class GoalOutcome(Outcome):
     """A goal written, edited or removed; ``revision`` is the goal's after
     the write (``None`` once it is removed)."""

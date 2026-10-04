@@ -20,7 +20,8 @@ set to advance on its own, nothing else does.
 That last rule is load-bearing. The 1.0 cutover removed every path by which
 the loop filed its own work, because issues used to force the loop forward
 had become a spiral (#498). Work the daemon now starts unattended comes only
-under an owner's grants, which ship empty, are capped per day and are
+under grants (Lantern's defaults or an owner's), which act on a plan only
+once a person set it to advance on its own, are capped per day and are
 recorded decision by decision. A follow-up is filed with its own label, capped
 per run, deduplicated by title within the run and by marker across runs,
 and left for a person. Creation also requires the reviewer's completed

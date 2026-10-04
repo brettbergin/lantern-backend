@@ -99,8 +99,9 @@ it as one full run (one at a time), and reports back on the issue
 (comments and labels; the issue closes when the PR merges or the result
 lands). An unlabeled issue is never work: a person labelling an issue, or
 asking you to, starts a run. Beyond that the daemon starts work only from a
-schedule someone created or a step an owner's standing grant allows on a
-plan the owner set to advance on its own. Item ids look like `gh:issue:12`
+schedule someone created or a step a standing grant allows on a plan a
+person set to advance on its own; under the same grants a recent failure
+with a transient cause may be retried once. Item ids look like `gh:issue:12`
 (the bare legacy form `gh:12` is accepted on input and normalised) or
 `chat:<message id>` for a workload started here; states are queued →
 running → done | failed | blocked | cancelled.

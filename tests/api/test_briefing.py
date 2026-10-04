@@ -18,10 +18,11 @@ from typing import Any
 
 from lantern.api.models import rfc3339
 from lantern.daemon.controls.delegation import Conditions, Decision
+from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS
 from lantern.daemon.controls.delegation_store import DelegationStore
 from lantern.daemon.sources import GitHubIssueSource
 from lantern_worker.protocol import Usage
-from tests.api.conftest import Api, build
+from tests.api.conftest import Api, build, without_default_grants
 from tests.api.test_attention import _blocked, _parked
 from tests.api.test_grants import _headers
 from tests.api.test_plans_publish import PUBLISH, _epic_with_tasks, _forge, _node, _publish
@@ -186,7 +187,8 @@ class TestAnEmptyWorkspace:
             "resets_at": body["budget"]["resets_at"],
         }
         assert body["budget"]["resets_at"].endswith("Z")
-        assert body["grants"] == {"enabled": 0, "at_limit": 0}
+        # Lantern's default grants, none of which has acted.
+        assert body["grants"] == {"enabled": len(DEFAULT_GRANTS), "at_limit": 0}
 
 
 class TestOutcomes:
@@ -464,6 +466,7 @@ class TestBudget:
 
 class TestGrants:
     def test_enabled_grants_are_counted_with_those_that_spent_today_s_limit(self, api: Api) -> None:
+        without_default_grants(api)
         now = api.clock()
         spent = _grant(api, daily_limit=2)
         _decide(api, "allow", at=now - 60, grant_id=spent)

@@ -14,15 +14,27 @@ the audit trail cannot disagree, and deleting a grant loses neither.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import and_, delete, func, insert, or_, select
 
-from lantern.daemon.controls.delegation import Conditions, Decision, DecisionOutcome, Grant
+from lantern.daemon.controls.delegation import (
+    Conditions,
+    Decision,
+    DecisionOutcome,
+    Grant,
+    GrantSource,
+)
+from lantern.daemon.controls.delegation_defaults import (
+    SEEDED_BY,
+    SEEDED_BY_DISPLAY,
+    SEEDED_PREFIX,
+    DefaultGrant,
+)
 from lantern.daemon.store import DaemonStore
-from lantern.db.daemon_models import DecisionRow, GrantRow
+from lantern.db.daemon_models import DaemonStateRow, DecisionRow, GrantRow
 from lantern.ids import _token
 
 GRANT_PREFIX = "grant_"
@@ -102,6 +114,8 @@ def _grant(row: GrantRow) -> Grant:
         created_at=float(row.created_at),
         updated_at=float(row.updated_at),
         revision=int(row.revision),
+        source=cast(GrantSource, row.source or "owner"),
+        default_key=row.default_key,
     )
 
 
@@ -200,6 +214,71 @@ class DelegationStore:
             session.add(row)
             session.flush()
             return _grant(row)
+
+    def seed_defaults(
+        self, defaults: Iterable[DefaultGrant], *, now: float, restore: bool = False
+    ) -> list[Grant]:
+        """Write the defaults that are due, in one transaction holding the
+        write lock, and return the grants written.
+
+        At start (``restore`` false) a default is due when its key was
+        never seeded: one seeded before is not written again, even when
+        its grant is gone — the owner deleted it. On a restore a default
+        is due when no grant carries its key, whatever was seeded. Either
+        way an existing grant is never touched, each key written is
+        recorded as seeded, and the unique ``default_key`` index keeps a
+        second process from writing one twice."""
+        written: list[Grant] = []
+        with self.dstore.immediate_transaction() as session:
+            seeded = {
+                str(key).removeprefix(SEEDED_PREFIX)
+                for key in session.scalars(
+                    select(DaemonStateRow.key).where(
+                        DaemonStateRow.key.startswith(SEEDED_PREFIX, autoescape=True)
+                    )
+                )
+            }
+            present = {
+                str(key)
+                for key in session.scalars(
+                    select(GrantRow.default_key).where(GrantRow.default_key.is_not(None))
+                )
+            }
+            for default in defaults:
+                if default.key in present or (not restore and default.key in seeded):
+                    continue
+                row = GrantRow(
+                    grant_id=new_grant_id(),
+                    agent_slug=default.agent_slug,
+                    action=default.action,
+                    conditions_json=_conditions_json(default.parsed()),
+                    daily_limit=default.daily_limit,
+                    enabled=1,
+                    note=default.note,
+                    created_by=SEEDED_BY,
+                    created_by_display=SEEDED_BY_DISPLAY,
+                    created_at=now,
+                    updated_at=now,
+                    revision=1,
+                    source="default",
+                    default_key=default.key,
+                )
+                session.add(row)
+                if default.key not in seeded:
+                    session.execute(
+                        insert(DaemonStateRow)
+                        .prefix_with("OR REPLACE")
+                        .values(key=SEEDED_PREFIX + default.key, value=repr(now))
+                    )
+                present.add(default.key)
+                session.flush()
+                written.append(_grant(row))
+        return written
+
+    def seeded_default_keys(self) -> set[str]:
+        """Every default key ever seeded here, whether its grant remains."""
+        values = self.dstore.values_with_prefix(SEEDED_PREFIX)
+        return {key.removeprefix(SEEDED_PREFIX) for key in values}
 
     def update_grant(
         self,

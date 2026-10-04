@@ -108,3 +108,12 @@ def api(tmp_path: Path) -> Iterator[Api]:
     with built.client:
         yield built
     built.ctx.close()
+
+
+def without_default_grants(api: Api) -> None:
+    """Delete Lantern's default grants, which every daemon seeds at start:
+    for a test about something else that a default grant would act on (the
+    operator triaging the failures it sets up, a count of grants)."""
+    for grant in api.loop.delegation.grants():
+        if grant.source == "default":
+            api.loop.delegation.delete_grant(grant.id)

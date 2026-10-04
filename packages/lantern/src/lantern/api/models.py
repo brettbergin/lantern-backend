@@ -1477,7 +1477,9 @@ class GrantOut(ApiModel):
     """A standing rule: ``agent_slug`` may take ``action`` while
     ``conditions`` hold, at most ``daily_limit`` times a day (``null`` is
     unlimited). ``used_today`` is how many acts it allowed in the current
-    cap day, counted from the decisions ledger."""
+    cap day, counted from the decisions ledger. ``source`` is ``default``
+    for one of Lantern's default grants (``default_key`` names which) and
+    ``owner`` for one a person wrote."""
 
     id: str
     workspace_id: str = WORKSPACE_ID
@@ -1493,6 +1495,8 @@ class GrantOut(ApiModel):
     created_at: str
     updated_at: str
     revision: int
+    source: Literal["default", "owner"] = "owner"
+    default_key: str | None = None
 
 
 class GrantCreate(ApiModel):
@@ -1519,6 +1523,15 @@ class GrantUpdate(ApiModel):
 
 class GrantResult(ApiModel):
     grant: GrantOut | None = None
+    message: str
+    operation: OperationOut
+
+
+class GrantsRestored(ApiModel):
+    """The default grants a restore wrote, in the table's order: empty when
+    every default was already in place."""
+
+    grants: list[GrantOut]
     message: str
     operation: OperationOut
 

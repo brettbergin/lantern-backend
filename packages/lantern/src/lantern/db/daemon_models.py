@@ -727,12 +727,17 @@ class GrantRow(Base):
     what the conditions mean and which actions can be named at all.
 
     ``revision`` is bumped by every edit, in the store, and an edit names
-    the revision it read. Grants ship empty: a database that has never had
-    one delegates nothing.
+    the revision it read. ``source`` is ``default`` for a grant Lantern
+    seeded at start (revision 0054) and ``owner`` for one a person wrote;
+    ``default_key`` names which default a seeded grant is, unique so two
+    processes starting at once cannot seed it twice.
     """
 
     __tablename__ = "daemon_grants"
-    __table_args__ = (Index("idx_daemon_grants_subject", "agent_slug", "action"),)
+    __table_args__ = (
+        Index("idx_daemon_grants_subject", "agent_slug", "action"),
+        Index("idx_daemon_grants_default_key", "default_key", unique=True),
+    )
 
     grant_id: Mapped[str] = mapped_column(Text, primary_key=True)
     agent_slug: Mapped[str] = mapped_column(Text, nullable=False)
@@ -749,6 +754,8 @@ class GrantRow(Base):
     created_at: Mapped[float] = mapped_column(REAL, nullable=False)
     updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'owner'"))
+    default_key: Mapped[str | None] = mapped_column(Text)
 
 
 class GoalRow(Base):

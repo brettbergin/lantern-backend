@@ -826,10 +826,11 @@ service_memory = "2g"
 # completed_label when the PR merges, gets failed_label when the run gave
 # up, blocked_label when GitHub would not let the loop finish. Nothing starts
 # a run without a person's act or an owner's standing word: a label, a
-# schedule someone created, or a grant an owner wrote (grants ship empty;
-# an unlabeled issue is never picked up). A label alone starts a run, so the
-# guardrails below are what stand between a mislabeled issue and your
-# budget. All of them are DAEMON-WIDE: with several repositories configured,
+# schedule someone created, or a grant (Lantern's default grants are on, but
+# no plan advances until a person sets it to Auto; triage retries a recent
+# transient failure once; an unlabeled issue is never picked up). A label
+# alone starts a run, so the guardrails below are what stand between a
+# mislabeled issue and your budget. All of them are DAEMON-WIDE: with several repositories configured,
 # the daily run cap, the per-item attempt/resume caps, the consecutive-failure
 # circuit breaker and one-run-at-a-time are shared across every repository.
 # poll_interval_s = 60.0
@@ -1105,8 +1106,10 @@ service_memory = "2g"
 # digest_at = ""                   # e.g. "07:00"; empty = no digest
 
 # [delegation]
-# How the daemon acts on the grants an owner wrote (POST /v1/grants; the
-# grants live in the daemon's database, never here). A plan whose advance
+# How the daemon acts on the grants (GET /v1/grants; they live in the
+# daemon's database, never here). Every install starts with Lantern's
+# default grants, enabled, and an owner pauses, edits, deletes or restores
+# them there (POST /v1/grants/defaults/restore). A plan whose advance
 # is auto moves itself forward under them: its breakdown is admitted, its
 # level approved, published and run, each only when a grant allows it, and
 # anything a grant does not cover waits for a person. An approved level

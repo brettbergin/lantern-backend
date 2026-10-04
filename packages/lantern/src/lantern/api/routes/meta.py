@@ -88,6 +88,9 @@ FEATURES: tuple[str, ...] = (
     "delegation",
     # The operator agent retries failures and grants rounds under grants.
     "delegation.triage",
+    # Every install starts with Lantern's default grants (`source`,
+    # `default_key`, `POST /v1/grants/defaults/restore`).
+    "delegation.defaults",
     "attention.act",
     "attention.decisions",
 )

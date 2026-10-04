@@ -17,7 +17,14 @@ from lantern.api.auth.deps import Authenticated, get_ctx, ready_daemon, require
 from lantern.api.commands import idempotency
 from lantern.api.context import PAGE_DEFAULT, PAGE_MAX, ApiContext
 from lantern.api.errors import Problem
-from lantern.api.models import DecisionOut, GrantCreate, GrantOut, GrantResult, GrantUpdate
+from lantern.api.models import (
+    DecisionOut,
+    GrantCreate,
+    GrantOut,
+    GrantResult,
+    GrantsRestored,
+    GrantUpdate,
+)
 from lantern.api.pagination import Page, decode_cursor, encode_cursor
 from lantern.api.usage import parse_when
 from lantern.daemon.controls.delegation import OUTCOMES
@@ -31,10 +38,24 @@ async def list_grants(
     ctx: ApiContext = Depends(get_ctx),  # noqa: B008
     _auth: Authenticated = Depends(require("audit:read")),  # noqa: B008
 ) -> Page[GrantOut]:
-    """Every grant, oldest first, with how many acts each allowed today.
-    Empty until an owner writes one: a fresh installation delegates
-    nothing."""
+    """Every grant, with how many acts each allowed today: Lantern's
+    default grants first, in their table's order (`source: "default"`),
+    then the grants owners wrote, oldest first."""
     return Page(data=await ctx.call(delegation.list_grants, ctx))
+
+
+@router.post("/grants/defaults/restore", response_model=GrantsRestored)
+async def restore_default_grants(
+    request: Request,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("policy:manage")),  # noqa: B008
+) -> GrantsRestored:
+    """Write again each of Lantern's default grants whose grant was
+    deleted. A default still there, edited or paused, is left as it is;
+    the answer lists the grants written (none when every default is in
+    place)."""
+    pair = idempotency(request, auth.principal, "/v1/grants/defaults/restore", required=False)
+    return await delegation.restore_defaults(ctx, auth, pair)
 
 
 @router.get("/grants/{grant_id}", response_model=GrantOut)

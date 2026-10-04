@@ -12,7 +12,8 @@ import pytest
 
 from lantern.api.admin import ADMIN_ACTIONS
 from lantern.daemon.controls import ControlError, ControlService, Principal
-from lantern.daemon.controls.delegation import DELEGABLE_ACTIONS, Decision
+from lantern.daemon.controls.delegation import DELEGABLE_ACTIONS, Decision, Grant
+from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS, DEFAULT_KEYS
 from lantern.daemon.controls.delegation_store import DelegationStore
 from tests.api.conftest import Api, build
 from tests.api.test_role_grants import _register_member, _register_owner
@@ -36,6 +37,16 @@ def _create(api: Api, headers: dict[str, str], **changed: Any) -> Any:
     return api.client.post("/v1/grants", json={**GRANT, **changed}, headers=headers)
 
 
+def _owners_listed(api: Api, headers: dict[str, str]) -> list[dict[str, Any]]:
+    """The listing less Lantern's defaults: the grants owners wrote."""
+    listed = api.client.get("/v1/grants", headers=headers).json()["data"]
+    return [grant for grant in listed if grant["source"] == "owner"]
+
+
+def _owner_grants(api: Api) -> list[Grant]:
+    return [grant for grant in api.loop.delegation.grants() if grant.source == "owner"]
+
+
 def _notices(api: Api, kind: str) -> list[str]:
     events = api.client.get("/v1/events", headers=api.bearer()).json()["data"]
     return [
@@ -46,11 +57,16 @@ def _notices(api: Api, kind: str) -> list[str]:
 
 
 class TestAnOwnerManagesGrants:
-    def test_grants_ship_empty(self, api: Api) -> None:
+    def test_a_fresh_install_lists_the_defaults_and_no_owner_grant(self, api: Api) -> None:
         listed = api.client.get("/v1/grants", headers=api.bearer(READ))
         assert listed.status_code == 200, listed.text
-        assert listed.json() == {"data": [], "next_cursor": None, "has_more": False}
-        assert api.loop.delegation.grants() == []
+        body = listed.json()
+        assert body["next_cursor"] is None and body["has_more"] is False
+        assert [g["default_key"] for g in body["data"]] == list(DEFAULT_KEYS)
+        assert {g["source"] for g in body["data"]} == {"default"}
+        assert all(g["enabled"] for g in body["data"])
+        assert {g["created_by_display"] for g in body["data"]} == {"Lantern default"}
+        assert _owner_grants(api) == []
 
     def test_an_owner_creates_reads_edits_and_deletes_a_grant(self, api: Api) -> None:
         owner = _headers(_register_owner(api))
@@ -78,7 +94,8 @@ class TestAnOwnerManagesGrants:
         assert body["operation"]["target"] == {"kind": "grant", "id": grant["id"]}
         assert "critic" in body["message"] and "plan.approve" in body["message"]
 
-        assert api.client.get("/v1/grants", headers=owner).json()["data"] == [grant]
+        assert grant["source"] == "owner" and grant["default_key"] is None
+        assert _owners_listed(api, owner) == [grant]
         assert api.client.get(f"/v1/grants/{grant['id']}", headers=owner).json() == grant
 
         edited = api.client.patch(
@@ -113,7 +130,7 @@ class TestAnOwnerManagesGrants:
         assert removed.status_code == 200, removed.text
         assert removed.json()["grant"] is None
         assert removed.json()["operation"]["action"] == "grant.delete"
-        assert api.client.get("/v1/grants", headers=owner).json()["data"] == []
+        assert _owners_listed(api, owner) == []
         assert api.client.get(f"/v1/grants/{grant['id']}", headers=owner).status_code == 404
 
     def test_a_grant_that_is_not_there_is_a_plain_404(self, api: Api) -> None:
@@ -150,7 +167,7 @@ class TestAnOwnerManagesGrants:
         assert first.status_code == 201 and again.status_code == 201
         assert again.json()["grant"]["id"] == first.json()["grant"]["id"]
         assert again.json()["operation"]["id"] == first.json()["operation"]["id"]
-        assert len(api.loop.delegation.grants()) == 1
+        assert len(_owner_grants(api)) == 1
         clash = _create(api, headers, daily_limit=9)
         assert clash.status_code == 409 and clash.json()["code"] == "idempotency_conflict"
 
@@ -203,7 +220,7 @@ class TestAnOwnerManagesGrants:
                 attrs={"repository": "o/r"},
                 now=api.clock(),
             )
-        (listed,) = api.client.get("/v1/grants", headers=headers).json()["data"]
+        (listed,) = _owners_listed(api, headers)
         assert listed["used_today"] == 2
         assert (
             api.client.get(f"/v1/grants/{grant['id']}", headers=headers).json()["used_today"] == 2
@@ -215,7 +232,7 @@ class TestWhoMayWrite:
         owner = _headers(_register_owner(api))
         admin = _headers(_register_member(api, "ada", role="admin"))
         grant = _create(api, owner).json()["grant"]
-        assert api.client.get("/v1/grants", headers=admin).json()["data"] == [grant]
+        assert _owners_listed(api, admin) == [grant]
         assert api.client.get(f"/v1/grants/{grant['id']}", headers=admin).status_code == 200
         assert api.client.get("/v1/decisions", headers=admin).status_code == 200
         for refused in (
@@ -231,7 +248,7 @@ class TestWhoMayWrite:
             assert refused.json()["code"] == "forbidden"
             assert refused.json()["capability"] == "policy:manage"
             assert "policy:manage" in refused.json()["detail"]
-        assert api.client.get("/v1/grants", headers=owner).json()["data"] == [grant]
+        assert _owners_listed(api, owner) == [grant]
 
     def test_a_member_neither_reads_nor_writes(self, api: Api) -> None:
         owner = _headers(_register_owner(api))
@@ -267,7 +284,7 @@ class TestWhoMayWrite:
         ):
             assert refused.status_code == 403
             assert refused.json()["capability"] == "policy:manage"
-        assert len(api.loop.delegation.grants()) == 1
+        assert len(_owner_grants(api)) == 1
 
     def test_a_refused_write_leaves_no_record(self, api: Api) -> None:
         before = len(api.loop.operations.recent())
@@ -305,7 +322,7 @@ class TestWhoMayWrite:
             assert refused.value.code == "forbidden"
             assert refused.value.detail["capability"] == "policy:manage"
         assert len(api.loop.operations.recent()) == before
-        (kept,) = api.loop.delegation.grants()
+        (kept,) = _owner_grants(api)
         assert kept.id == existing["id"] and kept.enabled and kept.revision == 1
 
 
@@ -341,7 +358,7 @@ class TestWhatMayBeWritten:
         body = refused.json()
         assert body["code"] == "invalid_argument" and body["field"] == field
         assert says in body["detail"]
-        assert api.loop.delegation.grants() == []
+        assert _owner_grants(api) == []
         # Refused before anything was recorded: there is nothing to reconcile.
         assert api.client.get("/v1/operations", headers=api.bearer()).json()["data"] == []
 
@@ -362,7 +379,7 @@ class TestWhatMayBeWritten:
         assert refused.status_code == 422, refused.text
         assert refused.json()["code"] == "invalid_request"
         assert any(loc in error["loc"] for error in refused.json()["errors"])
-        assert api.loop.delegation.grants() == []
+        assert _owner_grants(api) == []
 
     def test_an_alias_or_a_disabled_agent_is_not_a_subject(self, tmp_path: Path) -> None:
         agents = [
@@ -389,7 +406,7 @@ class TestWhatMayBeWritten:
         for action in DELEGABLE_ACTIONS:
             created = _create(api, headers, action=action, conditions={})
             assert created.status_code == 201, created.text
-        assert sorted(g.action for g in api.loop.delegation.grants()) == sorted(DELEGABLE_ACTIONS)
+        assert sorted(g.action for g in _owner_grants(api)) == sorted(DELEGABLE_ACTIONS)
 
     def test_an_edit_is_checked_against_the_grants_own_action(self, api: Api) -> None:
         headers = api.bearer(WRITE)
@@ -547,9 +564,101 @@ class TestWhatIsOffered:
     def test_the_feature_is_listed(self, api: Api) -> None:
         body = api.client.get("/v1/capabilities", headers=api.bearer(READ)).json()
         assert "delegation" in body["features"]
+        assert "delegation.defaults" in body["features"]
 
     def test_policy_is_not_edited_over_the_websocket(self) -> None:
         """An owner's chat turn or socket carries ``policy:manage``; editing
         policy from either is deliberately not offered."""
         assert not [action for action in ADMIN_ACTIONS if action.startswith("grant")]
         assert not [cap for cap, _route in ADMIN_ACTIONS.values() if cap == "policy:manage"]
+
+
+def _restore(api: Api, headers: dict[str, str]) -> Any:
+    return api.client.post("/v1/grants/defaults/restore", headers=headers)
+
+
+def _default(api: Api, key: str) -> Grant:
+    return next(g for g in api.loop.delegation.grants() if g.default_key == key)
+
+
+class TestTheDefaults:
+    def test_defaults_are_listed_first_in_the_tables_order_then_owners_oldest_first(
+        self, api: Api
+    ) -> None:
+        headers = api.bearer(WRITE)
+        first = _create(api, headers).json()["grant"]
+        api.clock.t += 1
+        second = _create(api, headers, action="plan.publish").json()["grant"]
+        # A default deleted and restored is newer than the owner's grants,
+        # and still lists in its place in the table.
+        gone = _default(api, DEFAULT_KEYS[0])
+        assert api.client.delete(f"/v1/grants/{gone.id}", headers=headers).status_code == 200
+        api.clock.t += 1
+        assert _restore(api, headers).status_code == 200
+        listed = api.client.get("/v1/grants", headers=headers).json()["data"]
+        assert [g["default_key"] for g in listed] == [*DEFAULT_KEYS, None, None]
+        assert [g["id"] for g in listed[len(DEFAULT_KEYS) :]] == [first["id"], second["id"]]
+        assert [g["source"] for g in listed] == ["default"] * len(DEFAULT_KEYS) + ["owner"] * 2
+
+    def test_an_owner_restores_a_deleted_default_and_nothing_else(self, api: Api) -> None:
+        owner = _headers(_register_owner(api))
+        gone = _default(api, "item.retry:operator:v1")
+        paused = _default(api, "plan.run:critic:v1")
+        assert api.client.delete(f"/v1/grants/{gone.id}", headers=owner).status_code == 200
+        edited = api.client.patch(
+            f"/v1/grants/{paused.id}",
+            json={"expected_revision": 1, "enabled": False, "daily_limit": 1},
+            headers=owner,
+        )
+        assert edited.status_code == 200, edited.text
+
+        restored = _restore(api, {**owner, "Idempotency-Key": "restore-1"})
+        assert restored.status_code == 200, restored.text
+        body = restored.json()
+        (back,) = body["grants"]
+        assert back["default_key"] == "item.retry:operator:v1" and back["source"] == "default"
+        assert back["id"] != gone.id and back["enabled"] is True
+        assert back["conditions"]["causes"] == [
+            "ci_timeout",
+            "forge_transient",
+            "provider_throttle",
+        ]
+        assert body["operation"]["action"] == "grant.restore_defaults"
+        assert body["operation"]["state"] == "succeeded"
+        assert body["operation"]["target"] == {"kind": "grant", "id": "defaults"}
+        assert back["id"] in body["message"]
+        kept = api.loop.delegation.grant(paused.id)
+        assert kept is not None and kept.enabled is False and kept.daily_limit == 1
+        assert kept.revision == 2
+
+        # The same key answers with what the first attempt wrote.
+        again = _restore(api, {**owner, "Idempotency-Key": "restore-1"})
+        assert again.status_code == 200, again.text
+        assert again.json()["operation"]["id"] == body["operation"]["id"]
+        assert [g["id"] for g in again.json()["grants"]] == [back["id"]]
+        # A fresh restore with every default in place writes nothing.
+        none = _restore(api, owner)
+        assert none.status_code == 200 and none.json()["grants"] == []
+        assert len(api.loop.delegation.grants()) == len(DEFAULT_GRANTS)
+        assert _notices(api, "daemon.grants_restored")
+
+    def test_a_member_and_an_admin_are_refused_the_restore(self, api: Api) -> None:
+        _register_owner(api)
+        member = _headers(_register_member(api))
+        admin = _headers(_register_member(api, "ada", role="admin"))
+        operator = api.bearer(frozenset({"daemon:manage", "audit:read", "runs:read"}))
+        gone = _default(api, DEFAULT_KEYS[0])
+        api.loop.delegation.delete_grant(gone.id)
+        before = len(api.loop.operations.recent())
+        for headers in (member, admin, operator):
+            refused = _restore(api, headers)
+            assert refused.status_code == 403, refused.text
+            assert refused.json()["capability"] == "policy:manage"
+            assert "policy:manage" in refused.json()["detail"]
+        assert len(api.loop.operations.recent()) == before
+        assert len(api.loop.delegation.grants()) == len(DEFAULT_GRANTS) - 1
+
+    def test_an_agent_principal_cannot_restore(self, api: Api) -> None:
+        with pytest.raises(ControlError) as refused:
+            ControlService(api.loop).restore_default_grants(Principal.for_agent("critic"))
+        assert refused.value.detail["capability"] == "policy:manage"

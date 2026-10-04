@@ -24,6 +24,7 @@ from lantern.api.models import (
     GrantCreate,
     GrantOut,
     GrantResult,
+    GrantsRestored,
     GrantUpdate,
     OperationOut,
     rfc3339,
@@ -31,6 +32,7 @@ from lantern.api.models import (
 from lantern.api.projections import not_found
 from lantern.api.publicids import run_public_id
 from lantern.daemon.controls.delegation import Grant
+from lantern.daemon.controls.delegation_defaults import default_order
 from lantern.daemon.controls.delegation_store import DecisionRecord, DelegationStore
 from lantern.daemon.controls.operations import Operation
 from lantern.daemon.controls.results import Outcome
@@ -73,13 +75,30 @@ def grant_out(grant: Grant, used: int = 0) -> GrantOut:
         created_at=rfc3339(grant.created_at) or "",
         updated_at=rfc3339(grant.updated_at) or "",
         revision=grant.revision,
+        source=grant.source,
+        default_key=grant.default_key,
     )
 
 
+def listed_order(grants: list[Grant]) -> list[Grant]:
+    """Lantern's defaults first, in the table's order, then the owner's
+    grants oldest first. The judge does not read this order: it picks the
+    oldest grant that allows an act."""
+    defaults = sorted(
+        (grant for grant in grants if grant.source == "default"),
+        key=lambda grant: (default_order(grant.default_key), grant.created_at, grant.id),
+    )
+    owners = [grant for grant in grants if grant.source != "default"]
+    return defaults + owners
+
+
 def list_grants(ctx: ApiContext) -> list[GrantOut]:
-    """Every grant, oldest first: the order the judge picks in."""
+    """Lantern's defaults in the table's order, then the owner's grants
+    oldest first."""
     used = _used_today(ctx)
-    return [grant_out(grant, used.get(grant.id, 0)) for grant in store_of(ctx).grants()]
+    return [
+        grant_out(grant, used.get(grant.id, 0)) for grant in listed_order(store_of(ctx).grants())
+    ]
 
 
 def get_grant(ctx: ApiContext, grant_id: str) -> GrantOut:
@@ -215,5 +234,40 @@ async def remove_grant(
         message=_outcome_message(outcome, operation),
         operation=OperationOut.from_operation(operation),
     )
+    ctx.hub.notify()
+    return result
+
+
+async def restore_defaults(
+    ctx: ApiContext, auth: Authenticated, pair: tuple[str, str] | None
+) -> GrantsRestored:
+    """Write again each default grant that is gone; one still there,
+    edited or paused, is left as it is."""
+    principal = auth.principal
+    service = ctx.service()
+
+    def apply() -> Outcome:
+        return service.restore_default_grants(principal, idempotency=pair)
+
+    outcome, operation = await _apply(ctx, apply)
+    # A replay answers with the grants the first attempt wrote, as they
+    # are now (one deleted since is left out).
+    ids = list(
+        getattr(outcome, "grant_ids", None) or (operation.result or {}).get("grant_ids") or []
+    )
+
+    def read() -> GrantsRestored:
+        used = _used_today(ctx)
+        store = store_of(ctx)
+        grants = [
+            grant for grant in (store.grant(grant_id) for grant_id in ids) if grant is not None
+        ]
+        return GrantsRestored(
+            grants=[grant_out(grant, used.get(grant.id, 0)) for grant in grants],
+            message=_outcome_message(outcome, operation),
+            operation=OperationOut.from_operation(operation),
+        )
+
+    result = await ctx.call(read)
     ctx.hub.notify()
     return result

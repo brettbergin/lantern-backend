@@ -872,8 +872,10 @@ before. A flip is `plan.node.changed` with `node_id: null`,
 `goal_id`, `review` and the three actor fields are refused as unknown
 fields (`422`) in any request body. Where `/v1/capabilities` lists
 `planning.driver`, an `auto` plan is moved forward by the daemon under the
-owner's grants (below); a `manual` plan is never touched by it, and neither
-is an `auto` one on a daemon that delegates nothing.
+grants (below); a `manual` plan is never touched by it, and neither is an
+`auto` one whose step no enabled grant covers. Lantern's default grants
+(see [Delegation](#delegation)) cover the plan steps, so on a daemon that
+still has them, setting a plan to `auto` is what lets it move.
 
 **Plans that advance themselves (`planning.driver`).** On every tick the
 daemon is not held, its plan driver takes the next step of each `auto` plan
@@ -2749,9 +2751,10 @@ list and gets none.
 
 When `/v1/capabilities` lists `delegation`, an owner can state once that an
 agent may take an action under conditions — a **grant** — and read the ledger
-of what was decided under the grants. Grants ship empty: a fresh installation,
-and one upgraded to this release, delegates nothing until an owner writes one.
-Where `planning.driver` is listed too, the daemon judges each step of a plan
+of what was decided under the grants. Grants do not ship empty: where
+`/v1/capabilities` lists `delegation.defaults`, every installation, fresh or
+upgraded, starts with Lantern's default grants, enabled (see "Default grants"
+below). Where `planning.driver` is listed too, the daemon judges each step of a plan
 whose `advance` is `auto` against them (see "Plans that advance themselves"
 under [Plans](#plans)), and where `goals.proposing` is listed and
 `[delegation] propose_every` is set, whether the planner may draft a plan
@@ -2867,8 +2870,10 @@ The cap day a `daily_limit` counts in is the one `[daemon] run_cap_timezone`
 defines, the same day the run cap uses. `used_today` on a grant is counted from
 the ledger's `allow` rows, not kept on the grant.
 
-`GET /v1/grants` and `GET /v1/grants/{id}` (`audit:read`) return grants, oldest
-first:
+`GET /v1/grants` and `GET /v1/grants/{id}` (`audit:read`) return grants. The
+list has Lantern's defaults first, in the order of the table below, then the
+grants owners wrote, oldest first (the judge does not read this order; it
+picks the oldest grant that allows an act):
 
 ```json
 {
@@ -2892,9 +2897,16 @@ first:
   "created_by_display": "olive",
   "created_at": "…",
   "updated_at": "…",
-  "revision": 1
+  "revision": 1,
+  "source": "owner",
+  "default_key": null
 }
 ```
+
+`source` is `default` for one of Lantern's default grants and `owner` for one
+a person wrote; `default_key` names which default it is (`null` on an owner's
+grant). A default is edited, paused and deleted like any other grant, and
+keeps its `source` and `default_key` through every edit.
 
 `POST /v1/grants` (`policy:manage`) takes `agent_slug`, `action`, and
 optionally `conditions`, `daily_limit` (`null` or absent is unlimited),
@@ -2929,6 +2941,53 @@ elsewhere because it holds `daemon:manage`. Each write is one operation
 same two records a schedule write leaves. A write a restart interrupted is
 settled from the stored grant at recovery — it is there, it holds the change,
 or it is gone — and is never left `reconciling`.
+
+**Default grants (`delegation.defaults`).** When the daemon starts it seeds
+each default below that was never seeded on this installation, enabled, as
+`created_by: "lantern"`, `created_by_display: "Lantern default"`, with a `note`
+saying what it is for. Seeding writes no event of its own (the daemon logs
+it); the grants say what they are wherever they are listed. A default is seeded once, ever: one an owner
+deleted is not seeded again at the next start, and one an owner edited or
+paused is never touched. There is no default token budget —
+`[daemon] daily_token_budget` stays unset — and each default's `daily_limit`
+is its spend guard.
+
+| `default_key`                  | Agent      | Action             | Conditions                                                                   | `daily_limit` |
+| ------------------------------ | ---------- | ------------------ | ---------------------------------------------------------------------------- | ------------- |
+| `plan.breakdown:planner:v1`    | `planner`  | `plan.breakdown`   | `levels: [epic, task]`                                                       | 10            |
+| `plan.approve:critic:v1`       | `critic`   | `plan.approve`     | `require_review: true`, `max_children: 8`                                    | 5             |
+| `plan.publish:critic:v1`       | `critic`   | `plan.publish`     | `require_review: true`, `max_children: 8`                                    | 5             |
+| `plan.run:critic:v1`           | `critic`   | `plan.run`         | `max_children: 12`                                                           | 3             |
+| `plan.propose:planner:v1`      | `planner`  | `plan.propose`     | none                                                                         | 2             |
+| `item.retry:operator:v1`       | `operator` | `item.retry`       | `causes: [ci_timeout, forge_transient, provider_throttle]`, `max_retries: 1` | 5             |
+| `run.grant_rounds:operator:v1` | `operator` | `run.grant_rounds` | `causes: [review_rounds_exhausted, ci_rounds_exhausted]`, `max_retries: 1`   | 3             |
+
+What they let happen: the plan defaults act only on a plan a person set to
+`advance: auto`, and `plan.propose` also needs `[delegation] propose_every`
+and an active goal — a `manual` plan, and every `code`, `workload` and `tool`
+run, is untouched by them. The two `operator` defaults act as soon as the
+daemon runs: triage retries an item that failed in the last day with one of
+the three transient causes once (at most five a day), and gives a run that
+spent its review or CI rounds two more rounds once (at most three a day); a
+recent failure they do not cover is one `escalate` row. A
+default whose agent is disabled or archived waits, unseeded, for a start where
+its agent can act.
+
+`POST /v1/grants/defaults/restore` (`policy:manage`, optional
+`Idempotency-Key`, no body) writes again each default whose grant no longer
+exists, as seeded; a default still there — edited, paused or as seeded — is
+left alone. It answers `200` with the grants it wrote, in the table's order
+(an empty list when every default is in place):
+
+```json
+{"grants": [{"id": "grant_…", "source": "default", "default_key": "item.retry:operator:v1", …}], "message": "1 default grant(s) restored: …", "operation": {"action": "grant.restore_defaults", "target": {"kind": "grant", "id": "defaults"}, …}}
+```
+
+It is one operation, `grant.restore_defaults` (target `grant` `defaults`),
+narrated as a `daemon.notice` of kind `daemon.grants_restored`; one a restart
+interrupted is settled at recovery from whether every default is in place.
+An admin, a member and a plain client holding `daemon:manage` are refused
+`403` naming `policy:manage`.
 
 Grants are edited here and nowhere else: there is no `command` for them on the
 WebSocket, no chat tool and no `ctl` verb. An owner's chat turn carries

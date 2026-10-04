@@ -244,10 +244,17 @@ class Conditions(BaseModel):
         }
 
 
+GrantSource = Literal["default", "owner"]
+GRANT_SOURCES: tuple[str, ...] = get_args(GrantSource)
+
+
 class Grant(BaseModel):
     """A standing rule: ``agent_slug`` may take ``action`` while
     ``conditions`` hold, at most ``daily_limit`` times a day (``None`` is
-    unlimited). ``revision`` counts its edits, for compare-and-set."""
+    unlimited). ``revision`` counts its edits, for compare-and-set.
+    ``source`` is ``default`` for one of Lantern's seeded defaults (named
+    by ``default_key``) and ``owner`` for one a person wrote; the judge
+    reads neither."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -263,6 +270,8 @@ class Grant(BaseModel):
     created_at: float = 0.0
     updated_at: float = 0.0
     revision: int = 1
+    source: GrantSource = "owner"
+    default_key: str | None = None
 
 
 class Decision(BaseModel):

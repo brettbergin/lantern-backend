@@ -413,6 +413,7 @@ NoticeKind = Literal[
     "daemon.grant_added",
     "daemon.grant_updated",
     "daemon.grant_removed",
+    "daemon.grants_restored",
     "daemon.restart_requested",
     "daemon.restarted",
     "daemon.restart_marker_stale",
