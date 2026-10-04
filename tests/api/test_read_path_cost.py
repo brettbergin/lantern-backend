@@ -10,6 +10,7 @@ answer, and nothing else in the suite would catch it.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from concurrent.futures import Future
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ from lantern.api import work_delivery
 from lantern.daemon.concierge import ConciergeReply
 from lantern.daemon.model import WorkItem
 from lantern.ghids import chat_item_id
+from tests.api.conftest import Api
 from tests.api.test_collaboration import FakeConcierge, bearer, register
 from tests.api.test_collaboration_recovery import settled
 
@@ -170,3 +172,42 @@ def test_a_turn_s_history_reads_its_authors_in_one_query(api: Any) -> None:
     # Every prior turn is in the history, each naming the person who wrote
     # it: the batching answers the same question, not a cheaper one.
     assert sum(1 for user_id in people if user_id in history) == len(people) - 1
+
+
+def test_the_briefing_costs_the_same_however_much_it_summarises(api: Api) -> None:
+    """A widget and a landing page poll the briefing, so it reads in a fixed
+    number of statements: the plans' nodes are counted in the store, the
+    landed runs' items are read as one batch, and the decisions are
+    counted rather than listed."""
+    from tests.api.test_briefing import _decide, _finished, _plan_with
+
+    api.clock.t = time.time()
+    now = api.clock()
+    headers = api.bearer()
+    _finished(api, "1", ended_at=time.time() - 60)
+    _plan_with(api, {"A": "proposed", "B": "approved"})
+    _decide(api, "allow", at=now, grant_id="grant_a")
+    with statements(api) as seen:
+        assert api.client.get("/v1/briefing", headers=headers).status_code == 200
+        few = (
+            touching(seen, "runs"),
+            touching(seen, "daemon_work_items"),
+            touching(seen, "daemon_plan_nodes"),
+            touching(seen, "daemon_decisions"),
+        )
+    for n in range(2, 8):
+        _finished(api, str(n), ended_at=time.time() - 60 * n)
+        _decide(api, "allow", at=now + n, grant_id="grant_a")
+    _plan_with(api, {"A": "proposed", "B": "approved"})
+    _plan_with(api, {"A": "approved", "B": "approved"})
+    with statements(api) as seen:
+        body = api.client.get("/v1/briefing", headers=headers).json()
+        many = (
+            touching(seen, "runs"),
+            touching(seen, "daemon_work_items"),
+            touching(seen, "daemon_plan_nodes"),
+            touching(seen, "daemon_decisions"),
+        )
+    assert body["outcomes"]["landed"] == 7 and body["decided"]["allow"] == 7
+    assert body["supply"]["approved"] == 4 and body["supply"]["proposed"] == 2
+    assert few == many, f"{few} statements for one of each, {many} for several"

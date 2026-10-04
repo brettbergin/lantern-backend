@@ -186,6 +186,25 @@ class TaskTotalsRecord(NamedTuple):
     suspect: int
 
 
+class EndedCountRecord(NamedTuple):
+    """How many runs of one kind rest in one end state, having reached it
+    inside a window (:meth:`StateStore.ended_between`)."""
+
+    kind: str
+    state: str
+    runs: int
+
+
+#: The states a run has *ended* in: an outcome (merged, completed), a
+#: failure, or a person's decision to stop. ``blocked``, ``gated`` and the
+#: review and answer waits are not ends: they wait on a person.
+ENDED_RUN_STATES: tuple[str, ...] = ("merged", "completed", "failed", "cancelled")
+#: The ends a run was meant to reach: a merged pull request, a delivered
+#: workload or tool result. The same pair :mod:`lantern.analytics` calls
+#: ``LANDED``.
+LANDED_RUN_STATES: tuple[str, ...] = ("merged", "completed")
+
+
 # FROZEN. Everything below is the body of Alembic revision 0001, and 0001
 # has shipped: every deployed database is already stamped at it, so Alembic
 # will never run this code against one again. A column added here now
@@ -883,6 +902,55 @@ class StateStore:
         )
         with self._read() as session:
             return [RunWindowRecord(*row) for row in session.execute(stmt)]
+
+    def ended_between(self, since: float, until: float) -> list[EndedCountRecord]:
+        """How many runs *ended* in the window, by kind and end state: the
+        runs resting in one of :data:`ENDED_RUN_STATES` whose last change
+        falls in ``[since, until)``. A run in an end state is not written
+        again except to settle its reason, so ``updated_at`` is when it got
+        there; a run resumed out of ``failed`` leaves the count and is
+        counted again when it ends anew. This is "what finished in the
+        window", where :meth:`runs_between` is "what began in it"."""
+        stmt = (
+            select(Run.kind, Run.state, func.count())
+            .where(
+                Run.state.in_(ENDED_RUN_STATES),
+                Run.updated_at >= since,
+                Run.updated_at < until,
+            )
+            .group_by(Run.kind, Run.state)
+        )
+        with self._read() as session:
+            return [
+                EndedCountRecord(str(kind or "code"), str(state), int(count))
+                for kind, state, count in session.execute(stmt)
+            ]
+
+    def landed_between(
+        self, since: float, until: float, *, limit: int, exclude: Collection[str] = ()
+    ) -> list[RunRecord]:
+        """The runs that landed (merged or completed) in ``[since, until)``,
+        the most recently landed first, at most ``limit`` of them.
+        ``exclude`` names runs to leave out (the ones a person deleted),
+        skipped in the same read so the list is still full."""
+        stmt = (
+            select(Run)
+            .where(
+                Run.state.in_(LANDED_RUN_STATES),
+                Run.updated_at >= since,
+                Run.updated_at < until,
+            )
+            .order_by(Run.updated_at.desc(), Run.run_id.desc())
+        )
+        out: list[RunRecord] = []
+        with self._read() as session:
+            for row in session.scalars(stmt):
+                if row.run_id in exclude:
+                    continue
+                out.append(self._run_record(row))
+                if len(out) >= limit:
+                    break
+        return out
 
     def phases_between(self, since: float, until: float) -> list[PhaseWindowRecord]:
         """Each phase in the window, by the attempts that *started* in it:

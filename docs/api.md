@@ -1922,6 +1922,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/runs/{id}/usage`, `/v1/usage`                               | `runs:read`            | Reported tokens and turns; never a bill                                     |
 | `GET`    | `/v1/usage/pool`                                                 | `runs:read`            | Today's runs and tokens against the daily cap and budget                    |
 | `GET`    | `/v1/analytics`                                                  | `runs:read`            | A window of runs folded: outcomes, time to land and parked, turns, causes   |
+| `GET`    | `/v1/briefing`                                                   | `runs:read`            | What finished since, what waits on a person, what is lined up, the budget   |
 | `GET`    | `/v1/operations[/{id}]`                                          | `audit:read`           | Every command any surface recorded                                          |
 | `GET`    | `/v1/grants[/{id}]`                                              | `audit:read`           | The standing rules that let agents take decisions, with today's use         |
 | `POST`   | `/v1/grants`                                                     | `policy:manage`        | Let an agent take a delegable action, under conditions                      |
@@ -2733,6 +2734,78 @@ A value outside these is `422 invalid_request`. The response:
 
 Durations are seconds. Nothing here is a currency: turns and tokens are what
 a backend reported, not a bill.
+
+## The briefing
+
+When `/v1/capabilities` lists `briefing`, `GET /v1/briefing` (`runs:read`)
+answers, in one request, what a person who has been away asks first: what
+happened, what needs me, and is there work lined up. Everything in it is on
+its own route already — the analytics, the attention list, the decisions
+ledger, the usage pool, the plans, the queue — and the briefing is the small
+summary a landing screen, a phone widget and a daily digest share, computed
+on read in a bounded number of statements so it can be polled. Nothing is
+stored, and reading it changes nothing.
+
+| Query   | Default   | Meaning                                                                              |
+| ------- | --------- | ------------------------------------------------------------------------------------ |
+| `since` | a day ago | RFC 3339 or epoch seconds: where the window begins. At most 90 days back, before now |
+
+A value outside those bounds, or that is not a time, is `422 invalid_request`.
+The window ends now. The response:
+
+- `since`, `until`, `observed_at`.
+- `outcomes`: the runs that **finished** inside the window — `landed` (merged
+  or completed), `failed` and `cancelled`, in total and `by_kind` (one entry
+  per run kind, by name), and `recent_landed`: the newest ten landed runs,
+  each with `run_id`, `kind`, `title` (the work item's; the run's own ask
+  when no item carries it), `repository`, `pull_request_number` and
+  `pull_request_url` where there is one, and `landed_at`. A run is in the
+  window when it *finished* in it, whenever it began — this is not the
+  analytics' window, which holds the runs that *began* in it. A `blocked`
+  run is not an outcome: it waits, and is counted under `waiting`. A deleted
+  run is counted and never listed.
+- `waiting`: the attention list's own `counts` (`total`, `decision`,
+  `failed`, `paused`) and `oldest_since`, when its longest wait began
+  (`null` when nothing waits). Exactly what
+  [`GET /v1/attention`](#what-is-waiting-on-a-person) would answer.
+- `decided`: what agents decided under grants inside the window, by outcome
+  (`allow`, `deny`, `escalate`), and `unresolved_escalations` — every
+  escalation still waiting for a person, however old. `recent` is the
+  allowed acts, newest first and at most ten, each with `id`, `grant_id`,
+  `agent_slug`, `action`, `reason`, `at` and the references
+  [`GET /v1/decisions`](#delegation) carries (`plan_id`, `node_id`,
+  `item_id`, `run_id`, `epic_run_id`, `repository`, `operation_id`). It is
+  filled only for a caller holding `audit:read` and is `null` for anyone
+  else: the counts are for everyone, the detail is not.
+- `supply`: how much work is lined up, as it stands now. `proposed` and
+  `approved` are plan nodes at any level in those states across the plans
+  that are not archived (awaiting a person's approval; approved and not yet
+  published). `ready_tasks` are the published tasks ready to start: on the
+  forge and still following their issue, the issue open as last reconciled,
+  and not started — no epic run has admitted the task (`queued`, `running`),
+  seen its item end (`landed`, `failed`), found its issue `closed` or had a
+  person `skipped` it; a task `waiting`, `ready`, `blocked` or withdrawn
+  (`cancelled`) before admission is still lined up. A task whose issue a
+  person labelled by hand, outside any epic run, is counted until its issue
+  closes. `queued` is the daemon queue's depth, `running` the runs in
+  flight, and `parked` the work parked on a person (the attention list's
+  `decision` plus `paused`).
+- `runway`: `ready_tasks` again, `landed_per_day` — the mean number of `code`
+  runs that landed per day over the trailing seven days, whatever `since`
+  was — and `days`, `ready_tasks` divided by that rate. Both are `null` when
+  no `code` run landed in those seven days: no rate is invented, and nothing
+  is divided by zero.
+- `budget`: `runs_today` against `max_runs_per_day` and `tokens_today`
+  against `daily_token_budget` (`null` when no budget is configured), with
+  `resets_at` — the figures of
+  [`GET /v1/usage/pool`](#fleet-analytics), for the pool's calendar day.
+- `grants`: how many grants are `enabled`, and how many of those are
+  `at_limit`, having allowed as many acts today as their `daily_limit`.
+
+Every field is always present; what cannot be said is `null`. Durations are
+seconds, timestamps RFC 3339, and nothing is a currency. Each part is its own
+object so a later release can add a field inside it: **a client ignores
+fields it does not know** rather than failing the page.
 
 ## Errors
 
