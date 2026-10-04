@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+**A plan step the forge keeps refusing backs off, and an escalation closes
+after the grants are gone.** The plan driver retried a failed act every
+`[daemon] poll_interval_s` with no end, so a publish the forge kept
+refusing left a failed operation a minute all day. It now waits the poll
+interval after the first failure and twice as long after each one in a row,
+never more than an hour, with the count kept in `daemon_state` so a restart
+neither forgets nor restarts it. And with every grant deleted or disabled,
+the driver returned before closing anything, so an escalation a person had
+since settled stayed open; it now still runs its resolution pass whenever
+escalations are open, and with none open still reads and writes nothing.
+
 **A plan whose `advance` is `auto` now moves itself, under the owner's
 grants.** The switch, the grants and the critic's review were all in
 place, but nothing acted on them: an `auto` plan still waited for a person
@@ -21,7 +32,7 @@ review where one is required, a reviewer's `escalate`, a breakdown that ran
 and left nothing (never queued again), an unusable repository or a refused
 forge write each become one `escalate` row, written once while the
 situation stands and resolved `acted` or `superseded` when it moves; a
-failed write is retried at most once per `[daemon] poll_interval_s`. The
+failed write is retried with a doubling wait (see above). The
 critic never approves a level it proposed. With no grant, or on a `manual`
 plan, nothing happens and nothing is written. New knob
 `[delegation] publish_delay_s` (default 900): the window a person has to
