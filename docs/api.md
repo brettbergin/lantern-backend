@@ -905,7 +905,8 @@ met, a `require_review` grant with no current review (an edit of a child
 makes it stale), the critic's verdict `escalate`, a breakdown that already
 ran for the node and left nothing (the daemon never queues another), a
 repository that cannot hold the plan, or a step the forge refused (tried
-again at most once per `[daemon] poll_interval_s`). It is resolved `acted`
+again after `[daemon] poll_interval_s`, then twice as long after each failure
+in a row, at most an hour apart). It is resolved `acted`
 when the step happens — taken by the daemon or by a person through any
 route — or `superseded` when the level changes under it. A person can step
 in at any point: flip `advance` to `manual` (the next step is not taken),

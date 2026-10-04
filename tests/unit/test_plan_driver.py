@@ -12,6 +12,7 @@ real engine is ``test_plan_driver_e2e.py``.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -392,6 +393,44 @@ class TestNothingHappens:
         assert (row.action, row.outcome) == ("plan.breakdown", "allow")
 
 
+class TestNoGrantsLeft:
+    def test_an_escalation_a_person_settled_is_closed_after_the_grants_are_gone(
+        self, world: World
+    ) -> None:
+        w = world
+        w.grants(max_children=1)
+        plan = w.plan()
+        w.tick()
+        w.deliver(plan)
+        w.tick()
+        (escalation,) = [r for r in w.decisions(plan) if r.action == "plan.approve"]
+        assert escalation.unresolved
+        for grant in w.loop.delegation.grants():
+            w.loop.delegation.delete_grant(grant.id)
+        # Still waiting on a person: left open, nothing new written.
+        before = (len(w.decisions()), len(w.operations()))
+        w.tick()
+        assert (len(w.decisions()), len(w.operations())) == before
+        still = w.loop.delegation.decision(escalation.id)
+        assert still is not None and still.unresolved
+        # A person approves: closed as acted, though no grant is left.
+        now = w.get(plan)
+        w.loop.plans.approve(
+            plan.id,
+            plan.root_id,
+            expected_revision=now.revision,
+            node_ids=None,
+            now=w.now(),
+            actor=PERSON,
+        )
+        w.tick()
+        closed = w.loop.delegation.decision(escalation.id)
+        assert closed is not None
+        assert (closed.resolution, closed.resolved_by) == ("acted", "usr_pat")
+        assert len(w.decisions()) == before[0], "the driver judged nothing"
+        assert w.get(plan).root.state != "published"
+
+
 class TestEscalations:
     def test_a_level_over_max_children_escalates_once_and_resolves_when_a_person_approves(
         self, world: World
@@ -648,15 +687,59 @@ class TestForgeErrors:
         w.tick()
         assert len([o for o in w.operations() if o.action == "plan.publish"]) == 2
         assert len([r for r in w.decisions(plan) if r.action == "plan.publish"]) == 1
-        # The forge is back: published, and the escalation is closed.
+        # The forge is back: published at the next try (twice the wait now),
+        # and the escalation is closed.
         w.box.down = False
-        w.later(POLL)
+        w.later(2 * POLL)
         w.tick()
         assert w.get(plan).root.state == "published"
         rows = [r for r in w.decisions(plan) if r.action == "plan.publish"]
         assert [r.outcome for r in rows] == ["escalate", "allow"]
         closed = w.loop.delegation.decision(failed.id)
         assert closed is not None and closed.resolution == "acted"
+
+    def test_a_failure_in_a_row_doubles_the_wait_up_to_an_hour_across_restarts(
+        self, world: World
+    ) -> None:
+        """A forge that keeps refusing is asked again after the poll
+        interval, then twice as long each time, never more than an hour
+        apart — and a restart neither forgets the count nor starts it over."""
+        w = world
+        w.grants()
+        plan = _approved(w, w.plan())
+        w.later(DELAY)
+        w.box.down = True
+        w.tick()
+
+        def tried() -> list[float]:
+            return [o.accepted_at for o in w.operations() if o.action == "plan.publish"]
+
+        waits = [60.0, 120.0, 240.0, 480.0, 960.0, 1920.0, 3600.0, 3600.0, 3600.0]
+        for n, wait in enumerate(waits):
+            if n % 2:
+                w.loop.plan_driver = PlanDriver(w.loop)  # a restart
+            last = tried()[-1]
+            # A hair before the wait is up: not tried.
+            w.h.clock.t = last + wait - 1
+            w.tick()
+            assert tried()[-1] == last, (n, wait)
+            # Once it is up: tried again, and failed again.
+            w.h.clock.t = last + wait
+            w.tick()
+            assert len(tried()) == n + 2, (n, wait)
+        gaps = [b - a for a, b in pairwise(tried())]
+        assert [round(g) for g in gaps] == waits, "doubling, capped at an hour"
+        # Still one escalation on the ledger for all those attempts.
+        assert len([r for r in w.decisions(plan) if r.action == "plan.publish"]) == 1
+        # Back up: published at the next try, and the count is gone.
+        w.box.down = False
+        w.later(3600)
+        w.tick()
+        assert w.get(plan).root.state == "published"
+        assert (
+            w.h.dstore.get_value(f"plan_driver.failing:{plan.id}:{plan.root_id}:plan.publish")
+            is None
+        )
 
     def test_no_forge_write_while_the_forge_is_not_provisioned(self, world: World) -> None:
         w = world

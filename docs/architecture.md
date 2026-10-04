@@ -2754,10 +2754,12 @@ breakdown already ran for the node and left no level — the driver never
 queues another; the node's repository is unknown, disabled or cannot hold
 a plan; the act was refused or failed (a stale revision, a forge error, a
 level the forge took only part of). A `deny` (the critic proposed the level
-itself) is recorded the same way. A failed act is retried no sooner than
-`[daemon] poll_interval_s` after the last attempt — the driver remembers
-its own last try, and the open escalation's time is the floor after a
-restart. A plan flipped back to `manual`, or archived, is not touched from
+itself) is recorded the same way. A failed act is retried `[daemon] poll_interval_s` after
+its first failure, then twice as long after each failure in a row, never
+more than an hour apart; the run of failures is kept per plan, node and
+action in `daemon_state` (`plan_driver.failing:…`), so a restart neither
+forgets nor restarts it, and it is cleared when the act succeeds or its
+escalation resolves. A plan flipped back to `manual`, or archived, is not touched from
 the next read on.
 
 **Written once.** Every judgement goes to the ledger with the facts it was
@@ -2784,8 +2786,11 @@ again and the review stale. The publish itself names the revision it was
 judged on, so an edit between the judgement and the write is a stale
 revision, never a publish of what was not judged.
 
-With no enabled grant the driver returns before reading a plan: an
-installation that delegates nothing behaves exactly as before. Not in this
+With no enabled grant the driver takes no step. When nothing is
+escalated either it returns before reading a plan, so an installation that
+delegates nothing behaves exactly as before; when escalations are still
+open (an owner removed or disabled the grants) it runs the resolution pass
+alone, so one whose step a person has since taken is closed `acted`. Not in this
 driver yet: retrying failed epic tasks or items (`plan.run.retry`,
 `item.retry`), and proposing plans from goals (`plan.propose`).
 
