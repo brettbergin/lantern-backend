@@ -30,13 +30,13 @@ import json
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy import func, select
 
 from lantern.api.push.relay import RelayClient
-from lantern.api.push.rules import TYPES, Event, Notice, NoticeRules, allowed
+from lantern.api.push.rules import TYPES, Event, Notice, NoticeRules, Pending, allowed
 from lantern.api.push.store import DeviceStore, DeviceTarget
 from lantern.config import Config
 from lantern.daemon.store import DaemonStore
@@ -138,8 +138,9 @@ class PushDispatcher:
                         log.warning(
                             "push.rules_failed", seq=event.seq, type=event.type, exc_info=True
                         )
+            found: dict[Pending, tuple[str | None, tuple[str, ...]]] = {}
             for event, notice in notices:
-                stored += self._dispatch(event, notice, now)
+                stored += self._dispatch(event, notice, now, found)
             if len(events) < BATCH:
                 return stored
 
@@ -178,7 +179,27 @@ class PushDispatcher:
 
     # -- matching ------------------------------------------------------------------
 
-    def _dispatch(self, event: Event, notice: Notice, now: float) -> int:
+    def _settle(
+        self,
+        event: Event,
+        notice: Notice,
+        found: dict[Pending, tuple[str | None, tuple[str, ...]]],
+    ) -> Notice:
+        """``notice`` with its entry named; one whose entry could not be
+        looked up still goes out, about no entry and offering nothing."""
+        try:
+            return self.rules.settle(notice, found)
+        except Exception:
+            log.warning("push.entry_failed", seq=event.seq, type=event.type, exc_info=True)
+            return replace(notice, entry_id=None, actions=(), pending=None)
+
+    def _dispatch(
+        self,
+        event: Event,
+        notice: Notice,
+        now: float,
+        found: dict[Pending, tuple[str | None, tuple[str, ...]]],
+    ) -> int:
         targets = [
             target
             for target in self.devices.targets([notice.user_id]).get(notice.user_id, [])
@@ -186,6 +207,9 @@ class PushDispatcher:
         ]
         if not targets or self._duplicate(notice, now):
             return 0
+        # Only now, for a notice that will be stored: finding its entry
+        # reads the attention list.
+        notice = self._settle(event, notice, found)
         ref = self.devices.record(
             user_id=notice.user_id,
             kind=notice.kind,
@@ -195,6 +219,9 @@ class PushDispatcher:
             body=notice.body,
             event_seq=event.seq,
             now=now,
+            entry_id=notice.entry_id,
+            actions=notice.actions,
+            level=notice.level,
         )
         for target in targets:
             self._enqueue(target, notice.kind, ref, notice.channel_id, now)

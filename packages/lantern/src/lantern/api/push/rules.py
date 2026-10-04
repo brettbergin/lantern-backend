@@ -45,22 +45,36 @@ kinds, carries them unchanged.
 
 Historical events (a job imported from before the daemon knew it) are
 never news. :func:`allowed` then narrows by a device's own preferences.
+
+**What a device can do about it.** A notice about something on the
+attention list (``GET /v1/attention``) names that entry (``entry_id``) and
+the entry's actions its recipient may take — only those whose capability
+the recipient's role holds, never one the server would refuse them — so a
+device can offer them beside the notification and take one through
+``POST /v1/attention/{id}/act``. Each notice also says how urgent it is
+(``level``): ``time_sensitive`` for a decision waiting on the recipient (an
+opened gate, a job's ``action_required``, a reminder about a decision);
+``active`` for a mention, something that could not finish, a plan waiting
+on the recipient and a reminder about a failed or held entry; ``passive``
+for work or a reply that arrived. The relay's payload carries none of it:
+the device reads it from the stored notification.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Literal
 
 from sqlalchemy import select
 
 from lantern.api.channel_access import MANAGING_ROLES
 from lantern.api.collaboration import CollaborationStore, Member, _message
 from lantern.api.publicids import parse_run_id, run_public_id
-from lantern.daemon.controls.principal import ROLE_CAPABILITIES
+from lantern.api.push.store import Level
+from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Role
 from lantern.db.api_models import OperationRow
 from lantern.db.collaboration_models import (
     ChannelMemberRow,
@@ -69,6 +83,10 @@ from lantern.db.collaboration_models import (
     TurnRow,
 )
 from lantern.db.daemon_models import PlanEpicRunRow, PlanNodeRow, WorkItemRow
+from lantern.db.job_models import ExternalJobRow
+
+if TYPE_CHECKING:
+    from lantern.api.models import AttentionEntry
 
 MESSAGE_CREATED = "collaboration.message.created"
 WORK_DELIVERED = "collaboration.work.delivered"
@@ -117,6 +135,14 @@ REMINDER_KINDS: dict[str, str] = {
     "failed": "failure",
     "paused": "failure",
 }
+#: How urgent a job's attention is, by its kind.
+ATTENTION_LEVELS: dict[str, Level] = {
+    "work": "passive",
+    "failure": "active",
+    "action_required": "time_sensitive",
+}
+#: What approving a gate is called on the attention list.
+GATE_APPROVE = "gate_approve"
 #: A notification body is cut to this many characters, ellipsis included.
 BODY_LIMIT = 140
 #: A username longer than this is not one.
@@ -150,6 +176,27 @@ class Notice:
     #: Two notices with the same key for one person are one notice (a gate
     #: announced both as it opens and through its conversation).
     dedupe: str | None = None
+    #: The attention entry it is about, when it is about one.
+    entry_id: str | None = None
+    #: That entry's actions this person may take, in the list's order.
+    actions: tuple[str, ...] = ()
+    level: Level = "active"
+    #: The entry is still to be found (:meth:`NoticeRules.settle`).
+    pending: Pending | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Pending:
+    """What a notice's entry is found by once the rules' read is over:
+    finding it names it with public ids, which may write. ``gate``: the
+    gate of the run ``run_id`` (approving it is what is offered); ``job``:
+    the entry about the run ``run_id``, else the item ``item_id``."""
+
+    kind: Literal["gate", "job"]
+    run_id: str | None
+    item_id: str | None
+    #: The recipient's role, which decides which actions are theirs.
+    role: Role
 
 
 def mentions(text: str, username: str) -> bool:
@@ -186,6 +233,25 @@ def _can_decide(member: Member) -> bool:
     return "gates:approve" in ROLE_CAPABILITIES[member.role]
 
 
+def may_take(role: Role, actions: Iterable[str]) -> tuple[str, ...]:
+    """The ones of ``actions`` whose capability ``role`` holds, in their
+    order: never an action the server would refuse whoever holds it."""
+    # The attention list reads the routes' capabilities, which read the
+    # API context that builds this module's dispatcher: imported here.
+    from lantern.api.attention import capability_for
+
+    held = ROLE_CAPABILITIES[role]
+    out: list[str] = []
+    for action in actions:
+        try:
+            capability = capability_for(action)
+        except KeyError:
+            continue  # an action this build does not know is never offered
+        if capability in held and action not in out:
+            out.append(action)
+    return tuple(out)
+
+
 def waited(seconds: float) -> str:
     """``seconds`` as a person would say it: the largest whole unit."""
     seconds = max(0.0, seconds)
@@ -196,12 +262,64 @@ def waited(seconds: float) -> str:
     return "under a minute"
 
 
+#: The entry on the attention list about a run or, failing that, an item
+#: (both by the ids the stores keep), with no caller in mind; ``None`` when
+#: neither is waiting.
+AttentionLookup = Callable[[str | None, str | None], "AttentionEntry | None"]
+
+
 class NoticeRules:
     """Turns chronology events into notices. ``agent_name`` names an agent
-    by slug (``None``: the default assistant) the way the chat does."""
+    by slug (``None``: the default assistant) the way the chat does.
+    ``gate_id`` gives a run's gate its public id and ``attention`` finds an
+    entry on the attention list; without them a notice names no entry."""
 
-    def __init__(self, agent_name: Callable[[str | None], str]) -> None:
+    def __init__(
+        self,
+        agent_name: Callable[[str | None], str],
+        *,
+        gate_id: Callable[[str], str] | None = None,
+        attention: AttentionLookup | None = None,
+    ) -> None:
         self.agent_name = agent_name
+        self.gate_id = gate_id
+        self.attention = attention
+
+    def settle(
+        self, notice: Notice, found: dict[Pending, tuple[str | None, tuple[str, ...]]]
+    ) -> Notice:
+        """``notice`` with the entry it is about found and named, and that
+        entry's actions its recipient may take. Run outside the rules'
+        read, since naming an entry may mint its public id; ``found``
+        keeps what one pass already looked up. An entry that cannot be
+        found names none and offers nothing."""
+        pending = notice.pending
+        if pending is None:
+            return notice
+        key = replace(pending, role="owner")
+        if key not in found:
+            found[key] = self._find(pending)
+        entry_id, offered = found[key]
+        return replace(
+            notice,
+            entry_id=entry_id,
+            actions=may_take(pending.role, offered) if entry_id is not None else (),
+            pending=None,
+        )
+
+    def _find(self, pending: Pending) -> tuple[str | None, tuple[str, ...]]:
+        from lantern.api.attention import gate_entry_id
+
+        if pending.kind == "gate":
+            if self.gate_id is None or not pending.run_id:
+                return None, ()
+            return gate_entry_id(self.gate_id(pending.run_id)), (GATE_APPROVE,)
+        if self.attention is None:
+            return None, ()
+        entry = self.attention(pending.run_id, pending.item_id)
+        if entry is None:
+            return None, ()
+        return entry.id, tuple(action.action for action in entry.actions)
 
     def notices(self, session: Any, event: Event) -> list[Notice]:
         if event.type == MESSAGE_CREATED:
@@ -310,6 +428,7 @@ class NoticeRules:
                 turn_id=message.turn_id,
                 title=f"{name} mentioned you",
                 body=body,
+                level="active",
             )
             for member in self._viewers(session, channel)
             if member.user.id != author.id and mentions(message.content, member.user.username)
@@ -337,7 +456,8 @@ class NoticeRules:
                 if state == "merged"
                 else "The result is in the chat."
             )
-        return [Notice(asker, kind, event.channel_id, turn_id, title, body)]
+        level: Level = "active" if kind == "failure" else "passive"
+        return [Notice(asker, kind, event.channel_id, turn_id, title, body, level=level)]
 
     def _turn(self, session: Any, event: Event) -> list[Notice]:
         turn_id = str(event.data.get("turn_id") or "") or None
@@ -355,6 +475,7 @@ class NoticeRules:
                     turn_id,
                     f"{agent} could not reply",
                     excerpt(error) if error else f"{agent} could not finish that reply.",
+                    level="active",
                 )
             ]
         return [
@@ -365,6 +486,7 @@ class NoticeRules:
                 turn_id,
                 f"{agent} replied",
                 "A new reply is waiting in the chat.",
+                level="passive",
             )
         ]
 
@@ -381,17 +503,19 @@ class NoticeRules:
             return []
         viewers = self._viewers(session, channel)
         if kind == "gate":
-            recipients = [m.user.id for m in viewers if _can_decide(m)]
+            recipients = [m for m in viewers if _can_decide(m)]
         else:
             # The people in the conversation, not everyone who could open it.
             joined = self._joined(session, str(channel.id)) | {str(channel.user_id)}
-            recipients = [m.user.id for m in viewers if m.user.id in joined]
+            recipients = [m for m in viewers if m.user.id in joined]
         body = data.get("body")
         run_id = data.get("run_id")
         dedupe = f"gate:{run_id}" if kind == "gate" and isinstance(run_id, str) and run_id else None
+        level = ATTENTION_LEVELS[str(data.get("kind"))]
+        about = self._job_subject(session, data) if kind != "work" else None
         return [
             Notice(
-                user_id,
+                member.user.id,
                 kind,
                 str(channel.id),
                 None,
@@ -400,9 +524,23 @@ class NoticeRules:
                 if isinstance(body, str) and body
                 else "The details are in the conversation.",
                 dedupe,
+                level=level,
+                pending=Pending("job", about[0], about[1], member.role)
+                if about is not None
+                else None,
             )
-            for user_id in recipients
+            for member in recipients
         ]
+
+    @staticmethod
+    def _job_subject(session: Any, data: Mapping[str, Any]) -> tuple[str | None, str | None] | None:
+        """The run and the item a job's attention is about, by the ids the
+        stores keep; ``None`` when it names neither."""
+        public = data.get("run_id")
+        run_id = parse_run_id(public) if isinstance(public, str) else None
+        job = session.get(ExternalJobRow, str(data.get("work_id") or ""))
+        item_id = str(job.item_id) if job is not None and job.item_id else None
+        return (run_id, item_id) if run_id or item_id else None
 
     def _gate(self, session: Any, event: Event) -> list[Notice]:
         channel = self._channel(session, event.channel_id)
@@ -426,6 +564,8 @@ class NoticeRules:
                 "Decision needed",
                 body,
                 dedupe,
+                level="time_sensitive",
+                pending=Pending("gate", event.run_id, None, member.role) if event.run_id else None,
             )
             for member in members
             if _can_decide(member)
@@ -532,6 +672,7 @@ class NoticeRules:
                     excerpt(
                         f"The planner has {many} about {what} before it proposes its {child}s."
                     ),
+                    level="active",
                 )
             ]
         count = data.get("count")
@@ -548,6 +689,7 @@ class NoticeRules:
                 None,
                 "A proposal is ready for you",
                 excerpt(f"The planner proposed {proposed} for {what}. Review and approve it."),
+                level="active",
             )
         ]
 
@@ -582,6 +724,7 @@ class NoticeRules:
                 None,
                 title,
                 excerpt(body),
+                level="active",
             )
         ]
 
@@ -624,6 +767,8 @@ class NoticeRules:
         else:
             body = f"It has been held {for_}; nothing moves until someone clears it."
         body += " First reminder." if count == 1 else f" Reminder {count}."
+        offered = [a for a in data.get("actions") or () if isinstance(a, str)]
+        level: Level = "time_sensitive" if group == "decision" else "active"
         return [
             Notice(
                 member.user.id,
@@ -633,6 +778,9 @@ class NoticeRules:
                 excerpt(f"Still waiting: {' '.join(title.split())}"),
                 excerpt(body),
                 f"attention:{entry_id}:{count}",
+                entry_id,
+                may_take(member.role, offered),
+                level,
             )
             for member in able
         ]
@@ -643,7 +791,9 @@ __all__ = [
     "Event",
     "Notice",
     "NoticeRules",
+    "Pending",
     "allowed",
     "excerpt",
+    "may_take",
     "mentions",
 ]

@@ -17,7 +17,7 @@ import httpx
 
 from lantern.api.push.dispatcher import PushDispatcher
 from lantern.api.push.relay import RelayClient, RelayError
-from lantern.api.push.rules import NoticeRules
+from lantern.api.push.rules import AttentionLookup, NoticeRules
 from lantern.api.push.schemas import DeviceIn
 from lantern.api.push.store import Device, DeviceStore, Notification, default_prefs
 from lantern.config import Config
@@ -59,6 +59,8 @@ class PushService:
         clock: Callable[[], float],
         agent_name: Callable[[str | None], str],
         transport: Callable[[], httpx.BaseTransport | None] = lambda: None,
+        gate_id: Callable[[str], str] | None = None,
+        attention: AttentionLookup | None = None,
     ) -> None:
         self.config = config
         self.clock = clock
@@ -67,7 +69,7 @@ class PushService:
         self.dispatcher = PushDispatcher(
             dstore,
             self.devices,
-            NoticeRules(agent_name),
+            NoticeRules(agent_name, gate_id=gate_id, attention=attention),
             config=config,
             relay=self.relay,
             clock=clock,
@@ -188,6 +190,7 @@ class PushService:
             body=TEST_BODY,
             event_seq=None,
             now=self.clock(),
+            level="passive",
         )
         self.dispatcher.enqueue_test(target, ref)
         log.info("push.test_queued", device=device_id, ref=ref)

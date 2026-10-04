@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+**A push says which decision it is about, and what you may do about it.** A
+device could only show a push's text: to approve a gate or retry a failed
+run a person had to open the app and find the thing again. The stored
+notification (`GET /v1/users/me/notifications/{ref}`) now carries
+`entry_id` — the attention entry it is about — `actions`, that entry's
+actions its recipient may take (only those their role holds, by the list's
+own names, taken through `POST /v1/attention/{id}/act`), and `level`
+(`passive`, `active` or `time_sensitive`). An opened gate offers
+`gate_approve` to who may approve it, a job's `action_required` or
+`failure` attention and a reminder offer the entry's actions each recipient
+may take, and plan notices name no entry (they are decided on the plan's
+page). `attention.reminder` now also carries the entry's `actions`.
+Migration 0052 adds the three nullable columns to `api_push_notifications`;
+a notification recorded before it reads about no entry, with no actions, at
+`active`. The relay's payload, its kinds and the relay itself are unchanged.
+
 **A plan that advances itself is broken down by agents with no memories.**
 Any workspace member may write a memory on any agent, and a run's agents
 carried those memories into their system messages — so a member who cannot

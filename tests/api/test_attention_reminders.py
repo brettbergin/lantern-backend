@@ -67,8 +67,10 @@ class TestWhenAReminderIsSent:
             "waiting_s": AFTER,
             "reminders": 1,
             "capabilities": sorted({a["capability"] for a in entry["actions"]}),
+            "actions": [a["action"] for a in entry["actions"]],
         }
         assert reminder["data"]["capabilities"] == ["runs:control"]
+        assert reminder["data"]["actions"] == ["retry", "abandon", "dismiss", "delete"]
         # Scoped as the opening was: the work's own run and item.
         assert reminder["run_id"] == opened["run_id"] and reminder["item_id"] == opened["item_id"]
         assert reminder["actor"]["kind"] == "system"

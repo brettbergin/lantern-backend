@@ -2532,8 +2532,8 @@ An entry never expires to yes or to no, so the same tracker reminds. Each
 when it was last reminded about and how many times; on the passes that read
 the list anyway, an entry open at least `[attention] remind_after_s` and not
 reminded within `remind_every_s` gets one `attention.reminder` — the
-opening's data plus `waiting_s`, `reminders` and the `capabilities` its
-actions need — with the clock moved in the event's own transaction, so a
+opening's data plus `waiting_s`, `reminders`, its `actions` and the
+`capabilities` they need — with the clock moved in the event's own transaction, so a
 restart repeats nothing and a long stop yields one reminder, not a burst. A
 value the previous release wrote has no clock and is stamped as first seen
 now. The push rules (`api/push/rules.py:_reminder`) turn the event into a

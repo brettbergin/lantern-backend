@@ -1701,9 +1701,47 @@ extension fetches the real text with the person's own token:
   "turn_id": "trn_…",
   "title": "Ada Lovelace mentioned you",
   "body": "@grace can you take a look at this?",
-  "created_at": "2026-09-25T12:00:00Z"
+  "created_at": "2026-09-25T12:00:00Z",
+  "entry_id": null,
+  "actions": [],
+  "level": "active"
 }
 ```
+
+The record also says what the person can do about it, so a device can offer
+it on the notification itself without opening the app:
+
+- `entry_id` — the id of the [attention](#what-is-waiting-on-a-person)
+  entry it is about (`gate:gate_…`, `item:itm_…:blocked:run_…`), or `null`
+  when it is about none.
+- `actions` — that entry's actions **its recipient may take**, by the
+  attention list's own names (`gate_approve`, `retry`, `dismiss`, …), in the
+  list's order: only those whose capability the recipient's role held when
+  the notification was recorded, never one the server would refuse them.
+  Each is taken through `POST /v1/attention/{entry_id}/act`, which checks the
+  entry and the capability again as it stands then. Empty without an entry.
+- `level` — how urgent it is: `passive` (news to read when convenient: work
+  or a reply that arrived, a test push), `active` (worth a look now: a
+  mention, something that could not finish, a plan waiting on you, a
+  reminder about work that failed or is held) or `time_sensitive` (a
+  decision is waiting on you: an opened gate, a job's `action_required`, a
+  reminder about a decision).
+
+| Source                                                   | `entry_id`                                                   | `actions`                                                      | `level`                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `gate.opened`                                            | `gate:<gate_id>` of the run's gate                           | `["gate_approve"]` (it goes only to who holds `gates:approve`) | `time_sensitive`                                       |
+| A job's `action_required` attention                      | The entry about the job's run, else its item, when one waits | The entry's actions the recipient's role may take              | `time_sensitive`                                       |
+| A job's `failure` attention                              | The same                                                     | The same (`retry`, `dismiss`, … where offered)                 | `active`                                               |
+| `attention.reminder`                                     | The event's `entry_id`                                       | The event's `actions` the recipient's role may take            | `time_sensitive` for a `decision` entry, else `active` |
+| Plan questions, a plan proposal, an epic run paused      | `null` (decided on the plan's own page)                      | `[]`                                                           | `active`                                               |
+| A mention                                                | `null`                                                       | `[]`                                                           | `active`                                               |
+| Work or a reply that could not finish                    | `null`                                                       | `[]`                                                           | `active`                                               |
+| Work delivered, a reply finished, a job's `work`, a test | `null`                                                       | `[]`                                                           | `passive`                                              |
+
+A notification recorded before these fields existed reads `entry_id: null`,
+`actions: []`, `level: "active"`. None of it rides the push itself: the
+relay's payload is still exactly `{srv, k, ref, thread}` with the same five
+kinds, and a device reads the rest from this record.
 
 What is pushed, and to whom (never to the person whose message or action it
 was):
@@ -2489,7 +2527,8 @@ opening's, plus:
   "…": "the fields of attention.opened, as the list has them now",
   "waiting_s": 14400,
   "reminders": 1,
-  "capabilities": ["gates:approve", "runs:control"]
+  "capabilities": ["gates:approve", "runs:control"],
+  "actions": ["gate_approve", "cancel"]
 }
 ```
 
@@ -2500,6 +2539,10 @@ opening's, plus:
   [`GET /v1/attention`](#what-is-waiting-on-a-person) lists them, without
   the per-reader `allowed`: who could act. An entry with no action (a
   provider hold) has `[]`.
+- `actions` are the entry's actions by name, in the list's order, without
+  `allowed`; a push of the reminder offers each recipient the ones their
+  role may take. A reminder recorded before this field reads as offering
+  none.
 
 It is scoped as the opening was (the same `run_id` and `item_id`, so the
 same people see it). An entry that leaves the list and comes back — a
