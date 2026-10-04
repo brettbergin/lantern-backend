@@ -945,9 +945,11 @@ def test_example_delegation_section_documents_the_defaults() -> None:
         elif in_block and not line.strip():
             break
     block = tomllib.loads(text)
-    assert set(block) == set(DelegationConfig.model_fields) == {"publish_delay_s"}
+    assert set(block) == set(DelegationConfig.model_fields) == {"publish_delay_s", "propose_every"}
     assert Config.model_validate({"delegation": block}).delegation == Config().delegation
     assert Config().delegation.publish_delay_s == 900
+    # Proposing is off until an owner sets a period.
+    assert Config().delegation.propose_every == 0
 
 
 def test_example_planning_section_documents_the_defaults() -> None:

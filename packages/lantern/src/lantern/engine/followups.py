@@ -38,6 +38,13 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pydantic import ValidationError
 
+from lantern.agents.assignment import AgentAssignment
+from lantern.agents.origin import (
+    WorkOrigin,
+    origin_from_body,
+    origin_marker,
+    strip_origin_markers,
+)
 from lantern.engine.issue_lookup import IssueLookup, LookupUnavailable
 from lantern.engine.review import (
     Followup,
@@ -150,8 +157,15 @@ def issue_body(
     closes: int | None,
     trigger_label: str | None = None,
     filed_by: str | None = None,
+    origin: WorkOrigin | None = None,
 ) -> str:
     """The follow-up issue's body: the note, then where it came from.
+
+    ``origin`` is the agent-started chain the filing run belongs to (its
+    assignment's ``origin_agent`` and ``chain_depth``); its marker is
+    appended so the planner, reading follow-ups to propose from, can tell
+    how deep the chain already is (:func:`origin_for_run`). A run a person
+    asked for has none, and its body is unchanged.
 
     ``trigger_label`` is the daemon's trigger for this repository when a
     daemon dispatched the run; the "add the trigger label" instruction is
@@ -159,7 +173,10 @@ def issue_body(
     point at a label that does nothing. ``filed_by`` names who the issue
     is filed on behalf of; without it the body is unchanged.
     """
-    lines = [candidate.followup.body.strip() or candidate.followup.title.strip(), ""]
+    # The note is the reviewer's text: an origin marker in it would be read
+    # back as the daemon's, claiming a chain this run is not on.
+    note = strip_origin_markers(candidate.followup.body).strip()
+    lines = [note or candidate.followup.title.strip(), ""]
     if candidate.followup.decision == "regression":
         lines.extend(
             [
@@ -173,19 +190,19 @@ def issue_body(
     if candidate.followup.anchor:
         lines.append(f"Where: `{candidate.followup.anchor}`")
         lines.append("")
-    origin = (
+    whence = (
         f"Out of scope for [PR #{pr_number}]({pr_url})"
         if pr_url
         else f"Out of scope for PR #{pr_number}"
     )
     if closes is not None:
-        origin += f" (issue #{closes})"
+        whence += f" (issue #{closes})"
     how = (
         f"noted by the review in round {candidate.round}"
         if candidate.source == "review"
         else f"a review finding of round {candidate.round} the fix round deferred"
     )
-    lines.append(f"{origin}, {how}; run `{run_id}` on `{repo}`.")
+    lines.append(f"{whence}, {how}; run `{run_id}` on `{repo}`.")
     queued = "Filed by lantern after that pull request merged. It is **not** queued for the loop"
     if trigger_label:
         queued += f": add the `{trigger_label}` label if you want it run."
@@ -196,7 +213,36 @@ def issue_body(
         lines.append(f"Filed on behalf of {filed_by}.")
     lines.append("")
     lines.append(followup_marker(run_id, candidate.key))
+    if origin is not None:
+        lines.append(origin_marker(origin))
     return "\n".join(lines)
+
+
+def origin_for_run(store: StateStore, run_id: str) -> WorkOrigin | None:
+    """The chain a run's follow-ups carry: the agent its work came from and
+    how deep that work is, read from the assignment the run was started
+    with. ``None`` for a run a person asked for (no origin agent, depth 0)
+    or one with no readable assignment, so its follow-ups read exactly as
+    they always did."""
+    raw = store.get_run_assignment(run_id)
+    if not raw:
+        return None
+    try:
+        assignment = AgentAssignment.from_json(raw)
+    except (ValueError, KeyError, TypeError):
+        return None
+    if assignment.origin_agent is None and assignment.chain_depth <= 0:
+        return None
+    origin = WorkOrigin(
+        agent_slug=(assignment.origin_agent or "").strip().casefold() or "lantern",
+        parent_item_id=None,
+        chain_depth=max(0, assignment.chain_depth),
+    )
+    if origin_from_body(origin_marker(origin)) is None:
+        # A slug the marker cannot carry would be read back as no marker at
+        # all — depth 0 — so the chain is kept under the daemon's own name.
+        origin = WorkOrigin(agent_slug="lantern", chain_depth=origin.chain_depth)
+    return origin
 
 
 def checklist_comment(
@@ -460,6 +506,7 @@ class FollowupFiler:
                             closes=self.cfg.github.deliver_closes,
                             trigger_label=self.trigger_label,
                             filed_by=attribution,
+                            origin=origin_for_run(self.store, run_id),
                         ),
                         labels=[cfg.followup_label],
                     )

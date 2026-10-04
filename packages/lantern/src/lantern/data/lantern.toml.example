@@ -1114,7 +1114,12 @@ service_memory = "2g"
 # as the plan records it — the window a person has to hold it (flip the
 # plan back to manual, or edit a child). Workspace-wide: a grant's
 # repositories condition narrows a repository. Never changed from chat.
+# propose_every is how often the planner may propose a plan for one active
+# goal (POST /v1/goals) under a plan.propose grant: an auto plan briefed
+# from the goal and the repository's open follow-up issues, at most once
+# per period per goal and never while a plan for it is still open.
 # publish_delay_s = 900            # 15 minutes; 0 = publish on the next tick
+# propose_every = 0                # seconds, e.g. 86400 = daily; 0 = off
 
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask

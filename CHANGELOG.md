@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+**The planner drafts plans from an owner's goals, and the chain of work it
+feeds on is bounded.** An `auto` plan moved itself, but someone still had
+to draft it. With `[delegation] propose_every` set (seconds; default `0`,
+off) and a `plan.propose` grant, the daemon now drafts one `auto` plan for
+each `active` goal that has no plan still open (not archived, not done),
+at most once per period per goal and one per tick in all, as
+`agent:planner` through a recorded `plan.propose` operation: `goal_id` the
+goal's, and a brief made of the goal's title and text and the repository's
+open follow-up issues (newest first, at most ten). The root is an epic, or
+an initiative for a goal text of 1200 characters or more, decided before
+anything is read so a grant's `levels` judges it. The period is counted
+from the ledger and the goal's plans, so a restart neither forgets nor
+restarts it. No grant, a grant that falls short, a disabled repository or
+a follow-up listing that cannot be read is one `escalate` row (facts
+naming the `goal_id`), written once and closed when the goal has a plan
+again or is no longer active. A goal is never marked done by the daemon.
+Loop guard: a proposed plan records a `chain_depth` (one more than its
+deepest follow-up), its epic runs' items carry `origin_agent` and that
+depth instead of resetting to `0` (a plan a person drafted still resets),
+the follow-ups those runs file carry an origin marker, and the proposer
+drops follow-ups at or beyond `[agent_team] max_chain_depth` — so
+propose → run → follow-up → propose stops after that many generations.
+Origin markers inside a reviewer's follow-up note are now stripped. New
+feature string `goals.proposing`; the knob is never changed from chat.
+
 **A plan step the forge keeps refusing backs off, and an escalation closes
 after the grants are gone.** The plan driver retried a failed act every
 `[daemon] poll_interval_s` with no end, so a publish the forge kept

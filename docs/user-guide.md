@@ -2479,10 +2479,64 @@ characters and the text at most 4000. A goal is `active` until you set it
 `expected_revision`); `DELETE /v1/goals/{id}` removes it.
 
 `GET /v1/goals` lists every goal with the plans proposed from it and
-`open_plan_id`, the one currently serving it. In this release nothing proposes
-a plan from a goal yet: goals are stored and read, and the release that lets
-agents propose work starts drafting plans from the active ones. Like grants,
+`open_plan_id`, the one currently serving it. The planner drafts plans from
+the active ones once you let it (next section). Like grants,
 goals are written through these routes only and have no configuration key.
+
+#### Letting the planner propose work from a goal
+
+A plan that advances itself still needs someone to draft it. To have the
+planner draft them, write a goal for the repository (`POST /v1/goals`, see
+"Goals"), and give the planner a `plan.propose` grant and a period:
+
+```sh
+curl -X POST "$LANTERN/v1/grants" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{
+    "agent_slug": "planner",
+    "action": "plan.propose",
+    "conditions": {"repositories": ["acme/shop"], "levels": ["epic"]},
+    "daily_limit": 2
+  }'
+```
+
+```toml
+[delegation]
+propose_every = 86400   # at most one plan per goal per day; 0 (the default) = off
+```
+
+From the next tick, for each `active` goal with no plan still open for it,
+the daemon drafts one as the planner: `advance = auto`, named after the goal
+(`goal_id`), with a brief made of the goal's title and text and the
+repository's open follow-up issues (the `[landing] followup_label` ones,
+newest first, at most ten). The four grants in "Letting a plan advance by
+itself" then carry it from brief to running epic; without them the drafted
+plan waits for you like any other. One proposal per tick across all goals,
+and at most one open plan per goal.
+
+**Writing a goal the planner can use.** Say the outcome, not the steps, in
+words a reviewer can check: "exports of any report finish in under ten
+seconds", not "optimise the exporter". The text is the brief's goal, and the
+breakdown is written against it. A goal under 1200 characters is drafted as
+an epic; a longer one as an initiative (several epics) — a grant's `levels`
+condition decides which of those the planner may draft without you.
+
+**When it proposes again.** Never while a plan for the goal is still open.
+Once that plan is archived, deleted or done (every epic of it closed on the
+forge), the next is drafted `propose_every` seconds after the later of the
+last proposal and that plan's last change. A goal is never marked `done` for
+you: it stays `active`, and is proposed from again, until you set it
+`paused` or `done`.
+
+**What it does not do.** It never reads your open backlog: an unlabeled issue
+still needs a person's label. And follow-ups are counted: the issues a
+proposed plan's runs file carry how many agent hops deep they are, and the
+planner does not read one at or beyond `[agent_team] max_chain_depth` (2 by
+default) into a brief, so proposals feeding on their own follow-ups stop
+after that many generations. Anything not covered — no grant, a grant that
+falls short, a disabled repository, a forge that could not be read — is one
+`escalate` in `GET /v1/decisions` (its facts name the `goal_id`), closed when
+the goal has a plan again or is no longer active. `propose_every`, like
+`publish_delay_s`, is never changed from chat.
 
 #### Sign in with an OIDC provider (Authentik)
 
@@ -3895,6 +3949,7 @@ The notable knobs:
 | `[attention] remind_every_s`                                                                                                                      | `86400`                                                                                                                                                                                                             | How long after a reminder the next one is due while the entry still waits (300 seconds to 30 days). A daemon down past several intervals sends one on return, not one per interval missed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[attention] digest_at`                                                                                                                           | `""` (off)                                                                                                                                                                                                          | The local time of day (`"HH:MM"`, 24-hour, in `[daemon] run_cap_timezone`) of the daily digest: a `briefing.digest` event every member can read, one control-channel line and one `work` push per member with a device, saying what happened since the last one (see [The daily digest](#the-daily-digest)). Once a day; a daemon down at the time sends it on return that day and skips a day missed entirely. Empty sends none; anything else is refused at load. Read at daemon start. Workspace-wide: there is no per-repo override.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `[delegation] publish_delay_s`                                                                                                                    | `900`                                                                                                                                                                                                               | How long a plan level approved on a plan whose `advance` is `auto` waits before the daemon publishes it under a grant — the window a person has to hold it by flipping `advance` back to `manual` or editing a child (see [Letting a plan advance by itself](#letting-a-plan-advance-by-itself)). Measured from the approval as the plan records it, so a restart neither shortens nor restarts it. `0` or more seconds; `0` publishes on the next tick. Workspace-wide (a grant's `repositories` narrows a repository); never changed from chat.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `[delegation] propose_every`                                                                                                                      | `0`                                                                                                                                                                                                                 | How often, in seconds, the planner may draft an `auto` plan for one `active` goal under a `plan.propose` grant (see [Letting the planner propose work from a goal](#letting-the-planner-propose-work-from-a-goal)). At most once per period per goal, counted from the later of its last proposal on the decisions ledger and the last change to a plan that served it, so a restart neither forgets nor restarts it; never while a plan for the goal is still open. `0` (the default) is off: nothing is proposed and the forge is not read. Workspace-wide; never changed from chat.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 The `[sandbox]` resource settings size each VM through `sbx create` CPU and
 memory flags; see [Sandbox CPU and memory](#sandbox-cpu-and-memory).
