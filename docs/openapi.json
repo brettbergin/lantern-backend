@@ -2187,6 +2187,534 @@
         "title": "BridgePage",
         "type": "object"
       },
+      "Briefing": {
+        "additionalProperties": false,
+        "description": "What happened in a window, what needs a person now, and what is\nlined up. Durations are seconds and timestamps RFC 3339; nothing is a\ncurrency.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/BriefingBudget"
+          },
+          "decided": {
+            "$ref": "#/components/schemas/BriefingDecided"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/BriefingGrants"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/BriefingOutcomes"
+          },
+          "runway": {
+            "$ref": "#/components/schemas/BriefingRunway"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "supply": {
+            "$ref": "#/components/schemas/BriefingSupply"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/BriefingWaiting"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "observed_at",
+          "outcomes",
+          "waiting",
+          "decided",
+          "supply",
+          "runway",
+          "budget",
+          "grants"
+        ],
+        "title": "Briefing",
+        "type": "object"
+      },
+      "BriefingBudget": {
+        "additionalProperties": false,
+        "description": "Today against the daily cap and the token budget, as the usage pool\ncounts them.",
+        "properties": {
+          "daily_token_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Token Budget"
+          },
+          "max_runs_per_day": {
+            "title": "Max Runs Per Day",
+            "type": "integer"
+          },
+          "resets_at": {
+            "title": "Resets At",
+            "type": "string"
+          },
+          "runs_today": {
+            "title": "Runs Today",
+            "type": "integer"
+          },
+          "tokens_today": {
+            "title": "Tokens Today",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs_today",
+          "max_runs_per_day",
+          "tokens_today",
+          "resets_at"
+        ],
+        "title": "BriefingBudget",
+        "type": "object"
+      },
+      "BriefingDecided": {
+        "additionalProperties": false,
+        "description": "What agents decided under grants inside the window, and the\nescalations still waiting for a person, however old.",
+        "properties": {
+          "allow": {
+            "default": 0,
+            "title": "Allow",
+            "type": "integer"
+          },
+          "deny": {
+            "default": 0,
+            "title": "Deny",
+            "type": "integer"
+          },
+          "escalate": {
+            "default": 0,
+            "title": "Escalate",
+            "type": "integer"
+          },
+          "recent": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BriefingDecision"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent"
+          },
+          "unresolved_escalations": {
+            "default": 0,
+            "title": "Unresolved Escalations",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingDecided",
+        "type": "object"
+      },
+      "BriefingDecision": {
+        "additionalProperties": false,
+        "description": "One act an agent was allowed to take, with what it was about.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "reason",
+          "at"
+        ],
+        "title": "BriefingDecision",
+        "type": "object"
+      },
+      "BriefingGrants": {
+        "additionalProperties": false,
+        "description": "The grants in force, and how many have spent today's limit.",
+        "properties": {
+          "at_limit": {
+            "default": 0,
+            "title": "At Limit",
+            "type": "integer"
+          },
+          "enabled": {
+            "default": 0,
+            "title": "Enabled",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingGrants",
+        "type": "object"
+      },
+      "BriefingLandedRun": {
+        "additionalProperties": false,
+        "description": "One run that landed in the window: the work it did and where.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed_at": {
+            "title": "Landed At",
+            "type": "string"
+          },
+          "pull_request_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull Request Number"
+          },
+          "pull_request_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull Request Url"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "title",
+          "landed_at"
+        ],
+        "title": "BriefingLandedRun",
+        "type": "object"
+      },
+      "BriefingLane": {
+        "additionalProperties": false,
+        "description": "How the runs of one kind ended inside the window.",
+        "properties": {
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed": {
+            "default": 0,
+            "title": "Landed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "BriefingLane",
+        "type": "object"
+      },
+      "BriefingOutcomes": {
+        "additionalProperties": false,
+        "description": "The runs that reached an end inside the window \u2014 by when they\nfinished, not when they began. ``blocked`` is not an end: it waits.",
+        "properties": {
+          "by_kind": {
+            "items": {
+              "$ref": "#/components/schemas/BriefingLane"
+            },
+            "title": "By Kind",
+            "type": "array"
+          },
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "landed": {
+            "default": 0,
+            "title": "Landed",
+            "type": "integer"
+          },
+          "recent_landed": {
+            "items": {
+              "$ref": "#/components/schemas/BriefingLandedRun"
+            },
+            "title": "Recent Landed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "by_kind",
+          "recent_landed"
+        ],
+        "title": "BriefingOutcomes",
+        "type": "object"
+      },
+      "BriefingRunway": {
+        "additionalProperties": false,
+        "description": "How long the tasks lined up would take at the trailing week's rate\nof landed ``code`` runs. Both rates are ``null`` when nothing landed in\nthat week: no rate is invented.",
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "landed_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landed Per Day"
+          },
+          "ready_tasks": {
+            "default": 0,
+            "title": "Ready Tasks",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingRunway",
+        "type": "object"
+      },
+      "BriefingSupply": {
+        "additionalProperties": false,
+        "description": "How much work is lined up, as it stands now.",
+        "properties": {
+          "approved": {
+            "default": 0,
+            "title": "Approved",
+            "type": "integer"
+          },
+          "parked": {
+            "default": 0,
+            "title": "Parked",
+            "type": "integer"
+          },
+          "proposed": {
+            "default": 0,
+            "title": "Proposed",
+            "type": "integer"
+          },
+          "queued": {
+            "default": 0,
+            "title": "Queued",
+            "type": "integer"
+          },
+          "ready_tasks": {
+            "default": 0,
+            "title": "Ready Tasks",
+            "type": "integer"
+          },
+          "running": {
+            "default": 0,
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingSupply",
+        "type": "object"
+      },
+      "BriefingWaiting": {
+        "additionalProperties": false,
+        "description": "The attention list's counts, and when its longest wait began.",
+        "properties": {
+          "decision": {
+            "default": 0,
+            "title": "Decision",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "oldest_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Since"
+          },
+          "paused": {
+            "default": 0,
+            "title": "Paused",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingWaiting",
+        "type": "object"
+      },
       "Capabilities": {
         "additionalProperties": false,
         "properties": {
@@ -15028,6 +15556,57 @@
         "summary": "List Bridges",
         "tags": [
           "collaboration"
+        ]
+      }
+    },
+    "/v1/briefing": {
+      "get": {
+        "description": "What happened since `since` (RFC 3339 or epoch; a day ago when\nomitted; at most 90 days back), what is waiting on a person now, and\nhow much work is lined up \u2014 computed on read, nothing stored. A run\ncounts in the window when it *finished* in it. `decided.recent` is\ndetailed only for a caller holding `audit:read` and `null` otherwise;\nevery other field is for everyone with `runs:read`. Clients ignore\nfields they do not know: a later release adds some.",
+        "operationId": "get_briefing_v1_briefing_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Briefing"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Briefing",
+        "tags": [
+          "briefing"
         ]
       }
     },

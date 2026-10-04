@@ -339,6 +339,28 @@ class DelegationStore:
         with self.dstore.read() as session:
             return [_decision(row) for row in session.scalars(stmt)]
 
+    def outcome_counts(self, since: float) -> dict[str, int]:
+        """``outcome -> how many`` decisions were taken at or after
+        ``since``, in one grouped query; an outcome nothing was decided
+        under is absent."""
+        stmt = (
+            select(DecisionRow.outcome, func.count())
+            .where(DecisionRow.at >= since)
+            .group_by(DecisionRow.outcome)
+        )
+        with self.dstore.read() as session:
+            return {str(outcome): int(count) for outcome, count in session.execute(stmt)}
+
+    def unresolved_count(self) -> int:
+        """How many escalations still wait for a person, however old."""
+        stmt = (
+            select(func.count())
+            .select_from(DecisionRow)
+            .where(DecisionRow.outcome == "escalate", DecisionRow.resolved_at.is_(None))
+        )
+        with self.dstore.read() as session:
+            return int(session.scalar(stmt) or 0)
+
     def used_today(self, day_start: float) -> dict[str, int]:
         """``grant id -> how many acts it allowed`` since ``day_start``
         (the start of the cap day, as the usage pool's ``day()`` gives
