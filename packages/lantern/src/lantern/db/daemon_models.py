@@ -549,7 +549,10 @@ class PlanRow(Base):
     """
 
     __tablename__ = "daemon_plans"
-    __table_args__ = (Index("idx_daemon_plans_updated", "updated_at"),)
+    __table_args__ = (
+        Index("idx_daemon_plans_updated", "updated_at"),
+        Index("idx_daemon_plans_goal", "goal_id"),
+    )
 
     plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
     workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -741,6 +744,31 @@ class GrantRow(Base):
     daily_limit: Mapped[int | None] = mapped_column(Integer)
     enabled: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
     note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_by_display: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+
+
+class GoalRow(Base):
+    """A standing objective an owner wrote for one repository (revision
+    0053): a title, the objective in the owner's words (``text``) and
+    whether it is ``active``, ``paused`` or ``done``. The plans proposed
+    from it name it in ``daemon_plans.goal_id``.
+
+    ``revision`` is bumped by every edit, in the store, and an edit names
+    the revision it read.
+    """
+
+    __tablename__ = "daemon_goals"
+    __table_args__ = (Index("idx_daemon_goals_repository", "repository", "state"),)
+
+    goal_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    repository: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'active'"))
     created_by: Mapped[str | None] = mapped_column(Text)
     created_by_display: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[float] = mapped_column(REAL, nullable=False)

@@ -65,6 +65,7 @@ from lantern.daemon.controls.results import (
     DismissedTarget,
     DismissOutcome,
     GateOutcome,
+    GoalOutcome,
     GrantOutcome,
     GrantRoundsOutcome,
     ItemOutcome,
@@ -88,6 +89,18 @@ from lantern.daemon.controls.results import (
     StopOutcome,
 )
 from lantern.daemon.controls.steering import SteeringStore
+from lantern.daemon.goals import (
+    EDITABLE as GOAL_EDITABLE,
+    GoalGone,
+    GoalInvalid,
+    GoalState,
+    GoalStore,
+    StaleGoal,
+    check_state,
+    check_text,
+    check_title,
+    new_goal_id,
+)
 from lantern.daemon.holds import OPERATOR_HOLD, hold_name
 from lantern.errors import GithubOpsError, ProvisionError, SbxError, WorkerError
 from lantern.ghids import normalize_item_id
@@ -1437,6 +1450,197 @@ class ControlService:
             principal=principal,
             request={"agent_slug": existing.agent_slug, "action": existing.action},
             idempotency=idempotency,
+        )
+        return self._record(spec, apply)
+
+    # -- goals: the direction an owner sets -----------------------------------------
+
+    def _goal_repository(self, repository: object) -> str:
+        """The configured spelling of a repository a goal may be set for:
+        configured, enabled, and able to hold a plan."""
+        from lantern.plans.hierarchy import repository_planning_for
+
+        name = repository.strip() if isinstance(repository, str) else ""
+        if not name:
+            raise GoalInvalid("repository", "repository must name a configured repository")
+        config: Any = getattr(self.loop, "config", None)
+        entry = None if config is None else config.find_repo(name)
+        if entry is None:
+            raise GoalInvalid("repository", f"{name} is not a repository configured on this server")
+        if not entry.enabled:
+            raise GoalInvalid("repository", f"{entry.repo} is disabled on this server")
+        planning = repository_planning_for(config, entry.repo)
+        if not planning.supported:
+            raise GoalInvalid(
+                "repository",
+                f"{entry.repo} cannot hold a plan: "
+                f"{planning.reason or 'its forge cannot hold plans'}",
+            )
+        return str(entry.repo)
+
+    def _goals(self) -> GoalStore:
+        store: GoalStore | None = getattr(self.loop, "goals", None)
+        return store if store is not None else GoalStore(self.loop.dstore)
+
+    def _now(self) -> float:
+        clock: Callable[[], float] = getattr(self.loop, "clock", time.time)
+        return float(clock())
+
+    def add_goal(
+        self,
+        principal: Principal,
+        *,
+        repository: str,
+        title: str,
+        text: str,
+        state: str = "active",
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Write a goal for ``repository``. ``invalid_argument`` names the
+        field that is wrong (``detail["field"]``): a repository that is not
+        configured, is disabled or cannot hold a plan, an empty or overlong
+        title or text, a state outside ``active``, ``paused``, ``done``.
+        Setting direction takes ``plans:publish``: an admin or an owner
+        sets it, a member does not."""
+        require(principal, "plans:publish")
+        try:
+            repo = self._goal_repository(repository)
+            clean_title = check_title(title)
+            clean_text = check_text(text)
+            clean_state: GoalState = check_state(state)
+        except GoalInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        goal_id = new_goal_id()
+
+        def apply(_: str | None) -> GoalOutcome:
+            goal = self._goals().create(
+                goal_id=goal_id,
+                repository=repo,
+                title=clean_title,
+                text=clean_text,
+                state=clean_state,
+                created_by=principal.id,
+                created_by_display=principal.attribution(),
+                now=self._now(),
+            )
+            return GoalOutcome(
+                verb="add",
+                goal_id=goal.id,
+                revision=goal.revision,
+                message=f"goal {goal.id} set for {goal.repository}: {goal.title}.",
+            )
+
+        spec = self._spec(
+            "goal.create",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            repository=repo,
+            title=clean_title,
+            state=clean_state,
+        )
+        return self._record(spec, apply)
+
+    def update_goal(
+        self,
+        principal: Principal,
+        goal_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Edit a goal's ``title``, ``text`` or ``state`` against the
+        revision the caller read (``stale_revision`` when it moved on). Its
+        repository is not edited: the plans proposed from it are there."""
+        require(principal, "plans:publish")
+        if self._goals().goal(goal_id) is None:
+            raise ControlError("unknown_target", f"no goal {goal_id}")
+        try:
+            unknown = sorted(set(changes) - GOAL_EDITABLE)
+            if unknown:
+                raise GoalInvalid(
+                    unknown[0],
+                    f"{unknown[0]} cannot be edited; an edit may change "
+                    f"{', '.join(sorted(GOAL_EDITABLE))}",
+                )
+            clean: dict[str, Any] = {}
+            if "title" in changes:
+                clean["title"] = check_title(changes["title"])
+            if "text" in changes:
+                clean["text"] = check_text(changes["text"])
+            if "state" in changes:
+                clean["state"] = check_state(changes["state"])
+        except GoalInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        if not clean:
+            raise ControlError(
+                "invalid_argument",
+                f"the edit changes nothing; name one of {', '.join(sorted(GOAL_EDITABLE))}",
+            )
+
+        def apply(_: str | None) -> GoalOutcome:
+            try:
+                goal = self._goals().update(
+                    goal_id, clean, expected_revision=expected_revision, now=self._now()
+                )
+            except GoalGone as exc:
+                raise ControlError("unknown_target", f"no goal {goal_id}") from exc
+            except StaleGoal as exc:
+                raise ControlError(
+                    "stale_revision",
+                    f"the goal changed since it was read; it is at revision {exc.current}",
+                    current_revision=exc.current,
+                ) from exc
+            return GoalOutcome(
+                verb="update",
+                goal_id=goal.id,
+                revision=goal.revision,
+                message=f"goal {goal.id} edited: {goal.title} ({goal.state}).",
+            )
+
+        spec = self._spec(
+            "goal.update",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            changes=clean,
+        )
+        return self._record(spec, apply)
+
+    def remove_goal(
+        self,
+        principal: Principal,
+        goal_id: str,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Delete a goal. The plans proposed from it are left as they are
+        and keep naming it."""
+        require(principal, "plans:publish")
+        existing = self._goals().goal(goal_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no goal {goal_id}")
+
+        def apply(_: str | None) -> GoalOutcome:
+            gone = self._goals().delete(goal_id)
+            if gone is None:
+                raise ControlError("unknown_target", f"no goal {goal_id}")
+            return GoalOutcome(
+                verb="remove", goal_id=gone.id, message=f"goal {gone.id} removed: {gone.title}."
+            )
+
+        spec = self._spec(
+            "goal.delete",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            repository=existing.repository,
+            title=existing.title,
         )
         return self._record(spec, apply)
 

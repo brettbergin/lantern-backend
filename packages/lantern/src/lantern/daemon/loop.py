@@ -81,6 +81,7 @@ from lantern.daemon.controls.results import (
 )
 from lantern.daemon.epicruns import EpicRunDriver
 from lantern.daemon.github import DaemonGithub
+from lantern.daemon.goals import GoalStore
 from lantern.daemon.holds import OPERATOR_HOLD, hold_name
 from lantern.daemon.logsink import event_log_subscriber
 from lantern.daemon.model import (
@@ -584,6 +585,9 @@ class DaemonLoop:
         # Triage: the operator agent picks failures back up under the
         # grants; with no operator grant it does nothing.
         self.triage = Triage(self)
+        # Goals: the standing objectives an owner writes for a repository,
+        # and the plans proposed from each (`daemon_plans.goal_id`).
+        self.goals = GoalStore(dstore)
 
     # -- external control ---------------------------------------------------------
 

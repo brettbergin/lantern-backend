@@ -2936,6 +2936,69 @@ disagree on who proposed them, `proposers`. An `escalate` row carries `resolved_
 `resolution` once it ends: `acted` (the step happened, whoever took it),
 `declined` (a person said no) or `superseded` (what it was about changed).
 
+## Goals
+
+When `/v1/capabilities` lists `goals`, an owner or an admin can set a
+**goal** for a repository: a standing objective, in their own words, that
+plans are proposed from. `goals` is served with `planning`: a goal is for a
+repository that can hold a plan. Goals ship empty, and nothing in the daemon
+proposes a plan from one yet: this release stores and reads them.
+
+`GET /v1/goals` (`runs:read`) lists every goal, oldest first, narrowed by
+`repository` (case is ignored) and `state` (`active`, `paused`, `done`).
+`GET /v1/goals/{id}` (`runs:read`) returns one:
+
+```json
+{
+  "id": "goal_…",
+  "workspace_id": "local",
+  "repository": "acme/shop",
+  "title": "Faster builds",
+  "text": "Cut the build time in half without dropping a check.",
+  "state": "active",
+  "created_by": "usr_…",
+  "created_by_display": "olive",
+  "created_at": "…",
+  "updated_at": "…",
+  "revision": 1,
+  "plans": [
+    {"plan_id": "plan_…", "title": "Build pipeline", "state": "published", "advance": "auto"}
+  ],
+  "open_plan_id": "plan_…"
+}
+```
+
+`plans` are the plans proposed from the goal (those whose `goal_id` names
+it), most recently changed first, each with its root's `title`, the `state` a
+plan reads as (`draft`, `published`, `archived`) and its `advance`.
+`open_plan_id` is the plan currently serving the goal — the most recently
+changed one that is not archived — or `null`.
+
+`POST /v1/goals` (`plans:publish`) takes `repository`, `title` (1–200
+characters), `text` (1–4000 characters, the objective) and optionally `state`
+(`active` when absent), and answers `201` with
+`{"goal": …, "message": "…", "operation": …}`. `PATCH /v1/goals/{id}` takes
+`expected_revision` and any of `title`, `text` and `state`; only the fields
+sent change, `409 stale_revision` (with `current_revision`) when the goal was
+edited since it was read. A goal's repository is not edited. `DELETE /v1/goals/{id}` removes one (`"goal": null` in the reply); the plans
+proposed from it keep their `goal_id`. Each takes an optional
+`Idempotency-Key`.
+
+A write is refused with `422` naming the field: `invalid_argument` with
+`"field": "repository"` when the repository is not configured on this server,
+is disabled, or cannot hold a plan (the detail says which); with
+`"field": "title"` or `"text"` when one is blank; `invalid_request` with
+`"errors"` when the body is malformed (an unknown key, an overlong title, a
+state outside the three).
+
+The write routes ask for `plans:publish`: an owner or an admin sets direction,
+a member is refused (`403 forbidden`, `"capability": "plans:publish"`). Each
+write is one operation (`goal.create`, `goal.update`, `goal.delete`, target
+kind `goal`) with its `operation.*` events; a write a restart interrupted is
+settled from the stored goal at recovery. A plan's `goal_id` is set by the
+daemon and is not accepted on the plan routes. There is no `command` for goals
+on the WebSocket, no chat tool and no `ctl` verb.
+
 ## Fleet analytics
 
 When `/v1/capabilities` lists `analytics`, `GET /v1/analytics` (`runs:read`)
