@@ -485,8 +485,9 @@ class TestTheContract:
             refused = api.client.get("/v1/briefing", params={"since": since}, headers=headers)
             assert refused.status_code == 422, (since, refused.text)
             assert refused.json()["code"] == "invalid_request", since
-        # The bounds themselves are fine: an RFC 3339 time, ninety days back.
-        edge = rfc3339(now - 90 * DAY)
+        # Just inside the bound is fine: an RFC 3339 time ninety days back
+        # (a second short of it, as a timestamp round-trips through text).
+        edge = rfc3339(now - 90 * DAY + 1)
         assert _briefing(api, since=edge)["since"] == edge
 
     def test_reading_it_needs_runs_read(self, api: Api) -> None:
