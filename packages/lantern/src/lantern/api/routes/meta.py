@@ -108,6 +108,10 @@ def features(config: Config) -> list[str]:
         served.append("planning.generated_root")
         # Epic runs admit a published epic's tasks as issue runs (#2347).
         served.append("planning.run")
+        # A plan carries `advance` and each node who proposed, approved and
+        # published it and its level's review; `advance` is set under
+        # `plans:publish`.
+        served.append("planning.advance")
     return served
 
 

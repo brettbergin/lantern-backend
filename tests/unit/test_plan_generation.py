@@ -195,6 +195,10 @@ def test_a_breakdown_runs_in_the_sandbox_and_lands_in_the_plan(harness: Harness)
     for child in (c1, c2, c3):
         assert child.state == "proposed" and child.origin == "planner"
         assert child.repository == REPO and child.level == "task"
+        # The agent dispatch bound to the run's plan phase, by name.
+        assert child.proposed_by == "agent:planner"
+    assert plan.root.proposed_by == "agent:planner"
+    assert kept.proposed_by == PERSON["id"], "the person's task is still theirs"
     assert c1.kind == "code" and c1.verify_commands == ("make test",)
     assert c1.acceptance_criteria == ("c1 works",)
     assert c2.depends_on == (c1.id,)

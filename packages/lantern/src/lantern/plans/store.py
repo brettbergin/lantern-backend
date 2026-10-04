@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -22,6 +22,8 @@ from lantern.db.api_models import ApiEventRow
 from lantern.db.daemon_models import PlanNodeRow, PlanRow
 from lantern.engine.planning import Clarification
 from lantern.plans.model import (
+    ADVANCES,
+    Advance,
     Drift,
     DriftChange,
     ForgeRef,
@@ -31,6 +33,7 @@ from lantern.plans.model import (
     Origin,
     Plan,
     PlanNode,
+    PlanReview,
     Replan,
     ReplanAction,
     ReplanEntry,
@@ -147,7 +150,26 @@ def _replan(raw: str | None) -> Replan | None:
         run_id=data.get("run_id"),
         proposed_at=float(data.get("proposed_at") or 0.0),
         entries=entries,
+        proposed_by=data.get("proposed_by"),
     )
+
+
+def _review(raw: str | None) -> PlanReview | None:
+    """A level's review as stored; one a later build wrote in a shape this
+    one cannot read is treated as none — the level then reads as not
+    reviewed, the safe reading — never as a crash of the plan."""
+    if not raw:
+        return None
+    try:
+        return PlanReview.from_dict(json.loads(raw))
+    except ValueError:
+        return None
+
+
+def _advance(raw: str | None) -> Advance:
+    """The plan's switch as stored; a value this build does not know is
+    never read as leave to advance."""
+    return raw if raw in ADVANCES else "manual"
 
 
 def _node(row: PlanNodeRow) -> PlanNode:
@@ -187,6 +209,10 @@ def _node(row: PlanNodeRow) -> PlanNode:
         drift=_drift(row.drift_json),
         generation=_generation(row.generation_json),
         replan=_replan(row.replan_json),
+        proposed_by=row.proposed_by,
+        approved_by=row.approved_by,
+        published_by=row.published_by,
+        review=_review(row.review_json),
     )
 
 
@@ -235,6 +261,12 @@ def _columns(node: PlanNode) -> dict[str, Any]:
         "created_at": node.created_at,
         "updated_at": node.updated_at,
         "generation_json": (None if node.generation is None else node.generation.model_dump_json()),
+        "proposed_by": node.proposed_by,
+        "approved_by": node.approved_by,
+        "published_by": node.published_by,
+        "review_json": (
+            None if node.review is None else json.dumps(node.review.as_dict(), default=str)
+        ),
     }
 
 
@@ -273,6 +305,8 @@ def _plan(row: PlanRow, nodes: Iterable[PlanNodeRow]) -> Plan:
         input=json.loads(row.input_json),
         reconciled_at=None if row.reconciled_at is None else float(row.reconciled_at),
         reconcile_error=row.reconcile_error,
+        advance=_advance(row.advance),
+        goal_id=row.goal_id,
     )
 
 
@@ -292,6 +326,15 @@ def _event(session: Any, event: PlanEvent, now: float, actor: dict[str, Any] | N
             audience_user_id=None,
         )
     )
+
+
+def actor_id(actor: Mapping[str, Any] | None) -> str | None:
+    """Who a node records as having proposed, approved or published it:
+    the actor's ``id`` — the one the same act's event carries — or ``None``
+    for an act with no actor, or an actor with no id."""
+    if actor is None:
+        return None
+    return str(actor.get("id") or "") or None
 
 
 class PlanStore:
@@ -345,6 +388,8 @@ class PlanStore:
                     workspace_id=plan.workspace_id,
                     root_node_id=plan.root_id,
                     input_json=json.dumps(plan.input),
+                    advance=plan.advance,
+                    goal_id=plan.goal_id,
                     state="archived" if plan.archived else "active",
                     created_by=plan.created_by,
                     created_by_display=plan.created_by_display,
@@ -374,10 +419,12 @@ class PlanStore:
         actor: dict[str, Any] | None = None,
         reconciled: Reconciled | None = None,
         input: dict[str, Any] | None = None,
+        advance: Advance | None = None,
     ) -> Plan:
         """Write one change to a plan, against the revision the caller
         read; the plan as it now is. ``reconciled`` records the forge read
-        the change came from, in the same transaction."""
+        the change came from, in the same transaction. ``advance`` sets the
+        plan's switch; left out, it stays as it is."""
         with self.dstore.transaction() as session:
             row = session.get(PlanRow, plan_id)
             if row is None:
@@ -402,6 +449,8 @@ class PlanStore:
                 row.state = "archived" if archived else "active"
             if input is not None:
                 row.input_json = json.dumps(input)
+            if advance is not None:
+                row.advance = advance
             if reconciled is not None:
                 _stamp(row, reconciled)
             row.revision = int(row.revision) + 1

@@ -8265,6 +8265,21 @@
             ],
             "title": "Acceptance Criteria"
           },
+          "advance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advance"
+          },
           "constraints": {
             "anyOf": [
               {
@@ -8843,6 +8858,17 @@
             "title": "Acceptance Criteria",
             "type": "array"
           },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          },
           "constraints": {
             "default": "",
             "title": "Constraints",
@@ -8953,6 +8979,28 @@
             "title": "Position",
             "type": "integer"
           },
+          "proposed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed By"
+          },
+          "published_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published By"
+          },
           "replan": {
             "anyOf": [
               {
@@ -8966,6 +9014,16 @@
           "repository": {
             "title": "Repository",
             "type": "string"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanReviewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "enum": [
@@ -9196,6 +9254,15 @@
         "additionalProperties": false,
         "description": "The whole tree: the root first, then each parent's children in\norder.",
         "properties": {
+          "advance": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "auto"
+            ],
+            "title": "Advance",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -9231,6 +9298,17 @@
             "default": false,
             "title": "Generation Pending",
             "type": "boolean"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
           },
           "id": {
             "title": "Id",
@@ -9795,6 +9873,63 @@
         "title": "PlanReplanResult",
         "type": "object"
       },
+      "PlanReviewOut": {
+        "additionalProperties": false,
+        "description": "A reviewer's verdict on a node's level \u2014 its children as they were\nwhen it was given: ``approve``, or ``escalate`` to a person, with the\n``reasons``, the run that reviewed and who did (``agent:<slug>``).\n``digest`` names what was reviewed; ``current`` is whether the level\nstill reads so \u2014 any edit, addition, removal or reorder of the children\nsince makes it ``false``, and a review that is not current says nothing\nabout the level as it is now. Written by the daemon, never through the\nAPI.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "current": {
+            "title": "Current",
+            "type": "boolean"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "approve",
+              "escalate"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "verdict",
+          "digest",
+          "at",
+          "current"
+        ],
+        "title": "PlanReviewOut",
+        "type": "object"
+      },
       "PlanRollup": {
         "additionalProperties": false,
         "description": "How far the plan has got: its epics and tasks, how many tasks the\nforge has closed, and how many nodes are published.",
@@ -9826,6 +9961,15 @@
       "PlanSummary": {
         "additionalProperties": false,
         "properties": {
+          "advance": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "auto"
+            ],
+            "title": "Advance",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -9856,6 +10000,17 @@
             "default": 0,
             "title": "Drift",
             "type": "integer"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
           },
           "id": {
             "title": "Id",
@@ -9946,7 +10101,7 @@
       },
       "PlanUpdate": {
         "additionalProperties": false,
-        "description": "Edit the inference brief while generation_pending, otherwise the\ngenerated root's sections.",
+        "description": "Edit the inference brief while generation_pending, otherwise the\ngenerated root's sections; and, with ``advance``, the plan's switch.",
         "properties": {
           "acceptance_criteria": {
             "anyOf": [
@@ -9962,6 +10117,21 @@
               }
             ],
             "title": "Acceptance Criteria"
+          },
+          "advance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advance"
           },
           "constraints": {
             "anyOf": [
@@ -18686,7 +18856,7 @@
         ]
       },
       "post": {
-        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.",
+        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.\n\n``advance`` (feature ``planning.advance``) is ``manual`` unless the\nbody says otherwise, and saying otherwise needs ``plans:publish``\n(``403 forbidden`` naming it, and nothing is drafted). Nothing acts on\nit yet.",
         "operationId": "create_plan_v1_plans_post",
         "requestBody": {
           "content": {
@@ -18708,6 +18878,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
           },
           "409": {
             "description": "A refusal, as `application/problem+json`."
@@ -18825,7 +18998,7 @@
         ]
       },
       "patch": {
-        "description": "Edit the plan's own sections (its root node's).",
+        "description": "Edit the plan's own sections (its root node's), and its ``advance``\nswitch (feature ``planning.advance``).\n\nChanging ``advance`` needs ``plans:publish``: a caller without it who\nnames a value the plan does not already have is ``403 forbidden``\nnaming the capability, and nothing in the request is written. Naming\nthe value it has changes nothing and is not refused, so the same edit\nwithout ``advance`` \u2014 or echoing it \u2014 still works for them. The switch\nmay be flipped on its own, on a published plan too; it is recorded as\n``plan.node.changed`` with ``change: advance``, ``advance`` and\n``before``, under whoever flipped it. Nothing acts on it yet.",
         "operationId": "update_plan_v1_plans__plan_id__patch",
         "parameters": [
           {
@@ -18858,6 +19031,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
           },
           "404": {
             "description": "A refusal, as `application/problem+json`."

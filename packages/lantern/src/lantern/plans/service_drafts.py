@@ -11,6 +11,8 @@ from typing import Any
 from lantern.daemon.controls.principal import WORKSPACE_ID
 from lantern.log import get_logger
 from lantern.plans.model import (
+    ADVANCES,
+    Advance,
     Plan,
     PlanNode,
     child_level,
@@ -32,6 +34,7 @@ from lantern.plans.store import (
     PlanEvent,
     PlanGone,
     StaleRevision,
+    actor_id,
     new_id,
 )
 
@@ -47,10 +50,19 @@ class _Drafting(_ServiceBase):
         sections: Mapping[str, Any],
         now: float,
         actor: Mapping[str, Any],
+        advance: Advance = "manual",
+        goal_id: str | None = None,
     ) -> Plan:
-        """A new draft plan whose root is an initiative or a lone epic."""
+        """A new draft plan whose root is an initiative or a lone epic.
+
+        ``advance`` and ``goal_id`` are the caller's to vouch for: nothing
+        here knows who is asking, so a surface that passes ``advance``
+        checks ``plans:publish`` first (the API does), and one that has no
+        business setting it passes neither — a draft is ``manual``."""
         if level not in ("initiative", "epic"):
             raise PlanRefusal(422, "invalid_argument", "a plan starts at an initiative or an epic")
+        if advance not in ADVANCES:
+            raise PlanRefusal(422, "invalid_argument", f"advance is one of {', '.join(ADVANCES)}")
         repo = self._repository(repository)
         plan_id = new_id("plan_")
         root = PlanNode(
@@ -65,6 +77,7 @@ class _Drafting(_ServiceBase):
             title="",
             created_at=now,
             updated_at=now,
+            proposed_by=actor_id(actor),
         )
         requested = self._with_sections(root, sections, siblings=[])
         brief = {
@@ -76,13 +89,15 @@ class _Drafting(_ServiceBase):
             workspace_id=WORKSPACE_ID,
             root_id=root.id,
             archived=False,
-            created_by=str(actor.get("id") or "") or None,
+            created_by=actor_id(actor),
             created_by_display=str(actor.get("display") or "") or None,
             created_at=now,
             updated_at=now,
             revision=1,
             nodes=(root,),
             input=brief,
+            advance=advance,
+            goal_id=goal_id,
         )
         return self.store.create(
             plan,
@@ -103,16 +118,48 @@ class _Drafting(_ServiceBase):
         sections: Mapping[str, Any],
         now: float,
         actor: Mapping[str, Any],
+        advance: Advance | None = None,
     ) -> Plan:
-        """Edit the plan's own sections: its root node's."""
+        """Edit the plan's own sections — its root node's — and, when
+        ``advance`` names a value the plan does not have, its switch: one
+        write, recorded as ``plan.node.changed`` with ``change: advance``
+        under the actor. Flipping the switch is the caller's to vouch for
+        (``plans:publish``; see :meth:`create`), and needs no section to
+        change with it, so a published plan can still be switched."""
         plan = self.get(plan_id)
-        return self.update_node(
-            plan_id,
-            plan.root_id,
-            expected_revision=expected_revision,
-            sections=sections,
-            position=None,
-            now=now,
+        if advance is None or advance == plan.advance:
+            return self.update_node(
+                plan_id,
+                plan.root_id,
+                expected_revision=expected_revision,
+                sections=sections,
+                position=None,
+                now=now,
+                actor=actor,
+            )
+        if advance not in ADVANCES:
+            raise PlanRefusal(422, "invalid_argument", f"advance is one of {', '.join(ADVANCES)}")
+        self._check_revision(plan, expected_revision)
+        self._not_archived(plan)
+        edit = self._node_edit(plan, plan.root, sections, None, now) if sections else {}
+        switched = PlanEvent(
+            "plan.node.changed",
+            {
+                "plan_id": plan.id,
+                "node_id": None,
+                "change": "advance",
+                "advance": advance,
+                "before": plan.advance,
+            },
+        )
+        return self._write(
+            plan,
+            expected_revision,
+            now,
+            upsert=edit.get("upsert", ()),
+            input=edit.get("input"),
+            advance=advance,
+            events=[*edit.get("events", ()), switched],
             actor=actor,
         )
 
@@ -161,6 +208,7 @@ class _Drafting(_ServiceBase):
             title="",
             created_at=now,
             updated_at=now,
+            proposed_by=actor_id(actor),
         )
         node = self._with_sections(node, sections, siblings=siblings)
         ordered = self._reorder([*siblings, node], node.id, position)
@@ -186,27 +234,42 @@ class _Drafting(_ServiceBase):
         actor: Mapping[str, Any],
     ) -> Plan:
         """Edit a node's sections or move it among its siblings. Editing a
-        proposed or approved node makes it a draft again."""
+        proposed or approved node makes it a draft again, and an approval
+        it had goes with it."""
         plan = self.get(plan_id)
         self._check_revision(plan, expected_revision)
         self._not_archived(plan)
         node = self._node(plan, node_id)
+        return self._write(
+            plan,
+            expected_revision,
+            now,
+            actor=actor,
+            **self._node_edit(plan, node, sections, position, now),
+        )
+
+    def _node_edit(
+        self,
+        plan: Plan,
+        node: PlanNode,
+        sections: Mapping[str, Any],
+        position: int | None,
+        now: float,
+    ) -> dict[str, Any]:
+        """What an edit of ``node`` writes, as :meth:`_write`'s ``upsert``
+        or ``input`` and its ``events``; refused when it changes nothing."""
         if node.id == plan.root_id and plan.generation_pending:
             if position is not None:
                 raise PlanRefusal(422, "invalid_argument", "the plan's root has no siblings")
             requested = self._with_sections(node, plan.input | dict(sections), siblings=[])
-            return self._write(
-                plan,
-                expected_revision,
-                now,
-                input={
+            return {
+                "input": {
                     key: plain(getattr(requested, key))
                     for key in SECTIONS
                     if key not in TASK_SECTIONS
                 },
-                events=[_node_changed(plan.id, node.id, "input_updated")],
-                actor=actor,
-            )
+                "events": [_node_changed(plan.id, node.id, "input_updated")],
+            }
         if node.state == "published" and sections:
             raise PlanRefusal(
                 409,
@@ -222,7 +285,9 @@ class _Drafting(_ServiceBase):
                 node, sections, siblings=[s for s in siblings if s.id != node.id]
             )
             if edited.state in ("proposed", "approved"):
-                edited = replace(edited, state="draft")
+                # What was approved is not what it now says: whoever
+                # approved it did not approve this.
+                edited = replace(edited, state="draft", approved_by=None)
             edited = replace(edited, updated_at=now)
             upsert[edited.id] = edited
         if position is not None:
@@ -233,14 +298,10 @@ class _Drafting(_ServiceBase):
                 upsert[moved.id] = moved
         if not upsert:
             raise PlanRefusal(422, "invalid_argument", "nothing to change")
-        return self._write(
-            plan,
-            expected_revision,
-            now,
-            upsert=list(upsert.values()),
-            events=[_node_changed(plan.id, node.id, "updated")],
-            actor=actor,
-        )
+        return {
+            "upsert": list(upsert.values()),
+            "events": [_node_changed(plan.id, node.id, "updated")],
+        }
 
     def remove_node(
         self,
@@ -339,7 +400,8 @@ class _Drafting(_ServiceBase):
     ) -> Plan:
         """A person's "this is right": ``node_id``'s draft and proposed
         children — all of them, or the ones named — become ``approved``,
-        ready to publish."""
+        ready to publish, each recording the actor as who approved it (a
+        child already approved keeps its own)."""
         plan = self.get(plan_id)
         self._check_revision(plan, expected_revision)
         self._not_archived(plan)
@@ -358,7 +420,7 @@ class _Drafting(_ServiceBase):
                 )
             chosen = [c for c in children if c.id in wanted]
         approved = [
-            replace(c, state="approved", updated_at=now)
+            replace(c, state="approved", approved_by=actor_id(actor), updated_at=now)
             for c in chosen
             if c.state in ("draft", "proposed")
         ]

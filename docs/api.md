@@ -760,8 +760,9 @@ the file still spells differently). The socket takes the same commands:
 Planning turns a larger effort into issues the loop can work (see the
 [spike](spikes/work-planning.md)). It is advertised as `planning` when a
 configured forge can hold a plan, together with `planning.clarify` (the
-planner's clarifying questions and the answers route), and epic runs as
-`planning.run`. A **plan** is a tree of **nodes**: an
+planner's clarifying questions and the answers route), epic runs as
+`planning.run`, and the `advance` switch with each node's actors and review
+as `planning.advance`. A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
@@ -771,9 +772,9 @@ and owners) publishes to the forge and edits, attaches and detaches its issues.
 | Route                                                                 | Body                                                              | Result                                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `GET /v1/plans`                                                       | `?repository=&level=&state=&limit=&cursor=`                       | `200 {data: [plan summary], next_cursor, has_more}`, most recent first, at most 200 a page |
-| `POST /v1/plans`                                                      | `{level, repository, title, goal?, acceptance_criteria?, …}`      | `201`, the plan with its root node                                                         |
+| `POST /v1/plans`                                                      | `{level, repository, title, goal?, advance?, …}`                  | `201`, the plan with its root node                                                         |
 | `GET /v1/plans/{id}`                                                  | none                                                              | `200`, the plan and every node                                                             |
-| `PATCH /v1/plans/{id}`                                                | `{expected_revision, …sections}`                                  | `200`, the root node's sections edited                                                     |
+| `PATCH /v1/plans/{id}`                                                | `{expected_revision, advance?, …sections}`                        | `200`, the root node's sections edited, the switch flipped                                 |
 | `DELETE /v1/plans/{id}`                                               | `?expected_revision=`                                             | `200 {id, outcome: deleted \| archived}`                                                   |
 | `POST /v1/plans/{id}/nodes`                                           | `{expected_revision, parent_id, title, repository?, …}`           | `201`, the plan; `Location` names the new node; `409 level_full` at the cap                |
 | `PATCH /v1/plans/{id}/nodes/{node_id}`                                | `{expected_revision, position?, forge_version?, …sections}`       | `200`, the plan (a published node: its issue written)                                      |
@@ -826,6 +827,42 @@ unpublished, person-authored roots move into `input`, retaining their trees
 and requiring generation before publishing; published and archived content
 is preserved.
 
+**Who a node is from, and whether a plan advances itself** (feature
+`planning.advance`). Every node carries three read-only fields, each a
+principal's id — the one the same act's event names as its actor — or
+`agent:<slug>`, or `null` where nobody is recorded:
+
+| Field          | Holds                                                                                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `proposed_by`  | Who the node's content is from: the person who drafted the plan or added the node; for a node a `plan` run proposed (the generated root, its children, a re-plan's addition), the planner agent bound to that run. `null` for an issue adopted from the forge and for a run that named no agent. An edit keeps it. |
+| `approved_by`  | Who approved the node for publishing (`approve`, or approving the re-plan entry that added it). Editing the node makes it a draft again and clears this.                                                                                                                                                           |
+| `published_by` | Who published the node to the forge. A root is published with its level, so it carries this and no `approved_by`.                                                                                                                                                                                                  |
+
+Nodes written before these were kept read `null` in all three. A node may
+also carry `review`, a reviewer's verdict on its **level** (its children):
+`{run_id, verdict: approve | escalate, reasons, digest, reviewed_by, at, current}`. `digest` names what was reviewed and `current` is whether the
+level still reads so: an edit of a child's title or sections, a child added,
+removed, moved or replaced, or a changed repository makes it `false`, and a
+review that is not current says nothing about the level as it is now.
+Approving and publishing the level do not move it. The daemon writes
+`review`; no route does, and nothing writes one in this release.
+
+A plan carries `advance`: `manual` (the default — a person takes every
+step) or `auto`, and `goal_id`, the goal it was proposed from (`null` for a
+plan a person drafted; read-only). `advance` is set on `POST /v1/plans` and
+flipped on `PATCH /v1/plans/{id}`, alone or with sections, on a published
+plan too. Setting it takes **`plans:publish`** on top of the route's
+`plans:create`: a caller without it who names a value the plan does not
+already have (anything but `manual` on create) is `403 forbidden` with
+`capability: plans:publish`, and nothing in the request is written; the
+same request without `advance`, or naming the value the plan has, works as
+before. A flip is `plan.node.changed` with `node_id: null`,
+`change: advance`, `advance` and `before`, under whoever flipped it.
+`goal_id`, `review` and the three actor fields are refused as unknown
+fields (`422`) in any request body. **Nothing acts on `advance` yet**: an
+`auto` plan is drafted, approved, published and run exactly as a `manual`
+one, by people.
+
 Every mutation names the plan's `revision` it read as `expected_revision`;
 any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
 says that before anyone types: `planning: {hierarchy, reason}`, where
@@ -834,7 +871,8 @@ labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
 repository's forge can't hold plans: Gitea is not supported"; or `[planning] enabled = false` for it: "planning is off for this repository"). Changes emit
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
-`deleted`, `approved` with `node_ids`, `published` with `number`,
+`deleted`, `advance` with `advance` and `before`, `approved` with
+`node_ids`, `published` with `number`,
 `issue_edited`, `attached` and `detached` — see below; a re-plan's `closed`
 with `number` and `replan_discarded` with `entry_ids`; and `closed`,
 `reopened` or `completed` with `number` — see "Closing what is finished").

@@ -23,7 +23,9 @@ entry:
   nothing is deleted, and a person can reopen the issue. An issue already
   closed is left as it is, without a comment.
 - ``add`` — the child becomes an ``approved`` node under the re-planned node
-  with the id the diff minted for it, and is published by
+  with the id the diff minted for it — proposed by the planner whose run
+  proposed the diff, approved by whoever approved the entry — and is
+  published by
   :func:`~lantern.plans.publish.publish_level` narrowed to the additions: its
   marker is looked for before it is created, it carries the level label and
   is linked as a sub-issue or a checklist line. An interrupted approval
@@ -50,7 +52,14 @@ from lantern.plans.forgeread import say, seen_of
 from lantern.plans.model import Plan, PlanNode, ReplanEntry, child_level, content_version, plain
 from lantern.plans.publish import publish_level
 from lantern.plans.reconcile import as_forge_has_it
-from lantern.plans.store import PlanEvent, PlanGone, PlanStore, StaleRevision, retry_stale
+from lantern.plans.store import (
+    PlanEvent,
+    PlanGone,
+    PlanStore,
+    StaleRevision,
+    actor_id,
+    retry_stale,
+)
 from lantern.vcs.protocol import IssueOps
 
 Outcome = Literal["created", "found", "updated", "closed", "failed"]
@@ -316,6 +325,10 @@ class _Apply:
                         title=title,
                         created_at=now,
                         updated_at=now,
+                        # The run that proposed the diff proposed it; whoever
+                        # approves the entry approves the child it becomes.
+                        proposed_by=None if parent.replan is None else parent.replan.proposed_by,
+                        approved_by=actor_id(self.actor),
                     ),
                     **node_fields({k: v for k, v in entry.sections.items() if k != "title"}),
                 )

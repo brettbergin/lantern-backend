@@ -6,7 +6,9 @@ holding ``runs:read``; drafting, editing, asking the planner for a
 breakdown and answering its clarifying questions (feature
 ``planning.clarify``) need ``plans:create``. Every mutation names the
 ``expected_revision`` it read; a stale one is ``409 stale_revision`` with
-the plan's current revision.
+the plan's current revision. Setting a plan's ``advance`` switch (feature
+``planning.advance``) needs ``plans:publish`` as well, on create and on
+edit.
 
 After publish the forge wins (#2342): reading a plan folds in what changed
 on the forge when its last reading is stale, ``POST .../sync`` does it now,
@@ -61,6 +63,7 @@ from lantern.api.plan_schemas import (
     PlanReplanEntryOut,
     PlanReplanOut,
     PlanReplanResult,
+    PlanReviewOut,
     PlanRollup,
     PlanSummary,
     PlanUpdate,
@@ -77,7 +80,7 @@ from lantern.daemon.controls.operations import (
 )
 from lantern.engine.planning import Clarification, PlanAnswer
 from lantern.plans import Plan, PlanNode, PlanRefusal
-from lantern.plans.model import content_version
+from lantern.plans.model import content_version, review_is_current
 from lantern.plans.reconcile import Reconciliation
 from lantern.plans.service import SECTIONS
 
@@ -105,7 +108,7 @@ def _sections(body: Any) -> dict[str, Any]:
     return {key: value for key, value in fields.items() if key in SECTIONS}
 
 
-def node_out(node: PlanNode) -> PlanNodeOut:
+def node_out(plan: Plan, node: PlanNode) -> PlanNodeOut:
     return PlanNodeOut(
         id=node.id,
         parent_id=node.parent_id,
@@ -173,6 +176,27 @@ def node_out(node: PlanNode) -> PlanNodeOut:
                 ],
             )
         ),
+        proposed_by=node.proposed_by,
+        approved_by=node.approved_by,
+        published_by=node.published_by,
+        review=review_out(plan, node),
+    )
+
+
+def review_out(plan: Plan, node: PlanNode) -> PlanReviewOut | None:
+    """The node's review as a client reads it, with whether it still
+    answers for the level as the plan has it now."""
+    review = node.review
+    if review is None:
+        return None
+    return PlanReviewOut(
+        run_id=run_public_id(review.run_id),
+        verdict=review.verdict,
+        reasons=list(review.reasons),
+        digest=review.digest,
+        reviewed_by=review.reviewed_by,
+        at=rfc3339(review.at) or "",
+        current=review_is_current(plan, node),
     )
 
 
@@ -232,6 +256,8 @@ def _summary_fields(plan: Plan) -> dict[str, Any]:
         "drift": sum(1 for n in plan.nodes if n.drift),
         "reconciled_at": rfc3339(plan.reconciled_at),
         "reconcile_error": plan.reconcile_error,
+        "advance": plan.advance,
+        "goal_id": plan.goal_id,
     }
 
 
@@ -241,7 +267,7 @@ def plan_out(plan: Plan, *, reconcile_error: str | None = None) -> PlanOut:
         fields["reconcile_error"] = reconcile_error
     return PlanOut(
         **fields,
-        nodes=[node_out(n) for n in plan.nodes],
+        nodes=[node_out(plan, n) for n in plan.nodes],
         input=PlanInput.model_validate(plan.input) if plan.input else None,
         generation_pending=plan.generation_pending,
     )
@@ -303,12 +329,26 @@ async def list_plans(
     )
 
 
+def _advance_refused(auth: Authenticated) -> PlanRefusal:
+    """Setting ``advance`` takes ``plans:publish``, on top of the
+    ``plans:create`` the route itself asks: the switch says a plan may be
+    moved forward — published included — without a person taking the step,
+    so whoever sets it has to be someone who may publish."""
+    return PlanRefusal(
+        403,
+        "forbidden",
+        f"{auth.principal.id} lacks plans:publish: whether a plan may advance on its own "
+        "is set by someone who may publish it",
+        capability="plans:publish",
+    )
+
+
 @router.post(
     "",
     response_model=PlanOut,
     status_code=201,
     summary="Draft a plan",
-    responses={409: PROBLEM, 422: PROBLEM},
+    responses={403: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def create_plan(
     body: PlanCreate,
@@ -316,7 +356,15 @@ async def create_plan(
     auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
 ) -> PlanOut:
     """A new draft plan from the form. A repository whose forge cannot hold
-    a plan is ``409 planning_unsupported``, naming why."""
+    a plan is ``409 planning_unsupported``, naming why.
+
+    ``advance`` (feature ``planning.advance``) is ``manual`` unless the
+    body says otherwise, and saying otherwise needs ``plans:publish``
+    (``403 forbidden`` naming it, and nothing is drafted). Nothing acts on
+    it yet."""
+    advance = body.advance or "manual"
+    if advance != "manual" and not auth.principal.can("plans:publish"):
+        raise problem_of(_advance_refused(auth))
     try:
         plan = await ctx.call(
             ctx.plans.create,
@@ -325,6 +373,7 @@ async def create_plan(
             sections=_sections(body),
             now=ctx.clock(),
             actor=actor_of(auth),
+            advance=advance,
         )
     except PlanRefusal as exc:
         raise problem_of(exc) from exc
@@ -422,7 +471,7 @@ async def ack_drift(
     "/{plan_id}",
     response_model=PlanOut,
     summary="Edit a plan",
-    responses={404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
+    responses={403: PROBLEM, 404: PROBLEM, 409: PROBLEM, 422: PROBLEM},
 )
 async def update_plan(
     plan_id: str,
@@ -430,16 +479,37 @@ async def update_plan(
     ctx: ApiContext = Depends(get_ctx),  # noqa: B008
     auth: Authenticated = Depends(require("plans:create")),  # noqa: B008
 ) -> PlanOut:
-    """Edit the plan's own sections (its root node's)."""
-    try:
-        plan = await ctx.call(
-            ctx.plans.update,
+    """Edit the plan's own sections (its root node's), and its ``advance``
+    switch (feature ``planning.advance``).
+
+    Changing ``advance`` needs ``plans:publish``: a caller without it who
+    names a value the plan does not already have is ``403 forbidden``
+    naming the capability, and nothing in the request is written. Naming
+    the value it has changes nothing and is not refused, so the same edit
+    without ``advance`` — or echoing it — still works for them. The switch
+    may be flipped on its own, on a published plan too; it is recorded as
+    ``plan.node.changed`` with ``change: advance``, ``advance`` and
+    ``before``, under whoever flipped it. Nothing acts on it yet."""
+    sections = _sections(body)
+    actor = actor_of(auth)
+    may_switch = auth.principal.can("plans:publish")
+
+    def run() -> Plan:
+        asked = body.advance is not None and not may_switch
+        if asked and ctx.plans.get(plan_id).advance != body.advance:
+            raise _advance_refused(auth)
+        return ctx.plans.update(
             plan_id,
             expected_revision=body.expected_revision,
-            sections=_sections(body),
+            sections=sections,
             now=ctx.clock(),
-            actor=actor_of(auth),
+            actor=actor,
+            # Only someone who may publish ever hands the service a switch.
+            advance=body.advance if may_switch else None,
         )
+
+    try:
+        plan = await ctx.call(run)
     except PlanRefusal as exc:
         raise problem_of(exc) from exc
     ctx.hub.notify()

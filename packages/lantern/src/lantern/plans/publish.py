@@ -15,8 +15,9 @@ dependency order:
    has them (a child already linked is not linked twice), else a line in
    the parent's managed checklist. A cross-repository sub-issue the forge
    refuses falls back to the checklist, and the result says why;
-4. is recorded ``published`` with its forge reference — one write per node,
-   so a walk that dies part-way resumes where it stopped.
+4. is recorded ``published`` with its forge reference and who published it
+   (the actor's id) — one write per node, so a walk that dies part-way
+   resumes where it stopped.
 
 A node that fails is reported with the forge's words and left as it was;
 the nodes that depend on it (its children, its dependents) are not
@@ -37,7 +38,7 @@ from lantern.plans.forgeread import refs, say
 from lantern.plans.hierarchy import FORGE_NAMES, repository_planning_for
 from lantern.plans.model import ForgeRef, ForgeState, Plan, PlanNode
 from lantern.plans.render import markers, render_body, repo_of
-from lantern.plans.store import PlanEvent, PlanStore, StaleRevision, retry_stale
+from lantern.plans.store import PlanEvent, PlanStore, StaleRevision, actor_id, retry_stale
 from lantern.vcs.checklist import ChecklistEntry, add_child, update_checklist
 from lantern.vcs.github.labels import LEVEL_DESCRIPTORS, LabelSpec, ensure_label
 from lantern.vcs.protocol import IssueOps
@@ -253,7 +254,15 @@ class _Walk:
                 plan.id,
                 expected_revision=plan.revision,
                 now=now,
-                upsert=[replace(node, state="published", forge=ref, updated_at=now)],
+                upsert=[
+                    replace(
+                        node,
+                        state="published",
+                        forge=ref,
+                        published_by=actor_id(self.actor),
+                        updated_at=now,
+                    )
+                ],
                 events=[
                     PlanEvent(
                         "plan.node.changed",

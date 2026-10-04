@@ -2860,6 +2860,64 @@ moved past the revision the approve read and the children it named are no
 longer draft or proposed, `failed` otherwise — safe, since nothing is ever
 half-approved and approving again is the whole write.
 
+The plan model also says who each node is from and who let it through
+(revision 0051). An event names an actor once; a rule such as "the agent
+that proposed a level is not the one that approves it" needs the fact on
+the node. `proposed_by`, `approved_by` and `published_by` each hold a
+principal's id — the id the same act's event carries — or `agent:<slug>`,
+and `NULL` where nobody is recorded:
+
+- `proposed_by` is written where a node is made. A person's plan and nodes
+  carry the person (`PlanService.create`, `add_node`). A `plan` run's
+  proposal carries the planner agent bound to the run: dispatch stores the
+  assignment on the item before the desk is built, `plans/generation.py`'s
+  `planner_of` reads the agent bound to the `plan` phase from it once, and
+  the desk hands it to `deliver_proposal` (the children and the generated
+  root, whose content stops being the person's) and to `deliver_replan`
+  (kept on the diff; an addition approved from it is the planner's). A run
+  whose item names no planned assignment records `NULL`, never a guess, and
+  the events stay attributed to the system actor `planner` as before. A
+  node adopted from the forge has none. An edit does not move it, as it
+  does not move `origin`.
+- `approved_by` is written by `PlanService.approve` on each child it
+  approves, and on a re-plan's addition by whoever approved its entry. An
+  edit that makes a proposed or approved child a draft again clears it:
+  what was approved is not what the node now says.
+- `published_by` is written by the publish walk as each node lands
+  (`plans/publish.py`'s `record`), so a re-plan's additions, which publish
+  through the same walk, carry it too. A node already on the forge is never
+  walked again, so a later level does not rewrite it.
+
+Regenerating a level replaces the planner's untouched `proposed` children
+with new nodes (the new run's `proposed_by`) and leaves the kept ones as
+they were; a re-plan's `modify` and `suggest_close` write the issue and
+leave all three fields alone.
+
+A node may carry a `review` (`PlanReview`, `review_json`): a reviewer's
+verdict on its level — `approve` or `escalate`, the reasons, the run, the
+reviewer — with a digest of what was reviewed. It lives beside the node's
+`generation` rather than in it: a clarification is written only when a run
+asks questions, and a record there parks a resume. `review_digest` hashes
+every child of the node, in order, as what publishing sends to the forge
+(its id, level, repository, position, title and sections) and nothing a
+review is meant to allow (state, forge reference, actors, timestamps), so
+approving and publishing a level leave it standing while an edit, an
+addition, a removal or a reorder makes it stale; `include_node` covers the
+node too, for a generated root, which is published with its level and never
+approved. `review_is_current` is the one question callers ask. A stored
+review this build cannot read is no review. Nothing writes one yet.
+
+A plan carries `advance` (`manual` or `auto`) and `goal_id`. `advance` is
+whether the plan may move itself forward; nothing reads it yet. What is
+settled is who may set it: plan edits take `plans:create`, which members
+hold, and the switch says a plan may be moved forward — published included
+— without a person taking the step, so the routes ask `plans:publish` of
+whoever names a value
+the plan does not have — in the handler, as the edit of a published node
+does. `PlanService.create` and `update` take `advance` from a caller that
+has checked; the concierge's `draft_plan` passes none, and a value in the
+store this build does not know reads `manual`.
+
 Publishing a level (#2341) is split three ways. `render.py` turns a node
 into its issue body — the sections as markdown headings, then the
 `<!-- sbx-plan: <plan_id>/<node_id> -->` marker — and is pure.
