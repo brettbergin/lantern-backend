@@ -1480,6 +1480,16 @@
             "title": "Action",
             "type": "string"
           },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "entry_id": {
             "title": "Entry Id",
             "type": "string"
@@ -1519,6 +1529,21 @@
               },
               {
                 "$ref": "#/components/schemas/EpicRunChanged"
+              },
+              {
+                "$ref": "#/components/schemas/EpicRunStarted"
+              },
+              {
+                "$ref": "#/components/schemas/PlanPublished"
+              },
+              {
+                "$ref": "#/components/schemas/PlanBreakdownAccepted"
+              },
+              {
+                "$ref": "#/components/schemas/PlanApproved"
+              },
+              {
+                "$ref": "#/components/schemas/EscalationDeclined"
               }
             ],
             "title": "Result"
@@ -1717,6 +1742,17 @@
             "title": "Actions",
             "type": "array"
           },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
           "channel_id": {
             "anyOf": [
               {
@@ -1727,6 +1763,28 @@
               }
             ],
             "title": "Channel Id"
+          },
+          "decision_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Action"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
           },
           "dismissal": {
             "anyOf": [
@@ -5170,6 +5228,30 @@
         "title": "EpicRunTaskOut",
         "type": "object"
       },
+      "EscalationDeclined": {
+        "additionalProperties": false,
+        "description": "An escalation a person said no to: the decision as the ledger now\nholds it, and the ``decision.decline`` operation that recorded it.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/DecisionOut"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision",
+          "operation_id"
+        ],
+        "title": "EscalationDeclined",
+        "type": "object"
+      },
       "EventOut": {
         "additionalProperties": false,
         "description": "One public event. ``id`` is the replay cursor (``evt_<seq>``);\n``native_seq`` is the engine's own sequence when the event is a\nprojection of the run's chronology; ``actor`` is absent where nothing\ntruthful can be said.",
@@ -8585,6 +8667,30 @@
           "expected_revision"
         ],
         "title": "PlanApprove",
+        "type": "object"
+      },
+      "PlanApproved": {
+        "additionalProperties": false,
+        "description": "A level approved from the list: the plan as it now is and the\n``plan.approve`` operation that approved it.",
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plan",
+          "operation_id"
+        ],
+        "title": "PlanApproved",
         "type": "object"
       },
       "PlanAttach": {
@@ -15093,7 +15199,7 @@
     },
     "/v1/attention": {
       "get": {
-        "description": "Everything waiting on a person, computed as it stands now: an open\nmerge or publication gate (one entry with the item it parks), an item\nwaiting for a review or for answers, an item that ended `failed` or\n`blocked`, a failed task of a live epic run (one entry with its item),\na provider hold nothing will retry by itself, and a repository whose\npolling is suspended. Decisions first, then failures, then pauses; the\nlongest wait first within each. A dismissed alert is left out unless\n`include_dismissed`; deleted work never appears. Each entry names what\nit is about, carries the revision an act on it is checked against, and\nlists the actions the server offers on it with the capability each\nneeds and whether the caller holds it. `counts` covers every group\nwhatever `group` the page was narrowed to. `kind` is open: leave out\nan entry whose kind you do not know.",
+        "description": "Everything waiting on a person, computed as it stands now: an open\nmerge or publication gate (one entry with the item it parks), an item\nwaiting for a review or for answers, an item that ended `failed` or\n`blocked`, a failed task of a live epic run (one entry with its item),\na provider hold nothing will retry by itself, a repository whose\npolling is suspended, a `manual` plan's breakdown questions with no\nparked item standing for them (`plan_questions`) and its proposed\nlevels (`plan_proposal`), and every escalation an agent left for a\nperson (`escalation`, naming the `agent`, the `decision_id` and the\n`decision_action`). Decisions first, then failures, then pauses; the\nlongest wait first within each. A dismissed alert is left out unless\n`include_dismissed`; deleted work never appears. Each entry names what\nit is about, carries the revision an act on it is checked against, and\nlists the actions the server offers on it with the capability each\nneeds and whether the caller holds it. `counts` covers every group\nwhatever `group` the page was narrowed to. `kind` is open: leave out\nan entry whose kind you do not know.",
         "operationId": "list_attention_v1_attention_get",
         "parameters": [
           {
@@ -15242,7 +15348,7 @@
     },
     "/v1/attention/{entry_id}/act": {
       "post": {
-        "description": "Take one of the actions an entry of `GET /v1/attention` offers,\nnaming only the entry and the action. The entry is looked up as it\nstands now (a dismissed one included, so `undismiss` works) and the\nrequest is handed to the command the action's own route runs: the same\noperation, the same refusals, nothing recorded for the act itself.\n\n`action` is one of the entry's `actions`; the caller needs that\naction's `capability` (`403 forbidden` naming it otherwise). `params`\nare the action's own arguments, validated as its route validates its\nbody: `rounds` for `grant_rounds`; `text` (and `source_refs`,\n`task_id`, `agent_slug`) for `steer`; `reason` for `abandon`,\n`dismiss` and the other item actions; `reason` and\n`discard_undelivered` for `delete`; `retry` and `reason` for `cancel`.\n\n`expected_revision` is the entry's `revision` as the person read it,\nnever defaulted from the entry as it stands. `gate_approve` requires\nit (`422` without). On a `gate_approve`, and on an item action of an\n`item` entry, the command itself checks it and records the refusal;\non any other action the entry's revision is compared before the\ncommand runs. Either way a moved entry is `409 stale_revision` with\nthe current `revision`. An entry whose `revision` is `null` \u2014 an\n`epic_task`, a `repository` \u2014 takes none (`422`).\n\nThe `Idempotency-Key` header is required (`422\nidempotency_key_required`), scoped to the caller and this entry. A\nreplay answers the first act (`replayed: true`), also once the entry\nis gone; another action, or other `params`, under the same key is\n`409 idempotency_conflict`.\n\nAn id nothing is waiting under is `409 not_waiting`: the thing was\nsettled, or waits again as a new entry. An action the entry does not\noffer now is `409 not_eligible` with `offered`; a name that is no\naction is `422 unknown_action`. Every refusal of the action's own\nroute can be answered too.\n\n`200` with `{entry_id, action, operation_id, replayed, still_waiting,\nresult}`; `202` where the action's own route answers `202` (a gate\napproval, a steer, a cancel honoured at the run's next boundary).\n`result` is the body the action's own route answers and\n`still_waiting` whether the entry is still on the list (dismissed\nalerts left out) as the answer is written.",
+        "description": "Take one of the actions an entry of `GET /v1/attention` offers,\nnaming only the entry and the action. The entry is looked up as it\nstands now (a dismissed one included, so `undismiss` works) and the\nrequest is handed to the command the action's own route runs: the same\noperation, the same refusals, nothing recorded for the act itself.\n\n`action` is one of the entry's `actions`; the caller needs that\naction's `capability` (`403 forbidden` naming it otherwise). `params`\nare the action's own arguments, validated as its route validates its\nbody: `rounds` for `grant_rounds`; `text` (and `source_refs`,\n`task_id`, `agent_slug`) for `steer`; `reason` for `abandon`,\n`dismiss` and the other item actions; `reason` and\n`discard_undelivered` for `delete`; `retry` and `reason` for `cancel`;\n`rounds` for `approve` on an escalated round grant.\n\nOn an `escalation`, `approve` takes the step the agent asked to take\nas the caller, through that step's own command and operation, then\nresolves the decision `acted`; `decline` records a `decision.decline`\noperation resolving it `declined`. Either needs the capability the\nentry lists (the escalated step's). On a `plan_proposal`, `approve`\napproves the level (`plans:create`). `decision` carries the ledger\nrow after an act on an escalation.\n\n`expected_revision` is the entry's `revision` as the person read it,\nnever defaulted from the entry as it stands. `gate_approve` requires\nit (`422` without). On a `gate_approve`, and on an item action of an\n`item` entry, the command itself checks it and records the refusal;\non any other action the entry's revision is compared before the\ncommand runs. Either way a moved entry is `409 stale_revision` with\nthe current `revision`. An entry whose `revision` is `null` \u2014 an\n`epic_task`, a `repository` \u2014 takes none (`422`).\n\nThe `Idempotency-Key` header is required (`422\nidempotency_key_required`), scoped to the caller and this entry. A\nreplay answers the first act (`replayed: true`), also once the entry\nis gone; another action, or other `params`, under the same key is\n`409 idempotency_conflict`.\n\nAn id nothing is waiting under is `409 not_waiting`: the thing was\nsettled, or waits again as a new entry. An action the entry does not\noffer now is `409 not_eligible` with `offered`; a name that is no\naction is `422 unknown_action`. Every refusal of the action's own\nroute can be answered too.\n\n`200` with `{entry_id, action, operation_id, replayed, still_waiting,\nresult}`; `202` where the action's own route answers `202` (a gate\napproval, a steer, a cancel honoured at the run's next boundary, an\napproved breakdown) and `201` where it answers `201` (an approved\nepic run start).\n`result` is the body the action's own route answers and\n`still_waiting` whether the entry is still on the list (dismissed\nalerts left out) as the answer is written.",
         "operationId": "act_on_attention_v1_attention__entry_id__act_post",
         "parameters": [
           {
@@ -15275,6 +15381,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Created: an approved escalation started an epic run."
           },
           "202": {
             "content": {

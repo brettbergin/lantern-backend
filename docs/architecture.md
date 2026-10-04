@@ -2547,8 +2547,13 @@ An entry's actions are not derived there: they are `eligibility`'s answer for
 the work as it stands (`Views.work_actions`, `Views.gate_actions` — the same
 subject the item, run and gate listings judge), each paired with the
 capability its command requires (`api/commands.py:ACTIONS`) and whether the
-caller's principal holds it. Entry kinds are open, so a later one (a plan's
-questions, an escalation) is an addition and not a new contract.
+caller's principal holds it. Entry kinds are open, so a later one is an
+addition and not a new contract: an agent's `escalation`, a `manual` plan's
+`plan_questions` and `plan_proposal` (see Delegation) were added that way.
+Their actions (`approve`, `decline`) are decided per entry — an escalation's
+capability is the escalated step's — so the act routes those kinds to its
+own path, and a reminder carries `action_capabilities` so the push rules ask
+the entry, not the action's name, who may take each.
 
 Acting on an entry is routing, not a second set of commands.
 `POST /v1/attention/{id}/act` (`api/attention_act.py`) finds the entry as it
@@ -2857,6 +2862,23 @@ among the facts), so a restart repeats nothing, and it is resolved by what
 happens next: `acted` when the work is under way again, `declined` when a
 person dismissed or abandoned it, `superseded` when it failed again
 differently, was deleted or is gone.
+
+**Escalations reach a person through the attention list.** Each unresolved
+`escalate` row is an `escalation` entry of `GET /v1/attention`
+(`api/escalations.py` holds the one action→words map, the capability a
+person needs for each step and whether a human path exists). `approve` on it
+is the person taking the step through the step's own command — the plan
+routes' `approve_level`, `publish_level_as`, `start_epic_run`,
+`control_epic_run`, the breakdown's `admit_plan`, the item retry, the round
+grant — recorded as that route's operation under the person, then the row is
+resolved `acted`; `decline` is a `decision.decline` operation resolving it
+`declined`. `plan.propose` has no human path and offers `decline` only. An
+escalation whose step already happened or whose target is gone is dropped
+from the list on read and resolved `superseded` on the attention tracker's
+next pass (`escalations.settle`), so the list read stays a read. A `manual`
+plan's waiting questions and proposed levels are entries too
+(`plan_questions`, `plan_proposal`, read by `PlanStore.waiting_on_people` in
+two statements); a plan that advances itself shows neither.
 
 ### The remote API listener
 

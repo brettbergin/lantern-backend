@@ -1277,6 +1277,59 @@ def test_a_reminder_about_a_failure_or_a_hold_is_active(room: Room, group: str) 
     assert _fields(room.notification(ping["ref"])) == (f"{group}:x", ["retry", "dismiss"], "active")
 
 
+def test_an_escalation_reminder_reaches_who_holds_the_escalated_acts_capability(
+    room: Room,
+) -> None:
+    """Approving an escalated plan approval needs ``plans:create``, which
+    a member holds: the member is reminded and offered both actions — the
+    names alone (``approve``) say nothing of what they need."""
+    _admin(room)
+    _remind(
+        room,
+        group="decision",
+        entry_id="escalation:dec_1",
+        capabilities=["plans:create"],
+        actions=["approve", "decline"],
+        action_capabilities={"approve": "plans:create", "decline": "plans:create"},
+        title="planner asks to approve the level proposed under “An epic”",
+        kind="escalation",
+        state="escalated",
+    )
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_C)] == ["gate"]
+    for token, user in ((TOKEN_A, "owner"), (TOKEN_B, "bob")):
+        [ping] = room.pushes_to(token)
+        assert ping["k"] == "gate"
+        assert _fields(room.notification(ping["ref"], user)) == (
+            "escalation:dec_1",
+            ["approve", "decline"],
+            "time_sensitive",
+        )
+
+
+def test_an_escalated_proposal_of_work_is_the_owners_alone(room: Room) -> None:
+    _admin(room)
+    _remind(
+        room,
+        group="decision",
+        entry_id="escalation:dec_2",
+        capabilities=["policy:manage"],
+        actions=["decline"],
+        action_capabilities={"decline": "policy:manage"},
+        title="planner asks to propose a plan for o/r",
+        kind="escalation",
+        state="escalated",
+    )
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == (
+        "escalation:dec_2",
+        ["decline"],
+        "time_sensitive",
+    )
+    assert room.pushes_to(TOKEN_B) == [] and room.pushes_to(TOKEN_C) == []
+
+
 def test_a_reminder_recorded_before_actions_were_offers_none(room: Room) -> None:
     _remind(room, group="decision", entry_id="gate:gate_1", capabilities=["gates:approve"])
     room.step()

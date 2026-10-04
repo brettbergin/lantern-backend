@@ -64,6 +64,32 @@ nothing is written. A grant's `causes` is now checked against that set when
 it is written (`needs_person` and any other name are refused with the field
 named; a stored grant still loads). New feature `delegation.triage`.
 
+**What an agent escalated, and what a plan waits for, is on the attention
+list and decided from it.** An escalation in the decisions ledger, a plan's
+unanswered questions and a level the planner proposed waited where no list
+showed them, so a person had to look in three places — or did not know. With
+feature `attention.decisions`, `GET /v1/attention` lists each unresolved
+escalation as an `escalation` entry (`escalation:<decision id>`, a plain
+title such as "planner asks to publish the level under …", the judge's
+reason, `agent`, `decision_id`, `decision_action`), offering `decline` and,
+where a person can take the step here, `approve`, each under the capability
+the step itself needs (`plans:create` for a breakdown or an approval,
+`plans:publish` for a publish, a run or a task retry, `runs:control` for an
+item retry, `budgets:grant` for rounds, `policy:manage` for a proposal of new
+work, which has no human path and offers `decline` only).
+`POST /v1/attention/{id}/act` with `approve` takes the step as the person
+through the step's own command and operation and resolves the decision
+`acted`; `decline` records a `decision.decline` operation resolving it
+`declined`; the answer carries `decision`. An escalation whose step already
+happened or whose target is gone leaves the list on read and is resolved
+`superseded` on the attention tracker's next pass. A `manual` plan's
+proposed level is a `plan_proposal` entry (`approve` for a holder of
+`plans:create`), and its breakdown's questions a `plan_questions` entry only
+where no parked `plan` item already stands for them — that item's entry
+keeps its id. A plan that advances itself shows neither. Reminders carry
+`action_capabilities`, so an escalation's reminder (`time_sensitive`)
+reaches whoever could take its step — the owners alone for a proposal.
+
 **A push says which decision it is about, and what you may do about it.** A
 device could only show a push's text: to approve a gate or retry a failed
 run a person had to open the app and find the thing again. The stored

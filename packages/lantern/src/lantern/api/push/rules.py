@@ -42,6 +42,10 @@ kinds, carries them unchanged.
   for, owners and admins for work nobody did, every member for a block on
   the daemon itself. Never the whole workspace. Each reminder is its own
   notice (the dedupe key counts them), and one is never pushed twice.
+  An escalation is a ``decision`` (so ``time_sensitive``); its actions
+  need the escalated step's capability, which the reminder names per
+  action (``action_capabilities``), so it reaches whoever could take that
+  step — the owners alone for a proposal of new work (``policy:manage``).
 
 - **the daily digest** (``briefing.digest``, which the attention tracker
   records once a day at ``[attention] digest_at``): pushed as ``work`` to
@@ -243,9 +247,14 @@ def _can_decide(member: Member) -> bool:
     return "gates:approve" in ROLE_CAPABILITIES[member.role]
 
 
-def may_take(role: Role, actions: Iterable[str]) -> tuple[str, ...]:
+def may_take(
+    role: Role, actions: Iterable[str], needs: Mapping[str, Any] | None = None
+) -> tuple[str, ...]:
     """The ones of ``actions`` whose capability ``role`` holds, in their
-    order: never an action the server would refuse whoever holds it."""
+    order: never an action the server would refuse whoever holds it.
+    ``needs`` names an action's capability where the entry decides it (an
+    escalation's ``approve`` needs the escalated act's); any other is the
+    route's."""
     # The attention list reads the routes' capabilities, which read the
     # API context that builds this module's dispatcher: imported here.
     from lantern.api.attention import capability_for
@@ -253,8 +262,9 @@ def may_take(role: Role, actions: Iterable[str]) -> tuple[str, ...]:
     held = ROLE_CAPABILITIES[role]
     out: list[str] = []
     for action in actions:
+        named = (needs or {}).get(action)
         try:
-            capability = capability_for(action)
+            capability = named if isinstance(named, str) else capability_for(action)
         except KeyError:
             continue  # an action this build does not know is never offered
         if capability in held and action not in out:
@@ -780,6 +790,9 @@ class NoticeRules:
             body = f"It has been held {for_}; nothing moves until someone clears it."
         body += " First reminder." if count == 1 else f" Reminder {count}."
         offered = [a for a in data.get("actions") or () if isinstance(a, str)]
+        needs = data.get("action_capabilities")
+        needs = needs if isinstance(needs, Mapping) else None
+        # A decision — an escalation among them — is time-sensitive.
         level: Level = "time_sensitive" if group == "decision" else "active"
         return [
             Notice(
@@ -791,7 +804,7 @@ class NoticeRules:
                 excerpt(body),
                 f"attention:{entry_id}:{count}",
                 entry_id,
-                may_take(member.role, offered),
+                may_take(member.role, offered, needs),
                 level,
             )
             for member in able

@@ -89,6 +89,7 @@ FEATURES: tuple[str, ...] = (
     # The operator agent retries failures and grants rounds under grants.
     "delegation.triage",
     "attention.act",
+    "attention.decisions",
 )
 
 

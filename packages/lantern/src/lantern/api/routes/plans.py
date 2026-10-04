@@ -875,13 +875,30 @@ async def approve_children(
     plan as it is now (or the refusal the first call recorded) and approves
     nothing again, and a different body under the same key is ``409
     idempotency_conflict``; without one, each call is its own operation."""
-    principal = auth.principal
     pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/approve", required=False
+        request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/approve", required=False
     )
+    plan, _op_id = await approve_level(ctx, auth, plan_id, node_id, body, pair)
+    return plan_out(plan)
+
+
+async def approve_level(
+    ctx: ApiContext,
+    auth: Authenticated,
+    plan_id: str,
+    node_id: str,
+    body: PlanApprove,
+    pair: tuple[str, str] | None,
+) -> tuple[Plan, str]:
+    """Approve a node's draft and proposed children as ``auth``, recorded
+    as a ``plan.approve`` operation under the idempotency ``pair``: the
+    plan and the operation's id (the earlier one's, on a replay). The
+    command behind the approve route, and behind approving a proposed
+    level or an escalated approval on ``/v1/attention``."""
+    principal = auth.principal
     actor = actor_of(auth)
 
-    def run() -> Plan:
+    def run() -> tuple[Plan, str]:
         return recorded(
             ctx,
             OperationSpec(
@@ -898,7 +915,7 @@ async def approve_children(
                 idempotency=pair,
                 expected_revision=body.expected_revision,
             ),
-            replay=lambda op: _replay_approve(ctx, plan_id, op),
+            replay=lambda op: (_replay_approve(ctx, plan_id, op), op.id),
             call=lambda: ctx.plans.approve(
                 plan_id,
                 node_id,
@@ -908,12 +925,12 @@ async def approve_children(
                 actor=actor,
             ),
             result=lambda plan: {"revision": plan.revision},
-            out=lambda plan, _op_id: plan,
+            out=lambda plan, op_id: (plan, op_id),
         )
 
-    plan = await ctx.call(run)
+    approved = await ctx.call(run)
     ctx.hub.notify()
-    return plan_out(plan)
+    return approved
 
 
 def _published(
@@ -960,10 +977,24 @@ async def publish_children(
     ``Idempotency-Key`` header is required: a replay answers the same
     results, a different body under the same key is ``409
     idempotency_conflict``."""
-    principal = auth.principal
     pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/publish", required=True
+        request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/publish", required=True
     )
+    return await publish_level_as(ctx, auth, plan_id, node_id, body, pair)
+
+
+async def publish_level_as(
+    ctx: ApiContext,
+    auth: Authenticated,
+    plan_id: str,
+    node_id: str,
+    body: PlanPublish,
+    pair: tuple[str, str] | None,
+) -> PlanPublished:
+    """Publish a node's level as ``auth``, recorded as a ``plan.publish``
+    operation under the idempotency ``pair``. The command behind the
+    publish route, and behind an escalated publish on ``/v1/attention``."""
+    principal = auth.principal
     actor = actor_of(auth)
 
     def run() -> PlanPublished:

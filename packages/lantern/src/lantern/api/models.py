@@ -884,9 +884,16 @@ class AttentionEntry(ApiModel):
     epic_run_id: str | None = None
     #: Set only when the caller can read the conversation.
     channel_id: str | None = None
-    #: The revision of the gate (a ``gate`` entry) or the item (an ``item``
-    #: entry); ``null`` where the thing waiting has none.
+    #: The revision of the gate (a ``gate`` entry), the item (an ``item``
+    #: entry) or the plan (a ``plan_questions`` or ``plan_proposal`` entry,
+    #: and an ``escalation`` about a plan); ``null`` where the thing
+    #: waiting has none.
     revision: int | None = None
+    #: An ``escalation``: the agent (its slug) that asked, the ledger row
+    #: (``GET /v1/decisions``) and the delegable action it asked to take.
+    agent: str | None = None
+    decision_id: str | None = None
+    decision_action: str | None = None
     actions: list[AttentionAction] = Field(default_factory=list)
     #: Set only on an entry listed with ``include_dismissed``.
     dismissal: Dismissal | None = None

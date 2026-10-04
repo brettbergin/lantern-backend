@@ -147,10 +147,30 @@ async def run_epic(
     ``Idempotency-Key`` header is required: a replay answers the run as it
     is now; a different body under the same key is ``409
     idempotency_conflict``."""
-    principal = auth.principal
     pair = idempotency(
-        request, principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run", required=True
+        request, auth.principal, f"/v1/plans/{plan_id}/nodes/{node_id}/run", required=True
     )
+    started = await start_epic_run(ctx, auth, plan_id, node_id, body, pair)
+    if started.replayed:
+        response.status_code = 200
+    else:
+        response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}/run"
+    return started
+
+
+async def start_epic_run(
+    ctx: ApiContext,
+    auth: Authenticated,
+    plan_id: str,
+    node_id: str,
+    body: EpicRunStart,
+    pair: tuple[str, str] | None,
+) -> EpicRunStarted:
+    """Start an epic run as ``auth``, recorded as a ``plan.run`` operation
+    under the idempotency ``pair`` (``replayed`` on a replay). The command
+    behind the run route, and behind an escalated start on
+    ``/v1/attention``."""
+    principal = auth.principal
     actor = actor_of(auth)
 
     def replay(op: Operation) -> EpicRunStarted:
@@ -159,7 +179,6 @@ async def run_epic(
         run = driver.runs.get(str((op.result or {}).get("epic_run_id") or ""))
         if run is None:
             run = driver.latest(plan_id, node_id)
-        response.status_code = 200
         return EpicRunStarted(
             **epic_run_out(run, ctx.plans.store.get(plan_id)), operation_id=op.id, replayed=True
         )
@@ -198,8 +217,6 @@ async def run_epic(
         )
 
     started = await ctx.call(start)
-    if not started.replayed:
-        response.headers["Location"] = f"/v1/plans/{plan_id}/nodes/{node_id}/run"
     ctx.hub.notify()
     return started
 

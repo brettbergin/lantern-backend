@@ -1844,6 +1844,15 @@ one is never pushed twice. The notice carries the entry's channel when it has
 one, so per-channel preferences apply, and a device's `gates` or `failures`
 switch governs it as it governs the kind.
 
+An [escalation](#decisions-on-the-list) is a `decision` entry, so its
+reminder is a `gate` at `time_sensitive`. Its `approve` and `decline` need
+the escalated step's capability, which the event names per action
+(`action_capabilities`, `{action: capability}`, beside `actions`): the
+reminder reaches whoever holds it — a member for a plan approval or a
+breakdown, owners and admins for a publish, a run or a retry, the owners
+alone for a proposal of new work (`policy:manage`) — and each is offered
+the actions their role may take.
+
 The daily digest, when `[attention] digest_at` is set, is one more:
 
 | Notice         | Event             | `kind` | Who                                                                          | Title                   |
@@ -2346,8 +2355,16 @@ One entry per thing a person has to act on:
 | `provider_hold` | A provider hold with no retry scheduled ("explicit operator recovery required")            | `provider_hold:<backend>:<generation>`         | `paused`   |
 | `repository`    | A repository whose polling is suspended                                                    | `repository:<repository id>`                   | `paused`   |
 
-- **`kind` is open.** A later release adds kinds (a plan's questions and
-  proposals, an agent's escalation). A client still shows an entry whose
+With `attention.decisions` three more — see
+[Decisions on the list](#decisions-on-the-list):
+
+| `kind`           | What waits                                                                                  | `id`                                    | `group`    |
+| ---------------- | ------------------------------------------------------------------------------------------- | --------------------------------------- | ---------- |
+| `escalation`     | A step an agent asked to take that no grant covered, unresolved in the decisions ledger     | `escalation:<decision id>`              | `decision` |
+| `plan_questions` | A `manual` plan's breakdown questions awaiting answers that no parked item stands for       | `plan_questions:<plan>:<node>:<run id>` | `decision` |
+| `plan_proposal`  | A `manual` plan's level the planner proposed (one or more `proposed` children) not approved | `plan_proposal:<plan id>:<node id>`     | `decision` |
+
+- **`kind` is open.** A later release adds kinds. A client still shows an entry whose
   `kind` it does not know — as a plain row with its `title` and `reason` and
   no controls — rather than hiding it or failing the page: something that
   waits on a person is worse hidden than plain. `counts` includes it.
@@ -2424,6 +2441,68 @@ one page badges every tab.
 per-channel filter. `channel_id` alone is withheld — it is set only when the
 caller can read that conversation, as on `GET /v1/items`.
 
+### Decisions on the list
+
+When `/v1/capabilities` lists `attention.decisions`, what agents and plans
+wait on a person for is on the same list.
+
+**Escalations.** Every `escalate` row of the decisions ledger
+([`GET /v1/decisions`](#delegation)) not yet resolved is an `escalation`
+entry: `state` `escalated`, `title` naming in plain words what the agent
+wanted to do (`planner asks to publish the level under “Reports”`), `reason`
+the judge's reason, `since` when it was decided, the row's references
+(`plan_id`, `node_id`, `item_id`, `run_id`, `epic_run_id`, `repository`) and
+three fields of its own: `agent` (the slug), `decision_id` and
+`decision_action` (the delegable action). `revision` is the plan's for a plan
+step and the item's for an item or run step.
+
+It offers `decline` and, where a person can take the step here, `approve`.
+Both need the capability a person needs to take that step themselves:
+
+| `decision_action`  | `approve` runs, as the caller                                       | `capability`    |
+| ------------------ | ------------------------------------------------------------------- | --------------- |
+| `plan.breakdown`   | `POST /v1/plans/{id}/nodes/{node}/breakdown` (`202`)                | `plans:create`  |
+| `plan.approve`     | `POST …/nodes/{node}/approve`, every draft and proposed child       | `plans:create`  |
+| `plan.publish`     | `POST …/nodes/{node}/publish`                                       | `plans:publish` |
+| `plan.run`         | `POST …/nodes/{node}/run` (`201`)                                   | `plans:publish` |
+| `plan.run.retry`   | `POST …/nodes/{task}/run/retry`                                     | `plans:publish` |
+| `item.retry`       | `POST /v1/items/{id}/retry`                                         | `runs:control`  |
+| `run.grant_rounds` | `POST /v1/runs/{id}/round-grants`, `params.rounds` (else the row's) | `budgets:grant` |
+| `plan.propose`     | — no human path: `decline` only                                     | `policy:manage` |
+
+An action this release does not know offers `decline` only, under
+`policy:manage`. `approve` records the step's own operation under the person
+(its refusals are that route's, and a refused step leaves the escalation
+waiting), then resolves the decision `acted` with the person as
+`resolved_by`. `decline` records a `decision.decline` operation that resolves
+it `declined` by the person and changes nothing else. Either way the act's
+answer carries `decision`, the ledger row as it then stands.
+
+An escalation whose target is gone, or whose step already happened —
+whoever took it, through any surface — leaves the list the next time the
+list is read, and the attention tracker resolves it `superseded` (no
+`resolved_by`) on its next pass; the read itself never writes. "Already
+happened": a breakdown's node has children, an approval's level has no draft
+or proposed child, a publish's node is published with nothing approved under
+it, an epic run started after the escalation, the task is no longer
+`failed`, the item is no longer `failed`, `blocked` or `cancelled` (or moved
+to another run).
+
+**A manual plan's questions and proposals.** Only on a plan whose `advance`
+is `manual`; a plan that advances itself shows neither — it reaches a person
+only through its escalations.
+
+- A breakdown that asked questions parks its `plan` item `awaiting_answers`,
+  and that `item` entry *is* the questions' entry: it keeps the id clients
+  already key on, and dismissing it puts the questions away. A
+  `plan_questions` entry stands only for questions no such item stands for.
+  It offers no action: questions are answered on the plan's page.
+- A `plan_proposal` is one node whose children include `proposed` ones,
+  `title` counting them, `reason` naming who proposed them. It offers
+  `approve` (`plans:create`) — to a caller holding `plans:create` only; others
+  see no action — which runs the plan's approve route on every draft and
+  proposed child and answers `{plan, operation_id, replayed}`.
+
 ### Acting on an entry
 
 When `/v1/capabilities` lists `attention.act`,
@@ -2460,6 +2539,7 @@ itself, so `GET /v1/operations` shows each act once.
 | `delete`                          | `POST /v1/items/{id}/delete`                              | `reason`, `discard_undelivered`                           |
 | `task_retry`, `task_skip`         | `POST /v1/plans/{id}/nodes/{task_id}/run/retry`, `…/skip` | none                                                      |
 | `repository_resume`               | `POST /v1/repositories/{id}/resume`                       | none                                                      |
+| `approve`, `decline`              | See [Decisions on the list](#decisions-on-the-list)       | `rounds` on an escalated round grant; otherwise none      |
 
 - **`expected_revision`** is the entry's `revision` as the person read it. It
   is never defaulted from the entry as it stands: the point of it is that the
@@ -2479,6 +2559,11 @@ itself, so `GET /v1/operations` shows each act once.
   - An `epic_task`, a `repository` and a `provider_hold` entry have
     `revision: null`: the epic run's retry and skip, and a repository's
     resume, take no revision. Sending one is `422 invalid_request`.
+  - An `escalation` or a `plan_proposal` carries the plan's revision (an
+    item's, for an item or run step). One sent is compared with the entry
+    before anything runs. A plan step is then sent the revision the entry
+    has as it is acted on (on a replay, the one the first act sent), so
+    the step's own route still refuses a plan that moved in between.
 
   Wherever it is checked, a moved entry is `409 stale_revision` with the
   current `revision`. Optional everywhere but on `gate_approve`.

@@ -36,8 +36,12 @@ async def list_attention(
     merge or publication gate (one entry with the item it parks), an item
     waiting for a review or for answers, an item that ended `failed` or
     `blocked`, a failed task of a live epic run (one entry with its item),
-    a provider hold nothing will retry by itself, and a repository whose
-    polling is suspended. Decisions first, then failures, then pauses; the
+    a provider hold nothing will retry by itself, a repository whose
+    polling is suspended, a `manual` plan's breakdown questions with no
+    parked item standing for them (`plan_questions`) and its proposed
+    levels (`plan_proposal`), and every escalation an agent left for a
+    person (`escalation`, naming the `agent`, the `decision_id` and the
+    `decision_action`). Decisions first, then failures, then pauses; the
     longest wait first within each. A dismissed alert is left out unless
     `include_dismissed`; deleted work never appears. Each entry names what
     it is about, carries the revision an act on it is checked against, and
@@ -98,6 +102,10 @@ async def list_attention(
     response_model=AttentionActResult,
     summary="Act on an entry",
     responses={
+        201: {
+            "model": AttentionActResult,
+            "description": "Created: an approved escalation started an epic run.",
+        },
         202: {
             "model": AttentionActResult,
             "description": "Accepted: the action's effect completes afterwards.",
@@ -128,7 +136,16 @@ async def act_on_attention(
     body: `rounds` for `grant_rounds`; `text` (and `source_refs`,
     `task_id`, `agent_slug`) for `steer`; `reason` for `abandon`,
     `dismiss` and the other item actions; `reason` and
-    `discard_undelivered` for `delete`; `retry` and `reason` for `cancel`.
+    `discard_undelivered` for `delete`; `retry` and `reason` for `cancel`;
+    `rounds` for `approve` on an escalated round grant.
+
+    On an `escalation`, `approve` takes the step the agent asked to take
+    as the caller, through that step's own command and operation, then
+    resolves the decision `acted`; `decline` records a `decision.decline`
+    operation resolving it `declined`. Either needs the capability the
+    entry lists (the escalated step's). On a `plan_proposal`, `approve`
+    approves the level (`plans:create`). `decision` carries the ledger
+    row after an act on an escalation.
 
     `expected_revision` is the entry's `revision` as the person read it,
     never defaulted from the entry as it stands. `gate_approve` requires
@@ -153,7 +170,9 @@ async def act_on_attention(
 
     `200` with `{entry_id, action, operation_id, replayed, still_waiting,
     result}`; `202` where the action's own route answers `202` (a gate
-    approval, a steer, a cancel honoured at the run's next boundary).
+    approval, a steer, a cancel honoured at the run's next boundary, an
+    approved breakdown) and `201` where it answers `201` (an approved
+    epic run start).
     `result` is the body the action's own route answers and
     `still_waiting` whether the entry is still on the list (dismissed
     alerts left out) as the answer is written."""
