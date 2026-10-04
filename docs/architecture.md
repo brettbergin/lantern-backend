@@ -1651,6 +1651,25 @@ provision (agent box only, data dir mounted, no toolchains)
   repositories an initiative's kept epics target are named to the planner
   rather than checked out.
 
+- **No memories when the plan advances itself.** Any workspace member
+  may write a memory on any agent, and a binding carries its agent's
+  memories into each session's system message — so a member who cannot
+  publish could tell the planner or the critic what to conclude, and a
+  decision an owner's grant takes unattended would rest on it. A run such a
+  decision depends on is therefore admitted with its agents bound without
+  memories. The rule is one function, `binds_without_memories` in
+  `daemon/model.py` — today, a `plan` run whose plan has `advance = "auto"`
+  — and `plan_item` asks it, writing `"memoryless": true` into the item's
+  assignment request. Dispatch (`_assign`) reads the switch, binds every
+  agent with an empty memory block, and stores the planned assignment with
+  the switch on it; the engine persists that assignment with the run, so a
+  daemon restart and a resume plan nothing again and render nothing again.
+  `PhaseRunner` also drops any memory block a memoryless assignment carries
+  and offers no memory tools (a `recall` would read the same text back). A
+  person's breakdown of a `manual` plan keeps its agents' memories, and the
+  switch is written only when on, so every other assignment encodes as
+  before.
+
 - **Validated like decompose.** `PlanProposal` is checked by
   `proposal_problems` inside `_agent_json`'s retry, to what the prompt
   asks: the level's room, every child whole (a goal, context and
@@ -2941,7 +2960,9 @@ approved. `review_is_current` is the one question callers ask. A stored
 review this build cannot read is no review. Nothing writes one yet.
 
 A plan carries `advance` (`manual` or `auto`) and `goal_id`. `advance` is
-whether the plan may move itself forward; nothing reads it yet. What is
+whether the plan may move itself forward; today only the breakdown's
+admission reads it, to bind an `auto` plan's agents without memories
+([Plan runs](#plan-runs)). What is
 settled is who may set it: plan edits take `plans:create`, which members
 hold, and the switch says a plan may be moved forward — published included
 — without a person taking the step, so the routes ask `plans:publish` of

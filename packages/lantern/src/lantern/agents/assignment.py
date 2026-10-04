@@ -140,7 +140,12 @@ class AgentBinding:
 class AgentAssignment:
     """The agents a run was given. ``roles`` maps a run role to a slug in
     ``agents``; ``tasks`` maps a task id to the slug that does its work;
-    ``lead`` is the slug that speaks for the run."""
+    ``lead`` is the slug that speaks for the run. ``memoryless`` says the
+    run binds its agents without their memories: every binding's memory
+    block is empty, and no session is offered the memory tools (a run a
+    delegated decision depends on; see the daemon's
+    ``binds_without_memories``). It is written to the JSON only when on,
+    so every other assignment encodes exactly as before."""
 
     lead: str
     roles: Mapping[RunRole, str]
@@ -149,6 +154,7 @@ class AgentAssignment:
     channel_id: str | None = None
     origin_agent: str | None = None
     chain_depth: int = 0
+    memoryless: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "roles", _frozen(self.roles))
@@ -206,11 +212,12 @@ class AgentAssignment:
             channel_id=self.channel_id,
             origin_agent=self.origin_agent,
             chain_depth=self.chain_depth,
+            memoryless=self.memoryless,
         )
 
     def to_json(self) -> str:
         """A stable encoding: fixed top-level order, maps sorted by key."""
-        payload = {
+        payload: dict[str, Any] = {
             "lead": self.lead,
             "roles": {role: self.roles[role] for role in sorted(self.roles)},
             "agents": {slug: self.agents[slug].to_dict() for slug in sorted(self.agents)},
@@ -219,6 +226,8 @@ class AgentAssignment:
             "origin_agent": self.origin_agent,
             "chain_depth": self.chain_depth,
         }
+        if self.memoryless:
+            payload["memoryless"] = True
         return json.dumps(payload, ensure_ascii=False)
 
     @classmethod
@@ -241,6 +250,7 @@ class AgentAssignment:
             channel_id=data.get("channel_id"),
             origin_agent=data.get("origin_agent"),
             chain_depth=int(data.get("chain_depth") or 0),
+            memoryless=data.get("memoryless") is True,
         )
 
 
@@ -308,6 +318,7 @@ def plan_assignment(
     requested: Mapping[RunRole, str],
     memory: MemoryBlocks | None = None,
     channel_id: str | None,
+    memoryless: bool = False,
 ) -> AgentAssignment:
     """The assignment a run of ``kind`` starts with.
 
@@ -316,7 +327,12 @@ def plan_assignment(
     is ``lead`` on the same terms, Lantern otherwise. A ``tool`` run has no
     agent phases and so no roles. ``memory`` fills each agent's memory
     block for ``channel_id``; without it the blocks are empty.
+    ``memoryless`` binds every agent without its memories, ``memory`` or
+    not, and says so on the assignment, so the run's phases offer no
+    memory tools either.
     """
+    if memoryless:
+        memory = None
     roles: dict[RunRole, str] = {}
     agents: dict[str, AgentBinding] = {}
     wanted: tuple[RunRole, ...] = () if kind == "tool" else RUN_ROLES
@@ -332,4 +348,10 @@ def plan_assignment(
         agents[leader.slug] = binding_from_definition(
             leader, "lead", memory=memory, channel_id=channel_id
         )
-    return AgentAssignment(lead=leader.slug, roles=roles, agents=agents, channel_id=channel_id)
+    return AgentAssignment(
+        lead=leader.slug,
+        roles=roles,
+        agents=agents,
+        channel_id=channel_id,
+        memoryless=memoryless,
+    )
