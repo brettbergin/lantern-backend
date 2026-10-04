@@ -2873,9 +2873,13 @@ routes' `approve_level`, `publish_level_as`, `start_epic_run`,
 grant — recorded as that route's operation under the person, then the row is
 resolved `acted`; `decline` is a `decision.decline` operation resolving it
 `declined`. `plan.propose` has no human path and offers `decline` only. An
-escalation whose step already happened or whose target is gone is dropped
-from the list on read and resolved `superseded` on the attention tracker's
-next pass (`escalations.settle`), so the list read stays a read. A `manual`
+escalation whose target is gone (plan, node or item) is dropped from the
+list on read and resolved `superseded` on the attention tracker's next pass
+(`escalations.settle`), so the list read stays a read. Whether its step
+moved on is never judged there: that is `PlanDriver._resolve`'s for the plan
+steps and triage's for the retries and round grants, each of which knows
+its own situation — two passes judging one row would close the other's
+escalations while their target still stands. A `manual`
 plan's waiting questions and proposed levels are entries too
 (`plan_questions`, `plan_proposal`, read by `PlanStore.waiting_on_people` in
 two statements); a plan that advances itself shows neither.

@@ -80,9 +80,11 @@ work, which has no human path and offers `decline` only).
 `POST /v1/attention/{id}/act` with `approve` takes the step as the person
 through the step's own command and operation and resolves the decision
 `acted`; `decline` records a `decision.decline` operation resolving it
-`declined`; the answer carries `decision`. An escalation whose step already
-happened or whose target is gone leaves the list on read and is resolved
-`superseded` on the attention tracker's next pass. A `manual` plan's
+`declined`; the answer carries `decision`. An escalation whose target is
+gone (its plan, node or item) leaves the list on read and is resolved
+`superseded` on the attention tracker's next pass; whether its step moved on
+is left to the plan driver and triage, which own their escalations, so the
+list never closes one of theirs while its target stands. A `manual` plan's
 proposed level is a `plan_proposal` entry (`approve` for a holder of
 `plans:create`), and its breakdown's questions a `plan_questions` entry only
 where no parked `plan` item already stands for them — that item's entry

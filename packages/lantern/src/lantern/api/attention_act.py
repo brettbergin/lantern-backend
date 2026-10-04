@@ -579,8 +579,8 @@ async def _decide(
                 raise Problem(
                     409,
                     "not_waiting",
-                    f"nothing is waiting as {entry_id}: it was settled, or what it asked "
-                    "for already happened",
+                    f"nothing is waiting as {entry_id}: it was settled, or what it is "
+                    "about is gone",
                     entry_id=entry_id,
                 )
             offered = [offer.action for offer in entry.actions]
