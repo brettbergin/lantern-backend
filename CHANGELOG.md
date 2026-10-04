@@ -36,6 +36,27 @@ new section is on `GET /v1/configuration`. Clients are now asked to show an
 attention entry of a `kind` they do not know as a plain row rather than hide
 it.
 
+**One answer to "what happened, what needs me, and is there work lined
+up?".** A person back from a day away had to read the analytics, the
+attention list, the decisions ledger, the usage pool and every plan, each
+behind its own route with its own shape, to find out — and a landing
+screen, a phone widget and a daily digest each needed the same small
+summary. `GET /v1/briefing` (`runs:read`; `since`, a day ago by default and
+at most 90 days back) now answers in one request: `outcomes` (the runs that
+*finished* in the window — landed, failed, cancelled, by kind, with the
+newest ten landed runs and their pull requests), `waiting` (the attention
+list's own counts and its oldest wait), `decided` (what agents decided under
+grants, by outcome, the escalations still unanswered, and — for a caller
+holding `audit:read` — the recent allowed acts), `supply` (plan nodes
+proposed and approved, the published tasks no epic run has started, the
+queue, the runs in flight, the work parked on a person), `runway` (those
+tasks over the trailing week's rate of landed code runs; `null` without a
+landing), `budget` (today against the daily cap and the token budget) and
+`grants` (enabled, and at today's limit). Computed on read in a bounded
+number of statements, so it can be polled; every part is an object a later
+release can add to, and a client ignores fields it does not know. Advertised
+as `briefing`.
+
 **An entry of the attention list can be acted on, and says when it comes and
 goes.** To act on what `GET /v1/attention` listed, a client had to know which
 of a dozen routes an action meant, with which ids, revision and idempotency

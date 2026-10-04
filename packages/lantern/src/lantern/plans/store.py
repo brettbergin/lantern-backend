@@ -15,11 +15,11 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from lantern.daemon.store import DaemonStore
 from lantern.db.api_models import ApiEventRow
-from lantern.db.daemon_models import PlanNodeRow, PlanRow
+from lantern.db.daemon_models import PlanEpicRunTaskRow, PlanNodeRow, PlanRow
 from lantern.engine.planning import Clarification
 from lantern.plans.model import (
     ADVANCES,
@@ -79,6 +79,40 @@ def retry_stale[T](attempt: Callable[[], T], *, tries: int = TRIES) -> T:
 
 class PlanGone(Exception):
     """The plan does not exist (or was deleted under the caller)."""
+
+
+#: An epic-run task state that says the task was started: its issue was
+#: admitted as an item (``queued``, ``running``), that item ended
+#: (``landed``, ``failed``), or a person settled it (``skipped``) — and
+#: ``closed``, found closed when the run reached it. ``waiting``, ``ready``,
+#: ``blocked`` and ``cancelled`` (withdrawn before it was admitted) are not
+#: starts: the task is still lined up.
+ADMITTED_TASK_STATES: tuple[str, ...] = (
+    "queued",
+    "running",
+    "landed",
+    "closed",
+    "failed",
+    "skipped",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Supply:
+    """How much work the plans hold, as :meth:`PlanStore.supply` counts it
+    over the plans that are not archived.
+
+    ``proposed`` and ``approved`` are nodes at any level in those states
+    (awaiting a person's approval; approved and not yet published).
+    ``ready_tasks`` are the published tasks lined up: on the forge and
+    still following their issue, the issue open as last reconciled, and
+    not started — no epic run has a task row for the node in one of
+    :data:`ADMITTED_TASK_STATES`. A task whose issue a person labelled by
+    hand, outside any epic run, is still counted until its issue closes."""
+
+    proposed: int = 0
+    approved: int = 0
+    ready_tasks: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,6 +395,42 @@ class PlanStore:
             for node in session.scalars(select(PlanNodeRow)):
                 nodes.setdefault(str(node.plan_id), []).append(node)
             return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
+
+    def supply(self) -> Supply:
+        """How much work the plans that are not archived hold, counted in
+        the store (never by loading every plan): the nodes ``proposed``
+        and ``approved`` at any level, and the published tasks that are
+        lined up — see :class:`Supply` for what that means."""
+        live = select(PlanRow.plan_id).where(PlanRow.state != "archived")
+        by_state = (
+            select(PlanNodeRow.state, func.count())
+            .where(PlanNodeRow.plan_id.in_(live), PlanNodeRow.state.in_(("proposed", "approved")))
+            .group_by(PlanNodeRow.state)
+        )
+        admitted = select(PlanEpicRunTaskRow.node_id).where(
+            PlanEpicRunTaskRow.node_id == PlanNodeRow.node_id,
+            PlanEpicRunTaskRow.state.in_(ADMITTED_TASK_STATES),
+        )
+        ready = (
+            select(func.count())
+            .select_from(PlanNodeRow)
+            .where(
+                PlanNodeRow.plan_id.in_(live),
+                PlanNodeRow.level == "task",
+                PlanNodeRow.state == "published",
+                PlanNodeRow.forge_state == "open",
+                PlanNodeRow.forge_detached.is_(None),
+                ~admitted.exists(),
+            )
+        )
+        with self.dstore.read() as session:
+            counts = {str(state): int(count) for state, count in session.execute(by_state)}
+            ready_tasks = int(session.scalar(ready) or 0)
+        return Supply(
+            proposed=counts.get("proposed", 0),
+            approved=counts.get("approved", 0),
+            ready_tasks=ready_tasks,
+        )
 
     def published_at(self, repo: str, number: int) -> list[tuple[str, PlanNode]]:
         """Every ``(plan_id, node)`` whose issue is ``number`` of ``repo``

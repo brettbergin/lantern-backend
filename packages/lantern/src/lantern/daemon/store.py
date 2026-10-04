@@ -3817,6 +3817,21 @@ class DaemonStore:
             ).first()
             return None if item_id is None else normalize_item_id(str(item_id))
 
+    def items_for_runs(self, run_ids: Sequence[str]) -> dict[str, str]:
+        """``run_id -> item_id`` for each of ``run_ids`` the ledger holds, in
+        one query: for a projection naming the work behind a list of runs.
+        A run the daemon never dispatched is absent."""
+        wanted = list(dict.fromkeys(run_ids))
+        if not wanted:
+            return {}
+        with self._read() as session:
+            rows = session.execute(
+                select(DaemonRunRow.run_id, DaemonRunRow.item_id).where(
+                    DaemonRunRow.run_id.in_(wanted)
+                )
+            )
+            return {str(run_id): normalize_item_id(str(item_id)) for run_id, item_id in rows}
+
     # -- merge gates ([landing] merge_gate) --------------------------------------
 
     def create_merge_gate(

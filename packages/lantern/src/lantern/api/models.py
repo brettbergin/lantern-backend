@@ -1162,6 +1162,155 @@ class AnalyticsWindow(ApiModel):
     delta: AnalyticsDelta
 
 
+# -- the briefing -------------------------------------------------------------------
+#
+# One small summary for a landing screen, a widget and a digest. Every
+# field is always present; what cannot be said is ``null``. Each part is
+# its own object so a later release adds a field inside it — clients
+# ignore fields they do not know.
+
+
+class BriefingLane(ApiModel):
+    """How the runs of one kind ended inside the window."""
+
+    kind: str
+    landed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+
+class BriefingLandedRun(ApiModel):
+    """One run that landed in the window: the work it did and where."""
+
+    run_id: str
+    kind: str
+    #: The work item's title; the run's own ask when no item carries it.
+    title: str
+    repository: str | None = None
+    pull_request_number: int | None = None
+    pull_request_url: str | None = None
+    landed_at: str
+
+
+class BriefingOutcomes(ApiModel):
+    """The runs that reached an end inside the window — by when they
+    finished, not when they began. ``blocked`` is not an end: it waits."""
+
+    #: Merged or completed.
+    landed: int = 0
+    failed: int = 0
+    #: A person's decision, not an outcome.
+    cancelled: int = 0
+    by_kind: list[BriefingLane]
+    #: Newest first, at most ten; deleted runs are left out.
+    recent_landed: list[BriefingLandedRun]
+
+
+class BriefingWaiting(ApiModel):
+    """The attention list's counts, and when its longest wait began."""
+
+    total: int = 0
+    decision: int = 0
+    failed: int = 0
+    paused: int = 0
+    oldest_since: str | None = None
+
+
+class BriefingDecision(ApiModel):
+    """One act an agent was allowed to take, with what it was about."""
+
+    id: str
+    grant_id: str | None = None
+    agent_slug: str
+    action: str
+    reason: str
+    at: str
+    plan_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    epic_run_id: str | None = None
+    repository: str | None = None
+    operation_id: str | None = None
+
+
+class BriefingDecided(ApiModel):
+    """What agents decided under grants inside the window, and the
+    escalations still waiting for a person, however old."""
+
+    allow: int = 0
+    deny: int = 0
+    escalate: int = 0
+    unresolved_escalations: int = 0
+    #: The allowed acts, newest first, at most ten — for a caller holding
+    #: ``audit:read``; ``null`` for anyone else, who reads the counts.
+    recent: list[BriefingDecision] | None = None
+
+
+class BriefingSupply(ApiModel):
+    """How much work is lined up, as it stands now."""
+
+    #: Plan nodes awaiting a person's approval.
+    proposed: int = 0
+    #: Plan nodes approved and not yet published.
+    approved: int = 0
+    #: Published tasks on the forge, open, that no epic run has started.
+    ready_tasks: int = 0
+    #: The daemon queue's depth.
+    queued: int = 0
+    #: Runs in flight.
+    running: int = 0
+    #: Work parked on a person: the attention list's decisions and pauses.
+    parked: int = 0
+
+
+class BriefingRunway(ApiModel):
+    """How long the tasks lined up would take at the trailing week's rate
+    of landed ``code`` runs. Both rates are ``null`` when nothing landed in
+    that week: no rate is invented."""
+
+    ready_tasks: int = 0
+    landed_per_day: float | None = None
+    days: float | None = None
+
+
+class BriefingBudget(ApiModel):
+    """Today against the daily cap and the token budget, as the usage pool
+    counts them."""
+
+    runs_today: int
+    max_runs_per_day: int
+    tokens_today: int
+    #: ``null`` when no budget is configured.
+    daily_token_budget: int | None = None
+    resets_at: str
+
+
+class BriefingGrants(ApiModel):
+    """The grants in force, and how many have spent today's limit."""
+
+    enabled: int = 0
+    at_limit: int = 0
+
+
+class Briefing(ApiModel):
+    """What happened in a window, what needs a person now, and what is
+    lined up. Durations are seconds and timestamps RFC 3339; nothing is a
+    currency."""
+
+    workspace_id: str = WORKSPACE_ID
+    since: str
+    until: str
+    observed_at: str
+    outcomes: BriefingOutcomes
+    waiting: BriefingWaiting
+    decided: BriefingDecided
+    supply: BriefingSupply
+    runway: BriefingRunway
+    budget: BriefingBudget
+    grants: BriefingGrants
+
+
 # -- diagnostics and administration (#1040) -----------------------------------------
 
 

@@ -2846,6 +2846,24 @@ knows no surface) with its derived values written out as fields: runs
 attributed whole to the window they began in, durations in seconds,
 `null` where there is nothing to measure, and no currency.
 
+**The briefing.** `GET /v1/briefing` (`api/briefing.py`) is the one summary
+a landing screen, a widget and a digest share: what finished in a window,
+what waits on a person, what agents decided, what is lined up, today's
+budget and the grants in force. It is a summary and never a second opinion:
+each part is the same computation its own route runs — `attention.waiting`
+for the counts, the delegation ledger, the usage pool's snapshot — or a
+count the store does (`StateStore.ended_between`, `PlanStore.supply`), so
+no client and no digest recomputes a figure and gets a different one. Two
+definitions are its own. A run is in the window when it *finished* there
+(it rests in an end state and its last change falls in the window), where
+the analytics key a run on when it began — a briefing is about what ended
+while the person was away. A published task is *ready* when its issue is
+open and followed and no epic run has started it; `PlanStore.supply`
+spells out which task states count as started. It is polled, so it reads
+in a bounded number of statements, never one per plan, run or decision
+(`tests/api/test_read_path_cost.py` holds the bound), and its parts are
+objects so a later release adds a field without a new contract.
+
 **Push notifications.** `api/push/` pings people's devices through a push
 relay that holds the provider's key and nothing else. `api_push_devices`
 keeps a device's token only as a digest and suffix, plus the relay's opaque
