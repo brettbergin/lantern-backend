@@ -19,6 +19,7 @@ from lantern.config import (
     RESERVED_ENV_KEYS,
     AttentionConfig,
     Config,
+    DelegationConfig,
     PlanningConfig,
     load_config,
     load_secrets_env,
@@ -928,6 +929,25 @@ def test_example_attention_section_documents_the_defaults() -> None:
         == {"remind_after_s", "remind_every_s", "digest_at"}
     )
     assert Config.model_validate({"attention": block}).attention == Config().attention
+
+
+def test_example_delegation_section_documents_the_defaults() -> None:
+    """The commented `[delegation]` block, uncommented whole, loads and
+    equals the model's defaults, and carries every key the model has."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[delegation]":
+            in_block = True
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+        elif in_block and not line.strip():
+            break
+    block = tomllib.loads(text)
+    assert set(block) == set(DelegationConfig.model_fields) == {"publish_delay_s"}
+    assert Config.model_validate({"delegation": block}).delegation == Config().delegation
+    assert Config().delegation.publish_delay_s == 900
 
 
 def test_example_planning_section_documents_the_defaults() -> None:

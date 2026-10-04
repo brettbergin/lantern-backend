@@ -764,8 +764,10 @@ Planning turns a larger effort into issues the loop can work (see the
 [spike](spikes/work-planning.md)). It is advertised as `planning` when a
 configured forge can hold a plan, together with `planning.clarify` (the
 planner's clarifying questions and the answers route), epic runs as
-`planning.run`, and the `advance` switch with each node's actors and review
-as `planning.advance`. A **plan** is a tree of **nodes**: an
+`planning.run`, the `advance` switch with each node's actors and review
+as `planning.advance`, and the daemon moving an `auto` plan forward under
+an owner's grants as `planning.driver` (see "Plans that advance
+themselves" below). A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
@@ -867,9 +869,47 @@ same request without `advance`, or naming the value the plan has, works as
 before. A flip is `plan.node.changed` with `node_id: null`,
 `change: advance`, `advance` and `before`, under whoever flipped it.
 `goal_id`, `review` and the three actor fields are refused as unknown
-fields (`422`) in any request body. **Nothing acts on `advance` yet**: an
-`auto` plan is drafted, approved, published and run exactly as a `manual`
-one, by people.
+fields (`422`) in any request body. Where `/v1/capabilities` lists
+`planning.driver`, an `auto` plan is moved forward by the daemon under the
+owner's grants (below); a `manual` plan is never touched by it, and neither
+is an `auto` one on a daemon that delegates nothing.
+
+**Plans that advance themselves (`planning.driver`).** On every tick the
+daemon is not held, its plan driver takes the next step of each `auto` plan
+that is not archived, as an agent and only when a grant
+([Delegation](#delegation)) allows it: it queues a node's **breakdown**
+(the `planner`, `plan.breakdown`) when the node has no children yet; it
+**approves** the node's `draft` and `proposed` children (the `critic`,
+`plan.approve`); once `[delegation] publish_delay_s` (900 s by default) has
+passed since the level was approved, it **publishes** it (the `critic`,
+`plan.publish`); and it **starts the epic run** of a published epic whose
+tasks are all on the forge and that never ran (the `critic`, `plan.run`).
+A node below the root is broken down once it is on the forge. One act per
+plan per tick, one forge write per tick in all. What a client sees is the
+same record a person's step leaves, under the agent:
+
+- each step is an operation like a person's (`item.admit` for a breakdown,
+  `plan.approve`, `plan.publish`, `plan.run`) whose `actor` is
+  `{"kind": "agent", "id": "agent:critic", "display": "the critic agent", "via": "agent"}` (or the planner);
+- the nodes' `approved_by` and `published_by`, and the epic run's
+  `started_by`, read `agent:critic` (`started_by_display`: "the critic
+  agent"); a breakdown's children read `proposed_by: "agent:planner"` as
+  they always did;
+- every step considered — allowed, denied or escalated — is a row of
+  `GET /v1/decisions` naming the plan, the node, the item or epic run, the
+  operation when it was taken, and the facts it was judged on.
+
+Anything the grants do not cover waits for a person and is one `escalate`
+row, written once while the situation stands: no grant, a condition not
+met, a `require_review` grant with no current review (an edit of a child
+makes it stale), the critic's verdict `escalate`, a breakdown that already
+ran for the node and left nothing (the daemon never queues another), a
+repository that cannot hold the plan, or a step the forge refused (tried
+again at most once per `[daemon] poll_interval_s`). It is resolved `acted`
+when the step happens — taken by the daemon or by a person through any
+route — or `superseded` when the level changes under it. A person can step
+in at any point: flip `advance` to `manual` (the next step is not taken),
+or take the step themselves through the usual routes.
 
 Every mutation names the plan's `revision` it read as `expected_revision`;
 any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
@@ -2592,9 +2632,9 @@ When `/v1/capabilities` lists `delegation`, an owner can state once that an
 agent may take an action under conditions — a **grant** — and read the ledger
 of what was decided under the grants. Grants ship empty: a fresh installation,
 and one upgraded to this release, delegates nothing until an owner writes one.
-Nothing in the daemon acts on a grant yet: this release stores them, judges
-nothing, and the ledger stays empty until the release that drives plans from
-them.
+Where `planning.driver` is listed too, the daemon judges each step of a plan
+whose `advance` is `auto` against them (see "Plans that advance themselves"
+under [Plans](#plans)); nothing else in the daemon acts on a grant yet.
 
 A grant never widens what an agent's principal holds. An agent acting for
 itself still carries `items:create` and nothing else; a grant is a rule the
@@ -2638,11 +2678,19 @@ when the grant is written.
 | Key              | Value                                  | Holds when                                                      |
 | ---------------- | -------------------------------------- | --------------------------------------------------------------- |
 | `repositories`   | a list of `owner/name`                 | the act's repository is one of them (case is ignored)           |
-| `levels`         | a list of `initiative`, `epic`, `task` | the level of the plan node acted on is one of them              |
+| `levels`         | a list of `initiative`, `epic`, `task` | the plan level the act is about is one of them (see below)      |
 | `max_children`   | a whole number, 1 or more              | the level has at most that many children                        |
 | `require_review` | `true`                                 | the level's stored review verdict is `approve`                  |
 | `causes`         | a list of failure-cause names          | the failure's cause is one of them (`unknown` cannot be listed) |
 | `max_retries`    | a whole number, 1 or more              | fewer retries than that were already made                       |
+
+For the plan steps, the level an act is about is the level it proposes,
+approves, publishes or runs: an epic's breakdown, the approval and the
+publishing of its tasks and its epic run are all `task`; an initiative's
+are `epic`. `child_count` is how many children the level has (an epic
+run's: its tasks on the forge), and `proposer` the agent or person every
+child being approved was proposed by — left out when they differ or one is
+not recorded, which escalates.
 
 **Three outcomes.** Every act the daemon considers taking for an agent is
 judged against the grants from facts the host established (never from what the
@@ -2753,7 +2801,7 @@ and `since` (RFC 3339 or epoch seconds).
   "epic_run_id": null,
   "repository": "acme/shop",
   "operation_id": "op_…",
-  "attrs": {"repository": "acme/shop", "level": "epic", "child_count": 4, "proposer": "planner", "review_verdict": "approve"},
+  "attrs": {"repository": "acme/shop", "level": "epic", "child_count": 4, "proposer": "agent:planner", "review_verdict": "approve", "level_digest": "r1-…"},
   "at": "…",
   "resolved_at": null,
   "resolved_by": null,
@@ -2762,7 +2810,9 @@ and `since` (RFC 3339 or epoch seconds).
 ```
 
 `grant_id` is set only on an `allow`. `attrs` are the facts the act was judged
-on, kept for audit. An `escalate` row carries `resolved_at`, `resolved_by` and
+on, kept for audit; the plan driver adds `level_digest` (the level as it
+read when judged — a new digest is a new situation) and, when the children
+disagree on who proposed them, `proposers`. An `escalate` row carries `resolved_at`, `resolved_by` and
 `resolution` once it ends: `acted` (the step happened, whoever took it),
 `declined` (a person said no) or `superseded` (what it was about changed).
 

@@ -19472,7 +19472,7 @@
         ]
       },
       "post": {
-        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.\n\n``advance`` (feature ``planning.advance``) is ``manual`` unless the\nbody says otherwise, and saying otherwise needs ``plans:publish``\n(``403 forbidden`` naming it, and nothing is drafted). Nothing acts on\nit yet.",
+        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.\n\n``advance`` (feature ``planning.advance``) is ``manual`` unless the\nbody says otherwise, and saying otherwise needs ``plans:publish``\n(``403 forbidden`` naming it, and nothing is drafted). An ``auto``\nplan is moved forward by the daemon under the owner's grants (feature\n``planning.driver``).",
         "operationId": "create_plan_v1_plans_post",
         "requestBody": {
           "content": {
@@ -19614,7 +19614,7 @@
         ]
       },
       "patch": {
-        "description": "Edit the plan's own sections (its root node's), and its ``advance``\nswitch (feature ``planning.advance``).\n\nChanging ``advance`` needs ``plans:publish``: a caller without it who\nnames a value the plan does not already have is ``403 forbidden``\nnaming the capability, and nothing in the request is written. Naming\nthe value it has changes nothing and is not refused, so the same edit\nwithout ``advance`` \u2014 or echoing it \u2014 still works for them. The switch\nmay be flipped on its own, on a published plan too; it is recorded as\n``plan.node.changed`` with ``change: advance``, ``advance`` and\n``before``, under whoever flipped it. Nothing acts on it yet.",
+        "description": "Edit the plan's own sections (its root node's), and its ``advance``\nswitch (feature ``planning.advance``).\n\nChanging ``advance`` needs ``plans:publish``: a caller without it who\nnames a value the plan does not already have is ``403 forbidden``\nnaming the capability, and nothing in the request is written. Naming\nthe value it has changes nothing and is not refused, so the same edit\nwithout ``advance`` \u2014 or echoing it \u2014 still works for them. The switch\nmay be flipped on its own, on a published plan too; it is recorded as\n``plan.node.changed`` with ``change: advance``, ``advance`` and\n``before``, under whoever flipped it. From the next tick the daemon\nmoves an ``auto`` plan forward under the owner's grants, and stops\nbefore its next step once it reads ``manual`` (feature\n``planning.driver``).",
         "operationId": "update_plan_v1_plans__plan_id__patch",
         "parameters": [
           {

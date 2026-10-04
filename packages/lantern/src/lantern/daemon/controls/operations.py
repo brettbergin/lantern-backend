@@ -672,6 +672,13 @@ def _judge(
         ):
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the run was not admitted"
+    if op.action == "item.admit" and (op.request or {}).get("form") == "plan":
+        # A breakdown is queued under the id it was recorded against (a
+        # person's through the routes, or the planner's through the plan
+        # driver): the row being there is the effect.
+        if loop.dstore.get(op.target_key) is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the breakdown was not queued"
     if op.action in ("item.abandon", "item.retry", "item.requeue"):
         item = loop.dstore.get(op.target_key)
         if item is None:

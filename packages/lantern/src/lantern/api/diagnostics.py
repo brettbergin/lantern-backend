@@ -80,6 +80,7 @@ CONFIGURATION_SECTIONS: tuple[str, ...] = (
     "budgets",
     "concierge",
     "daemon",
+    "delegation",
     "entrygraph",
     "github",
     "landing",

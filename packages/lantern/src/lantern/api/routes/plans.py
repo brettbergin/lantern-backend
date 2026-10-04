@@ -360,8 +360,9 @@ async def create_plan(
 
     ``advance`` (feature ``planning.advance``) is ``manual`` unless the
     body says otherwise, and saying otherwise needs ``plans:publish``
-    (``403 forbidden`` naming it, and nothing is drafted). Nothing acts on
-    it yet."""
+    (``403 forbidden`` naming it, and nothing is drafted). An ``auto``
+    plan is moved forward by the daemon under the owner's grants (feature
+    ``planning.driver``)."""
     advance = body.advance or "manual"
     if advance != "manual" and not auth.principal.can("plans:publish"):
         raise problem_of(_advance_refused(auth))
@@ -489,7 +490,10 @@ async def update_plan(
     without ``advance`` — or echoing it — still works for them. The switch
     may be flipped on its own, on a published plan too; it is recorded as
     ``plan.node.changed`` with ``change: advance``, ``advance`` and
-    ``before``, under whoever flipped it. Nothing acts on it yet."""
+    ``before``, under whoever flipped it. From the next tick the daemon
+    moves an ``auto`` plan forward under the owner's grants, and stops
+    before its next step once it reads ``manual`` (feature
+    ``planning.driver``)."""
     sections = _sections(body)
     actor = actor_of(auth)
     may_switch = auth.principal.can("plans:publish")

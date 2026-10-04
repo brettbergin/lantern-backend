@@ -2686,9 +2686,108 @@ owner's alone, checked as a capability, never inferred from a role — and goes
 through `ControlService` as a recorded operation (`grant.create`,
 `grant.update`, `grant.delete`) that recovery settles from the stored grant.
 The only surface that writes one is the API's `/v1/grants`; chat, `ctl` and
-the WebSocket's commands deliberately do not. Grants ship empty, and nothing
-in the loop calls `decide` yet: the judge, the store and the routes are in
-place for the driver that will.
+the WebSocket's commands deliberately do not. Grants ship empty; the one
+caller of `decide` in the loop is the plan driver, below.
+
+### The plan driver
+
+A plan whose `advance` is `auto` is moved forward by `PlanDriver`
+(`daemon/plandriver.py`), which the loop holds as `loop.plan_driver` and
+ticks right after the epic runs — and only while the daemon holds no pause:
+a hold stops what is new, and an agent's step is new. Modelled on
+`EpicRunDriver`: a non-blocking lock per pass, each plan in its own
+`try`, the daemon's forge reached through `github.ops()` with
+`note_failure`.
+
+**What it does, in order.** For each plan that may move itself (not
+archived), the plan read again before every step, it walks the initiative
+and epic nodes root first, each parent before its children, and finds the
+one step each is at:
+
+1. **break down** a node with no children (or a root still to be generated
+   from its brief) — `planner`, `plan.breakdown`; a node below the root
+   waits until it is on the forge. Admitted through `plan_item` + `upsert`
+   (so its agents bind without memories) and recorded as an `item.admit`
+   operation;
+2. **approve** a node's `draft` and `proposed` children — `critic`,
+   `plan.approve`, through `PlanService.approve`;
+3. **publish** an approved level once `[delegation] publish_delay_s` has
+   passed — `critic`, `plan.publish`, through `PlanService.publish`;
+4. **start the epic run** of a published epic whose tasks are all on the
+   forge and that was never run — `critic`, `plan.run`, through
+   `EpicRunDriver.start`.
+
+The facts each is judged on: `repository` and `level` — the level the step
+proposes, approves, publishes or runs (an epic's breakdown is `task`) —
+always; `child_count` (the level's children; the epic's tasks for a run)
+from approval on; `proposer`, the approved children's `proposed_by` when
+they all name the same one (left out otherwise, which the judge escalates);
+`review_verdict`, only while the node's review is current for the level as
+it reads now (`review_is_current`), so a `require_review` grant escalates on
+a stale or missing review. The ledger row also keeps `level_digest` (the
+level's `review_digest`) and, when they disagree, `proposers`.
+
+**At most one act per plan per tick, and one forge write per tick across
+every plan** (a publish and an epic start are the forge writes); the plan
+the last forge write went to goes last on the next pass, so one plan's
+steps never starve another's. No forge step is tried while the daemon's
+forge is absent or not provisioned (the `_maybe_check_labels` rule: a
+reading is never what boots the sandbox).
+
+**Agents act in-process, under grants, never with widened capabilities.**
+An allowed step runs as `Principal.for_agent(slug)` — `items:create` and
+nothing else; `Principal.system` is never used — calling the plan service
+and the epic-run driver directly, through `record_plan_operation`, so the
+operation's actor is the agent and the node's `approved_by` /
+`published_by` and the run's `started_by` read `agent:critic`. No route is
+involved and no route's dependency changes. `item.admit` gained a
+`_judge` branch for a breakdown (the queued row is the effect), so a driver
+admission cut short by a restart is settled, not left `reconciling`;
+`plan.approve`, `plan.publish` and `plan.run` were already judged from the
+plan and the run, whoever the actor.
+
+**Fail closed.** Each of these is one `escalate` row and the plan stays
+where it is: no enabled grant covers the step, or one falls short (over
+`max_children`, the day's `daily_limit` spent, a `require_review` grant
+with no current review); the critic's current review says `escalate`; a
+breakdown already ran for the node and left no level — the driver never
+queues another; the node's repository is unknown, disabled or cannot hold
+a plan; the act was refused or failed (a stale revision, a forge error, a
+level the forge took only part of). A `deny` (the critic proposed the level
+itself) is recorded the same way. A failed act is retried no sooner than
+`[daemon] poll_interval_s` after the last attempt — the driver remembers
+its own last try, and the open escalation's time is the floor after a
+restart. A plan flipped back to `manual`, or archived, is not touched from
+the next read on.
+
+**Written once.** Every judgement goes to the ledger with the facts it was
+judged on and the plan, node, item or epic run it was about (and the
+operation, when allowed). An `escalate` or `deny` is not written again
+while the newest decision on that node and action says the same: same
+outcome, same reason (which names the grants, so a grant change that
+matters is a new situation), same facts (the level's digest among them).
+The ledger is that memory, so it survives a restart and needs no
+`daemon_state` key. Before a plan's steps the driver closes each open
+escalation whose node has moved to another step: `acted` when what it
+asked for happened — by the driver, or by a person on any surface, who is
+named from the node or the run — and `superseded` when the level changed
+under it; one still at the same step is superseded only when a new
+judgement differs.
+
+**The publish window.** An approved level waits `[delegation] publish_delay_s` (900 s by default) before it is published. The clock is
+the plan's: the newest `updated_at` of the level's approved children, which
+the approve stamps in the same write as its `plan.node.changed` event — so
+a restart neither shortens nor restarts the wait, and a person's approval
+counts the same as the critic's. In the window a person holds the level by
+flipping `advance` to `manual`, or edits a child, which makes it a draft
+again and the review stale. The publish itself names the revision it was
+judged on, so an edit between the judgement and the write is a stale
+revision, never a publish of what was not judged.
+
+With no enabled grant the driver returns before reading a plan: an
+installation that delegates nothing behaves exactly as before. Not in this
+driver yet: retrying failed epic tasks or items (`plan.run.retry`,
+`item.retry`), and proposing plans from goals (`plan.propose`).
 
 ### The remote API listener
 

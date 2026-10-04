@@ -387,3 +387,9 @@ class TestAdvertised:
     def test_planning_advance_is_a_feature(self, api: Api) -> None:
         features = api.client.get("/v1/capabilities", headers=api.bearer(READ)).json()["features"]
         assert "planning" in features and "planning.advance" in features
+
+    def test_planning_driver_says_the_switch_now_acts(self, api: Api) -> None:
+        """An `auto` plan is moved forward by the daemon under the owner's
+        grants: a client tells that daemon from one where it is inert."""
+        features = api.client.get("/v1/capabilities", headers=api.bearer(READ)).json()["features"]
+        assert "planning.driver" in features

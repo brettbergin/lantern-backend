@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+**A plan whose `advance` is `auto` now moves itself, under the owner's
+grants.** The switch, the grants and the critic's review were all in
+place, but nothing acted on them: an `auto` plan still waited for a person
+at every step. The daemon's new plan driver takes the next step of each
+`auto` plan on every tick it is not held, as an agent and only when a grant
+allows it: it queues a node's breakdown (the planner, `plan.breakdown`),
+approves the proposed level (the critic, `plan.approve`), publishes it once
+`[delegation] publish_delay_s` has passed since the approval (the critic,
+`plan.publish`), and starts the epic run once its tasks are on the forge
+(the critic, `plan.run`) — one act per plan per tick and one forge write
+per tick in all. Each is judged on the host's facts (`repository`, the
+`level` it works on, `child_count`, the children's `proposer`, and the
+review's verdict only while it is current), written to `GET /v1/decisions`,
+and taken in the daemon as `agent:<slug>` — whose capabilities are not
+widened — through the same recorded operations a person's step leaves, so
+`approved_by`, `published_by` and the epic run's `started_by` read
+`agent:critic`. It fails closed: no covering grant, a missing or stale
+review where one is required, a reviewer's `escalate`, a breakdown that ran
+and left nothing (never queued again), an unusable repository or a refused
+forge write each become one `escalate` row, written once while the
+situation stands and resolved `acted` or `superseded` when it moves; a
+failed write is retried at most once per `[daemon] poll_interval_s`. The
+critic never approves a level it proposed. With no grant, or on a `manual`
+plan, nothing happens and nothing is written. New knob
+`[delegation] publish_delay_s` (default 900): the window a person has to
+hold an approved level, measured from the approval as the plan records it,
+so a restart neither shortens nor restarts it; readable on
+`/v1/configuration`, never changed from chat. New feature string
+`planning.driver`. A breakdown admission cut short by a restart is now
+settled from the queue (`item.admit` for a plan), not left `reconciling`.
+
 **A push says which decision it is about, and what you may do about it.** A
 device could only show a push's text: to approve a gate or retry a failed
 run a person had to open the app and find the thing again. The stored
@@ -32,8 +63,8 @@ delivered, so `current` is true until a person changes it — with a new
 waits for a person. The verdict is kept on the run's task before delivery,
 so a resume neither asks again nor loses it. The turn is a `plan_review`
 phase row with its spend and emits `phase.end` only. A `manual` plan's run
-is byte-identical, and a re-plan is not reviewed. Nothing approves or
-publishes on a verdict yet.
+is byte-identical, and a re-plan is not reviewed. The plan driver (above)
+is what acts on the verdict.
 
 **A plan that advances itself is broken down by agents with no memories.**
 Any workspace member may write a memory on any agent, and a run's agents

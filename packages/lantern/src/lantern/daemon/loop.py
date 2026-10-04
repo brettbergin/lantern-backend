@@ -94,6 +94,7 @@ from lantern.daemon.model import (
     requested_roles,
     requests_memoryless,
 )
+from lantern.daemon.plandriver import PlanDriver
 from lantern.daemon.repositories import RepositoryRegistry
 from lantern.daemon.schedule import Cadence, ScheduleRow, format_due
 from lantern.daemon.sources import HIDDEN_MARKER_RE, IssueContext, WorkSource
@@ -571,9 +572,12 @@ class DaemonLoop:
         # admits as issue runs, in dependency order, on every tick.
         self.epic_runs = EpicRunDriver(self)
         # Delegation: the grants an owner wrote and the ledger of what was
-        # decided under them. Nothing in this loop judges an act against
-        # them yet; the API writes grants and reads both.
+        # decided under them. The API writes grants and reads both; the
+        # plan driver judges a plan's next step against them.
         self.delegation = DelegationStore(dstore)
+        # Plans whose `advance` is auto, moved forward under the grants on
+        # every tick the daemon is not held (see daemon/plandriver.py).
+        self.plan_driver = PlanDriver(self)
 
     # -- external control ---------------------------------------------------------
 
@@ -2186,6 +2190,11 @@ class DaemonLoop:
         # ones they made ready (#2347). Queueing is not starting: the gate
         # below, the holds and the usage pool decide when each one runs.
         self.epic_runs.tick(now)
+        # A plan that advances itself takes its next step under the owner's
+        # grants — never while the daemon is held: a hold stops what is new,
+        # and an agent's step is new. Its breakdowns queue like any work.
+        if not self.paused:
+            self.plan_driver.tick(now)
         idle = self._dispatch_gate(now, first=True)
         if idle is not None:
             return idle

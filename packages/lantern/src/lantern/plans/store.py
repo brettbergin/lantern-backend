@@ -396,6 +396,26 @@ class PlanStore:
                 nodes.setdefault(str(node.plan_id), []).append(node)
             return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
 
+    def advancing(self) -> list[Plan]:
+        """Every plan that may move itself forward — ``advance`` is
+        ``auto`` and it is not archived — oldest first: the plan driver's
+        round. A ``manual`` plan is never read here."""
+        with self.dstore.read() as session:
+            rows = list(
+                session.scalars(
+                    select(PlanRow)
+                    .where(PlanRow.advance == "auto", PlanRow.state != "archived")
+                    .order_by(PlanRow.created_at.asc(), PlanRow.plan_id)
+                )
+            )
+            if not rows:
+                return []
+            ids = [str(row.plan_id) for row in rows]
+            nodes: dict[str, list[PlanNodeRow]] = {}
+            for node in session.scalars(select(PlanNodeRow).where(PlanNodeRow.plan_id.in_(ids))):
+                nodes.setdefault(str(node.plan_id), []).append(node)
+            return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
+
     def supply(self) -> Supply:
         """How much work the plans that are not archived hold, counted in
         the store (never by loading every plan): the nodes ``proposed``
