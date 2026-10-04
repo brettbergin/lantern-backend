@@ -1082,6 +1082,18 @@ service_memory = "2g"
 # close_completed = true           # summarise and close a finished epic or initiative
 # reconcile_interval_s = 120       # re-read a published plan on open when older; 0 = sync only
 
+# [attention]
+# What waits on a person — a merge gate, a publish hold, a plan's questions,
+# a blocked run — never expires to yes or to no; it waits until someone
+# acts. After remind_after_s the chronology records an attention.reminder
+# for it and the people who can act on it (and can see where it is) get a
+# push, then one more every remind_every_s. A daemon that was down past
+# several intervals sends one reminder on return, never a burst. Both
+# intervals are 300 s to 30 days; needs [api] enabled (the tracker runs
+# there). Workspace-wide: an entry need not belong to a repository.
+# remind_after_s = 14400           # first reminder after 4 hours; 0 = no reminders
+# remind_every_s = 86400           # then one a day
+
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask
 # about runs, PRs and diffs, operate the daemon (every !sbx verb) or queue

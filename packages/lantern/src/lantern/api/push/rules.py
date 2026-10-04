@@ -31,6 +31,18 @@ They ride the existing kinds, so a device's ``gates``, ``work`` and
 ``failures`` switches govern them and the relay, which accepts only those
 kinds, carries them unchanged.
 
+- **still waiting** (``attention.reminder``, which the attention tracker
+  records for an entry open past ``[attention] remind_after_s`` and again
+  every ``remind_every_s``): pushed as ``gate`` for a ``decision`` entry
+  and as ``failure`` for a ``failed`` or ``paused`` one (the kind a paused
+  epic run already rides; no kind names a daemon-level block). To the
+  active members who can act on the entry — who hold the capability of at
+  least one of its actions, or the owners when it has none — among those
+  who can see where it is: the channel's readers for work a channel asked
+  for, owners and admins for work nobody did, every member for a block on
+  the daemon itself. Never the whole workspace. Each reminder is its own
+  notice (the dedupe key counts them), and one is never pushed twice.
+
 Historical events (a job imported from before the daemon knew it) are
 never news. :func:`allowed` then narrows by a device's own preferences.
 """
@@ -45,6 +57,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from lantern.api.channel_access import MANAGING_ROLES
 from lantern.api.collaboration import CollaborationStore, Member, _message
 from lantern.api.publicids import parse_run_id, run_public_id
 from lantern.daemon.controls.principal import ROLE_CAPABILITIES
@@ -66,6 +79,7 @@ GATE_OPENED = "gate.opened"
 PLAN_QUESTIONS = "plan.generation.questions"
 PLAN_PROPOSED = "plan.generation.proposed"
 PLAN_PAUSED = "plan.run.paused"
+ATTENTION_REMINDER = "attention.reminder"
 #: Every event type a notice can come from.
 TYPES: frozenset[str] = frozenset(
     {
@@ -78,6 +92,7 @@ TYPES: frozenset[str] = frozenset(
         PLAN_QUESTIONS,
         PLAN_PROPOSED,
         PLAN_PAUSED,
+        ATTENTION_REMINDER,
     }
 )
 
@@ -95,6 +110,12 @@ ATTENTION_KINDS: dict[str, str] = {
     "work": "work",
     "failure": "failure",
     "action_required": "gate",
+}
+#: How an attention entry's group is pushed when it is reminded about.
+REMINDER_KINDS: dict[str, str] = {
+    "decision": "gate",
+    "failed": "failure",
+    "paused": "failure",
 }
 #: A notification body is cut to this many characters, ellipsis included.
 BODY_LIMIT = 140
@@ -165,6 +186,16 @@ def _can_decide(member: Member) -> bool:
     return "gates:approve" in ROLE_CAPABILITIES[member.role]
 
 
+def waited(seconds: float) -> str:
+    """``seconds`` as a person would say it: the largest whole unit."""
+    seconds = max(0.0, seconds)
+    for unit, length in (("day", 86400.0), ("hour", 3600.0), ("minute", 60.0)):
+        count = int(seconds // length)
+        if count >= 1:
+            return f"{count} {unit}" + ("" if count == 1 else "s")
+    return "under a minute"
+
+
 class NoticeRules:
     """Turns chronology events into notices. ``agent_name`` names an agent
     by slug (``None``: the default assistant) the way the chat does."""
@@ -187,6 +218,8 @@ class NoticeRules:
             return self._breakdown(session, event)
         if event.type == PLAN_PAUSED:
             return self._paused(session, event)
+        if event.type == ATTENTION_REMINDER:
+            return self._reminder(session, event)
         return []
 
     # -- who ---------------------------------------------------------------------
@@ -550,6 +583,58 @@ class NoticeRules:
                 title,
                 excerpt(body),
             )
+        ]
+
+    # -- reminders ------------------------------------------------------------------
+
+    def _reminder(self, session: Any, event: Event) -> list[Notice]:
+        data = event.data
+        entry_id = str(data.get("entry_id") or "")
+        title = data.get("title")
+        kind = REMINDER_KINDS.get(str(data.get("group") or ""))
+        if not entry_id or kind is None or not isinstance(title, str) or not title.strip():
+            return []
+        channel = self._channel(session, event.channel_id)
+        if event.channel_id and channel is None:
+            return []
+        # Who can see where it is: the same scope the event itself has.
+        if channel is not None:
+            seers = self._viewers(session, channel)
+        elif event.run_id or event.item_id:
+            seers = [m for m in self._members(session) if m.role in MANAGING_ROLES]
+        else:
+            seers = self._members(session)
+        # Who can act on it: a holder of one of its actions' capabilities;
+        # an entry with no action is the owners' to settle.
+        needed = {c for c in data.get("capabilities") or () if isinstance(c, str)}
+        if needed:
+            able = [m for m in seers if needed & ROLE_CAPABILITIES[m.role]]
+        else:
+            able = [m for m in seers if m.role == "owner"]
+        count = data.get("reminders")
+        count = count if isinstance(count, int) and count > 0 else 1
+        waiting = data.get("waiting_s")
+        for_ = waited(float(waiting)) if isinstance(waiting, int | float) else "a while"
+        group = str(data.get("group"))
+        if group == "decision":
+            body = f"A decision has been waiting {for_}."
+        elif group == "failed":
+            state = str(data.get("state") or "").strip() or "needing someone"
+            body = f"It ended {state} {for_} ago and still needs someone."
+        else:
+            body = f"It has been held {for_}; nothing moves until someone clears it."
+        body += " First reminder." if count == 1 else f" Reminder {count}."
+        return [
+            Notice(
+                member.user.id,
+                kind,
+                str(channel.id) if channel is not None else None,
+                None,
+                excerpt(f"Still waiting: {' '.join(title.split())}"),
+                excerpt(body),
+                f"attention:{entry_id}:{count}",
+            )
+            for member in able
         ]
 
 

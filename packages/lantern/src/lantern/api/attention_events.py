@@ -1,5 +1,6 @@
-"""``attention.opened`` and ``attention.resolved``: the chronology says when
-something starts waiting on a person and when it stops.
+"""``attention.opened``, ``attention.resolved`` and ``attention.reminder``:
+the chronology says when something starts waiting on a person, when it
+stops, and — while it waits — that it is still waiting.
 
 ``GET /v1/attention`` is computed on read, so nothing told a client — or
 the push dispatcher, or a reminder — that an entry had appeared or gone:
@@ -15,13 +16,26 @@ announces what is still open a second time nor loses the resolution of
 what settled while nothing was watching. The first pass ever — an upgrade
 — finds no :data:`SEEDED_KEY` and records what is waiting without a word.
 
+**Reminders.** An entry never expires to yes or to no; it waits until
+someone acts, and people are reminded. Each kept value also carries when
+the entry was first announced, when it was last reminded about and how
+many times. On the same passes an entry open at least
+``[attention] remind_after_s`` and not reminded about within
+``remind_every_s`` gets one :data:`REMINDER` — the opening's data plus
+``waiting_s``, ``reminders`` and the ``capabilities`` its actions need —
+and the clock moves in the event's own transaction, so a restart repeats
+nothing and a daemon that was down for a week sends one reminder on
+return, not seven. A value the release before reminders wrote has no
+clock; it is stamped as first seen now, never overdue.
+
 **What it costs.** It is called on every pass of the projector, once a
 second, and looks at the list only when the daemon itself recorded
 something that could have changed it since the last pass
 (:data:`TRIGGERS` — never a run's own projected output, never a chat's
 traffic), or when :data:`SWEEP_S` has gone by since it last looked, for
 the changes that record nothing (polling that stopped, a provider hold).
-A pass with nothing new runs no statement.
+A pass with nothing new runs no statement; reminders are judged on the
+passes that read the list anyway, and a sweep with none due writes nothing.
 """
 
 from __future__ import annotations
@@ -42,10 +56,13 @@ log = get_logger(__name__)
 
 OPENED = "attention.opened"
 RESOLVED = "attention.resolved"
+REMINDER = "attention.reminder"
 
 _STATE_PREFIX = "attention."
 #: ``daemon_state`` keys of the entries last seen waiting: the prefix, then
-#: the entry's id. The value is what its events carry.
+#: the entry's id. The value is what its events carry (``run_id``,
+#: ``item_id``, ``data``) and the reminder clock (``opened_at``,
+#: ``reminded_at``, ``reminders``).
 OPEN_PREFIX = _STATE_PREFIX + "open:"
 #: Set once the first pass has recorded what was already waiting.
 SEEDED_KEY = _STATE_PREFIX + "seeded"
@@ -110,14 +127,17 @@ class AttentionTracker:
 
     def diff(self, now: float) -> int:
         """Compare the list with the set last seen and record the
-        difference; the first time, record the set and say nothing."""
+        difference, and a reminder for what has waited long enough; the
+        first time, record the set and say nothing."""
         views = Views(self.ctx)
         dstore = views.dstore
         found = sorted(waiting(views), key=lambda w: w.order)
         current: dict[str, dict[str, Any]] = {}
+        capabilities: dict[str, list[str]] = {}
         for w, entry in zip(found, entries(views, found, None), strict=True):
             run_id, item_id = subject(w)
-            current[entry.id] = {"run_id": run_id, "item_id": item_id, "data": event_data(entry)}
+            current[entry.id] = _opened(run_id, item_id, event_data(entry), now)
+            capabilities[entry.id] = sorted({action.capability for action in entry.actions})
         kept: dict[str, str] = dstore.values_with_prefix(_STATE_PREFIX)
         known = {
             key[len(OPEN_PREFIX) :]: value
@@ -140,6 +160,45 @@ class AttentionTracker:
             if entry_id not in current:
                 self._record(RESOLVED, now, _kept(entry_id, raw), {OPEN_PREFIX + entry_id: None})
                 recorded += 1
+        reminders = self.ctx.config.attention
+        for entry_id, raw in known.items():
+            if entry_id not in current:
+                continue
+            record = _kept(entry_id, raw)
+            if not isinstance(record.get("opened_at"), int | float):
+                # Kept by a release without the clock (or unreadable):
+                # first seen now, with what the list says of it now.
+                record = {**current[entry_id], "data": record.get("data") or {}}
+                if set(record["data"]) <= {"entry_id"}:
+                    record["data"] = current[entry_id]["data"]
+                dstore.set_value(OPEN_PREFIX + entry_id, json.dumps(record))
+                continue
+            if not reminders.enabled:
+                continue
+            opened_at = float(record["opened_at"])
+            reminded_at = record.get("reminded_at")
+            last = float(reminded_at) if isinstance(reminded_at, int | float) else None
+            if now - opened_at < reminders.remind_after_s:
+                continue
+            if last is not None and now - last < reminders.remind_every_s:
+                continue
+            count = int(record.get("reminders") or 0) + 1
+            reminded = {**record, "reminded_at": now, "reminders": count}
+            self._record(
+                REMINDER,
+                now,
+                {
+                    **current[entry_id],
+                    "data": {
+                        **current[entry_id]["data"],
+                        "waiting_s": int(now - opened_at),
+                        "reminders": count,
+                        "capabilities": capabilities[entry_id],
+                    },
+                },
+                {OPEN_PREFIX + entry_id: json.dumps(reminded)},
+            )
+            recorded += 1
         return recorded
 
     def _record(
@@ -157,6 +216,20 @@ class AttentionTracker:
             data=dict(record.get("data") or {}),
             state=state,
         )
+
+
+def _opened(
+    run_id: str | None, item_id: str | None, data: dict[str, Any], now: float
+) -> dict[str, Any]:
+    """The value kept for an entry that opens now."""
+    return {
+        "run_id": run_id,
+        "item_id": item_id,
+        "data": data,
+        "opened_at": now,
+        "reminded_at": None,
+        "reminders": 0,
+    }
 
 
 def _kept(entry_id: str, raw: str) -> dict[str, Any]:

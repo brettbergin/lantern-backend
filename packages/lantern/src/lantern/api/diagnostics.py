@@ -76,6 +76,7 @@ def redact(text: str) -> str:
 CONFIGURATION_SECTIONS: tuple[str, ...] = (
     "agent",
     "artifacts",
+    "attention",
     "budgets",
     "concierge",
     "daemon",

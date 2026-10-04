@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+**What waits on a person is reminded about.** A merge gate, a publish hold,
+a plan's clarifying questions and a blocked run announced themselves once and
+then waited in silence, for as long as it took; the only repeated signal in
+the system was the review wait's single warning. An entry never expires to
+yes or to no, so the attention tracker now reminds: once an entry has been on
+the list `[attention] remind_after_s` (4 hours by default) the chronology
+records `attention.reminder` — the opening's data plus `waiting_s`,
+`reminders` and the `capabilities` its actions need — and again every
+`remind_every_s` (a day). The clock rides the same `daemon_state` value as
+the announcement, moved in the event's own transaction, so a restart repeats
+nothing and resets nothing, and a daemon down past several intervals sends
+one reminder on return rather than a burst; what the previous release kept
+is read as first seen now, never as overdue. A dismissed entry reminds
+nobody; one taken back, or work that fails again, starts over.
+`remind_after_s = 0` turns reminders off; both knobs are bounded (300
+seconds to 30 days) and named in the refusal. With push on, a reminder
+reaches the people who can act on the entry — who hold the capability of one
+of its actions and can see where it is; the owners for an entry nobody below
+owner can act on — as a `gate` push for a decision and a `failure` push for
+a failed or held one, each reminder its own notice and none sent twice. The
+new section is on `GET /v1/configuration`. Clients are now asked to show an
+attention entry of a `kind` they do not know as a plain row rather than hide
+it.
+
 **An entry of the attention list can be acted on, and says when it comes and
 goes.** To act on what `GET /v1/attention` listed, a client had to know which
 of a dozen routes an action meant, with which ids, revision and idempotency

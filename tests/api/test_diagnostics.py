@@ -142,6 +142,11 @@ class TestConfiguration:
             assert entries["concierge.enabled"]["locked"] == "it is the concierge's own switch"
             assert entries["model"]["applies"] == "live"
             assert entries["workloads[0].name"]["value"] == "brief"
+            # The reminder cadence is an operator's question ("why did my
+            # phone ring?"): two numbers, no secret, no host path.
+            assert entries["attention.remind_after_s"]["value"] == 14400
+            assert entries["attention.remind_every_s"]["applies"] == "restart"
+            assert entries["attention.remind_after_s"]["locked"] is None
             assert body["observed_at"].endswith("Z") and body["workspace_id"] == "local"
             # A reader without diagnostics:read sees none of it.
             assert (

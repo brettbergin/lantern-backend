@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from lantern.chatservices import CHAT_SERVICES
 from lantern.config import (
     RESERVED_ENV_KEYS,
+    AttentionConfig,
     Config,
     PlanningConfig,
     load_config,
@@ -905,6 +906,24 @@ def test_example_push_section_documents_the_defaults() -> None:
         "max_devices_per_user",
     }
     assert Config.model_validate({"push": block}).push == Config().push
+
+
+def test_example_attention_section_documents_the_defaults() -> None:
+    """The commented `[attention]` block, uncommented whole, loads and
+    equals the model's defaults, and carries every key the model has."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[attention]":
+            in_block = True
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+        elif in_block and not line.strip():
+            break
+    block = tomllib.loads(text)
+    assert set(block) == set(AttentionConfig.model_fields) == {"remind_after_s", "remind_every_s"}
+    assert Config.model_validate({"attention": block}).attention == Config().attention
 
 
 def test_example_planning_section_documents_the_defaults() -> None:
