@@ -48,8 +48,11 @@ the review is missing or stale where a grant asks for one; the reviewer said
 ``escalate``; a breakdown already ran for the node and left no level (it is
 never queued again by the driver); the repository is unknown, disabled or
 cannot hold a plan; the act itself was refused or failed (a stale revision,
-a forge error). A failed act is tried again no sooner than ``[daemon]
-poll_interval_s`` after the last attempt. A ``deny`` (self-approval) is
+a forge error). A failed act is tried again ``[daemon] poll_interval_s``
+after its first failure, twice as long after each failure in a row and
+never more than an hour apart; the count lives in ``daemon_state``, so a
+restart neither forgets nor restarts it, and it is cleared when the act
+succeeds or the situation moves on. A ``deny`` (self-approval) is
 recorded the same way. The driver never approves a level its approving
 agent proposed: :func:`decide` denies it.
 
@@ -63,13 +66,16 @@ nothing. An escalation is resolved once: ``acted`` when the step happened
 (the driver's own act, or a person's on any surface), ``superseded`` when
 the situation it asked about changed.
 
-With no enabled grant the driver does nothing at all — nothing is read
-past the grants and nothing is written, exactly as before it existed — and
-a ``manual`` plan is never touched.
+With no enabled grant the driver takes no step. With no open escalation
+either it reads no plan and writes nothing, exactly as before it existed;
+with some open (an owner removed or disabled the grants) it still closes
+those whose step a person has since taken. A ``manual`` plan is never
+touched.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -96,6 +102,12 @@ PLANNER = "planner"
 CRITIC = "critic"
 #: The attribution a breakdown the driver admits is queued under.
 BREAKDOWN_BY = "the planner agent (plan driver)"
+
+#: The longest a failed act waits before it is tried again (unless the poll
+#: interval itself is longer).
+RETRY_CEILING_S = 3600.0
+#: ``daemon_state`` prefix of a target's run of failed attempts.
+FAILURE_PREFIX = "plan_driver.failing:"
 
 #: The steps that write to the forge: one per tick, across every plan.
 FORGE_ACTIONS: frozenset[str] = frozenset({"plan.publish", "plan.run"})
@@ -145,10 +157,6 @@ class PlanDriver:
         self.store = PlanStore(loop.dstore)
         # One pass at a time: a tick that overruns is not doubled by the next.
         self._lock = threading.Lock()
-        #: When each (plan, node, action) was last tried and failed, so a
-        #: failure is not tried again every tick. The ledger's escalation
-        #: is the floor after a restart.
-        self._attempted: dict[tuple[str, str, str], float] = {}
         # Per pass: the enabled grants, and whether the forge write is spent.
         self._grants: list[Grant] = []
         self._forge_spent = False
@@ -172,6 +180,11 @@ class PlanDriver:
         try:
             self._grants = self.delegation.grants(enabled_only=True)
             if not self._grants:
+                # Nothing may be taken; what was escalated may still have
+                # been taken by a person since, and is closed as such. With
+                # nothing open this reads no plan and writes nothing.
+                if self.delegation.unresolved_count():
+                    self._resolve_only(now)
                 return
             self._forge_spent = False
             for plan in _after(self.store.advancing(), self._forge_last):
@@ -181,6 +194,16 @@ class PlanDriver:
                     log.warning("plan_driver.plan_failed", plan=plan.id, exc_info=True)
         finally:
             self._lock.release()
+
+    def _resolve_only(self, now: float) -> None:
+        """The resolution pass alone, over every plan that advances itself:
+        what a person settled is closed although no grant lets the driver
+        act any more."""
+        for plan in self.store.advancing():
+            try:
+                self._resolve(plan, now)
+            except Exception:
+                log.warning("plan_driver.resolve_failed", plan=plan.id, exc_info=True)
 
     def _advance(self, plan_id: str, now: float) -> None:
         """At most one act on one plan: the escalations it no longer
@@ -327,18 +350,15 @@ class PlanDriver:
         if decision.outcome != "allow":
             self._note(decision, plan, node, step, latest, now)
             return False
-        # A failed attempt is tried again once per poll interval at most:
-        # this process remembers its own last try, and the ledger's open
-        # escalation for a failed act is the floor after a restart.
-        last = self._attempted.get(key, 0.0)
-        if latest is not None and latest.unresolved and latest.operation_id is not None:
-            last = max(last, latest.at)
-        if last and now < last + float(self.loop.config.daemon.poll_interval_s):
+        # A failed act waits before it is tried again, twice as long after
+        # each failure in a row (see :meth:`retry_at`), counted in the
+        # daemon's state so a restart neither forgets nor resets it.
+        failing = self._failures(key)
+        if failing is not None and now < self.retry_at(*failing):
             return False
         if step.forge:
             self._forge_spent = True
             self._forge_last = plan.id
-        self._attempted[key] = now
         try:
             operation_id, refs = self._act(plan, node, step, now)
         except _ActFailed as failed:
@@ -348,7 +368,9 @@ class PlanDriver:
                 node=node.id,
                 action=step.action,
                 error=failed.detail,
+                failures=(0 if failing is None else failing[0]) + 1,
             )
+            self._failed(key, failing, now)
             self._note(
                 Decision(
                     outcome="escalate",
@@ -362,7 +384,7 @@ class PlanDriver:
                 operation_id=failed.operation_id,
             )
             return True
-        self._attempted.pop(key, None)
+        self._clear(key)
         self.delegation.record(
             decision,
             agent_slug=step.agent,
@@ -387,6 +409,42 @@ class PlanDriver:
             operation=operation_id,
         )
         return True
+
+    # -- backing off a failed act ---------------------------------------------
+
+    def retry_at(self, failures: int, last: float) -> float:
+        """When an act that failed ``failures`` times in a row, the last at
+        ``last``, may be tried again: ``[daemon] poll_interval_s`` after the
+        first failure, doubling with each one after it, never more than
+        :data:`RETRY_CEILING_S` (or the poll interval, if that is longer)."""
+        poll = float(self.loop.config.daemon.poll_interval_s)
+        ceiling = max(RETRY_CEILING_S, poll)
+        wait = poll * (2.0 ** min(max(failures - 1, 0), 32))
+        return last + min(wait, ceiling)
+
+    def _failures(self, key: tuple[str, str, str]) -> tuple[int, float] | None:
+        """``(failures in a row, when the last was)`` for one target, or
+        ``None`` when its last attempt did not fail (or none was made)."""
+        raw = self.loop.dstore.get_value(_failure_key(key))
+        if raw is None:
+            return None
+        try:
+            data = json.loads(raw)
+            return int(data["failures"]), float(data["last"])
+        except (ValueError, TypeError, KeyError):
+            # Unreadable is never a reason to wait forever: tried, and the
+            # count starts again from this failure.
+            return None
+
+    def _failed(
+        self, key: tuple[str, str, str], before: tuple[int, float] | None, now: float
+    ) -> None:
+        count = 1 if before is None else before[0] + 1
+        self.loop.dstore.set_value(_failure_key(key), json.dumps({"failures": count, "last": now}))
+
+    def _clear(self, key: tuple[str, str, str]) -> None:
+        if self.loop.dstore.get_value(_failure_key(key)) is not None:
+            self.loop.dstore.set_value(_failure_key(key), None)
 
     def _note(
         self,
@@ -569,6 +627,8 @@ class PlanDriver:
                 continue
             done, by = self._effect(plan, node, escalation.action)
             self._close(escalation, by=by, resolution="acted" if done else "superseded", now=now)
+            # What it was about moved on: a run of failures on it is history.
+            self._clear((plan.id, node.id, escalation.action))
 
     def _effect(self, plan: Plan, node: PlanNode, action: str) -> tuple[bool, str | None]:
         """Whether ``action``'s effect stands on ``node``, and who it is
@@ -602,6 +662,12 @@ class PlanDriver:
             resolution=resolution,
             by=by,
         )
+
+
+def _failure_key(key: tuple[str, str, str]) -> str:
+    """The ``daemon_state`` key one target's run of failures is kept under."""
+    plan_id, node_id, action = key
+    return f"{FAILURE_PREFIX}{plan_id}:{node_id}:{action}"
 
 
 def _order(plan: Plan) -> list[str]:
