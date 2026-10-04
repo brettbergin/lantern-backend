@@ -416,6 +416,50 @@ class PlanStore:
                 nodes.setdefault(str(node.plan_id), []).append(node)
             return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
 
+    def many(self, plan_ids: Iterable[str]) -> dict[str, Plan]:
+        """The plans ``plan_ids`` names that exist, in two statements
+        however many there are."""
+        wanted = sorted(set(plan_ids))
+        if not wanted:
+            return {}
+        with self.dstore.read() as session:
+            return self._loaded(
+                session, list(session.scalars(select(PlanRow).where(PlanRow.plan_id.in_(wanted))))
+            )
+
+    def waiting_on_people(self) -> list[Plan]:
+        """Every live ``manual`` plan with a node a person has to look at:
+        a ``proposed`` node (a level waiting to be approved) or a node
+        whose breakdown asked questions not yet answered. A plan that
+        advances itself is not here: what it needs from a person reaches
+        them as an escalation. Two statements, however many plans."""
+        asking = (
+            select(PlanNodeRow.plan_id)
+            .where(
+                (PlanNodeRow.state == "proposed")
+                # Narrowed in SQL, decided on the parsed record.
+                | PlanNodeRow.generation_json.like('%"awaiting_answers"%')
+            )
+            .distinct()
+        )
+        stmt = select(PlanRow).where(
+            PlanRow.plan_id.in_(asking),
+            PlanRow.state != "archived",
+            PlanRow.advance == "manual",
+        )
+        with self.dstore.read() as session:
+            return list(self._loaded(session, list(session.scalars(stmt))).values())
+
+    @staticmethod
+    def _loaded(session: Any, rows: list[PlanRow]) -> dict[str, Plan]:
+        if not rows:
+            return {}
+        ids = [str(row.plan_id) for row in rows]
+        nodes: dict[str, list[PlanNodeRow]] = {}
+        for node in session.scalars(select(PlanNodeRow).where(PlanNodeRow.plan_id.in_(ids))):
+            nodes.setdefault(str(node.plan_id), []).append(node)
+        return {str(row.plan_id): _plan(row, nodes.get(str(row.plan_id), [])) for row in rows}
+
     def supply(self) -> Supply:
         """How much work the plans that are not archived hold, counted in
         the store (never by loading every plan): the nodes ``proposed``

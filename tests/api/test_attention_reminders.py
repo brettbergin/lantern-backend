@@ -68,6 +68,7 @@ class TestWhenAReminderIsSent:
             "reminders": 1,
             "capabilities": sorted({a["capability"] for a in entry["actions"]}),
             "actions": [a["action"] for a in entry["actions"]],
+            "action_capabilities": {a["action"]: a["capability"] for a in entry["actions"]},
         }
         assert reminder["data"]["capabilities"] == ["runs:control"]
         assert reminder["data"]["actions"] == ["retry", "abandon", "dismiss", "delete"]

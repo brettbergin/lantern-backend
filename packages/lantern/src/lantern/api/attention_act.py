@@ -22,8 +22,11 @@ from typing import Any
 
 from pydantic import Field, ValidationError
 
+from lantern.api import escalations
 from lantern.api.admin import resume_repository
 from lantern.api.attention import (
+    DECISION_KINDS,
+    PROPOSAL_CAPABILITY,
     REPOSITORY_ACTIONS,
     TASK_ACTIONS,
     WORK_COMMANDS,
@@ -31,12 +34,14 @@ from lantern.api.attention import (
     find,
 )
 from lantern.api.auth.deps import Authenticated
-from lantern.api.commands import approve_gate, item_command, run_verb, steer
+from lantern.api.commands import admit_plan, approve_gate, item_command, run_verb, steer
 from lantern.api.context import ApiContext
+from lantern.api.delegation import decision_out
 from lantern.api.errors import Problem
 from lantern.api.models import (
     ApiModel,
     AttentionEntry,
+    DecisionOut,
     GateApproval,
     GateResult,
     ItemCommand,
@@ -49,11 +54,38 @@ from lantern.api.models import (
     SteerResult,
     WorkDeleteCommand,
 )
-from lantern.api.plan_schemas import EpicRunChanged
+from lantern.api.plan_schemas import (
+    EpicRunChanged,
+    EpicRunStart,
+    EpicRunStarted,
+    PlanApprove,
+    PlanBreakdownAccepted,
+    PlanOut,
+    PlanPublish,
+    PlanPublished,
+)
 from lantern.api.projections import Views, not_found
 from lantern.api.publicids import run_public_id
-from lantern.api.routes.plan_runs import ControlVerb, control_epic_run
-from lantern.daemon.controls.operations import Operation, OperationStore
+from lantern.api.routes.plan_runs import ControlVerb, control_epic_run, start_epic_run
+from lantern.api.routes.plans import (
+    actor_of,
+    approve_level,
+    plan_out,
+    problem_of,
+    publish_level_as,
+)
+from lantern.daemon.controls.delegation_store import DecisionRecord, DelegationStore
+from lantern.daemon.controls.intake import PlanAdmission
+from lantern.daemon.controls.operations import (
+    IdempotencyConflict,
+    Operation,
+    OperationReplay,
+    OperationSpec,
+    OperationStore,
+    record_plan_operation,
+)
+from lantern.plans import PlanRefusal
+from lantern.plans.store import actor_id
 
 
 class AttentionActRequest(ApiModel):
@@ -67,6 +99,24 @@ class AttentionActRequest(ApiModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class PlanApproved(ApiModel):
+    """A level approved from the list: the plan as it now is and the
+    ``plan.approve`` operation that approved it."""
+
+    plan: PlanOut
+    operation_id: str
+    replayed: bool = False
+
+
+class EscalationDeclined(ApiModel):
+    """An escalation a person said no to: the decision as the ledger now
+    holds it, and the ``decision.decline`` operation that recorded it."""
+
+    decision: DecisionOut
+    operation_id: str
+    replayed: bool = False
+
+
 #: What an act answers with: the body the action's own route answers.
 ActOutcome = (
     ItemCommandResult
@@ -75,6 +125,11 @@ ActOutcome = (
     | GateResult
     | RepositoryResult
     | EpicRunChanged
+    | EpicRunStarted
+    | PlanPublished
+    | PlanBreakdownAccepted
+    | PlanApproved
+    | EscalationDeclined
 )
 
 
@@ -93,6 +148,10 @@ class AttentionActResult(ApiModel):
     #: left out) as this answer is written.
     still_waiting: bool
     result: ActOutcome
+    #: On an ``escalation``: the decision as the ledger holds it after the
+    #: act — ``acted`` by the caller on an approve, ``declined`` on a
+    #: decline (the first resolution stands).
+    decision: DecisionOut | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +192,23 @@ OPERATIONS: dict[str, str] = {
 _ROUTES: dict[str, _Route] = {
     action: _Route(operation, *_BODIES.get(action, (None, None)))
     for action, operation in OPERATIONS.items()
+}
+
+#: What an ``escalation`` or a ``plan_proposal`` offers: what each does
+#: depends on the entry, not on the name (:func:`_decide`).
+DECISION_ACTIONS: tuple[str, ...] = (escalations.APPROVE, escalations.DECLINE)
+KNOWN_ACTIONS: list[str] = sorted({*_ROUTES, *DECISION_ACTIONS})
+
+#: The operation approving each escalated action records: the one the
+#: step's own route records, under the person.
+APPROVED_OPERATIONS: dict[str, str] = {
+    "plan.breakdown": "item.admit",
+    "plan.approve": "plan.approve",
+    "plan.publish": "plan.publish",
+    "plan.run": "plan.run",
+    "plan.run.retry": "plan.run.retry",
+    "item.retry": "item.retry",
+    "run.grant_rounds": "run.grant_rounds",
 }
 
 
@@ -286,15 +362,26 @@ async def act(
     """Take ``body.action`` on the entry ``entry_id`` names; the answer and
     its HTTP status."""
     action = body.action
+    kind = entry_id.partition(":")[0]
+    if kind in DECISION_KINDS:
+        return await _decide(ctx, auth, entry_id, body, pair)
     route = _ROUTES.get(action)
     if route is None:
-        raise Problem(422, "unknown_action", f"no such action {action!r}", actions=sorted(_ROUTES))
+        if action in DECISION_ACTIONS:
+            # A name some entries offer, and this one never does.
+            raise Problem(
+                409,
+                "not_eligible",
+                f"{entry_id} does not offer {action}; only an escalation or a proposal does",
+                action=action,
+                entry_id=entry_id,
+            )
+        raise Problem(422, "unknown_action", f"no such action {action!r}", actions=KNOWN_ACTIONS)
     capability = capability_for(action)
     if not auth.principal.can(capability):  # type: ignore[arg-type]
         raise Problem(
             403, "forbidden", f"{auth.principal.id} lacks {capability}", capability=capability
         )
-    kind = entry_id.partition(":")[0]
     # An entry's revision is its gate's or its item's. A command that
     # checks that same record is handed the revision and refuses a moved
     # one inside its own operation; for any other the entry is compared
@@ -371,4 +458,336 @@ async def act(
             result=result,
         ),
         status,
+    )
+
+
+# -- escalations and proposals ---------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Decided:
+    """What an act on an ``escalation`` or a ``plan_proposal`` is aimed
+    at, read in one pass: the ledger row (none for a proposal), the public
+    ids its command is named by, the plan revision it is sent with, and
+    the operation an earlier act under the same key recorded."""
+
+    record: DecisionRecord | None
+    operation: str
+    plan_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    revision: int | None = None
+    replay: Operation | None = None
+
+
+def _forbidden(auth: Authenticated, capability: str) -> Problem:
+    return Problem(
+        403, "forbidden", f"{auth.principal.id} lacks {capability}", capability=capability
+    )
+
+
+def _params(action: str, record: DecisionRecord | None, params: dict[str, Any]) -> None:
+    """Only approving a round grant takes a param (``rounds``)."""
+    if "expected_revision" in params:
+        raise _invalid(
+            "expected_revision is a field of the request, not one of params",
+            ["params", "expected_revision"],
+            "send it beside action",
+        )
+    grants = (
+        action == escalations.APPROVE and record is not None and record.action == "run.grant_rounds"
+    )
+    extra = sorted(set(params) - ({"rounds"} if grants else set()))
+    if extra:
+        raise _invalid(
+            f"{action} takes no {extra[0]} here",
+            ["params", extra[0]],
+            "this action takes no such param",
+        )
+
+
+async def _decide(
+    ctx: ApiContext,
+    auth: Authenticated,
+    entry_id: str,
+    body: AttentionActRequest,
+    pair: tuple[str, str],
+) -> tuple[AttentionActResult, int]:
+    """``approve`` or ``decline`` an escalation, or ``approve`` a proposed
+    level. The capability is the escalated act's (a proposal's is
+    ``plans:create``). ``approve`` runs the step's own command as the
+    caller — its operation, its refusals — then resolves the decision
+    ``acted`` by them; ``decline`` records a ``decision.decline``
+    operation that resolves it ``declined``. A replay under the same key
+    answers the first act."""
+    action = body.action
+    kind, _, key = entry_id.partition(":")
+    offers = DECISION_ACTIONS if kind == escalations.KIND else (escalations.APPROVE,)
+    if action not in offers:
+        if action in KNOWN_ACTIONS:
+            raise Problem(
+                409,
+                "not_eligible",
+                f"{entry_id} does not offer {action}; it offers: {', '.join(offers)}",
+                action=action,
+                offered=list(offers),
+                entry_id=entry_id,
+            )
+        raise Problem(422, "unknown_action", f"no such action {action!r}", actions=KNOWN_ACTIONS)
+
+    def look() -> _Decided:
+        store = getattr(ctx.loop, "operations", None)
+        if not isinstance(store, OperationStore):
+            raise Problem(503, "daemon_not_ready", "the daemon keeps no operation record")
+        views = Views(ctx)
+        record: DecisionRecord | None = None
+        if kind == escalations.KIND:
+            record = DelegationStore(views.dstore).decision(key)
+            if record is None or record.outcome != "escalate":
+                raise Problem(
+                    409, "not_waiting", f"nothing is waiting as {entry_id}", entry_id=entry_id
+                )
+            capability: str = escalations.capability(record.action)
+            operation = (
+                escalations.DECLINE_OPERATION
+                if action == escalations.DECLINE
+                else APPROVED_OPERATIONS.get(record.action, "")
+            )
+            plan_id, node_id = record.plan_id or "", record.node_id or ""
+        else:
+            capability = PROPOSAL_CAPABILITY
+            operation = "plan.approve"
+            plan_id, _, node_id = key.partition(":")
+        if not auth.principal.can(capability):  # type: ignore[arg-type]
+            raise _forbidden(auth, capability)
+        _params(action, record, body.params)
+        existing = store.for_idempotency(*pair)
+        if existing is not None:
+            if existing.action != operation:
+                raise Problem(
+                    409,
+                    "idempotency_conflict",
+                    "the idempotency key was already used with a different request",
+                    operation_id=existing.id,
+                )
+            raw = (existing.request or {}).get("expected_revision")
+            revision = raw if isinstance(raw, int) else None
+        else:
+            entry = find(views, entry_id, auth)
+            if entry is None:
+                raise Problem(
+                    409,
+                    "not_waiting",
+                    f"nothing is waiting as {entry_id}: it was settled, or what it asked "
+                    "for already happened",
+                    entry_id=entry_id,
+                )
+            offered = [offer.action for offer in entry.actions]
+            if action not in offered:
+                raise Problem(
+                    409,
+                    "not_eligible",
+                    f"{entry_id} does not offer {action} now; it offers: "
+                    f"{', '.join(offered) or 'nothing'}",
+                    action=action,
+                    offered=offered,
+                    entry_id=entry_id,
+                )
+            if body.expected_revision is not None and entry.revision != body.expected_revision:
+                raise Problem(
+                    409,
+                    "stale_revision",
+                    f"{entry_id} is at revision {entry.revision}, not {body.expected_revision}",
+                    revision=entry.revision,
+                    entry_id=entry_id,
+                )
+            revision = entry.revision
+        item_public = run_public = None
+        if record is not None and (record.item_id or record.run_id):
+            item = views.dstore.get(record.item_id) if record.item_id else None
+            if item is not None:
+                item_public = views.ids.item_id(item, views.now)
+            run = record.run_id or (item.run_id if item is not None else None)
+            run_public = run_public_id(run) if run else None
+        return _Decided(
+            record=record,
+            operation=operation,
+            plan_id=plan_id or None,
+            node_id=node_id or None,
+            item_id=item_public,
+            run_id=run_public,
+            revision=revision,
+            replay=existing,
+        )
+
+    target = await ctx.call(look)
+    decision: DecisionOut | None = None
+    result: ActOutcome
+    if action == escalations.DECLINE:
+        assert target.record is not None  # nosec B101 - only an escalation declines
+        declined = await _decline(ctx, auth, target.record, pair)
+        result, status, decision = declined, 200, declined.decision
+    else:
+        result, status = await _approve(ctx, auth, entry_id, target, body.params, pair)
+        if target.record is not None:
+            decision = await ctx.call(_resolve_acted, ctx, auth, target.record)
+    still_waiting = await ctx.call(lambda: find(Views(ctx), entry_id, auth) is not None)
+    operation = getattr(result, "operation", None)
+    return (
+        AttentionActResult(
+            entry_id=entry_id,
+            action=action,
+            operation_id=operation.id if operation is not None else result.operation_id,  # type: ignore[union-attr]
+            replayed=target.replay is not None,
+            still_waiting=still_waiting,
+            result=result,
+            decision=decision,
+        ),
+        status,
+    )
+
+
+def _resolve_acted(ctx: ApiContext, auth: Authenticated, record: DecisionRecord) -> DecisionOut:
+    """The step happened, taken by the caller: the decision is ``acted``
+    by them (the first resolution stands)."""
+    done = DelegationStore(ctx.loop.dstore).resolve(
+        record.id, by=actor_id(actor_of(auth)), resolution="acted", now=ctx.clock()
+    )
+    return decision_out(ctx, done or record)
+
+
+async def _decline(
+    ctx: ApiContext, auth: Authenticated, record: DecisionRecord, pair: tuple[str, str]
+) -> EscalationDeclined:
+    """Resolve the escalation ``declined`` by the caller, as one recorded
+    ``decision.decline`` operation: a replay answers the decision as the
+    ledger holds it, and changes nothing."""
+    delegation = DelegationStore(ctx.loop.dstore)
+    by = actor_id(actor_of(auth))
+
+    def apply() -> EscalationDeclined:
+        try:
+            op_id, _ = record_plan_operation(
+                ctx.loop.operations,
+                OperationSpec(
+                    action=escalations.DECLINE_OPERATION,
+                    target_kind="decision",
+                    target_key=record.id,
+                    principal=auth.principal,
+                    request={"decision_id": record.id},
+                    idempotency=pair,
+                ),
+                call=lambda: delegation.resolve(
+                    record.id, by=by, resolution="declined", now=ctx.clock()
+                ),
+                result=lambda done: {"resolution": done.resolution if done else None},
+                clock=ctx.clock,
+                generation=getattr(ctx.loop, "generation", None),
+            )
+            replayed = False
+        except OperationReplay as exc:
+            op_id, replayed = exc.existing.id, True
+        except IdempotencyConflict as exc:
+            raise Problem(
+                409,
+                "idempotency_conflict",
+                "the idempotency key was already used with a different request",
+                operation_id=exc.existing.id,
+            ) from exc
+        held = delegation.decision(record.id) or record
+        return EscalationDeclined(
+            decision=decision_out(ctx, held), operation_id=op_id, replayed=replayed
+        )
+
+    declined = await ctx.call(apply)
+    ctx.hub.notify()
+    return declined
+
+
+def _revision(target: _Decided, entry_id: str) -> int:
+    if target.revision is None:
+        raise Problem(
+            409, "not_eligible", f"{entry_id} names no plan revision to act on", entry_id=entry_id
+        )
+    return target.revision
+
+
+async def _approve(
+    ctx: ApiContext,
+    auth: Authenticated,
+    entry_id: str,
+    target: _Decided,
+    params: dict[str, Any],
+    pair: tuple[str, str],
+) -> tuple[ActOutcome, int]:
+    """Take the step the agent proposed (or approve the proposed level) as
+    the caller, through the command the step's own route runs; its answer
+    and the status that route answers with."""
+    record = target.record
+    step = record.action if record is not None else "plan.approve"
+    replayed = target.replay is not None
+    approve = escalations.APPROVE
+    if step in ("plan.approve", "plan.publish", "plan.run", "plan.run.retry", "plan.breakdown"):
+        plan_id = _need(target.plan_id, approve, entry_id)
+        node_id = _need(target.node_id, approve, entry_id)
+        if step == "plan.approve":
+            level = PlanApprove(expected_revision=_revision(target, entry_id))
+            plan, op_id = await approve_level(ctx, auth, plan_id, node_id, level, pair)
+            return PlanApproved(plan=plan_out(plan), operation_id=op_id, replayed=replayed), 200
+        if step == "plan.publish":
+            publish = PlanPublish(expected_revision=_revision(target, entry_id))
+            return await publish_level_as(ctx, auth, plan_id, node_id, publish, pair), 200
+        if step == "plan.run":
+            start = EpicRunStart(expected_revision=_revision(target, entry_id))
+            started = await start_epic_run(ctx, auth, plan_id, node_id, start, pair)
+            return started, 200 if started.replayed else 201
+        if step == "plan.run.retry":
+            return await control_epic_run(ctx, auth, "retry", plan_id, node_id, pair), 200
+        revision = _revision(target, entry_id)
+        if not replayed:
+
+            def check() -> None:
+                ctx.plans.breakdown_target(plan_id, node_id, expected_revision=revision)
+
+            try:
+                await ctx.call(check)
+            except PlanRefusal as exc:
+                raise problem_of(exc) from exc
+        admitted = await admit_plan(
+            ctx,
+            auth,
+            PlanAdmission(plan_id=plan_id, node_id=node_id, expected_revision=revision),
+            pair,
+        )
+        accepted = PlanBreakdownAccepted(
+            plan_id=plan_id,
+            node_id=node_id,
+            item=admitted.item,
+            operation=admitted.operation,
+            created=admitted.created,
+        )
+        return accepted, 202
+    if step == "item.retry":
+        item_id = _need(target.item_id, approve, entry_id)
+        return await item_command(ctx, auth, "retry", item_id, ItemCommand(), pair), 200
+    if step == "run.grant_rounds":
+        assert record is not None  # nosec B101 - an escalation's step
+        run_id = _need(target.run_id, approve, entry_id)
+        rounds = params.get("rounds", record.attrs.get("rounds"))
+        try:
+            grant = RoundGrant.model_validate({"rounds": rounds})
+        except ValidationError as exc:
+            raise _invalid(
+                "a round grant needs how many rounds",
+                ["params", "rounds"],
+                "send rounds, a whole number from 1 to 100",
+            ) from exc
+        return await run_verb(ctx, auth, "grant_rounds", run_id, grant, pair), 200
+    raise Problem(
+        409,
+        "not_eligible",
+        f"{entry_id} asks for {step}, which no person can take from here",
+        action=approve,
+        entry_id=entry_id,
     )

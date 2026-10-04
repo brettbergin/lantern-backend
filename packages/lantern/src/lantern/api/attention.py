@@ -18,6 +18,14 @@ An entry's actions are the ones eligibility
 (:mod:`lantern.daemon.controls.eligibility`) answers for the work as it
 stands — the same answer the item, run and gate listings advertise — each
 with the capability its route requires and whether this caller holds it.
+
+Decisions are entries too (``attention.decisions``): every unresolved
+escalation in the decisions ledger (:mod:`lantern.api.escalations`, whose
+``approve`` and ``decline`` need the escalated step's capability), and on
+a ``manual`` plan its breakdown's waiting questions (``plan_questions``,
+only where no parked ``plan`` item already stands for them) and each
+proposed level (``plan_proposal``). A plan that advances itself shows no
+proposal: it reaches a person only through its escalations.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from lantern.api import escalations
 from lantern.api.admin import ADMIN_ACTIONS
 from lantern.api.commands import ACTIONS as COMMANDS
 from lantern.api.models import (
@@ -38,11 +47,11 @@ from lantern.api.models import (
 from lantern.api.projections import Views, item_repository
 from lantern.api.publicids import item_key, run_public_id
 from lantern.daemon.controls.eligibility import Action
-from lantern.daemon.controls.principal import Principal
+from lantern.daemon.controls.principal import Capability, Principal
 from lantern.daemon.model import WorkItem
 from lantern.daemon.store import REVIEW_WAIT_STATES, MergeGate
 from lantern.plans.epicrun import LIVE_RUN_STATES, EpicRun, EpicRunStore, EpicRunTask, from_item
-from lantern.plans.model import PlanNode
+from lantern.plans.model import Plan, PlanNode
 from lantern.plans.store import PlanStore
 from lantern.provider import ProviderHold, ProviderRecovery
 
@@ -106,6 +115,18 @@ TASK_ACTIONS: tuple[str, ...] = ("task_retry", "task_skip")
 _TASK_CAPABILITY = "plans:publish"
 REPOSITORY_ACTIONS: tuple[str, ...] = ("repository_resume",)
 
+#: The kinds about a plan a person settles on the plan's own page: a
+#: breakdown's questions (answered there) and a proposed level (approved
+#: there, or here).
+PLAN_QUESTIONS = "plan_questions"
+PLAN_PROPOSAL = "plan_proposal"
+#: Approving a proposed level: the plan's approve route, and what it needs.
+PROPOSAL_ACTIONS: tuple[str, ...] = (escalations.APPROVE,)
+PROPOSAL_CAPABILITY: Capability = "plans:create"
+#: The kinds whose actions are decided per entry, not per action name: an
+#: escalation's capability is the escalated act's.
+DECISION_KINDS: tuple[str, ...] = (escalations.KIND, PLAN_PROPOSAL)
+
 
 def gate_entry_id(gate_id: str) -> str:
     """The id of the entry an open gate is, by the gate's public id."""
@@ -141,6 +162,8 @@ class Waiting:
     node: PlanNode | None = None
     hold: ProviderHold | None = None
     health: Mapping[str, Any] | None = None
+    plan: Plan | None = None
+    escalation: escalations.Escalation | None = None
 
     @property
     def order(self) -> tuple[int, float, str, str]:
@@ -263,6 +286,11 @@ def waiting(views: Views, *, include_dismissed: bool = False) -> list[Waiting]:
             )
         )
 
+    # What a manual plan waits on a person for, and what agents escalated:
+    # after the items, so an item's own entry is the one found about it.
+    found.extend(_plans_waiting(views, items))
+    found.extend(_escalations(views))
+
     # A provider hold with no retry scheduled stands until a person
     # recovers it; one with a time to try again is the daemon's own wait.
     backend = str(views.config.agent.backend)
@@ -288,6 +316,90 @@ def waiting(views: Views, *, include_dismissed: bool = False) -> list[Waiting]:
                 Waiting("repository", "paused", health.get("since"), repo, repo, health=health)
             )
     return found
+
+
+def _plans_waiting(views: Views, items: Mapping[str, WorkItem]) -> list[Waiting]:
+    """What a ``manual`` plan waits on a person for: a breakdown's
+    questions, and a proposed level to approve. A plan that advances
+    itself has none here — what it needs reaches a person as an
+    escalation.
+
+    A breakdown's questions park its ``plan`` item ``awaiting_answers``,
+    and that item's entry *is* the questions' entry: its id was on the
+    list first and clients key on it. A ``plan_questions`` entry stands
+    only for questions no such item stands for (the item is gone, or moved
+    on while the plan still asks) — and never for questions whose item was
+    dismissed."""
+    plans = PlanStore(views.dstore).waiting_on_people()
+    if not plans:
+        return []
+    found: list[Waiting] = []
+    asked: set[tuple[str, str]] | None = None
+    for plan in plans:
+        for node in plan.nodes:
+            questions = node.generation
+            if questions is None or questions.status != "awaiting_answers":
+                continue
+            if asked is None:
+                parked = [
+                    *items.values(),
+                    *views.dstore.attention_items(("awaiting_answers",), include_dismissed=True),
+                ]
+                asked = {
+                    (str(item.plan_id), str(item.plan_node_id))
+                    for item in parked
+                    if item.state == "awaiting_answers" and item.plan_id
+                }
+            if (plan.id, node.id) in asked:
+                continue
+            found.append(
+                Waiting(
+                    PLAN_QUESTIONS,
+                    "decision",
+                    questions.asked_at or None,
+                    f"{plan.id}:{node.id}:{questions.run_id}",
+                    node.repository,
+                    node=node,
+                    plan=plan,
+                )
+            )
+        if plan.generation_pending:
+            continue
+        for node in plan.nodes:
+            proposed = [c for c in plan.children(node.id) if c.state == "proposed"]
+            if not proposed:
+                continue
+            found.append(
+                Waiting(
+                    PLAN_PROPOSAL,
+                    "decision",
+                    min(c.created_at for c in proposed) or None,
+                    f"{plan.id}:{node.id}",
+                    node.repository,
+                    node=node,
+                    plan=plan,
+                )
+            )
+    return found
+
+
+def _escalations(views: Views) -> list[Waiting]:
+    """Each escalation still waiting on a person. One whose target moved
+    on is left out as soon as the list is read; the tracker's pass
+    resolves it (:func:`lantern.api.escalations.settle`)."""
+    return [
+        Waiting(
+            escalations.KIND,
+            "decision",
+            e.record.at,
+            e.record.id,
+            e.repository,
+            item=e.item,
+            plan=e.plan,
+            escalation=e,
+        )
+        for e in escalations.unresolved(views.dstore)
+    ]
 
 
 def counts(found: Sequence[Waiting]) -> AttentionCounts:
@@ -357,7 +469,11 @@ def entries(
     out: list[AttentionEntry] = []
     for w in page:
         item = w.item
-        if w.gate is not None:
+        if w.escalation is not None:
+            out.append(_escalation_entry(w.escalation, base(w), principal))
+        elif w.plan is not None and w.node is not None:
+            out.append(_plan_entry(w, w.plan, w.node, base(w), principal))
+        elif w.gate is not None:
             gate = w.gate
             run = runs.get(gate.run_id)
             allowed: set[str] = set()
@@ -444,6 +560,84 @@ def entries(
                 )
             )
     return out
+
+
+def _escalation_entry(
+    escalation: escalations.Escalation,
+    fields: dict[str, Any],
+    principal: Principal | None,
+) -> AttentionEntry:
+    record = escalation.record
+    needed = escalations.capability(record.action)
+    return AttentionEntry(
+        **fields,
+        id=escalations.entry_id(record.id),
+        state="escalated",
+        title=escalations.title(record, escalation.target),
+        reason=record.reason,
+        run_id=run_public_id(record.run_id) if record.run_id else None,
+        plan_id=record.plan_id,
+        node_id=record.node_id,
+        epic_run_id=record.epic_run_id,
+        revision=escalation.revision,
+        agent=record.agent_slug,
+        decision_id=record.id,
+        decision_action=record.action,
+        actions=[
+            AttentionAction(
+                action=action,
+                capability=needed,
+                allowed=principal is not None and needed in principal.capabilities,
+            )
+            for action in escalations.actions(record.action)
+        ],
+    )
+
+
+def _plan_entry(
+    w: Waiting,
+    plan: Plan,
+    node: PlanNode,
+    fields: dict[str, Any],
+    principal: Principal | None,
+) -> AttentionEntry:
+    if w.kind == PLAN_QUESTIONS:
+        asked = node.generation
+        count = len(asked.unanswered()) if asked is not None else 0
+        return AttentionEntry(
+            **fields,
+            id=f"{PLAN_QUESTIONS}:{w.key}",
+            state="awaiting_answers",
+            title=f"Questions about “{node.title}” wait for answers",
+            reason=f"{count} question{'' if count == 1 else 's'} to answer on the plan",
+            run_id=run_public_id(asked.run_id) if asked is not None else None,
+            plan_id=plan.id,
+            node_id=node.id,
+            revision=plan.revision,
+            # Answered on the plan's page, never from a notification.
+            actions=[],
+        )
+    proposed = [c for c in plan.children(node.id) if c.state == "proposed"]
+    noun = "epics" if proposed and proposed[0].level == "epic" else "tasks"
+    by = sorted({c.proposed_by for c in proposed if c.proposed_by})
+    holds = principal is not None and PROPOSAL_CAPABILITY in principal.capabilities
+    # Approving is offered only to a caller who may approve. The daemon's
+    # own read (no caller) lists it, so a reminder knows who that is.
+    offered = PROPOSAL_ACTIONS if principal is None or holds else ()
+    return AttentionEntry(
+        **fields,
+        id=f"{PLAN_PROPOSAL}:{w.key}",
+        state="proposed",
+        title=f"{len(proposed)} proposed {noun} under “{node.title}” wait for approval",
+        reason=f"proposed by {', '.join(by)}" if by else None,
+        plan_id=plan.id,
+        node_id=node.id,
+        revision=plan.revision,
+        actions=[
+            AttentionAction(action=action, capability=PROPOSAL_CAPABILITY, allowed=holds)
+            for action in offered
+        ],
+    )
 
 
 def find(

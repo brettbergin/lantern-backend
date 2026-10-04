@@ -87,6 +87,7 @@ EFFECTS: dict[str, str] = {
     "grant.create": "the grant is stored and judged from the next decision",
     "grant.update": "the grant holds the requested change",
     "grant.delete": "the grant is gone; what it allowed stays in the ledger",
+    "decision.decline": "the escalation is resolved; a person declined it unless it was already",
 }
 
 
@@ -831,6 +832,16 @@ def _judge(
         return "failed", "interrupted_before_effect", f"the task was not {done}"
     if op.action.startswith("grant."):
         return _judge_grant(loop, op)
+    if op.action == "decision.decline":
+        # One write to the ledger row: it is resolved, or it is not.
+        from lantern.daemon.controls.delegation_store import DelegationStore
+
+        decision = DelegationStore(loop.dstore).decision(op.target_key)
+        if decision is None:
+            return "failed", "unknown_target", "no such decision"
+        if decision.resolved_at is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the escalation is still waiting"
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:

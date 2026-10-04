@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from lantern.api import escalations
 from lantern.api.attention import entries, subject, waiting
 from lantern.api.chronology import DAEMON_ACTOR
 from lantern.api.digest import Digest
@@ -143,15 +144,23 @@ class AttentionTracker:
         first time, record the set and say nothing."""
         views = Views(self.ctx)
         dstore = views.dstore
+        # An escalation whose step already happened, or whose target is
+        # gone, is off the list as soon as it is read; here it is resolved
+        # ``superseded`` in the ledger, so the list read never writes.
+        settled = escalations.settle(dstore, now)
+        if settled:
+            log.info("attention.escalations_superseded", decisions=[d.id for d in settled])
         found = sorted(waiting(views), key=lambda w: w.order)
         current: dict[str, dict[str, Any]] = {}
         capabilities: dict[str, list[str]] = {}
         actions: dict[str, list[str]] = {}
+        needs: dict[str, dict[str, str]] = {}
         for w, entry in zip(found, entries(views, found, None), strict=True):
             run_id, item_id = subject(w)
             current[entry.id] = _opened(run_id, item_id, event_data(entry), now)
             capabilities[entry.id] = sorted({action.capability for action in entry.actions})
             actions[entry.id] = [action.action for action in entry.actions]
+            needs[entry.id] = {action.action: action.capability for action in entry.actions}
         kept: dict[str, str] = dstore.values_with_prefix(_STATE_PREFIX)
         known = {
             key[len(OPEN_PREFIX) :]: value
@@ -209,6 +218,9 @@ class AttentionTracker:
                         "reminders": count,
                         "capabilities": capabilities[entry_id],
                         "actions": actions[entry_id],
+                        # What each action needs: an escalation's approve
+                        # and decline need the escalated act's capability.
+                        "action_capabilities": needs[entry_id],
                     },
                 },
                 {OPEN_PREFIX + entry_id: json.dumps(reminded)},
