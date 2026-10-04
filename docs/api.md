@@ -2478,15 +2478,15 @@ waiting), then resolves the decision `acted` with the person as
 it `declined` by the person and changes nothing else. Either way the act's
 answer carries `decision`, the ledger row as it then stands.
 
-An escalation whose target is gone, or whose step already happened —
-whoever took it, through any surface — leaves the list the next time the
-list is read, and the attention tracker resolves it `superseded` (no
-`resolved_by`) on its next pass; the read itself never writes. "Already
-happened": a breakdown's node has children, an approval's level has no draft
-or proposed child, a publish's node is published with nothing approved under
-it, an epic run started after the escalation, the task is no longer
-`failed`, the item is no longer `failed`, `blocked` or `cancelled` (or moved
-to another run).
+The list resolves an escalation in two ways only: a person's `approve` or
+`decline` on it, and its target being gone — its plan deleted or archived,
+its node removed, its item gone or deleted. Such an escalation leaves the
+list the next time the list is read, and the attention tracker resolves it
+`superseded` (no `resolved_by`) on its next pass; the read itself never
+writes. Whether the step already happened, or the situation that asked for
+it moved on, is judged by the pass that escalated it — the plan driver for
+the plan steps, triage for the retries and round grants — which resolves its
+own escalations `acted` or `superseded`; until it does, the entry stays.
 
 **A manual plan's questions and proposals.** Only on a plan whose `advance`
 is `manual`; a plan that advances itself shows neither — it reaches a person

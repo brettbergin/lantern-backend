@@ -1,6 +1,6 @@
 """What an agent asked a person to decide, as the attention list shows it.
 
-The plan driver (and, later, triage) writes an ``escalate`` row to the
+The plan driver and triage write an ``escalate`` row to the
 decisions ledger whenever no grant covers a step an agent wanted to take.
 Each unresolved one is an ``escalation`` entry of ``GET /v1/attention``;
 this module is everything about them that is not the list's own plumbing:
@@ -11,11 +11,15 @@ this module is everything about them that is not the list's own plumbing:
   server has a human path for it (``approve``). An action this build does
   not know is shown, offers only ``decline``, and needs ``policy:manage``:
   fail closed.
-* :func:`moved_on` — whether what the escalation asked for no longer
-  waits on anyone: its target is gone, or the step already happened
-  (whoever took it). Such an escalation is left off the list as soon as
-  the list is read, and resolved ``superseded`` by :func:`settle` on the
-  attention tracker's next pass — the list itself never writes.
+* :func:`gone` — whether what the escalation is about no longer exists
+  (its plan, node or item). Such an escalation is left off the list as
+  soon as the list is read, and resolved ``superseded`` by :func:`settle`
+  on the attention tracker's next pass — the list itself never writes.
+  Whether the step already happened is *not* judged here: the pass that
+  escalated it owns that (``PlanDriver._resolve`` for the plan steps,
+  ``daemon/triage.py`` for the retries and round grants). Here an
+  escalation is resolved only by a person's ``approve`` or ``decline``,
+  or by its target being gone.
 
 **What ``approve`` does**, per action: the person takes the step the agent
 proposed, through the same command the step's own route runs, recorded as
@@ -48,7 +52,6 @@ from typing import TYPE_CHECKING, Any
 
 from lantern.daemon.controls.delegation_store import DecisionRecord, DelegationStore
 from lantern.daemon.model import WorkItem
-from lantern.plans.epicrun import EpicRunStore
 from lantern.plans.model import Plan
 from lantern.plans.store import PlanStore
 
@@ -62,8 +65,6 @@ APPROVE = "approve"
 DECLINE = "decline"
 #: The operation a ``decline`` records.
 DECLINE_OPERATION = "decision.decline"
-#: An item state an item-retry or a round grant still waits in.
-_ENDED = frozenset({"failed", "blocked", "cancelled"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,9 +164,9 @@ class Escalation:
 
 def unresolved(dstore: Any) -> list[Escalation]:
     """Every escalation still waiting on a person, with its plan and its
-    item read in one statement each; the ones that moved on are left out
-    (:func:`moved_on`)."""
-    return [e for e in _read(dstore) if not moved_on(dstore, e)]
+    item read in one statement each; the ones whose target is gone are
+    left out (:func:`gone`)."""
+    return [e for e in _read(dstore) if not gone(dstore, e)]
 
 
 def _read(dstore: Any) -> list[Escalation]:
@@ -193,51 +194,39 @@ def _read(dstore: Any) -> list[Escalation]:
     ]
 
 
-def moved_on(dstore: Any, escalation: Escalation) -> bool:
-    """Whether nobody needs to decide ``escalation`` any more: what it was
-    about is gone, or the step it asked for already happened. Fails open
-    toward the person — anything it cannot tell keeps the entry listed."""
+def gone(dstore: Any, escalation: Escalation) -> bool:
+    """Whether what ``escalation`` is about no longer exists: its plan is
+    gone or archived, its node removed, or its item gone or deleted. Only
+    that is settled here. Whether the step has *happened* — or the
+    situation that asked for it moved on — is for the pass that escalated
+    it (the plan driver for the plan steps, triage for the retries and
+    round grants), which knows its own situation; an escalation whose
+    target still stands waits for them or for a person."""
     record, plan = escalation.record, escalation.plan
-    action = record.action
-    if action.startswith("plan.") and action != "plan.propose":
+    # A plan step names its plan: one that names none has no target.
+    if record.action.startswith("plan.") and record.action != "plan.propose" and not record.plan_id:
+        return True
+    if record.plan_id:
         if plan is None or plan.archived:
             return True
-        node = plan.node(record.node_id or "")
-        if node is None:
+        if record.node_id and plan.node(record.node_id) is None:
             return True
-        children = plan.children(node.id)
-        if action == "plan.breakdown":
-            return bool(children)
-        if action == "plan.approve":
-            return not any(c.state in ("draft", "proposed") for c in children)
-        if action == "plan.publish":
-            return node.state == "published" and not any(c.state == "approved" for c in children)
-        runs = EpicRunStore(dstore)
-        if action == "plan.run":
-            run = runs.latest(plan.id, node.id)
-            return run is not None and run.created_at >= record.at
-        if action == "plan.run.retry":
-            run = runs.for_task(plan.id, node.id)
-            task = run.task(node.id) if run is not None else None
-            return task is not None and task.state not in ("failed", "blocked")
-        return False
-    if action in ("item.retry", "run.grant_rounds"):
+    if record.item_id:
         item = escalation.item
-        if record.item_id is None:
-            return False
-        if item is None or item.state not in _ENDED:
+        if item is None:
             return True
-        return bool(record.run_id and item.run_id and item.run_id != record.run_id)
+        return dstore.work_mark("item", item.item_id, "deleted") is not None
     return False
 
 
 def settle(dstore: Any, now: float) -> list[DecisionRecord]:
-    """Resolve ``superseded`` every escalation that moved on: the
-    attention tracker's pass calls this, so the list read stays a read."""
+    """Resolve ``superseded`` every escalation whose target is gone
+    (:func:`gone`): the attention tracker's pass calls this, so the list
+    read stays a read."""
     store = DelegationStore(dstore)
     settled: list[DecisionRecord] = []
     for escalation in _read(dstore):
-        if moved_on(dstore, escalation):
+        if gone(dstore, escalation):
             done = store.resolve(escalation.record.id, by=None, resolution="superseded", now=now)
             if done is not None:
                 settled.append(done)

@@ -466,32 +466,56 @@ class TestApprove:
 
 
 class TestSuperseded:
-    def test_a_step_someone_took_elsewhere_leaves_the_list_and_the_tracker_resolves_it(
+    """The list resolves an escalation only through a person's act or its
+    target being gone. Whether the step moved on is the plan driver's
+    (plan steps) or triage's (retries, round grants) to judge."""
+
+    def test_an_open_triage_escalation_on_a_still_failed_item_is_not_resolved(
         self, api: Api
     ) -> None:
+        run_id = _blocked(api)
+        (item,) = [i for i in api.loop.dstore.items() if i.source_key == "1"]
+        record = api.loop.delegation.record(
+            Decision(outcome="escalate", reason="needs_person always goes to a person"),
+            agent_slug="operator",
+            action="item.retry",
+            attrs={"repository": "o/r", "failure_cause": "needs_person", "retries": 0},
+            now=api.clock(),
+            item_id=item.item_id,
+            run_id=run_id,
+            repository="o/r",
+        )
+        assert "escalation" in _kinds(_entries(api))
+        _settle(api)
+        assert "escalation" in _kinds(_entries(api))
+        assert _ledger(api, record).unresolved
+
+    def test_a_step_taken_elsewhere_is_left_to_the_pass_that_escalated_it(self, api: Api) -> None:
         plan = _plan(api, "A")
         record = _escalate(api, "plan.approve", plan_id=plan["id"], node_id=plan["root_id"])
-        assert "escalation" in _kinds(_entries(api))
         approved = api.client.post(
             f"/v1/plans/{plan['id']}/nodes/{plan['root_id']}/approve",
             json={"expected_revision": plan["revision"]},
             headers=api.bearer(),
         )
         assert approved.status_code == 200, approved.text
-        # Off the list as soon as it is read; the read wrote nothing.
-        assert _entries(api) == []
-        assert _ledger(api, record).unresolved
         _settle(api)
-        held = _ledger(api, record)
-        assert held.resolution == "superseded" and held.resolved_by is None
+        # Still listed, still open: the plan driver resolves its own.
+        assert _kinds(_entries(api)) == ["escalation"]
+        assert _ledger(api, record).unresolved
 
     def test_an_escalation_about_something_gone_is_superseded(self, api: Api) -> None:
         record = _escalate(api, "plan.publish", plan_id="plan_gone", node_id="node_gone")
         item_record = _escalate(api, "item.retry", item_id="gh:404", repository="o/r")
-        assert _entries(api) == []
+        plan = _plan(api, "A")
+        node_record = _escalate(api, "plan.breakdown", plan_id=plan["id"], node_id="node_gone")
+        # Off the list as soon as it is read; the read wrote nothing.
+        assert "escalation" not in _kinds(_entries(api))
+        assert _ledger(api, record).unresolved
         _settle(api)
-        assert _ledger(api, record).resolution == "superseded"
-        assert _ledger(api, item_record).resolution == "superseded"
+        for gone in (record, item_record, node_record):
+            held = _ledger(api, gone)
+            assert held.resolution == "superseded" and held.resolved_by is None
 
     def test_an_escalation_still_needed_is_left_alone(self, api: Api) -> None:
         plan = _plan(api, "A")

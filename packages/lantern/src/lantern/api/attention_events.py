@@ -144,9 +144,10 @@ class AttentionTracker:
         first time, record the set and say nothing."""
         views = Views(self.ctx)
         dstore = views.dstore
-        # An escalation whose step already happened, or whose target is
-        # gone, is off the list as soon as it is read; here it is resolved
-        # ``superseded`` in the ledger, so the list read never writes.
+        # An escalation whose target is gone is off the list as soon as it
+        # is read; here it is resolved ``superseded`` in the ledger, so the
+        # list read never writes. One whose step moved on is the plan
+        # driver's or triage's to resolve, never this pass's.
         settled = escalations.settle(dstore, now)
         if settled:
             log.info("attention.escalations_superseded", decisions=[d.id for d in settled])
