@@ -1144,9 +1144,18 @@ class DelegationConfig(_ConfigModel):
     publishes on the next tick. Workspace-wide: a grant's ``repositories``
     condition is where a repository is narrowed. The grants themselves
     live in the daemon's database, never here.
+
+    ``propose_every`` (seconds; ``0``, the default, is off) is how often
+    the planner may propose a plan for one ``active`` goal, under a
+    ``plan.propose`` grant: at most once per period per goal, counted from
+    the last proposal the ledger records for it or the last change to a
+    plan that served it (archived or done), whichever is later — so a
+    restart neither forgets nor restarts it. Never while the goal has a
+    plan still open and not done.
     """
 
     publish_delay_s: int = Field(default=900, ge=0)
+    propose_every: int = Field(default=0, ge=0)
 
 
 class PlanningOverride(_ConfigModel):

@@ -765,9 +765,10 @@ Planning turns a larger effort into issues the loop can work (see the
 configured forge can hold a plan, together with `planning.clarify` (the
 planner's clarifying questions and the answers route), epic runs as
 `planning.run`, the `advance` switch with each node's actors and review
-as `planning.advance`, and the daemon moving an `auto` plan forward under
+as `planning.advance`, the daemon moving an `auto` plan forward under
 an owner's grants as `planning.driver` (see "Plans that advance
-themselves" below). A **plan** is a tree of **nodes**: an
+themselves" below), and the planner drafting plans from goals as
+`goals.proposing`. A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
@@ -911,6 +912,38 @@ when the step happens — taken by the daemon or by a person through any
 route — or `superseded` when the level changes under it. A person can step
 in at any point: flip `advance` to `manual` (the next step is not taken),
 or take the step themselves through the usual routes.
+
+**Plans proposed from goals (`goals.proposing`).** Where
+`/v1/capabilities` lists `goals.proposing` and `[delegation] propose_every`
+is set (seconds; `0`, the default, is off), the daemon drafts a plan for
+each `active` goal that has no plan still open (not archived, and not done:
+every epic closed on the forge), at most once per `propose_every` per goal
+and one per tick across all goals, as the `planner` under a `plan.propose`
+grant. What a client sees:
+
+- a new draft plan with `created_by: "agent:planner"`, `advance: "auto"`,
+  `goal_id` the goal's, and a root to be generated from a brief: the goal's
+  title and text, and in its context the repository's open follow-up
+  issues (`[landing] followup_label`, newest first, at most ten, each as
+  `- title (url)`). It then advances like any `auto` plan;
+- a `plan.propose` operation whose `target_kind` is `plan`, `target_key`
+  the plan's id and `actor` the planner;
+- a `GET /v1/decisions` row with `action: "plan.propose"`: `allow` naming
+  the plan, its root node and the operation, with facts `repository`,
+  `level` (the root's: `initiative` when the goal's text is 1200 characters
+  or more, `epic` otherwise), `goal_id`, `chain_depth` and `followups` (the
+  issue numbers in the brief); or an `escalate` with no plan, the facts
+  naming the `goal_id` — no grant, a grant that falls short, a repository
+  that is not configured, is disabled or cannot hold a plan, a follow-up
+  listing that could not be read. It is written once while the situation
+  stands, closed `acted` when the goal has an open plan again and
+  `superseded` when the goal is deleted or no longer `active`.
+
+A follow-up filed by a run of an agent-proposed plan carries an origin
+marker (`<!-- lantern:origin item=none agent=planner depth=N -->`) after its
+`lantern-followup` marker, and the proposer never reads one at or beyond
+`[agent_team] max_chain_depth` into a brief. A goal is never set `done` by
+the daemon: it stays `active` until an owner changes it.
 
 Every mutation names the plan's `revision` it read as `expected_revision`;
 any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
@@ -2720,7 +2753,9 @@ of what was decided under the grants. Grants ship empty: a fresh installation,
 and one upgraded to this release, delegates nothing until an owner writes one.
 Where `planning.driver` is listed too, the daemon judges each step of a plan
 whose `advance` is `auto` against them (see "Plans that advance themselves"
-under [Plans](#plans)); nothing else in the daemon acts on a grant yet.
+under [Plans](#plans)), and where `goals.proposing` is listed and
+`[delegation] propose_every` is set, whether the planner may draft a plan
+from a goal (`plan.propose`; "Plans proposed from goals" there).
 
 A grant never widens what an agent's principal holds. An agent acting for
 itself still carries `items:create` and nothing else; a grant is a rule the

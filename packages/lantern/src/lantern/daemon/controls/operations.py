@@ -75,6 +75,7 @@ EFFECTS: dict[str, str] = {
     "schedule.resume": "the schedule fires again",
     "daemon.stop": "the graceful stop is committed and signalled",
     "daemon.restart": "the restart is committed and signalled",
+    "plan.propose": "the draft plan is stored for its goal, its root generated from the brief",
     "plan.approve": "the node's draft and proposed children are approved",
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
     "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
@@ -750,6 +751,14 @@ def _judge(
         if (op.action == "daemon.pause") == held:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the hold did not survive the restart"
+    if op.action == "plan.propose":
+        # The planner's draft is one transaction under the id the
+        # operation named: the plan being there is the effect.
+        from lantern.plans.store import PlanStore
+
+        if PlanStore(loop.dstore).get(op.target_key) is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the proposed plan was not stored"
     if op.action == "plan.approve":
         # One transaction on the plan, which moves its revision: the
         # children it named say whether it landed, and a plan still at the

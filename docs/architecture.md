@@ -2817,7 +2817,7 @@ delegates nothing behaves exactly as before; when escalations are still
 open (an owner removed or disabled the grants) it runs the resolution pass
 alone, so one whose step a person has since taken is closed `acted`. Retrying
 failed epic tasks and items is triage's (below); proposing plans from goals
-(`plan.propose`) is not in this driver yet.
+(`plan.propose`) is the proposer's (below).
 
 ### Triage
 
@@ -2894,7 +2894,88 @@ every plan, and the one that is not archived and changed last is the goal's
 open plan. Writing a goal takes `plans:publish` and goes through
 `ControlService` as a recorded operation (`goal.create`, `goal.update`,
 `goal.delete`) that recovery settles from the stored goal. The API's
-`/v1/goals` is the only surface; nothing proposes a plan from a goal yet.
+`/v1/goals` is the only surface for writing one; the planner proposes plans
+from the active ones ("Proposing", below).
+
+### Proposing
+
+`daemon/planproposer.py` is the planner drafting a plan from an owner's
+goal (`daemon_goals`, `daemon/goals.py`). It sits beside the driver rather
+than inside it — the driver walks plans that exist, this makes them — and is
+ticked first in every driver pass, under the driver's lock and against the
+same snapshot of the enabled grants, borrowing its repository check, its
+backoff and its escalation closing. It is off unless `[delegation] propose_every` is set (seconds; `0`, the default, is off): then it proposes nothing and
+never reads the forge — it only closes a proposal escalation left open
+from when it was on, as below.
+
+Each pass, over the `active` goals oldest first, **at most one proposal
+overall**. A goal is considered only when no plan serving it (`goal_id`) is
+still open — not archived and not done, done being every epic of it
+published and closed on the forge — and when `propose_every` has passed
+since the later of its last allowed `plan.propose` on the ledger and the
+last change to a plan that served it. Both are in the database, so a
+restart neither forgets nor restarts the period, and a plan archived,
+deleted or finished is followed by the next only a period later.
+
+It is judged before anything is read from the forge:
+`decide(planner, plan.propose, {repository, level, goal_id})`. A repository
+that is not configured, is disabled or cannot hold a plan escalates from
+the host, before any grant. `escalate` and `deny` are written once per
+situation, the newest decision about the goal (its `goal_id` fact; a
+proposal is about a goal, not yet a plan) being the reference, as the
+driver's are. Allowed, it reads the repository's open follow-up issues
+(`[landing] followup_label`, filtered by label and state again on our side),
+newest first, at most ten, dropping any whose origin marker is at or beyond
+`[agent_team] max_chain_depth`, and creates the draft through
+`PlanService.create` as a recorded `plan.propose` operation by
+`Principal.for_agent("planner")`: `advance = auto`, the goal's `goal_id`,
+`created_by = agent:planner`, and a brief — the goal's title as the title,
+its text as the goal, the follow-ups as `title (url)` lines in the context —
+that the root is generated from. The operation names the plan id before the
+plan exists (`create(plan_id=)`), so its `_judge` branch settles a create
+cut short by a restart from the plan's presence. A follow-up listing that
+cannot be read, or a create that is refused, escalates and backs off
+exactly as a failed driver act does (`plan_driver.failing:goal:<id>:plan.propose`). From there the driver's own steps carry the plan, each
+under its own grant. An open `plan.propose` escalation closes `acted` when
+the goal has an open plan again (the planner's, or one a person drafted for
+it) and `superseded` when the goal is gone or no longer `active`.
+
+**The root's level** is decided from the goal alone, so a grant's `levels`
+condition judges what will be drafted: an `initiative` when the goal's text
+is 1200 characters or more, an `epic` otherwise.
+
+**A goal is never marked done by the daemon.** A goal whose plan finishes
+stays `active` — and is proposed from again a period later — until an owner
+marks it `done` or `paused`.
+
+**The loop guard.** Follow-ups are how work an agent ran comes back as
+work to propose, and before proposing they were safe because a person
+promoted each one. Now an agent reads them, so the chain is counted:
+
+- the allowed `plan.propose` records the plan's `chain_depth` on the
+  ledger — one more than the deepest follow-up its brief was built from (a
+  follow-up with no origin marker, filed by a run a person asked for, is
+  depth 0), so at least 1;
+- an epic run of a plan whose `created_by` starts with `agent:` admits its
+  tasks with `origin_agent` the slug and `chain_depth` that recorded depth
+  (`EpicRunDriver._chain`; a depth the ledger lacks is taken as
+  `max_chain_depth`, fail closed). A plan a person drafted keeps the reset
+  to `None`/`0` it always had;
+- a follow-up a run files carries an origin marker (`agents/origin.py`)
+  with the run's `origin_agent` and `chain_depth` when its assignment has
+  either (`engine/followups.py` `origin_for_run`); a run a person asked for
+  files exactly the body it always did. Origin markers in the reviewer's
+  note are stripped, and the daemon's marker is last, so the note cannot
+  claim a shallower chain;
+- the proposer drops follow-ups at or beyond `max_chain_depth`.
+
+So no proposed plan is deeper than `max_chain_depth`, and a follow-up a
+plan at that depth's runs file is never read into a brief: propose → run →
+follow-up → propose stops after `max_chain_depth` generations of follow-ups
+(two by default). The goal itself is still proposed from at the cadence,
+without them, and the grant's `daily_limit` bounds that.
+`tests/unit/test_plan_proposer.py` drives five generations through the
+driver on the fake forge and holds the bound.
 
 ### The remote API listener
 

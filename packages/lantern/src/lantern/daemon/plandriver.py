@@ -87,6 +87,7 @@ from lantern.daemon.controls.intake import PlanAdmission, plan_item, target_key,
 from lantern.daemon.controls.operations import OperationSpec, record_plan_operation
 from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import ControlError
+from lantern.daemon.planproposer import PlanProposer
 from lantern.errors import LanternError
 from lantern.log import get_logger
 from lantern.plans.hierarchy import repository_planning_for
@@ -163,6 +164,8 @@ class PlanDriver:
         #: The plan the last forge write went to: the next pass starts after
         #: it, so one plan's steps never starve another's.
         self._forge_last: str | None = None
+        #: Plans drafted from goals (:mod:`lantern.daemon.planproposer`).
+        self.proposer = PlanProposer(self)
 
     @property
     def delegation(self) -> DelegationStore:
@@ -179,6 +182,12 @@ class PlanDriver:
             return
         try:
             self._grants = self.delegation.grants(enabled_only=True)
+            # Proposing first, so a goal's plan drafted now is walked in this
+            # same pass. Proposes nothing unless `propose_every` is set.
+            try:
+                self.proposer.tick(now)
+            except Exception:
+                log.warning("plan_driver.propose_failed", exc_info=True)
             if not self._grants:
                 # Nothing may be taken; what was escalated may still have
                 # been taken by a person since, and is closed as such. With

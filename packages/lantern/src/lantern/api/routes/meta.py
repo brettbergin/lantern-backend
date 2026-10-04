@@ -123,6 +123,10 @@ def features(config: Config) -> list[str]:
         # Goals (`/v1/goals`): the standing objectives an owner sets for a
         # repository that can hold a plan, and the plans proposed from each.
         served.append("goals")
+        # ... and the planner may draft an `auto` plan from an active goal
+        # under a `plan.propose` grant, at most once per `[delegation]
+        # propose_every` (off by default).
+        served.append("goals.proposing")
     return served
 
 

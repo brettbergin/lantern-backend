@@ -52,8 +52,12 @@ class _Drafting(_ServiceBase):
         actor: Mapping[str, Any],
         advance: Advance = "manual",
         goal_id: str | None = None,
+        plan_id: str | None = None,
     ) -> Plan:
         """A new draft plan whose root is an initiative or a lone epic.
+
+        ``plan_id`` lets a recorded operation name the plan before it
+        exists (the planner's proposal); minted here otherwise.
 
         ``advance`` and ``goal_id`` are the caller's to vouch for: nothing
         here knows who is asking, so a surface that passes ``advance``
@@ -64,7 +68,7 @@ class _Drafting(_ServiceBase):
         if advance not in ADVANCES:
             raise PlanRefusal(422, "invalid_argument", f"advance is one of {', '.join(ADVANCES)}")
         repo = self._repository(repository)
-        plan_id = new_id("plan_")
+        plan_id = plan_id or new_id("plan_")
         root = PlanNode(
             id=new_id("node_"),
             plan_id=plan_id,

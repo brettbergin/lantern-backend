@@ -357,6 +357,65 @@ class DelegationStore:
             row = session.scalars(stmt).first()
             return None if row is None else _decision(row)
 
+    def latest_for_goal(
+        self, goal_id: str, *, action: str = "plan.propose", outcome: str | None = None
+    ) -> DecisionRecord | None:
+        """The newest decision on ``action`` about one goal (its
+        ``goal_id`` fact), narrowed to an ``outcome``: what the proposer
+        compares a fresh judgement with, and when it last proposed. A
+        proposal is about a goal, not yet a plan, so the goal rides in the
+        facts; the match is confirmed on the parsed facts, never on the
+        text alone."""
+        needle = json.dumps({"goal_id": goal_id})[1:-1]
+        stmt = (
+            select(DecisionRow)
+            .where(
+                DecisionRow.action == action,
+                DecisionRow.attrs_json.contains(needle, autoescape=True),
+            )
+            .order_by(DecisionRow.at.desc(), DecisionRow.decision_id.desc())
+        )
+        if outcome is not None:
+            stmt = stmt.where(DecisionRow.outcome == outcome)
+        with self.dstore.read() as session:
+            for row in session.scalars(stmt):
+                record = _decision(row)
+                if record.attrs.get("goal_id") == goal_id:
+                    return record
+        return None
+
+    def unresolved_for_action(self, action: str) -> list[DecisionRecord]:
+        """The escalations on ``action`` still waiting, oldest first."""
+        stmt = (
+            select(DecisionRow)
+            .where(
+                DecisionRow.action == action,
+                DecisionRow.outcome == "escalate",
+                DecisionRow.resolved_at.is_(None),
+            )
+            .order_by(DecisionRow.at.asc(), DecisionRow.decision_id.asc())
+        )
+        with self.dstore.read() as session:
+            return [_decision(row) for row in session.scalars(stmt)]
+
+    def proposal_for(self, plan_id: str) -> DecisionRecord | None:
+        """The allowed ``plan.propose`` that drafted ``plan_id``, or
+        ``None`` when the ledger has none (a plan a person drafted, or a
+        proposal whose decision was never written)."""
+        stmt = (
+            select(DecisionRow)
+            .where(
+                DecisionRow.action == "plan.propose",
+                DecisionRow.outcome == "allow",
+                DecisionRow.plan_id == plan_id,
+            )
+            .order_by(DecisionRow.at.desc(), DecisionRow.decision_id.desc())
+            .limit(1)
+        )
+        with self.dstore.read() as session:
+            row = session.scalars(stmt).first()
+            return None if row is None else _decision(row)
+
     def unresolved_for_plan(self, plan_id: str) -> list[DecisionRecord]:
         """The escalations about ``plan_id`` still waiting, oldest first."""
         stmt = (

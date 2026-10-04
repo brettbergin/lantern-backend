@@ -846,6 +846,29 @@ class EpicRunDriver:
         self.loop.dstore.dismiss_abandoned(withdrawn.item_id, now, actor=actor, reason=why)
         return True
 
+    def _chain(self, plan_id: str) -> tuple[str | None, int]:
+        """``(origin_agent, chain_depth)`` the items of ``plan_id``'s epic
+        runs carry. A plan a person drafted starts no chain: ``(None, 0)``,
+        as every epic run's items always have. A plan an agent drafted
+        (``created_by`` is ``agent:<slug>``) is that agent's work: its
+        items carry the slug and the depth its proposal recorded on the
+        decisions ledger (one more than the deepest follow-up its brief was
+        built from; at least 1), so the follow-ups their runs file carry it
+        on and the proposer can stop the chain at ``[agent_team]
+        max_chain_depth``. Fail closed: a depth the ledger does not have,
+        or cannot be read, is taken as that ceiling."""
+        plan = self.plans.get(plan_id)
+        created_by = (plan.created_by if plan is not None else None) or ""
+        if not created_by.startswith("agent:"):
+            return None, 0
+        slug = created_by.removeprefix("agent:") or "planner"
+        ceiling = max(1, int(self.loop.config.agent_team.max_chain_depth))
+        proposal = self.loop.delegation.proposal_for(plan_id)
+        raw = None if proposal is None else proposal.attrs.get("chain_depth")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            return slug, ceiling
+        return slug, raw
+
     def _admit(self, run: EpicRun, node: PlanNode, task: EpicRunTask, now: float) -> EpicRunTask:
         """Admit one ready task; the task as it then stands."""
         assert node.forge is not None  # nosec B101 - only published tasks run
@@ -861,13 +884,14 @@ class EpicRunDriver:
             request = IssueAdmission(
                 repository=node.repository, number=node.forge.number, run_kind=kind
             )
+            origin_agent, chain_depth = self._chain(run.plan_id)
             try:
                 item = admit_issue(self.loop, request, label=False)
                 item = item.model_copy(
                     update={
                         "parent_item_id": run.id,
-                        "origin_agent": None,
-                        "chain_depth": 0,
+                        "origin_agent": origin_agent,
+                        "chain_depth": chain_depth,
                         **({"profile": profile} if profile is not None else {}),
                     }
                 )
