@@ -7,8 +7,10 @@ permanent subscribers to its bus). The engine carries the item all the way
 — task graph, gate, pull request, its own review, fix rounds, CI, merge —
 so the daemon's whole job is to hand it an issue and settle on how the run
 ended: ``merged`` closes the issue, ``failed`` retries or gives up,
-``blocked`` hands the PR to a human. The daemon never files work of its
-own.
+``blocked`` hands the PR to a human. The daemon starts nothing on its own
+account: work reaches it from a person's label or ask, a schedule a person
+created, or a step an owner's grant allows an agent (grants ship empty, and
+whatever no grant covers escalates to a person).
 
 Spend guardrails — a calendar-day run cap that counts runs started since
 00:00 in ``daemon.run_cap_timezone`` (default ``UTC``) and resets at the

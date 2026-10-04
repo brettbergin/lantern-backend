@@ -745,7 +745,7 @@ service_memory = "2g"
 # ignore_reviewers = []      # User-type logins treated as automated reviewers (a bot on a personal token): one fix round, never a block
 # followups = "issues"       # after the merge, the review's out-of-scope notes: issues | comment | off
 # Issues require a completed lookup; existing matches are linked, uncertain notes stay on the PR.
-# followup_label = "lantern:follow-up"  # never the trigger label — a human promotes a follow-up
+# followup_label = "lantern:follow-up"  # never the trigger label — the loop never promotes a follow-up
 # max_followups_per_run = 5
 # review_diff_max_chars = 150000  # diff budget handed to the self-review
 
@@ -824,12 +824,14 @@ service_memory = "2g"
 # work, opens a draft PR, reviews and fixes it, waits for CI and merges it
 # (the landing knobs live under [landing]). The issue closes with
 # completed_label when the PR merges, gets failed_label when the run gave
-# up, blocked_label when GitHub would not let the loop finish. The daemon
-# never files work of its own; a label alone starts a run, so the guardrails
-# below are what stand between a mislabeled issue and your budget. All of
-# them are DAEMON-WIDE: with several repositories configured, the daily run
-# cap, the per-item attempt/resume caps, the consecutive-failure circuit
-# breaker and one-run-at-a-time are shared across every repository.
+# up, blocked_label when GitHub would not let the loop finish. Nothing starts
+# a run without a person's act or an owner's standing word: a label, a
+# schedule someone created, or a grant an owner wrote (grants ship empty;
+# an unlabeled issue is never picked up). A label alone starts a run, so the
+# guardrails below are what stand between a mislabeled issue and your
+# budget. All of them are DAEMON-WIDE: with several repositories configured,
+# the daily run cap, the per-item attempt/resume caps, the consecutive-failure
+# circuit breaker and one-run-at-a-time are shared across every repository.
 # poll_interval_s = 60.0
 # trigger_label = "lantern:run"    # issue label that queues work
 # in_progress_label = "lantern:in-progress"
@@ -1072,9 +1074,10 @@ service_memory = "2g"
 # Planning work into the forge: a person describes an initiative or an epic
 # in the Lantern web or iOS app, the planner proposes its next level from a read-only
 # checkout, and a person edits, approves and publishes each level as linked
-# issues, then starts an epic run. Nothing reaches the forge or the queue
-# without a person. Offered on every forge that can hold a plan (GitHub
-# natively, GitLab as labels and a checklist; Gitea cannot).
+# issues, then starts an epic run. A plan an owner sets to advance on its own
+# may take those steps under the owner's grants (none by default); any step
+# no grant covers waits for a person. Offered on every forge that can hold
+# a plan (GitHub natively, GitLab as labels and a checklist; Gitea cannot).
 # enabled = true
 # max_epics_per_initiative = 8     # the most epics one initiative may hold
 # max_tasks_per_epic = 12          # the most tasks one epic may hold

@@ -955,7 +955,7 @@ criteria as a checkbox list, Kind, Verify commands as a code block, Depends
 on as issue references, Non-goals, Constraints) and the marker at the foot,
 with its level label (`sbx:initiative`, `sbx:epic`, `sbx:task`) on the
 create itself — never the trigger or the workload label, so a published
-task is inert until a person starts it. It is linked under its parent: a
+task is inert until an epic run admits it or a person labels it. It is linked under its parent: a
 native sub-issue on GitHub (one already linked is not linked twice), a line
 in the parent's managed checklist on GitLab. A cross-repository sub-issue
 GitHub refuses falls back to the checklist, and the node's result names why

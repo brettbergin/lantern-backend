@@ -266,7 +266,8 @@ AGENT_NAMES = {
     # The one actor allowed to change the exam rather than the work.
     "reauthor_verify": "verify editor",
     # Breaking an initiative or an epic into its next level (#2343), from a
-    # read-only checkout: it proposes, a person publishes.
+    # read-only checkout: it proposes, and publishing is a separate step — a
+    # person's, or one an owner's grant allows on a plan set to advance itself.
     "plan": "planner",
 }
 # The phases whose session gets the run's host tools: the one doing the

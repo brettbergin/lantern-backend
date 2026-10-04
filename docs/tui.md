@@ -344,8 +344,8 @@ console's lifetime.
 
 On the Queue screen `n` asks for an outcome and posts it to the control
 channel addressed to the concierge, which files the issue with the trigger
-label; the daemon claims it like any labeled issue. That is the daemon's
-way to a run — a human asks, the daemon never files work for itself. `N`
+label; the daemon claims it like any labeled issue. That is the console's
+way to a daemon run: a human asks, and the issue is filed for them. `N`
 instead starts a detached `lantern run "…" --no-tui --no-chat` on this
 host, outside the daemon.
 
