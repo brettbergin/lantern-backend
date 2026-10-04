@@ -107,6 +107,11 @@ _TASK_CAPABILITY = "plans:publish"
 REPOSITORY_ACTIONS: tuple[str, ...] = ("repository_resume",)
 
 
+def gate_entry_id(gate_id: str) -> str:
+    """The id of the entry an open gate is, by the gate's public id."""
+    return f"gate:{gate_id}"
+
+
 def capability_for(action: str) -> str:
     """The capability the route behind ``action`` requires."""
     if action in TASK_ACTIONS:
@@ -364,7 +369,7 @@ def entries(
             out.append(
                 AttentionEntry(
                     **base(w),
-                    id=f"gate:{gate_ids[gate.run_id]}",
+                    id=gate_entry_id(gate_ids[gate.run_id]),
                     state="gated",
                     title=item.title if item is not None else unnamed,
                     reason=gate.detail,
@@ -455,6 +460,22 @@ def find(
         if entry.id == entry_id:
             return entry if auth is None else entries(views, [w], auth)[0]
     return None
+
+
+def about(
+    views: Views, *, run_id: str | None = None, item_id: str | None = None
+) -> AttentionEntry | None:
+    """The entry on the default list about the run ``run_id`` or, failing
+    that, the item ``item_id`` (both by the ids the stores keep), as it
+    stands now with no caller in mind — or ``None`` when neither is
+    waiting. One read of what is waiting, and only the match projected."""
+    if not run_id and not item_id:
+        return None
+    found = waiting(views)
+    match = next((w for w in found if run_id and subject(w)[0] == run_id), None)
+    if match is None and item_id:
+        match = next((w for w in found if subject(w)[1] == item_id), None)
+    return entries(views, [match], None)[0] if match is not None else None
 
 
 def subject(w: Waiting) -> tuple[str | None, str | None]:

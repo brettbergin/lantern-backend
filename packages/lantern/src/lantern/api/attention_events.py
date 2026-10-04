@@ -22,10 +22,10 @@ the entry was first announced, when it was last reminded about and how
 many times. On the same passes an entry open at least
 ``[attention] remind_after_s`` and not reminded about within
 ``remind_every_s`` gets one :data:`REMINDER` — the opening's data plus
-``waiting_s``, ``reminders`` and the ``capabilities`` its actions need —
-and the clock moves in the event's own transaction, so a restart repeats
-nothing and a daemon that was down for a week sends one reminder on
-return, not seven. A value the release before reminders wrote has no
+``waiting_s``, ``reminders``, its ``actions`` and the ``capabilities``
+they need — and the clock moves in the event's own transaction, so a
+restart repeats nothing and a daemon that was down for a week sends one
+reminder on return, not seven. A value the release before reminders wrote has no
 clock; it is stamped as first seen now, never overdue.
 
 **What it costs.** It is called on every pass of the projector, once a
@@ -134,10 +134,12 @@ class AttentionTracker:
         found = sorted(waiting(views), key=lambda w: w.order)
         current: dict[str, dict[str, Any]] = {}
         capabilities: dict[str, list[str]] = {}
+        actions: dict[str, list[str]] = {}
         for w, entry in zip(found, entries(views, found, None), strict=True):
             run_id, item_id = subject(w)
             current[entry.id] = _opened(run_id, item_id, event_data(entry), now)
             capabilities[entry.id] = sorted({action.capability for action in entry.actions})
+            actions[entry.id] = [action.action for action in entry.actions]
         kept: dict[str, str] = dstore.values_with_prefix(_STATE_PREFIX)
         known = {
             key[len(OPEN_PREFIX) :]: value
@@ -194,6 +196,7 @@ class AttentionTracker:
                         "waiting_s": int(now - opened_at),
                         "reminders": count,
                         "capabilities": capabilities[entry_id],
+                        "actions": actions[entry_id],
                     },
                 },
                 {OPEN_PREFIX + entry_id: json.dumps(reminded)},

@@ -84,6 +84,7 @@ from lantern_worker.protocol import HostToolSpec
 if TYPE_CHECKING:
     from lantern.api.attention_events import AttentionTracker
     from lantern.api.auth.oidc import OidcProvider
+    from lantern.api.models import AttentionEntry
 
 T = TypeVar("T")
 
@@ -724,8 +725,18 @@ class ApiContext:
                 clock=self.clock,
                 agent_name=self._agent_name,
                 transport=lambda: self.relay_transport,
+                gate_id=lambda run_id: self.public_ids.gate_id(run_id, self.clock()),
+                attention=self._attention_about,
             )
         return self._push
+
+    def _attention_about(self, run_id: str | None, item_id: str | None) -> AttentionEntry | None:
+        """The attention entry about a run or an item, for a notification
+        to name: the list's own read, with no caller in mind."""
+        from lantern.api.attention import about
+        from lantern.api.projections import Views
+
+        return about(Views(self), run_id=run_id, item_id=item_id)
 
     @property
     def attention(self) -> AttentionTracker:

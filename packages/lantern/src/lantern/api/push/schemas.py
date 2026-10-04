@@ -62,6 +62,23 @@ class NotificationKind(StrEnum):
     TEST = "test"
 
 
+class NotificationLevel(StrEnum):
+    """How urgent a push is, for the device to present it by.
+
+    ``passive``: news to read when convenient (work or a reply that
+    arrived, a test). ``active``: worth a look now (a mention, something
+    that could not finish, a plan waiting on you, a reminder about work
+    that failed or is held). ``time_sensitive``: something is waiting on a
+    decision the recipient can make (a gate, work that needs a person, a
+    reminder about a decision). A notification recorded before levels
+    existed reads ``active``.
+    """
+
+    PASSIVE = "passive"
+    ACTIVE = "active"
+    TIME_SENSITIVE = "time_sensitive"
+
+
 class DevicePrefs(ApiModel):
     """Which pushes a device wants. Every kind is on by default; a channel
     absent from ``per_channel`` gets ``all``."""
@@ -162,6 +179,22 @@ class PushNotificationOut(ApiModel):
     title: str
     body: str
     created_at: str
+    entry_id: str | None = Field(
+        description=(
+            "The id of the `GET /v1/attention` entry it is about, when it is about "
+            "one: what `POST /v1/attention/{id}/act` takes."
+        ),
+    )
+    actions: list[str] = Field(
+        description=(
+            "The entry's actions the recipient may take, by the attention list's "
+            "action names (`gate_approve`, `retry`, `dismiss`, ...): never one the "
+            "server would refuse them when it was recorded. Empty without an entry."
+        ),
+    )
+    level: NotificationLevel = Field(
+        description="How urgent it is: `active` for a push recorded before levels were."
+    )
 
 
 __all__ = [
@@ -174,6 +207,7 @@ __all__ = [
     "DevicePlatform",
     "DevicePrefs",
     "NotificationKind",
+    "NotificationLevel",
     "PushEnvironment",
     "PushNotificationOut",
     "PushTestOut",

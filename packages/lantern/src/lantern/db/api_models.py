@@ -298,3 +298,12 @@ class PushNotificationRow(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     event_seq: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    #: The attention entry it is about (``GET /v1/attention``'s ``id``),
+    #: when it is about one.
+    entry_id: Mapped[str | None] = mapped_column(Text)
+    #: The JSON list of that entry's actions its recipient may take.
+    #: NULL on a row written before revision 0052: none.
+    actions_json: Mapped[str | None] = mapped_column(Text)
+    #: ``passive``, ``active`` or ``time_sensitive``. NULL on a row written
+    #: before revision 0052: ``active``.
+    level: Mapped[str | None] = mapped_column(Text)

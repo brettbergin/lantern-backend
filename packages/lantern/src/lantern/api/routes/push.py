@@ -61,6 +61,9 @@ def _notification_out(notification: Notification) -> PushNotificationOut:
             "title": notification.title,
             "body": notification.body,
             "created_at": rfc3339(notification.created_at),
+            "entry_id": notification.entry_id,
+            "actions": list(notification.actions),
+            "level": notification.level,
         }
     )
 
@@ -158,7 +161,9 @@ async def get_notification(
     auth: Authenticated = Depends(require("collaboration:read")),  # noqa: B008
     member: Member = Depends(current_member),  # noqa: B008
 ) -> PushNotificationOut:
-    """The text a device shows for the push that carried `ref`."""
+    """The text a device shows for the push that carried `ref`, the
+    attention entry it is about, the actions on that entry the caller may
+    take (through `POST /v1/attention/{id}/act`) and how urgent it is."""
     notification = await ctx.call(ctx.push.notification, member.user.id, ref)
     if notification is None:
         raise Problem(404, "notification_not_found", "notification not found")

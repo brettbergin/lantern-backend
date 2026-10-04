@@ -339,6 +339,9 @@ def test_a_test_push_reaches_only_that_device(api: Api, relay: FakeRelay) -> Non
         "title": "Test notification",
         "body": "Notifications from this server reach this device.",
         "created_at": body["created_at"],
+        "entry_id": None,
+        "actions": [],
+        "level": "passive",
     }
     listed = api.client.get("/v1/users/me/devices", headers=me).json()["items"]
     pushed = {d["id"]: d["last_push_at"] for d in listed}
