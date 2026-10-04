@@ -15,6 +15,7 @@ import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from lantern.api.attention_events import SWEEP_S
 from lantern.api.chronology import DAEMON_ACTOR
 from lantern.api.collaboration import LocalUser, _event
 from lantern.api.publicids import run_public_id
+from lantern.api.push.rules import BODY_LIMIT
 from lantern.db.api_models import ApiEventRow, OperationRow, PushNotificationRow
 from lantern.db.daemon_models import WorkItemRow
 from lantern.db.job_models import ExternalJobRow
@@ -1335,3 +1337,106 @@ def test_a_notification_recorded_before_the_fields_reads_about_nothing_and_activ
         row.actions_json = None
         row.level = None
     assert _fields(room.notification(ping["ref"])) == (None, [], "active")
+
+
+# -- the daily digest ---------------------------------------------------------------
+
+
+def _digest(room: Room, day: str = "2026-10-02", **numbers: Any) -> None:
+    """A ``briefing.digest`` as the tracker records one: for everyone, no
+    run, item or channel."""
+    room.api.ctx.chronology.record(
+        "briefing.digest",
+        room.api.clock(),
+        actor=DAEMON_ACTOR,
+        data={
+            "day": day,
+            "since": "2026-10-01T07:00:00Z",
+            "until": "2026-10-02T07:00:00Z",
+            "landed": 11,
+            "failed": 1,
+            "waiting": 2,
+            "decided_allow": 9,
+            "decided_escalate": 0,
+            "runway_days": 2.5,
+            "timezone": "UTC",
+            **numbers,
+        },
+    )
+
+
+def test_the_digest_is_one_work_push_to_every_member(room: Room) -> None:
+    _admin(room)
+    _digest(room)
+    room.step()
+    for token in (TOKEN_A, TOKEN_B, TOKEN_C):
+        [ping] = room.pushes_to(token)
+        assert ping["k"] == "work" and ping["thread"] == ""
+    notice = room.notification(room.pushes_to(TOKEN_B)[0]["ref"], "bob")
+    assert notice["kind"] == "work" and notice["channel_id"] is None
+    assert notice["title"] == "Your Lantern briefing"
+    assert (notice["entry_id"], notice["actions"], notice["level"]) == (None, [], "passive")
+    assert notice["body"] == (
+        "Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; "
+        "9 decided under grants; runway 2.5 days."
+    )
+    assert len(notice["body"]) <= BODY_LIMIT
+
+
+def test_the_same_digest_is_never_pushed_twice(room: Room) -> None:
+    _digest(room)
+    room.step()
+    _digest(room)
+    room.step()
+    assert len(room.pushes_to(TOKEN_A)) == 1
+    # The next day's is its own.
+    room.api.clock.t += 60
+    _digest(room, day="2026-10-03")
+    room.step()
+    assert len(room.pushes_to(TOKEN_A)) == 2
+
+
+def test_the_digest_answers_to_the_work_switch(room: Room) -> None:
+    room.prefs("bob", work=False)
+    room.prefs("owner", failures=False, gates=False)
+    _digest(room)
+    room.step()
+    assert room.pushes_to(TOKEN_B) == []
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == ["work"]
+
+
+def test_a_digest_without_its_day_is_quiet(room: Room) -> None:
+    _digest(room, day="")
+    room.step()
+    assert room.relay.sent == []
+
+
+def test_a_digest_the_tracker_records_reaches_a_device(tmp_path: Path, relay: FakeRelay) -> None:
+    """End to end: the tracker's own event, as it writes it, is what the
+    rule reads; a plain API client is no member and is never a recipient."""
+    api = build(
+        tmp_path,
+        config={
+            "push": {"enabled": True, "relay_url": RELAY},
+            "attention": {"digest_at": "07:00"},
+        },
+    )
+    api.ctx.relay_transport = relay.transport
+    midnight = datetime(2026, 10, 2, tzinfo=UTC).timestamp()
+    api.clock.t = midnight + 6 * 3600
+    with api.client:
+        owner_headers = register_owner(api)
+        api.client.post("/v1/users/me/devices", json=device(TOKEN_A), headers=owner_headers)
+        api.ctx.push.dispatcher.prime()
+        assert _step(api) == 0
+        api.clock.t = midnight + 7 * 3600
+        assert _step(api) == 1
+        api.ctx.push.dispatcher.step()
+        [ping] = [sent.payload for sent in relay.sent if sent.token == TOKEN_A]
+        assert ping["k"] == "work"
+        assert len(relay.sent) == 1
+        api.clock.t += SWEEP_S
+        assert _step(api) == 0
+        api.ctx.push.dispatcher.step()
+        assert len(relay.sent) == 1
+    api.ctx.close()

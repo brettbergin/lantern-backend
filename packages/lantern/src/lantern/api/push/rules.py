@@ -43,6 +43,11 @@ kinds, carries them unchanged.
   the daemon itself. Never the whole workspace. Each reminder is its own
   notice (the dedupe key counts them), and one is never pushed twice.
 
+- **the daily digest** (``briefing.digest``, which the attention tracker
+  records once a day at ``[attention] digest_at``): pushed as ``work`` to
+  every active member, titled :data:`DIGEST_TITLE`, its body the digest's
+  summary line. The dedupe key is the day, so one digest is one push.
+
 Historical events (a job imported from before the daemon knew it) are
 never news. :func:`allowed` then narrows by a device's own preferences.
 
@@ -72,6 +77,7 @@ from sqlalchemy import select
 
 from lantern.api.channel_access import MANAGING_ROLES
 from lantern.api.collaboration import CollaborationStore, Member, _message
+from lantern.api.digest import summary_line
 from lantern.api.publicids import parse_run_id, run_public_id
 from lantern.api.push.store import Level
 from lantern.daemon.controls.principal import ROLE_CAPABILITIES, Role
@@ -98,6 +104,9 @@ PLAN_QUESTIONS = "plan.generation.questions"
 PLAN_PROPOSED = "plan.generation.proposed"
 PLAN_PAUSED = "plan.run.paused"
 ATTENTION_REMINDER = "attention.reminder"
+DIGEST = "briefing.digest"
+#: The daily digest's notification title.
+DIGEST_TITLE = "Your Lantern briefing"
 #: Every event type a notice can come from.
 TYPES: frozenset[str] = frozenset(
     {
@@ -111,6 +120,7 @@ TYPES: frozenset[str] = frozenset(
         PLAN_PROPOSED,
         PLAN_PAUSED,
         ATTENTION_REMINDER,
+        DIGEST,
     }
 )
 
@@ -338,6 +348,8 @@ class NoticeRules:
             return self._paused(session, event)
         if event.type == ATTENTION_REMINDER:
             return self._reminder(session, event)
+        if event.type == DIGEST:
+            return self._digest(session, event)
         return []
 
     # -- who ---------------------------------------------------------------------
@@ -783,6 +795,33 @@ class NoticeRules:
                 level,
             )
             for member in able
+        ]
+
+    # -- the daily digest -------------------------------------------------------------
+
+    def _digest(self, session: Any, event: Event) -> list[Notice]:
+        """One ``work`` notice per active member: the day's summary line.
+        Only a digest for everyone — one scoped to a run, an item or a
+        channel is not one the tracker records."""
+        day = event.data.get("day")
+        if not isinstance(day, str) or not day.strip():
+            return []
+        if event.channel_id or event.run_id or event.item_id:
+            return []
+        timezone = event.data.get("timezone")
+        body = excerpt(summary_line(event.data, timezone if isinstance(timezone, str) else "UTC"))
+        return [
+            Notice(
+                member.user.id,
+                "work",
+                None,
+                None,
+                DIGEST_TITLE,
+                body,
+                f"digest:{day}",
+                level="passive",
+            )
+            for member in self._members(session)
         ]
 
 

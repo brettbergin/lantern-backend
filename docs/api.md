@@ -1721,7 +1721,7 @@ it on the notification itself without opening the app:
   Each is taken through `POST /v1/attention/{entry_id}/act`, which checks the
   entry and the capability again as it stands then. Empty without an entry.
 - `level` — how urgent it is: `passive` (news to read when convenient: work
-  or a reply that arrived, a test push), `active` (worth a look now: a
+  or a reply that arrived, the daily digest, a test push), `active` (worth a look now: a
   mention, something that could not finish, a plan waiting on you, a
   reminder about work that failed or is held) or `time_sensitive` (a
   decision is waiting on you: an opened gate, a job's `action_required`, a
@@ -1737,6 +1737,7 @@ it on the notification itself without opening the app:
 | A mention                                                | `null`                                                       | `[]`                                                           | `active`                                               |
 | Work or a reply that could not finish                    | `null`                                                       | `[]`                                                           | `active`                                               |
 | Work delivered, a reply finished, a job's `work`, a test | `null`                                                       | `[]`                                                           | `passive`                                              |
+| The daily digest (`briefing.digest`)                     | `null`                                                       | `[]`                                                           | `passive`                                              |
 
 A notification recorded before these fields existed reads `entry_id: null`,
 `actions: []`, `level: "active"`. None of it rides the push itself: the
@@ -1783,6 +1784,17 @@ second is not swallowed by the one-hour dedupe of the first — and the same
 one is never pushed twice. The notice carries the entry's channel when it has
 one, so per-channel preferences apply, and a device's `gates` or `failures`
 switch governs it as it governs the kind.
+
+The daily digest, when `[attention] digest_at` is set, is one more:
+
+| Notice         | Event             | `kind` | Who                                                                          | Title                   |
+| -------------- | ----------------- | ------ | ---------------------------------------------------------------------------- | ----------------------- |
+| Daily briefing | `briefing.digest` | `work` | Every active member of the workspace with a device; never a plain API client | `Your Lantern briefing` |
+
+The body is the digest's summary line (`Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; 9 decided under grants; runway 2.5 days.`),
+cut to the notification body's length. It carries no channel, so the
+device's `work` switch alone governs it, and its dedupe key is the day: one
+digest is one push.
 
 Only live events are pushed: the dispatcher reads the chronology from where
 it stood when the daemon started, so historical events and a restart's replay
@@ -2149,7 +2161,9 @@ included — filter with `type_prefix`), gate transitions, steering receipts,
 every operation any surface recorded, and — with `attention.act` —
 [`attention.opened`, `attention.resolved` and `attention.reminder`](#hearing-that-an-entry-appeared-or-left)
 when something starts and stops waiting on a person, and while it still
-does. Each event's `id` (`evt_<n>`) is also the cursor.
+does, and — with `[attention] digest_at` set — the day's
+[`briefing.digest`](#the-daily-digest). Each event's `id` (`evt_<n>`) is
+also the cursor.
 
 1. Read a snapshot: `GET /v1/status` reports `watermark`.
 2. Read what came after it: `GET /v1/events?after=evt_<watermark>` — pages
@@ -2852,6 +2866,46 @@ Every field is always present; what cannot be said is `null`. Durations are
 seconds, timestamps RFC 3339, and nothing is a currency. Each part is its own
 object so a later release can add a field inside it: **a client ignores
 fields it does not know** rather than failing the page.
+
+### The daily digest
+
+With `[attention] digest_at` set (a local time of day, `"HH:MM"`, in
+`[daemon] run_cap_timezone`; off by default), the daemon computes this
+briefing once a day by itself, at or after that time, for the window since
+the previous digest (a day, the first time) — with the same code, as the
+summary anyone may read (no `decided.recent`) — and records one
+`briefing.digest` event:
+
+```json
+{
+  "type": "briefing.digest",
+  "run_id": null,
+  "item_id": null,
+  "data": {
+    "day": "2026-10-02",
+    "since": "2026-10-01T07:00:00Z",
+    "until": "2026-10-02T07:00:00Z",
+    "landed": 11,
+    "failed": 1,
+    "waiting": 2,
+    "decided_allow": 9,
+    "decided_escalate": 0,
+    "runway_days": 2.5,
+    "timezone": "UTC"
+  }
+}
+```
+
+`landed` and `failed` are `outcomes`, `waiting` is `waiting.total`,
+`decided_allow` and `decided_escalate` are `decided.allow` and
+`decided.escalate`, and `runway_days` is `runway.days` (`null` without a
+rate). The numbers only: no title, no reason, nothing of what was decided.
+It names no run, item or channel, so **every member** sees it, whatever
+their role. The same summary goes to the control channel as one
+`daemon.notice` (`kind: "daemon.digest"`, `level: "info"`) and, with push
+on, to every member as [one `work` push](#push-notifications). One a day:
+a restart repeats nothing, a daemon that was down at the time sends it once
+when it is back the same day, and a day missed entirely is skipped.
 
 ## Errors
 
