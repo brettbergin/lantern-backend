@@ -50,7 +50,9 @@ written, naming the key and the action. What each key compares:
 * ``max_children`` — ``child_count`` is at most this.
 * ``require_review`` — the level's stored ``review_verdict`` is
   ``approve``.
-* ``causes`` — the ``failure_cause`` is one of these names.
+* ``causes`` — the ``failure_cause`` is one of these names, each one of
+  :data:`GRANTABLE_CAUSES` (the closed set triage derives, less
+  ``needs_person`` and ``unknown``, which always go to a person).
 * ``max_retries`` — ``retries``, the retries already made, is below this.
 
 **Fail closed.** A condition whose fact is missing, or is a value the judge
@@ -101,6 +103,28 @@ LEVELS: tuple[str, ...] = get_args(Level)
 APPROVING_VERDICT = "approve"
 #: A failure cause the host could not establish: never matched by a grant.
 UNKNOWN_CAUSE = "unknown"
+#: A failure that says a person must look: never matched by a grant either.
+NEEDS_PERSON_CAUSE = "needs_person"
+
+#: The failure causes the daemon's triage names (:mod:`lantern.daemon.triage`
+#: derives them): what a grant's ``causes`` may list, except the two that
+#: always go to a person.
+FAILURE_CAUSES: tuple[str, ...] = (
+    "ci_timeout",
+    "provider_throttle",
+    "sandbox_resource",
+    "forge_transient",
+    "verify_failed",
+    "review_rounds_exhausted",
+    "ci_rounds_exhausted",
+    "merge_conflict",
+    NEEDS_PERSON_CAUSE,
+    UNKNOWN_CAUSE,
+)
+#: The causes a grant may list.
+GRANTABLE_CAUSES: tuple[str, ...] = tuple(
+    cause for cause in FAILURE_CAUSES if cause not in (NEEDS_PERSON_CAUSE, UNKNOWN_CAUSE)
+)
 
 _PLAN_SCOPE = frozenset({"repositories", "levels"})
 _PLAN_REVIEWED = frozenset({"repositories", "levels", "max_children", "require_review"})
@@ -295,6 +319,27 @@ def check_conditions(action: str, conditions: Conditions) -> None:
                 f"conditions.{key}",
                 f"condition {key!r} does not apply to {action}; it accepts "
                 f"{', '.join(k for k in ATTRIBUTE_FOR if k in accepted)}",
+            )
+    check_causes(conditions.causes)
+
+
+def check_causes(causes: tuple[str, ...] | None) -> None:
+    """Refuse a cause outside :data:`GRANTABLE_CAUSES`, naming it. Checked
+    when a grant is written, not when one is read: a stored grant naming a
+    cause that no longer exists still loads, and simply never matches."""
+    for cause in causes or ():
+        name = cause.casefold()
+        if name == NEEDS_PERSON_CAUSE:
+            raise GrantInvalid(
+                "conditions.causes",
+                f"condition 'causes': {NEEDS_PERSON_CAUSE!r} cannot be listed: a failure "
+                "that says a person must look always goes to one",
+            )
+        if name not in GRANTABLE_CAUSES:
+            raise GrantInvalid(
+                "conditions.causes",
+                f"condition 'causes': {cause!r} is not a failure cause; the causes are "
+                f"{', '.join(GRANTABLE_CAUSES)}",
             )
 
 

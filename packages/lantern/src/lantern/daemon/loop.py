@@ -101,6 +101,7 @@ from lantern.daemon.repositories import RepositoryRegistry
 from lantern.daemon.schedule import Cadence, ScheduleRow, format_due
 from lantern.daemon.sources import HIDDEN_MARKER_RE, IssueContext, WorkSource
 from lantern.daemon.store import DaemonStore, MergeGate, ReviewHold
+from lantern.daemon.triage import Triage
 from lantern.daemon.usagepool import UsagePool, fairness_key
 from lantern.db.event_scope import channel_for_item, channel_for_run
 from lantern.engine.checks import check_policy_reader
@@ -580,6 +581,9 @@ class DaemonLoop:
         # Plans whose `advance` is auto, moved forward under the grants on
         # every tick the daemon is not held (see daemon/plandriver.py).
         self.plan_driver = PlanDriver(self)
+        # Triage: the operator agent picks failures back up under the
+        # grants; with no operator grant it does nothing.
+        self.triage = Triage(self)
 
     # -- external control ---------------------------------------------------------
 
@@ -2197,6 +2201,10 @@ class DaemonLoop:
         # and an agent's step is new. Its breakdowns queue like any work.
         if not self.paused:
             self.plan_driver.tick(now)
+        # Triage acts for the operator agent (retry, grant rounds); a
+        # paused daemon takes no new act on its own.
+        if not self.paused:
+            self.triage.tick(now)
         idle = self._dispatch_gate(now, first=True)
         if idle is not None:
             return idle
