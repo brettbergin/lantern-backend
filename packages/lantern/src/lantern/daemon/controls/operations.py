@@ -88,6 +88,7 @@ EFFECTS: dict[str, str] = {
     "grant.create": "the grant is stored and judged from the next decision",
     "grant.update": "the grant holds the requested change",
     "grant.delete": "the grant is gone; what it allowed stays in the ledger",
+    "grant.restore_defaults": "every default grant whose agent can act is in place",
     "decision.decline": "the escalation is resolved; a person declined it unless it was already",
     "goal.create": "the goal is stored for its repository",
     "goal.update": "the goal holds the requested change",
@@ -871,6 +872,23 @@ def _judge_grant(
     it happened: it is there, it holds the change, or it is gone."""
     from lantern.daemon.controls.delegation_store import DelegationStore
 
+    if op.action == "grant.restore_defaults":
+        # One transaction writes every missing default: they are all in
+        # place, or the restore did not happen.
+        from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS
+
+        store = DelegationStore(loop.dstore)
+        present = {grant.default_key for grant in store.grants() if grant.default_key}
+        ready = getattr(loop, "_seedable_defaults", None)
+        wanted = ready() if callable(ready) else list(DEFAULT_GRANTS)
+        missing = [default.key for default in wanted if default.key not in present]
+        if not missing:
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the default grants were not restored ({', '.join(missing)} missing)",
+        )
     grant = DelegationStore(loop.dstore).grant(op.target_key)
     if op.action == "grant.create":
         if grant is not None:

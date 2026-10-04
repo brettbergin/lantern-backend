@@ -1,5 +1,31 @@
 ## [Unreleased]
 
+**Grants no longer ship empty: every install starts with Lantern's defaults.**
+An owner had to write every grant before an `auto` plan or triage did
+anything, so an install delegated nothing until someone learned the grant
+vocabulary. The daemon now seeds seven default grants when it starts, on a
+fresh install and on upgrade alike, all enabled: the planner breaks down
+(`levels: [epic, task]`, 10 a day) and proposes (2 a day); the critic
+approves and publishes a reviewed level of at most 8 children (5 a day each)
+and starts an epic of at most 12 tasks (3 a day); and the operator retries an
+item that failed on `ci_timeout`, `forge_transient` or `provider_throttle`
+once (5 a day) and grants more rounds once to a run that spent its review or
+CI rounds (3 a day). **An upgraded install starts triage at once:** failures
+of the last day with those causes are retried once, within those limits, and
+one with any other cause is written once to the ledger as an escalation. The
+plan defaults still act only on a plan a person set to `auto`, proposing
+still needs `[delegation] propose_every` and a goal, and no default token
+budget is set. Each default is seeded once, ever, under a stable
+`default_key` recorded in `daemon_state`: a deleted default is not seeded
+again and an edited or paused one is never touched;
+`POST /v1/grants/defaults/restore` (`policy:manage`, operation
+`grant.restore_defaults`) writes back the deleted ones. Revision 0054 adds
+`daemon_grants.source` (`default` or `owner`; existing rows are `owner`) and
+a unique `default_key`. `Grant` gains `source` and `default_key`, and
+`GET /v1/grants` lists the defaults first, in their table's order, then the
+owners' grants oldest first. New notice kind `daemon.grants_restored` (a restore; seeding is logged) and
+feature string `delegation.defaults`.
+
 **The planner drafts plans from an owner's goals, and the chain of work it
 feeds on is bounded.** An `auto` plan moved itself, but someone still had
 to draft it. With `[delegation] propose_every` set (seconds; default `0`,

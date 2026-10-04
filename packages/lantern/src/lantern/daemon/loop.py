@@ -9,8 +9,8 @@ so the daemon's whole job is to hand it an issue and settle on how the run
 ended: ``merged`` closes the issue, ``failed`` retries or gives up,
 ``blocked`` hands the PR to a human. The daemon starts nothing on its own
 account: work reaches it from a person's label or ask, a schedule a person
-created, or a step an owner's grant allows an agent (grants ship empty, and
-whatever no grant covers escalates to a person).
+created, or a step a grant allows an agent (Lantern's defaults, seeded once
+at start, or an owner's; whatever no grant covers escalates to a person).
 
 Spend guardrails — a calendar-day run cap that counts runs started since
 00:00 in ``daemon.run_cap_timezone`` (default ``UTC``) and resets at the
@@ -62,6 +62,7 @@ from lantern.config import (
     VcsKind,
 )
 from lantern.daemon.controls.delegation import Conditions, Grant, describe as describe_grant
+from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS, DefaultGrant
 from lantern.daemon.controls.delegation_store import DelegationStore, GrantGone
 from lantern.daemon.controls.eligibility import Subject, check as check_eligibility
 from lantern.daemon.controls.generation import (
@@ -583,7 +584,8 @@ class DaemonLoop:
         # every tick the daemon is not held (see daemon/plandriver.py).
         self.plan_driver = PlanDriver(self)
         # Triage: the operator agent picks failures back up under the
-        # grants; with no operator grant it does nothing.
+        # grants (the defaults retry a transient failure once); with no
+        # enabled operator grant it does nothing.
         self.triage = Triage(self)
         # Goals: the standing objectives an owner writes for a repository,
         # and the plans proposed from each (`daemon_plans.goal_id`).
@@ -2983,6 +2985,56 @@ class DaemonLoop:
         return grant, (
             f"grant {grant.id} removed; {grant.agent_slug} no longer takes {grant.action} under it."
         )
+
+    def _seedable_defaults(self) -> list[DefaultGrant]:
+        """The defaults whose agent can act: one whose agent an operator
+        disabled or removed waits, unseeded, for a start where it can."""
+        ready: list[DefaultGrant] = []
+        for default in DEFAULT_GRANTS:
+            agent = self.agents.get(default.agent_slug)
+            if agent is not None and agent.slug == default.agent_slug and agent.active:
+                ready.append(default)
+            else:
+                log.info("delegation.default_waits", default=default.key, agent=default.agent_slug)
+        return ready
+
+    def seed_default_grants(self) -> list[Grant]:
+        """Seed each of Lantern's default grants never seeded here before
+        (:mod:`lantern.daemon.controls.delegation_defaults`). A default
+        seeded before is not written again, even when an owner deleted it;
+        an existing grant is never touched. Logged, not narrated: start-up
+        writes no chronology of its own, and the grants say what they are
+        (``source = "default"``) wherever they are listed."""
+        written = self.delegation.seed_defaults(self._seedable_defaults(), now=self.clock())
+        if written:
+            log.info(
+                "delegation.defaults_seeded",
+                grants=[grant.id for grant in written],
+                defaults=[grant.default_key for grant in written],
+            )
+        return written
+
+    def restore_default_grants(self, *, by: str | None) -> tuple[list[Grant], str]:
+        """Write again each default whose grant is gone; an existing one,
+        edited or paused, is left as it is. The grants written and the
+        line to answer with."""
+        written = self.delegation.seed_defaults(
+            self._seedable_defaults(), now=self.clock(), restore=True
+        )
+        if not written:
+            return [], "every default grant is already in place; nothing was restored."
+        who = by or "operator"
+        self._notice(
+            "daemon.grants_restored",
+            f"{len(written)} default grant(s) restored by {who}: "
+            + "; ".join(describe_grant(grant) for grant in written),
+            grants=[grant.id for grant in written],
+            defaults=[grant.default_key for grant in written],
+            by=by,
+        )
+        return written, f"{len(written)} default grant(s) restored: " + "; ".join(
+            f"{grant.id} ({grant.default_key})" for grant in written
+        ) + "."
 
     # -- the registered repositories ------------------------------------------------
 
@@ -5945,6 +5997,7 @@ class DaemonLoop:
                 "`resume --all` every one",
                 holds=[h.name for h in restored],
             )
+        self.seed_default_grants()
         self._settle_half_claims()
         self._reconcile_gates()
         self._reconcile_review_holds()

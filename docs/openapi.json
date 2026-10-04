@@ -6143,7 +6143,7 @@
       },
       "GrantOut": {
         "additionalProperties": false,
-        "description": "A standing rule: ``agent_slug`` may take ``action`` while\n``conditions`` hold, at most ``daily_limit`` times a day (``null`` is\nunlimited). ``used_today`` is how many acts it allowed in the current\ncap day, counted from the decisions ledger.",
+        "description": "A standing rule: ``agent_slug`` may take ``action`` while\n``conditions`` hold, at most ``daily_limit`` times a day (``null`` is\nunlimited). ``used_today`` is how many acts it allowed in the current\ncap day, counted from the decisions ledger. ``source`` is ``default``\nfor one of Lantern's default grants (``default_key`` names which) and\n``owner`` for one a person wrote.",
         "properties": {
           "action": {
             "title": "Action",
@@ -6193,6 +6193,17 @@
             ],
             "title": "Daily Limit"
           },
+          "default_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Key"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
@@ -6216,6 +6227,15 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "source": {
+            "default": "owner",
+            "enum": [
+              "default",
+              "owner"
+            ],
+            "title": "Source",
+            "type": "string"
           },
           "updated_at": {
             "title": "Updated At",
@@ -6330,6 +6350,33 @@
           "expected_revision"
         ],
         "title": "GrantUpdate",
+        "type": "object"
+      },
+      "GrantsRestored": {
+        "additionalProperties": false,
+        "description": "The default grants a restore wrote, in the table's order: empty when\nevery default was already in place.",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantOut"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          }
+        },
+        "required": [
+          "grants",
+          "message",
+          "operation"
+        ],
+        "title": "GrantsRestored",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -18971,7 +19018,7 @@
     },
     "/v1/grants": {
       "get": {
-        "description": "Every grant, oldest first, with how many acts each allowed today.\nEmpty until an owner writes one: a fresh installation delegates\nnothing.",
+        "description": "Every grant, with how many acts each allowed today: Lantern's\ndefault grants first, in their table's order (`source: \"default\"`),\nthen the grants owners wrote, oldest first.",
         "operationId": "list_grants_v1_grants_get",
         "responses": {
           "200": {
@@ -19026,6 +19073,28 @@
           }
         },
         "summary": "Create Grant",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
+    "/v1/grants/defaults/restore": {
+      "post": {
+        "description": "Write again each of Lantern's default grants whose grant was\ndeleted. A default still there, edited or paused, is left as it is;\nthe answer lists the grants written (none when every default is in\nplace).",
+        "operationId": "restore_default_grants_v1_grants_defaults_restore_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsRestored"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Restore Default Grants",
         "tags": [
           "delegation"
         ]

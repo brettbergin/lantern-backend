@@ -13,7 +13,7 @@ from lantern.daemon.controls.eligibility import ACTIONS
 from lantern.daemon.controls.principal import CAPABILITIES, ROLE_CAPABILITIES
 from lantern.daemon.sources import RepoHealth
 from lantern.provider import ProviderRecovery
-from tests.api.conftest import Api
+from tests.api.conftest import Api, without_default_grants
 from tests.api.test_channel_access import _channel, _invite
 from tests.api.test_collaboration import bearer, register
 from tests.api.test_control import gated, run_public
@@ -395,6 +395,8 @@ class TestTheList:
     def _mixed(self, api: Api) -> None:
         """Two failures a minute apart, a gate opened after both, and a
         suspended repository."""
+        # The list's order, not triage: no default grant judges the failures.
+        without_default_grants(api)
         _parked(api, "2", repo="o/r")
         api.clock.t += 60
         _parked(api, "3", "failed", repo="o/r")

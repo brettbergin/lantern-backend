@@ -68,6 +68,7 @@ from lantern.daemon.controls.results import (
     GoalOutcome,
     GrantOutcome,
     GrantRoundsOutcome,
+    GrantsRestoredOutcome,
     ItemOutcome,
     ItemsOutcome,
     LogRecordsOutcome,
@@ -1450,6 +1451,26 @@ class ControlService:
             principal=principal,
             request={"agent_slug": existing.agent_slug, "action": existing.action},
             idempotency=idempotency,
+        )
+        return self._record(spec, apply)
+
+    def restore_default_grants(
+        self,
+        principal: Principal,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantsRestoredOutcome:
+        """Write again each of Lantern's default grants whose grant is
+        gone. One still there — edited, paused or as seeded — is left
+        alone; the outcome names the grants written."""
+        require(principal, "policy:manage")
+
+        def apply(_: str | None) -> GrantsRestoredOutcome:
+            written, message = self.loop.restore_default_grants(by=principal.attribution())
+            return GrantsRestoredOutcome(grant_ids=[grant.id for grant in written], message=message)
+
+        spec = self._spec(
+            "grant.restore_defaults", principal, "grant", "defaults", idempotency=idempotency
         )
         return self._record(spec, apply)
 

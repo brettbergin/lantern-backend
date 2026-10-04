@@ -2031,8 +2031,10 @@ class DaemonConfig(_ConfigModel):
     an owner's standing word: a person labelling an issue (directly, or
     through the chat concierge), a schedule a person created, or a step an
     owner's grant allows an agent on a plan the owner set to advance on its
-    own. Grants ship empty, so a fresh install starts only what a person
-    asked for, and an unlabeled issue is never picked up.
+    own. Every install starts with Lantern's default grants, but no plan
+    advances until a person sets it to Auto, and an unlabeled issue is never
+    picked up; the defaults do let triage retry a recent transient failure
+    once (see ``docs/user-guide.md``, "Default grants").
 
     It is fully autonomous — a label alone starts a run — so the spend
     guardrails here are the only thing standing between a mislabeled issue

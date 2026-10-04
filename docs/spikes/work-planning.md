@@ -65,10 +65,11 @@ capabilities.
 > **Since 2026-10-03.** The constraint above was the first version's. A plan
 > an owner sets to `advance = "auto"` may now be broken down, approved (after
 > an independent critic's review), published and run by agents under grants
-> the owner writes (`/v1/grants`). What still holds: grants ship empty, so a
-> fresh install behaves as described here; agents' capabilities are not
-> widened; an unlabeled issue still needs a person's label; and any step no
-> grant covers waits for a person. See `docs/architecture.md` "Delegation".
+> (`/v1/grants`). Since 2026-10-04 every install starts with Lantern's
+> default grants, but a plan still behaves as described here until a person
+> sets it to `auto`. What still holds: agents' capabilities are not widened;
+> an unlabeled issue still needs a person's label; and any step no grant
+> covers waits for a person. See `docs/architecture.md` "Delegation".
 
 ## Decisions
 

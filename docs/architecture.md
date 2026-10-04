@@ -2335,9 +2335,13 @@ approved only after the run's **critic review** (`plan_review`, see
 [Plan runs](#plan-runs)) has passed it. Whatever no grant covers is an
 escalation, and lands on the one list of **what is waiting on a person**
 (`GET /v1/attention`, under [Typed controls](#typed-controls)), with
-reminders, until someone takes or declines it. Grants ship empty and agents'
-capability sets are never widened, so a fresh install behaves as if none of
-this existed.
+reminders, until someone takes or declines it. Agents' capability sets are
+never widened. Every install starts with Lantern's **default grants**
+(`daemon/controls/delegation_defaults.py`), enabled, but no plan moves until a
+person sets it to `auto`, and proposing also needs `[delegation] propose_every` and a goal; what does act from the first tick is triage, which
+retries a recent transient failure once and gives an exhausted run more rounds
+once, within each default's daily limit. An owner pauses, edits, deletes or
+restores any default.
 
 **Workload intake (#760)** rides the same machinery with a second label and
 a second source. `GitHubIssueSource.poll` runs two searches, the trigger
@@ -2711,8 +2715,26 @@ owner's alone, checked as a capability, never inferred from a role — and goes
 through `ControlService` as a recorded operation (`grant.create`,
 `grant.update`, `grant.delete`) that recovery settles from the stored grant.
 The only surface that writes one is the API's `/v1/grants`; chat, `ctl` and
-the WebSocket's commands deliberately do not. Grants ship empty; the callers
-of `decide` in the loop are the plan driver and triage, below.
+the WebSocket's commands deliberately do not. The callers of `decide` in the
+loop are the plan driver, triage and the proposer, below.
+
+**Default grants.** Grants do not ship empty. `DEFAULT_GRANTS`
+(`daemon/controls/delegation_defaults.py`) is the table every install starts
+with, each row under a stable `default_key` (`plan.approve:critic:v1`).
+`DaemonLoop.recover` seeds them through `DelegationStore.seed_defaults`, in one
+`BEGIN IMMEDIATE` transaction that writes each due grant
+(`source = "default"`, `created_by = "lantern"`) and records its key in
+`daemon_state` (`delegation.defaults.seeded:<key>`). A key recorded there is
+never seeded again, so a default an owner deleted stays deleted (the record is
+the tombstone) and one an owner edited or paused is never touched; the unique
+index on `daemon_grants.default_key` (revision 0054) is the second guard
+against two processes seeding the same row. A default whose agent is disabled
+or archived waits, unseeded, for a start where it can act. `POST /v1/grants/defaults/restore` (`grant.restore_defaults`, `policy:manage`)
+writes again each default whose grant is gone and leaves the rest alone. Every
+grant row carries `source` (`default` or `owner`); the judge reads neither it
+nor `default_key`, so an owner's older grant still wins over a default when
+both allow an act. There is no default token budget: each default's
+`daily_limit` is the spend guard.
 
 ### The plan driver
 
@@ -2812,8 +2834,9 @@ judged on, so an edit between the judgement and the write is a stale
 revision, never a publish of what was not judged.
 
 With no enabled grant the driver takes no step. When nothing is
-escalated either it returns before reading a plan, so an installation that
-delegates nothing behaves exactly as before; when escalations are still
+escalated either it returns before reading a plan, so an installation whose
+owner paused or deleted the plan grants behaves as one with no driver; and
+with grants it never touches a `manual` plan. When escalations are still
 open (an owner removed or disabled the grants) it runs the resolution pass
 alone, so one whose step a person has since taken is closed `acted`. Retrying
 failed epic tasks and items is triage's (below); proposing plans from goals
