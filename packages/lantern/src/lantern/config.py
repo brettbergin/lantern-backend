@@ -1128,6 +1128,24 @@ class AttentionConfig(_ConfigModel):
         return self.remind_after_s > 0
 
 
+class DelegationConfig(_ConfigModel):
+    """How the daemon acts on the grants an owner wrote.
+
+    ``publish_delay_s`` is the window a person has to hold a level an agent
+    approved under a grant before the daemon publishes it to the forge: a
+    plan whose ``advance`` is ``auto`` waits this long after its level was
+    approved (whoever approved it), measured from the approval as the plan
+    records it, so a restart neither shortens nor restarts the wait.
+    Flipping the plan's ``advance`` back to ``manual`` in that window — or
+    editing a child, which makes it a draft again — holds it. ``0``
+    publishes on the next tick. Workspace-wide: a grant's ``repositories``
+    condition is where a repository is narrowed. The grants themselves
+    live in the daemon's database, never here.
+    """
+
+    publish_delay_s: int = Field(default=900, ge=0)
+
+
 class PlanningOverride(_ConfigModel):
     """`[vcs.repos.planning]`: sparse per-repository overrides of
     `[planning]`; omit a key to inherit."""
@@ -3400,6 +3418,9 @@ class Config(_ConfigModel):
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
     # When what waits on a person is reminded about.
     attention: AttentionConfig = Field(default_factory=AttentionConfig)
+    # How the daemon acts on an owner's grants: the hold window before an
+    # agent-approved plan level is published.
+    delegation: DelegationConfig = Field(default_factory=DelegationConfig)
     entrygraph: EntrygraphConfig = Field(default_factory=EntrygraphConfig)
     # Named bounds for workload runs (#758) and the one a run gets by
     # default; a code run ignores both.

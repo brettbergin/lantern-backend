@@ -1101,6 +1101,18 @@ service_memory = "2g"
 # time sends it when it is back that day; a day missed entirely is skipped.
 # digest_at = ""                   # e.g. "07:00"; empty = no digest
 
+# [delegation]
+# How the daemon acts on the grants an owner wrote (POST /v1/grants; the
+# grants live in the daemon's database, never here). A plan whose advance
+# is auto moves itself forward under them: its breakdown is admitted, its
+# level approved, published and run, each only when a grant allows it, and
+# anything a grant does not cover waits for a person. An approved level
+# waits publish_delay_s before it is published, measured from the approval
+# as the plan records it — the window a person has to hold it (flip the
+# plan back to manual, or edit a child). Workspace-wide: a grant's
+# repositories condition narrows a repository. Never changed from chat.
+# publish_delay_s = 900            # 15 minutes; 0 = publish on the next tick
+
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask
 # about runs, PRs and diffs, operate the daemon (every !sbx verb) or queue

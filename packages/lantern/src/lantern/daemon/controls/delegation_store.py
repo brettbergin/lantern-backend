@@ -339,6 +339,38 @@ class DelegationStore:
         with self.dstore.read() as session:
             return [_decision(row) for row in session.scalars(stmt)]
 
+    def latest(self, *, action: str, plan_id: str, node_id: str) -> DecisionRecord | None:
+        """The newest decision on ``action`` for one plan node, whatever its
+        outcome: what the plan driver compares a fresh judgement with, so
+        the same answer to the same situation is written once."""
+        stmt = (
+            select(DecisionRow)
+            .where(
+                DecisionRow.action == action,
+                DecisionRow.plan_id == plan_id,
+                DecisionRow.node_id == node_id,
+            )
+            .order_by(DecisionRow.at.desc(), DecisionRow.decision_id.desc())
+            .limit(1)
+        )
+        with self.dstore.read() as session:
+            row = session.scalars(stmt).first()
+            return None if row is None else _decision(row)
+
+    def unresolved_for_plan(self, plan_id: str) -> list[DecisionRecord]:
+        """The escalations about ``plan_id`` still waiting, oldest first."""
+        stmt = (
+            select(DecisionRow)
+            .where(
+                DecisionRow.plan_id == plan_id,
+                DecisionRow.outcome == "escalate",
+                DecisionRow.resolved_at.is_(None),
+            )
+            .order_by(DecisionRow.at.asc(), DecisionRow.decision_id.asc())
+        )
+        with self.dstore.read() as session:
+            return [_decision(row) for row in session.scalars(stmt)]
+
     def outcome_counts(self, since: float) -> dict[str, int]:
         """``outcome -> how many`` decisions were taken at or after
         ``since``, in one grouped query; an outcome nothing was decided

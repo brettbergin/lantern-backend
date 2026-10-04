@@ -1982,8 +1982,9 @@ layer still wins. It is the second thing the concierge never does on its
 own initiative, after closing an issue, and it never proceeds on silence.
 `[concierge] edit_config` gates both tools; `[concierge] config_locked`
 lists the prefixes chat may read but not change (egress, tool grants and
-credential names by default), and the chat sections and the gate itself
-are never changed from chat whatever it says.
+credential names by default), and the chat sections, the gate itself and
+`[delegation]` (the rules agents act under) are never changed from chat
+whatever it says.
 
 Ask for something too big for one run — work that needs several pull
 requests or deliveries, several repositories, or steps that depend on what
@@ -2368,10 +2369,57 @@ why.
 
 Three things to know. A fresh installation has no grants and delegates
 nothing. Grants are edited through these routes only: not from chat, not from
-`lantern daemon ctl`, not from the WebSocket. And in this release nothing acts
-on a grant yet — they are stored and can be reviewed, and the daemon starts
-consulting them in the release that lets a plan advance by itself. There is
-no configuration key for any of this: grants live in the daemon's database.
+`lantern daemon ctl`, not from the WebSocket. And they live in the daemon's
+database, not in `lantern.toml`; the one key beside them is
+`[delegation] publish_delay_s` (below).
+
+#### Letting a plan advance by itself
+
+Grants act on plans whose **`advance`** is `auto`; nothing else in the
+daemon acts on them yet. To let a plan go from its brief to a running epic
+with nobody in the loop, an owner writes four grants, once:
+
+```sh
+for grant in \
+  '{"agent_slug": "planner", "action": "plan.breakdown", "conditions": {"repositories": ["acme/shop"]}}' \
+  '{"agent_slug": "critic", "action": "plan.approve", "conditions": {"repositories": ["acme/shop"], "max_children": 8, "require_review": true}}' \
+  '{"agent_slug": "critic", "action": "plan.publish", "conditions": {"repositories": ["acme/shop"], "require_review": true}}' \
+  '{"agent_slug": "critic", "action": "plan.run", "conditions": {"repositories": ["acme/shop"]}}'
+do
+  curl -X POST "$LANTERN/v1/grants" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' -d "$grant"
+done
+```
+
+and then someone holding `plans:publish` sets the plan's `advance` to `auto`
+(`PATCH /v1/plans/{id}` with `{"expected_revision": …, "advance": "auto"}`,
+or the switch on the plan's page). From the next tick the daemon takes the
+plan's next step itself whenever a grant allows it: the planner's breakdown
+is queued (its review by the critic rides the same run), the critic
+approves the proposed level, publishes it to the forge `publish_delay_s`
+later, and starts the epic run once the epic's tasks are on the forge. An
+initiative's epics are each broken down in turn once they are published.
+Each step is one operation under the agent, and the plan says
+`approved_by: agent:critic` and so on, exactly where a person's name would
+be. Nothing happens while the daemon is paused.
+
+Whatever a grant does not cover waits for you and is written to
+`GET /v1/decisions` as an `escalate` once — a level larger than
+`max_children`, a review that is missing, stale or says `escalate`, the
+day's `daily_limit` spent, a breakdown that failed (it is never queued
+again on its own), a forge that refused the write. You take that step
+yourself through the usual routes, and the escalation is closed as `acted`.
+The critic never approves a level it proposed.
+
+**Stepping in.** An approved level waits `[delegation] publish_delay_s`
+(15 minutes by default) before it is published: that is your window to hold
+it. Flip the plan's `advance` back to `manual` and the daemon takes no
+further step on it (flip it back to `auto` to let it carry on from where it
+stands); or edit a child, which makes it a draft again and the review stale,
+so a grant that requires review sends it to you. The key is
+workspace-wide — narrow a repository with a grant's `repositories` — and is
+never changed from chat: the concierge is an agent, and agents do not edit
+the rules they are judged by.
 
 #### Sign in with an OIDC provider (Authentik)
 
@@ -3783,6 +3831,7 @@ The notable knobs:
 | `[attention] remind_after_s`                                                                                                                      | `14400`                                                                                                                                                                                                             | How long an entry of the attention list (a gate, a hold, a plan's questions, a blocked run) may wait before the chronology records an `attention.reminder` for it and the people who can act on it are pushed (see [Reminders for what waits on you](#reminders-for-what-waits-on-you)). 300 seconds to 30 days, or `0` for no reminders; refused at load otherwise. Read at daemon start. Workspace-wide: there is no per-repo override.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `[attention] remind_every_s`                                                                                                                      | `86400`                                                                                                                                                                                                             | How long after a reminder the next one is due while the entry still waits (300 seconds to 30 days). A daemon down past several intervals sends one on return, not one per interval missed.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[attention] digest_at`                                                                                                                           | `""` (off)                                                                                                                                                                                                          | The local time of day (`"HH:MM"`, 24-hour, in `[daemon] run_cap_timezone`) of the daily digest: a `briefing.digest` event every member can read, one control-channel line and one `work` push per member with a device, saying what happened since the last one (see [The daily digest](#the-daily-digest)). Once a day; a daemon down at the time sends it on return that day and skips a day missed entirely. Empty sends none; anything else is refused at load. Read at daemon start. Workspace-wide: there is no per-repo override.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `[delegation] publish_delay_s`                                                                                                                    | `900`                                                                                                                                                                                                               | How long a plan level approved on a plan whose `advance` is `auto` waits before the daemon publishes it under a grant — the window a person has to hold it by flipping `advance` back to `manual` or editing a child (see [Letting a plan advance by itself](#letting-a-plan-advance-by-itself)). Measured from the approval as the plan records it, so a restart neither shortens nor restarts it. `0` or more seconds; `0` publishes on the next tick. Workspace-wide (a grant's `repositories` narrows a repository); never changed from chat.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The `[sandbox]` resource settings size each VM through `sbx create` CPU and
 memory flags; see [Sandbox CPU and memory](#sandbox-cpu-and-memory).

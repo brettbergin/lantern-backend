@@ -44,7 +44,9 @@ written, naming the key and the action. What each key compares:
 
 * ``repositories`` — the act's ``repository`` is one of these (compared
   without regard to case).
-* ``levels`` — the ``level`` of the plan node acted on is one of these.
+* ``levels`` — the plan ``level`` the act is about is one of these: for a
+  plan step, the level it proposes, approves, publishes or runs (an epic's
+  breakdown, approval, publishing and run are all ``task``).
 * ``max_children`` — ``child_count`` is at most this.
 * ``require_review`` — the level's stored ``review_verdict`` is
   ``approve``.

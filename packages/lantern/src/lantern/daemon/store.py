@@ -2472,6 +2472,19 @@ class DaemonStore:
         with self._read() as session:
             return [_row_to_item(row) for row in session.scalars(stmt)]
 
+    def plan_breakdowns(self, plan_node_id: str) -> list[WorkItem]:
+        """Every ``plan`` item ever admitted to propose ``plan_node_id``'s
+        next level, whatever its state, oldest first: what tells the plan
+        driver a breakdown already ran (and how it ended), so a failed one
+        goes to a person instead of being queued again."""
+        stmt = (
+            select(WorkItemRow)
+            .where(WorkItemRow.plan_node_id == plan_node_id)
+            .order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
+        )
+        with self._read() as session:
+            return [_row_to_item(row) for row in session.scalars(stmt)]
+
     def page_items(
         self,
         *,

@@ -113,6 +113,10 @@ def features(config: Config) -> list[str]:
         # published it and its level's review; `advance` is set under
         # `plans:publish`.
         served.append("planning.advance")
+        # ... and an `auto` plan is moved forward by the daemon's plan
+        # driver under the owner's grants: approved, published and run as
+        # an agent, every judgement on the decisions ledger.
+        served.append("planning.driver")
     return served
 
 

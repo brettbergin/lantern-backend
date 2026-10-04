@@ -315,7 +315,8 @@ class Plan:
     reconcile_error: str | None = None
     #: The person's planning brief, separate from every issue's content.
     input: dict[str, Any] = field(default_factory=dict)
-    #: Whether the plan may move itself forward. Nothing reads it yet.
+    #: Whether the plan may move itself forward: an ``auto`` plan is taken
+    #: step by step by the daemon's plan driver, under the owner's grants.
     advance: Advance = "manual"
     #: The goal the plan was proposed from; ``None`` for a person's draft.
     goal_id: str | None = None
