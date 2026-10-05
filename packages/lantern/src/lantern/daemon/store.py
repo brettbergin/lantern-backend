@@ -62,7 +62,7 @@ import lantern.db.collaboration_models  # noqa: F401 - registers collaboration t
 from lantern.config import ScheduleConfig
 from lantern.daemon.model import ItemState, PendingReport, WorkItem, requested_roles_json
 from lantern.daemon.schedule import ScheduleRow
-from lantern.db import begin_immediate, ensure_schema, open_engine
+from lantern.db import begin_immediate, ensure_schema, open_engine, write_engine
 from lantern.db.daemon_models import (
     ChatThreadRow,
     DaemonRunRow,
@@ -1470,6 +1470,9 @@ class DaemonStore:
                     f"{path} does not exist; start `lantern daemon` once to create it"
                 )
             self._engine = open_engine(path, readonly=True)
+            # A read-only handle cannot take the write lock, and a block of
+            # the console's that only reads must not ask for it.
+            self._writer = self._engine
             tables = set(inspect(self._engine).get_table_names())
             if "daemon_local_messages" not in tables or "daemon_state" not in tables:
                 self._engine.dispose()
@@ -1489,6 +1492,7 @@ class DaemonStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         _refuse_pre_1_0(path)
         self._engine = open_engine(path)
+        self._writer = write_engine(self._engine)
         ensure_schema(self._engine)
         # Not part of the schema, and so not behind its version: a stamped
         # database still has to carry a prompt an older daemon wrote back
@@ -1515,8 +1519,16 @@ class DaemonStore:
         Every statement in the block is one transaction, so the pairs that
         have to move together — an item's state and its ledger row — either
         both land or neither does.
+
+        The transaction opens with ``BEGIN IMMEDIATE``, at its first
+        statement. The engine's store, the console and a CLI command write
+        this file through connections of their own, and a block that read
+        before it wrote under a deferred ``BEGIN`` failed with ``database
+        is locked`` whenever one of them committed in between (see
+        :mod:`lantern.db.session`). Field failure: a sign-in answered 500
+        while runs were recording events.
         """
-        with self._lock, Session(self._engine) as session:
+        with self._lock, Session(self._writer) as session:
             yield session
             session.commit()
 
@@ -1536,12 +1548,14 @@ class DaemonStore:
 
     @contextmanager
     def immediate_transaction(self) -> Iterator[Session]:
-        """One transaction that reserves SQLite's write lock before reading.
+        """One transaction that reserves SQLite's write lock on entry.
 
         This is for a read-then-write decision against tables another store
         can change through its own connection. A deferred WAL transaction
         cannot upgrade a stale read snapshot after that other writer commits;
         taking the write lock first makes the decision and its write atomic.
+        :meth:`transaction` takes the same lock, at its first statement
+        rather than on entry.
         """
         with self._lock, begin_immediate(self._engine) as conn, Session(bind=conn) as session:
             yield session

@@ -1,5 +1,29 @@
 ## [Unreleased]
 
+**A sign-in no longer fails with 500 while runs are recording.** Under load
+`POST /v1/auth/local/login` (and `/v1/auth/token` with client credentials)
+could answer 500 `internal_error`; server side it was
+`sqlite3.OperationalError: database is locked`. The state database is one
+WAL file with several connections onto it inside the daemon (its own store,
+the engine's, the console's). A transaction that read before it wrote opened
+with a deferred `BEGIN`, so its first SELECT pinned a read snapshot; when
+another connection committed before the write (a run's event, on the
+engine's connection), SQLite could not upgrade the stale snapshot and failed
+the write at once, without consulting the busy timeout. A sign-in was the
+widest such window: it read the client row, checked the password (scrypt,
+tens of milliseconds by design) and wrote `last_used_at` in one transaction,
+holding the daemon store's lock throughout. Two changes. Every committing
+session on the daemon's store, the engine's store and the CLI's standalone
+sessions now opens with `BEGIN IMMEDIATE` at its first statement
+(`lantern.db.write_engine`), so a read-then-write holds the write lock from
+its read and the other writer waits on the busy timeout instead; reads stay
+deferred, and a read-only store asks for no lock. And a credential check
+now reads the client, verifies the secret with no transaction open and
+outside the store's lock, then records the use in one UPDATE conditional on
+the client still being unrevoked with the secret it was checked against;
+registration hashes the password before its transaction opens. The busy
+timeout is unchanged at 5 s: it was never reached.
+
 **Grants no longer ship empty: every install starts with Lantern's defaults.**
 An owner had to write every grant before an `auto` plan or triage did
 anything, so an install delegated nothing until someone learned the grant

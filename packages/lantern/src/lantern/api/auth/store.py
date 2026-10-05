@@ -31,7 +31,7 @@ from sqlalchemy import delete, insert, or_, select, update
 from sqlalchemy.orm import Session
 
 from lantern.daemon.controls.principal import CAPABILITIES, Capability
-from lantern.db import ensure_schema, open_engine
+from lantern.db import ensure_schema, open_engine, write_engine
 from lantern.db.api_models import (
     ClientRow,
     OidcLogoutRow,
@@ -60,6 +60,7 @@ class StandaloneSessions:
     def __init__(self, path: Path, *, owns_schema: bool) -> None:
         self._lock = threading.RLock()
         self._engine = open_engine(path, owns_schema=owns_schema)
+        self._writer = write_engine(self._engine)
         if owns_schema:
             ensure_schema(self._engine)
 
@@ -68,7 +69,9 @@ class StandaloneSessions:
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:
-        with self._lock, Session(self._engine) as session:
+        # `BEGIN IMMEDIATE`, as the daemon's own store opens its writes: the
+        # daemon is committing to this file from another process.
+        with self._lock, Session(self._writer) as session:
             yield session
             session.commit()
 
@@ -388,16 +391,36 @@ class ApiAuthStore:
         """The client behind a credential pair; :class:`AuthError` when
         the pair is wrong or the client revoked — the same code either
         way, so a probe learns nothing about which."""
-        with self.sessions.transaction() as session:
+        with self.sessions.read() as session:
             row = session.get(ClientRow, client_id)
-            if row is None or row.revoked_at is not None:
-                # Burn the same time as a real check so timing says nothing.
-                check_secret(secret, hash_secret("x"))
+            stored = None if row is None or row.revoked_at is not None else str(row.secret_hash)
+        # The check is scrypt, tens of milliseconds by design, so it runs
+        # with no transaction open and outside the sessions' lock: a
+        # transaction held across it kept a read snapshot that any other
+        # connection's commit made unwritable, and the lock stalled every
+        # other caller of the store for as long as the hash took.
+        if stored is None:
+            # Burn the same time as a real check so timing says nothing.
+            check_secret(secret, hash_secret("x"))
+            raise AuthError("invalid_client", "unknown client or wrong secret")
+        if not check_secret(secret, stored):
+            raise AuthError("invalid_client", "unknown client or wrong secret")
+        with self.sessions.transaction() as session:
+            # Conditional on what the check was made against: a client
+            # revoked, or a secret replaced, while it ran is refused.
+            used = session.execute(
+                update(ClientRow)
+                .where(
+                    ClientRow.id == client_id,
+                    ClientRow.revoked_at.is_(None),
+                    ClientRow.secret_hash == stored,
+                )
+                .values(last_used_at=now)
+            )
+            if not int(getattr(used, "rowcount", 0) or 0):
                 raise AuthError("invalid_client", "unknown client or wrong secret")
-            if not check_secret(secret, str(row.secret_hash)):
-                raise AuthError("invalid_client", "unknown client or wrong secret")
-            row.last_used_at = now
-            session.flush()
+            row = session.get(ClientRow, client_id)
+            assert row is not None  # nosec B101 - just updated under the lock
             return _client(row)
 
     def touch(self, client_id: str, now: float) -> None:

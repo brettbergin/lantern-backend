@@ -1913,8 +1913,15 @@ and `status --json` all compose the run's closing line from those rows
 run produced. It runs
 `synchronous=NORMAL`, which is the safe setting under WAL: commits no longer
 fsync one-by-one, and a crash can only lose the tail of the WAL, never
-corrupt the database. Streaming `agent.message_delta` events are *not*
-persisted — they are per-chunk UI telemetry that live surfaces (TUI,
+corrupt the database. Every transaction that will write opens with
+`BEGIN IMMEDIATE` (`lantern.db.write_engine`), at its first statement:
+several connections share the file inside the daemon alone, and a deferred
+transaction that read first loses its write — `database is locked`, at
+once, whatever the busy timeout — to any other connection's commit in
+between. Taking the write lock first makes the other writer wait instead;
+reads stay deferred. Slow work (a password hash) is done before the
+transaction opens, never under that lock. Streaming `agent.message_delta`
+events are *not* persisted — they are per-chunk UI telemetry that live surfaces (TUI,
 Discord) read off the bus, while the full `agent.message` carries the same
 text and is committed like every other event; resume never reads deltas, so
 `lantern logs` differs only by those chunk lines. A row is committed

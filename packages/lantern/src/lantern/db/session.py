@@ -16,11 +16,19 @@ purpose, what the hand-written ``sqlite3`` stores did before #539:
   own; each store keeps the ``threading.RLock`` that serialises its callers.
   Nothing here replaces it.
 * **``isolation_level=None``** turns off pysqlite's implicit ``BEGIN`` so this
-  module decides where transactions start. Ordinary ones open with a plain
-  ``BEGIN`` (a deferred, read-friendly lock); :func:`begin_immediate` opens
-  with ``BEGIN IMMEDIATE`` for the check-then-write paths that must hold the
-  write lock across both halves. Making every transaction immediate would
-  take a write lock to answer a read, which is why it is opt-in.
+  module decides where transactions start. A read opens with a plain
+  ``BEGIN`` (a deferred, read-friendly lock). A transaction that will write
+  opens with ``BEGIN IMMEDIATE`` — :func:`write_engine` for a store's
+  committing sessions, :func:`begin_immediate` for a block on a connection —
+  and that is a rule, not an optimisation. Under WAL a deferred transaction's
+  first SELECT pins a read snapshot; once any other connection to the file
+  commits, SQLite cannot upgrade that snapshot and fails the transaction's
+  first write with ``database is locked`` at once, without consulting the
+  busy timeout. Every store here shares its file with at least one other
+  connection in the same process, so a write transaction that reads first is
+  a failure waiting for the other connection's next commit. Taking the write
+  lock first turns that into a wait the busy timeout covers. Reads stay
+  deferred: an immediate one would take the write lock to answer a query.
 """
 
 from __future__ import annotations
@@ -108,6 +116,18 @@ def open_engine(path: Path, *, readonly: bool = False, owns_schema: bool = True)
         conn.exec_driver_sql(conn.get_execution_options().get(BEGIN_OPTION, "BEGIN"))
 
     return engine
+
+
+def write_engine(engine: Engine) -> Engine:
+    """``engine``, with every transaction opened by ``BEGIN IMMEDIATE``.
+
+    What a store binds its committing sessions to. It shares the engine's one
+    connection and its listeners; only the BEGIN differs, and a session still
+    emits it lazily, before its first statement — so a block that never
+    touches the database takes no lock, and the Python work ahead of the
+    first statement is not done under one.
+    """
+    return engine.execution_options(**{BEGIN_OPTION: "BEGIN IMMEDIATE"})
 
 
 @contextmanager

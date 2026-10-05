@@ -781,8 +781,9 @@ class TestWriterSerialization:
         from lantern.engine import store as store_module
 
         source = inspect.getsource(store_module)
-        rogue = re.findall(r"Session\(\s*self\._engine", source)
-        # `_write` and `_read` are the two sanctioned constructions.
+        rogue = re.findall(r"Session\(\s*self\._(?:engine|writer)", source)
+        # `_write` (on the engine that begins immediate) and `_read` are the
+        # two sanctioned constructions.
         assert len(rogue) == 2, f"a method opens its own session: {len(rogue)} sites, expected 2"
 
 

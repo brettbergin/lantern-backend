@@ -1169,6 +1169,9 @@ class CollaborationStore:
             raise CollaborationError("weak_password", "password must contain at least 8 characters")
         user_id = "usr_" + _token(12)
         client_id = "local_" + _token(12)
+        # scrypt, tens of milliseconds by design: made before the transaction
+        # opens, so the write lock is held for its statements and not for this.
+        secret_hash = hash_secret(password)
         try:
             with self.dstore.transaction() as session:
                 invite: WorkspaceInviteRow | None = None
@@ -1185,7 +1188,7 @@ class CollaborationStore:
                     insert(ClientRow).values(
                         id=client_id,
                         name=username,
-                        secret_hash=hash_secret(password),
+                        secret_hash=secret_hash,
                         capabilities_json=capabilities_json,
                         created_at=now,
                         created_by="local-onboarding" if invite is None else "workspace-invite",
