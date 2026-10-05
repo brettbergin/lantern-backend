@@ -170,6 +170,14 @@ def test_local_auth_policy_is_documented_with_its_compatible_default() -> None:
     assert "`[api] local_auth_enabled`" in guide
 
 
+def test_the_trusted_proxy_default_is_documented_in_the_shipped_example() -> None:
+    """Unset on a loopback bind, the local proxy is believed; ``[]`` is nobody —
+    so the commented line must not read as if ``[]`` were the default."""
+    text = EXAMPLE.read_text()
+    assert "# trusted_proxies = []" not in text
+    assert "unset on a loopback bind, the local proxy is; [] is nobody" in text
+
+
 def test_every_chat_backend_credential_is_in_the_secrets_example() -> None:
     """A bridge's token has to appear in the file an operator actually fills
     in. Generic over the descriptor set, so a fourth service cannot land with

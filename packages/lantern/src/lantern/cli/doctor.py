@@ -267,6 +267,36 @@ def daemon_repo_health(
     return out
 
 
+def api_forwarding_checks(config: Config) -> list[Check]:
+    """A proxy whose forwarded client addresses the listener ignores.
+
+    The running daemon notes the first request from a loopback or private
+    peer that carried ``X-Forwarded-For`` while no proxy was trusted; read
+    only when the state db exists, and only while the configuration still
+    trusts nobody — a note about a configuration since fixed says nothing.
+    """
+    from lantern.api.forwarding import UNTRUSTED_FORWARDING_KEY, untrusted_forwarding_detail
+    from lantern.daemon.store import DaemonStore
+
+    if not config.api.enabled or config.api.forwarding_proxies:
+        return []
+    db = config.paths.state_db
+    if not db.is_file():
+        return []
+    try:
+        store = DaemonStore(db, readonly=True)
+        try:
+            note = store.get_value(UNTRUSTED_FORWARDING_KEY)
+        finally:
+            store.close()
+    except Exception:  # a store doctor cannot read is its own row elsewhere
+        return []
+    detail = untrusted_forwarding_detail(note) if note else None
+    if detail is None:
+        return []
+    return [Check("api client addresses", False, detail, hard=False)]
+
+
 def _count_orphans(cli: SbxCLI, state_db: Path) -> int:
     """Orphan count, without doctor ever writing to the state database.
 
@@ -1636,6 +1666,7 @@ def collect_checks(
         )
 
     checks.extend(daemon_intake_checks(config, stored))
+    checks.extend(api_forwarding_checks(config))
     # daemon's chat bridge (only when a backend is configured)
     backend = config.chat_backend
     if backend is not None:

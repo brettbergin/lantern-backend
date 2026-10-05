@@ -18,6 +18,7 @@ import threading
 from typing import Any
 
 from lantern.api.context import ApiContext
+from lantern.api.forwarding import UNTRUSTED_FORWARDING_KEY
 from lantern.api.projector import Projector
 from lantern.config import ApiConfig
 from lantern.daemon.controls.steering import SteeringStore
@@ -34,7 +35,7 @@ class ApiServer:
 
         self.config = config
         self.ctx = ctx
-        proxies = list(config.trusted_proxies)
+        proxies = config.forwarding_proxies
         self._uv = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -79,6 +80,12 @@ class ApiServer:
             if self._failed is not None:
                 raise RuntimeError(f"the API listener did not start: {self._failed}")
             raise RuntimeError("the API listener did not start within 10 s")
+        # A note that a proxy's forwarded addresses were ignored is about
+        # the configuration the last process ran with; this one notes its own.
+        try:
+            self.ctx.loop.dstore.set_value(UNTRUSTED_FORWARDING_KEY, None)
+        except Exception:
+            log.warning("api.forwarding_note_clear_failed", exc_info=True)
         # The listener starts before recovery: no run is in flight, so a
         # steering instruction still waiting from the last process will
         # never be answered — its receipt says so. Any run that is in
