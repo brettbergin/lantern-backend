@@ -12,7 +12,13 @@ from __future__ import annotations
 
 from lantern.db.base import Base
 from lantern.db.schema import current_revision, ensure_schema, head_revision
-from lantern.db.session import BUSY_TIMEOUT_MS, begin_immediate, open_engine, readonly_uri
+from lantern.db.session import (
+    BUSY_TIMEOUT_MS,
+    begin_immediate,
+    open_engine,
+    readonly_uri,
+    write_engine,
+)
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
@@ -23,4 +29,5 @@ __all__ = [
     "head_revision",
     "open_engine",
     "readonly_uri",
+    "write_engine",
 ]

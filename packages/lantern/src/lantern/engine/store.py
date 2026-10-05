@@ -36,7 +36,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from lantern.db import begin_immediate, ensure_schema, open_engine
+from lantern.db import begin_immediate, ensure_schema, open_engine, write_engine
 from lantern.db.engine_models import EventRow, PhaseAttempt, Reconciliation, Run, Task
 from lantern.engine.model import (
     TERMINAL_RUN_STATES,
@@ -446,13 +446,22 @@ class StateStore:
         if readonly and not path.exists():
             raise StateError(f"{path} does not exist")
         self._engine = open_engine(path, readonly=readonly)
+        # A read-only handle cannot take the write lock, and a block of the
+        # console's that only reads must not ask for it.
+        self._writer = self._engine if readonly else write_engine(self._engine)
         if not readonly:
             ensure_schema(self._engine)
 
     @contextmanager
     def _write(self) -> Iterator[Session]:
-        """A session that commits on the way out, under the store's lock."""
-        with self._lock, Session(self._engine) as session:
+        """A session that commits on the way out, under the store's lock.
+
+        The transaction opens with ``BEGIN IMMEDIATE``, at its first
+        statement: a block that reads before it writes must not lose its
+        write to another connection's commit (see :meth:`_immediate`, which
+        takes the same lock on entry, and :mod:`lantern.db.session`).
+        """
+        with self._lock, Session(self._writer) as session:
             yield session
             session.commit()
 
