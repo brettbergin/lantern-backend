@@ -22,7 +22,7 @@ from lantern.config import Config
 from lantern.daemon.model import WorkItem
 from lantern.daemon.store import DaemonStore
 from lantern.db.collaboration_models import ChannelInputFileRow
-from lantern.ghids import is_chat_id
+from lantern.ghids import chat_source_message_id, is_chat_id
 from lantern.log import get_logger
 
 log = get_logger(__name__)
@@ -39,11 +39,11 @@ class StagedInput:
 
 
 def _message_id(item: WorkItem) -> str | None:
-    """The chat message that keyed the item: a later participant's key
-    carries ``:<index>`` after the message's own id."""
-    if not is_chat_id(item.item_id) or item.channel_id is None or not item.source_key:
+    """The chat message that keyed the item (a later participant's key
+    carries ``:<index>`` after the message's own id)."""
+    if not is_chat_id(item.item_id) or item.channel_id is None:
         return None
-    return item.source_key.split(":", 1)[0] or None
+    return chat_source_message_id(item.kind, item.source_key)
 
 
 def _safe_name(name: str, taken: set[str]) -> str:
