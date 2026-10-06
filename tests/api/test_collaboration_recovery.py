@@ -362,3 +362,92 @@ def test_restart_runs_an_unprompted_answer_to_a_guest_for_the_guest(api: Any) ->
     # Queued to run, not settled as interrupted.
     remaining = store.get_turn(None, channel, unprompted.id)
     assert remaining is not None and remaining.status == "accepted"
+
+
+def _locked() -> Exception:
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError
+
+    return OperationalError(
+        "UPDATE collaboration_turns", {}, sqlite3.OperationalError("database is locked")
+    )
+
+
+def test_a_turn_that_cannot_start_settles_failed_with_an_error(api: Any, monkeypatch: Any) -> None:
+    """A turn whose start keeps failing never stays accepted with nobody
+    working on it: it settles failed, and the channel says so."""
+    from lantern.api import context as context_module
+
+    monkeypatch.setattr(context_module, "TURN_START_BACKOFF_S", (0.0, 0.0))
+    api.ctx.concierge = FakeConcierge()
+    headers = bearer(register(api))
+    channel = api.client.post("/v1/channels", json={}, headers=headers).json()["id"]
+
+    def locked(turn_id: str, now: float) -> bool:
+        raise _locked()
+
+    monkeypatch.setattr(api.ctx.collaboration, "start_turn", locked)
+    turn = api.client.post(
+        f"/v1/channels/{channel}/turns", json={"content": "hello"}, headers=headers
+    ).json()["turn"]
+    result = settled(api.client, headers, channel, turn["id"])
+    assert result["status"] == "failed"
+    assert [p["status"] for p in result["participants"]] == ["failed"]
+    messages = api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()
+    errors = [m for m in messages if m["kind"] == "turn_error"]
+    assert len(errors) == 1 and "could not start" in errors[0]["content"]
+    assert api.ctx.concierge.calls == []
+
+
+def test_a_transient_lock_on_start_is_retried(api: Any, monkeypatch: Any) -> None:
+    from lantern.api import context as context_module
+
+    monkeypatch.setattr(context_module, "TURN_START_BACKOFF_S", (0.0, 0.0))
+    api.ctx.concierge = FakeConcierge()
+    headers = bearer(register(api))
+    channel = api.client.post("/v1/channels", json={}, headers=headers).json()["id"]
+    real = api.ctx.collaboration.start_turn
+    attempts: list[str] = []
+
+    def once_locked(turn_id: str, now: float) -> bool:
+        attempts.append(turn_id)
+        if len(attempts) == 1:
+            raise _locked()
+        return bool(real(turn_id, now))
+
+    monkeypatch.setattr(api.ctx.collaboration, "start_turn", once_locked)
+    turn = api.client.post(
+        f"/v1/channels/{channel}/turns", json={"content": "hello"}, headers=headers
+    ).json()["turn"]
+    assert settled(api.client, headers, channel, turn["id"])["status"] == "completed"
+    assert len(attempts) == 2
+
+
+def test_channel_stop_settles_a_turn_stranded_as_accepted(api: Any) -> None:
+    """A turn nothing is running (its start crashed, say) is still the
+    channel's: stopping the channel cancels it too."""
+    from sqlalchemy import select
+
+    from lantern.db.collaboration_models import LocalUserRow
+
+    headers = bearer(register(api))
+    channel = api.client.post("/v1/channels", json={}, headers=headers).json()["id"]
+    with api.loop.dstore.read() as session:
+        user_id = session.scalars(select(LocalUserRow)).one().id
+    stranded, _ = api.ctx.collaboration.accept_turn(
+        user_id,
+        channel,
+        content="never started",
+        targets=(),
+        intent="conversation",
+        client_turn_id="stranded",
+        client_message_id=None,
+        actor=None,
+        now=api.clock(),
+    )[:2]
+    stopped = api.client.post(f"/v1/channels/{channel}/stop", headers=headers)
+    assert stopped.status_code == 200, stopped.text
+    assert stranded.id in stopped.json()["cancelled_turns"]
+    turn = api.client.get(f"/v1/channels/{channel}/turns/{stranded.id}", headers=headers).json()
+    assert turn["status"] == "cancelled"
