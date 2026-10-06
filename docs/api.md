@@ -1945,7 +1945,10 @@ Rules a client can rely on:
   holds**: a grant narrowed later narrows the live token at once; a revoked
   client is refused on its next request and dropped from its streams.
 - A refresh token is used once. Presenting it twice revokes its whole family
-  (`401 refresh_reuse_detected`); the client re-authenticates with its secret.
+  (`401 refresh_reuse_detected`): its refresh tokens and every access token
+  minted beside them, which are refused at once (`401 token_revoked`) and
+  dropped from their streams. The client re-authenticates with its secret.
+  Revoking a refresh token through `POST /v1/auth/revoke` does the same.
 - Authentication failures are rate-limited per client id and per source
   address (`429`, with `Retry-After`).
 
@@ -3336,8 +3339,8 @@ from a developer machine.
   On `410 cursor_expired`, read a fresh snapshot and subscribe from its
   watermark; what you missed is in the resources themselves.
 - **A token stopped working.** `401 token_expired`: refresh. `401 client_revoked`: the operator revoked the client; work already admitted
-  stands. `401 refresh_reuse_detected`: the family was revoked; mint from
-  the secret and treat the reuse as a leak.
+  stands. `401 refresh_reuse_detected`: the family was revoked, its live access
+  tokens with it; mint from the secret and treat the reuse as a leak.
 - **A hold you did not take blocks the queue.** `GET /v1/daemon/holds`
   names its owner; release it with `?force=true` only as an override, which
   the record shows as yours.

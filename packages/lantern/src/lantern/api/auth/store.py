@@ -206,6 +206,21 @@ def _client(row: ClientRow) -> Client:
     )
 
 
+#: How long a revoked family's entry refuses access tokens: past the longest
+#: access token ``[api] access_token_ttl_s`` allows, plus the verifier's leeway.
+FAMILY_REVOCATION_S = 3600 + 60
+
+
+def new_family_id() -> str:
+    return "fam_" + _token(12)
+
+
+def family_revocation_key(family_id: str) -> str:
+    """The revocation-list entry for a whole family. Never a ``jti``: those
+    are bare tokens, and this one carries a prefix with a colon."""
+    return f"family:{family_id}"
+
+
 class ApiAuthStore:
     def __init__(self, sessions: SessionSource) -> None:
         self.sessions = sessions
@@ -441,7 +456,7 @@ class ApiAuthStore:
                 insert(RefreshTokenRow).values(
                     id="rt_" + _token(12),
                     client_id=client_id,
-                    family_id=family_id or "fam_" + _token(12),
+                    family_id=family_id or new_family_id(),
                     token_hash=_digest(token),
                     issued_at=now,
                     expires_at=now + ttl_s,
@@ -457,11 +472,13 @@ class ApiAuthStore:
         ttl_s: int,
         local_auth_enabled: bool = True,
         oidc_issuer: str | None = None,
-    ) -> tuple[Client, str]:
-        """Exchange a refresh token for a new one in the same family.
+    ) -> tuple[Client, str, str]:
+        """Exchange a refresh token for a new one in the same family; the
+        client, the new token and the family.
 
-        A token already used is a reuse: the whole family is revoked (in a
-        transaction of its own, so the refusal cannot roll it back) and the
+        A token already used is a reuse: the whole family is revoked — its
+        refresh tokens and every access token minted beside them — in a
+        transaction of its own, so the refusal cannot roll it back, and the
         caller refused (``refresh_reuse_detected``). Expired, revoked or
         unknown tokens are refused too, without saying which.
         """
@@ -473,10 +490,11 @@ class ApiAuthStore:
             if row is None:
                 raise AuthError("invalid_grant", "the refresh token is not valid")
             family_id = str(row.family_id)
+            owner = str(row.client_id)
             reused = row.used_at is not None
             dead = row.revoked_at is not None or float(row.expires_at) <= now
         if reused:
-            self._revoke_family(family_id, now)
+            self._revoke_family(family_id, owner, now)
             raise AuthError(
                 "refresh_reuse_detected",
                 "the refresh token was already used; its family is revoked — "
@@ -527,10 +545,22 @@ class ApiAuthStore:
             row.replaced_by = fresh_id
             client_row.last_used_at = now
             session.flush()
-            return _client(client_row), fresh
+            return _client(client_row), fresh, str(row.family_id)
 
-    def _revoke_family(self, family_id: str, now: float) -> None:
+    def _revoke_family(self, family_id: str, client_id: str, now: float) -> None:
         with self.sessions.transaction() as session:
+            # The family's live access tokens are refused from now on, as a
+            # revoked jti is; the entry outlives the longest one minted.
+            session.execute(
+                insert(TokenRevocationRow)
+                .prefix_with("OR IGNORE")
+                .values(
+                    jti=family_revocation_key(family_id),
+                    client_id=client_id,
+                    expires_at=now + FAMILY_REVOCATION_S,
+                    revoked_at=now,
+                )
+            )
             session.execute(
                 update(OidcSessionRow)
                 .where(OidcSessionRow.id == family_id, OidcSessionRow.revoked_at.is_(None))
@@ -554,7 +584,8 @@ class ApiAuthStore:
             if row is None:
                 return False
             family_id = str(row.family_id)
-        self._revoke_family(family_id, now)
+            owner = str(row.client_id)
+        self._revoke_family(family_id, owner, now)
         return True
 
     # -- access token revocation ----------------------------------------------------
@@ -567,9 +598,17 @@ class ApiAuthStore:
                 .values(jti=jti, client_id=client_id, expires_at=expires_at, revoked_at=now)
             )
 
-    def is_revoked(self, jti: str) -> bool:
+    def is_revoked(self, jti: str, family_id: str | None = None) -> bool:
+        """Whether an access token was revoked, by its own ``jti`` or with
+        the refresh-token family it was minted beside."""
+        keys = [jti] if family_id is None else [jti, family_revocation_key(family_id)]
         with self.sessions.read() as session:
-            return session.get(TokenRevocationRow, jti) is not None
+            return (
+                session.scalars(
+                    select(TokenRevocationRow.jti).where(TokenRevocationRow.jti.in_(keys)).limit(1)
+                ).first()
+                is not None
+            )
 
     def prune(self, now: float) -> int:
         """Drop revocations past their token's expiry and refresh tokens

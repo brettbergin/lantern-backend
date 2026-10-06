@@ -1,8 +1,10 @@
 """Access tokens: short-lived Ed25519-signed JWTs.
 
 Claims are the standard ones plus ``scope`` (the capabilities, space
-separated) and ``workspace``. The algorithm list is exactly ``EdDSA``: a
-token claiming another is refused before its signature is looked at.
+separated), ``workspace`` and ``family`` — the refresh-token family the
+token was minted beside, so revoking the family ends it too. The
+algorithm list is exactly ``EdDSA``: a token claiming another is refused
+before its signature is looked at.
 """
 
 from __future__ import annotations
@@ -43,6 +45,9 @@ class AccessClaims:
     kid: str
     workspace_id: str
     session_id: str | None = None
+    #: The refresh-token family minted beside it; ``None`` on a token from
+    #: before families were stamped, which only its own expiry ends early.
+    family_id: str | None = None
 
 
 def scope_from(capabilities: frozenset[Capability]) -> str:
@@ -62,6 +67,7 @@ def mint_access(
     ttl_s: int,
     now: float,
     session_id: str | None = None,
+    family_id: str | None = None,
 ) -> tuple[str, AccessClaims]:
     if keys.current.private is None:
         raise TokenError("no_signing_key", "the current signing key has no private half")
@@ -74,6 +80,7 @@ def mint_access(
         kid=keys.current.kid,
         workspace_id=WORKSPACE_ID,
         session_id=session_id,
+        family_id=family_id,
     )
     payload: dict[str, Any] = {
         "iss": ISSUER,
@@ -87,6 +94,8 @@ def mint_access(
     }
     if session_id is not None:
         payload["session_id"] = session_id
+    if family_id is not None:
+        payload["family"] = family_id
     token = jwt.encode(
         payload, keys.current.private, algorithm=ALGORITHM, headers={"kid": keys.current.kid}
     )
@@ -139,4 +148,5 @@ def verify_access(keys: SigningKeys, token: str, *, now: float) -> AccessClaims:
         kid=str(header.get("kid")),
         workspace_id=str(payload.get("workspace", WORKSPACE_ID)),
         session_id=payload.get("session_id"),
+        family_id=None if payload.get("family") is None else str(payload["family"]),
     )
