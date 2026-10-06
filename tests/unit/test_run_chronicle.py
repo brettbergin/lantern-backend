@@ -418,6 +418,76 @@ def test_a_run_with_no_chat_sink_names_what_it_delivered_at_its_end() -> None:
     ]
 
 
+class ResultPoster(FakePoster):
+    """The API's poster: a workload's result reaches its channel as a work
+    result, with its files."""
+
+    delivers_work_results = True
+
+
+def test_a_workload_whose_result_reaches_its_channel_is_not_posted_twice() -> None:
+    """The asking channel gets the answer as the work result; the chronicle
+    does not post a second copy, clipped, beside it."""
+    clock = Clock()
+    poster = ResultPoster()
+    chronicle = RunChronicle(
+        poster,
+        _assignment(),
+        _item(kind="workload"),
+        _config(progress_interval_s=0),
+        clock,
+        artifacts=poster,
+    )
+    answer = "TOML vs YAML research report: " + "x" * 600
+    chronicle.on_event(
+        Event.now(HostEventTypes.RUN_PUBLISHED, RUN, sink="chat", tasks=["t1"], message=answer)
+    )
+    chronicle.on_event(Event.now(HostEventTypes.RUN_END, RUN, state="completed"))
+    assert [p for p in poster.posts if p.kind == "delivery"] == []
+
+
+def test_another_sinks_delivery_is_still_named_beside_the_work_result() -> None:
+    clock = Clock()
+    poster = ResultPoster(files=False)
+    chronicle = RunChronicle(
+        poster, _assignment(), _item(kind="workload"), _config(), clock, artifacts=poster
+    )
+    chronicle.on_event(
+        Event.now(
+            HostEventTypes.RUN_PUBLISHED,
+            RUN,
+            sink="issue",
+            tasks=["t1"],
+            message="result filed as https://example.test/issues/4",
+        )
+    )
+    chronicle.on_event(
+        Event.now(HostEventTypes.RUN_PUBLISHED, RUN, sink="chat", tasks=["t1"], message="answer")
+    )
+    chronicle.on_event(Event.now(HostEventTypes.RUN_END, RUN, state="completed"))
+    assert [(p.kind, p.text) for p in poster.posts] == [
+        ("delivery", "result filed as https://example.test/issues/4")
+    ]
+
+
+def test_a_workload_told_in_another_channel_still_carries_its_answer() -> None:
+    """The work result goes to the channel that asked; a chronicle told
+    elsewhere (the work's own channel) still delivers there."""
+    clock = Clock()
+    poster = ResultPoster()
+    poster.channel = "chn_job"  # type: ignore[attr-defined]
+    chronicle = RunChronicle.for_item(
+        poster, _assignment(), _item(kind="workload"), _config(), clock, artifacts=poster
+    )
+    assert chronicle is not None
+    chronicle.on_event(
+        Event.now(HostEventTypes.RUN_PUBLISHED, RUN, sink="chat", tasks=["t1"], message="answer")
+    )
+    assert [(p.kind, p.text, p.channel_id) for p in poster.posts] == [
+        ("delivery", "answer", "chn_job")
+    ]
+
+
 def test_a_post_names_the_message_that_asked_for_the_work() -> None:
     """A channel can have several turns in flight, so a post that does not
     name the message it answers lands on an unrelated one. The item's
