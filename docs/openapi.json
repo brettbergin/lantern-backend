@@ -7168,10 +7168,14 @@
       },
       "LinkCodeOut": {
         "additionalProperties": false,
-        "description": "A code to type on a bridge, once, to prove an account is yours.",
+        "description": "A code to type on a bridge, once, to prove an account is yours.\n``command`` is the exact message to send there: the bridge's configured\n``[chat] command_prefix``, the ``link`` verb and the code.",
         "properties": {
           "code": {
             "title": "Code",
+            "type": "string"
+          },
+          "command": {
+            "title": "Command",
             "type": "string"
           },
           "expires_at": {
@@ -7181,7 +7185,8 @@
         },
         "required": [
           "code",
-          "expires_at"
+          "expires_at",
+          "command"
         ],
         "title": "LinkCodeOut",
         "type": "object"
@@ -24002,7 +24007,7 @@
     },
     "/v1/users/me/identities/link-code": {
       "post": {
-        "description": "A code to type on a bridge, as ``!sbx link <code>``, so messages you\nsend on a linked surface post under this account. It is single use and\nshort-lived, and this is the only place it is shown.",
+        "description": "A code to type on a bridge, as ``<prefix> link <code>``, so messages\nyou send on a linked surface post under this account. ``command`` is\nthat message exactly, with the bridge's configured prefix. It is single\nuse and short-lived, and this is the only place it is shown.",
         "operationId": "create_link_code_v1_users_me_identities_link_code_post",
         "responses": {
           "201": {

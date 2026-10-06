@@ -588,10 +588,13 @@ class ChannelLinkPage(ApiModel):
 
 
 class LinkCodeOut(ApiModel):
-    """A code to type on a bridge, once, to prove an account is yours."""
+    """A code to type on a bridge, once, to prove an account is yours.
+    ``command`` is the exact message to send there: the bridge's configured
+    ``[chat] command_prefix``, the ``link`` verb and the code."""
 
     code: str
     expires_at: str
+    command: str
 
 
 class ExternalIdentityOut(ApiModel):
