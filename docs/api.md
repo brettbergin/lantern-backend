@@ -1611,7 +1611,8 @@ A person has the last word over all of it:
 | `PUT /v1/channels/{id}/silence` | delegate | Body `{until}` (a timestamp, or null to lift it); the channel        |
 | `PUT /v1/channels/{id}/read`    | write    | Body `{sequence}`; the caller's channel member entry                 |
 
-Stop cancels the channel's queued and running turns, cancels the runs its
+Stop cancels the channel's queued and running turns (a turn still accepted
+that nothing is running included), cancels the runs its
 work items are executing, abandons the work items it queued that have not
 started, and silences the channel for an hour; resume lifts the silence but
 restarts nothing. The runs and items are cancelled through the daemon's
