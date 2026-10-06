@@ -3049,8 +3049,10 @@ disagree on who proposed them, `proposers`. An `escalate` row carries `resolved_
 When `/v1/capabilities` lists `goals`, an owner or an admin can set a
 **goal** for a repository: a standing objective, in their own words, that
 plans are proposed from. `goals` is served with `planning`: a goal is for a
-repository that can hold a plan. Goals ship empty, and nothing in the daemon
-proposes a plan from one yet: this release stores and reads them.
+repository that can hold a plan. Goals ship empty, and the planner proposes
+plans from them only where `[delegation] propose_every` is set ("Plans
+proposed from goals" under [Plans](#plans)); each goal's `proposing` says
+which.
 
 `GET /v1/goals` (`runs:read`) lists every goal, oldest first, narrowed by
 `repository` (case is ignored) and `state` (`active`, `paused`, `done`).
@@ -3072,7 +3074,8 @@ proposes a plan from one yet: this release stores and reads them.
   "plans": [
     {"plan_id": "plan_…", "title": "Build pipeline", "state": "published", "advance": "auto"}
   ],
-  "open_plan_id": "plan_…"
+  "open_plan_id": "plan_…",
+  "proposing": {"enabled": false, "every_s": 0, "reason": "proposing is off on this server: …"}
 }
 ```
 
@@ -3080,7 +3083,14 @@ proposes a plan from one yet: this release stores and reads them.
 it), most recently changed first, each with its root's `title`, the `state` a
 plan reads as (`draft`, `published`, `archived`) and its `advance`.
 `open_plan_id` is the plan currently serving the goal — the most recently
-changed one that is not archived — or `null`.
+changed one that is not archived — or `null`. `proposing` says whether the
+planner drafts plans toward the goal on its own here: `enabled` only while
+`[delegation] propose_every` is set (`every_s`, `0` when off) and the goal is
+`active`, and otherwise a `reason` a client can show ("proposing is off on
+this server", "the goal is paused") rather than leave the goal waiting for
+a plan that never comes. `goals.proposing` in `/v1/capabilities` says the
+server can propose; `proposing.enabled` says whether it will. A missing or
+short `plan.propose` grant is judged per proposal and shows as an escalation.
 
 `POST /v1/goals` (`plans:publish`) takes `repository`, `title` (1–200
 characters), `text` (1–4000 characters, the objective) and optionally `state`

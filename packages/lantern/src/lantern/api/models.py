@@ -1576,11 +1576,28 @@ class GoalPlanOut(ApiModel):
     advance: Literal["manual", "auto"]
 
 
+class GoalProposingOut(ApiModel):
+    """Whether the planner drafts plans toward a goal on its own here, and
+    when it does not, why — so a client can say so rather than promise a
+    plan that never comes."""
+
+    enabled: bool
+    #: ``[delegation] propose_every``: at most one proposal per goal per this
+    #: many seconds. ``0`` is off.
+    every_s: int
+    #: Why proposing is off for this goal (``propose_every`` is 0, or the
+    #: goal is not ``active``); ``null`` while it is on. Whether the
+    #: planner holds a ``plan.propose`` grant is judged per proposal and
+    #: shows as an escalation, not here.
+    reason: str | None = None
+
+
 class GoalOut(ApiModel):
     """A standing objective an owner wrote for one repository. ``plans`` are
     the plans proposed from it, most recently changed first;
     ``open_plan_id`` is the one currently serving it (the most recently
-    changed plan that is not archived), or ``null``."""
+    changed plan that is not archived), or ``null``. ``proposing`` says
+    whether the planner drafts plans toward it on its own."""
 
     id: str
     workspace_id: str = WORKSPACE_ID
@@ -1595,6 +1612,7 @@ class GoalOut(ApiModel):
     revision: int
     plans: list[GoalPlanOut] = Field(default_factory=list)
     open_plan_id: str | None = None
+    proposing: GoalProposingOut
 
 
 class GoalCreate(ApiModel):
