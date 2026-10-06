@@ -252,6 +252,42 @@ class TestRefresh:
         # … and a fresh client-credentials grant starts a new family.
         assert api.token()["refresh_token"]
 
+    def test_reuse_refuses_the_familys_live_access_tokens(self, api: Api) -> None:
+        """The leak's working credential is the access token a stolen
+        refresh token was rotated into: reuse ends it at once, and every
+        other access token the family minted, but no other family's."""
+        client, secret = api.register()
+        grant = {
+            "grant_type": "client_credentials",
+            "client_id": client.id,
+            "client_secret": secret,
+        }
+        first = api.client.post("/v1/auth/token", json=grant).json()
+        other = api.client.post("/v1/auth/token", json=grant).json()
+        second = self._refresh(api, first["refresh_token"]).json()  # type: ignore[attr-defined]
+
+        def status(pair: dict[str, str]) -> object:
+            return api.client.get(
+                "/v1/status", headers={"Authorization": f"Bearer {pair['access_token']}"}
+            )
+
+        assert status(second).status_code == 200  # type: ignore[attr-defined]
+        replay = self._refresh(api, first["refresh_token"])
+        assert replay.json()["code"] == "refresh_reuse_detected"  # type: ignore[attr-defined]
+        for pair in (first, second):
+            refused = status(pair)
+            assert refused.status_code == 401  # type: ignore[attr-defined]
+            assert refused.json()["code"] == "token_revoked"  # type: ignore[attr-defined]
+        assert status(other).status_code == 200  # type: ignore[attr-defined]
+
+    def test_a_family_revocation_outlives_the_longest_access_token(self) -> None:
+        from lantern.api.auth.store import FAMILY_REVOCATION_S
+        from lantern.config import ApiConfig
+
+        bounds = ApiConfig.model_fields["access_token_ttl_s"].metadata
+        longest = max(int(getattr(bound, "le", 0)) for bound in bounds)
+        assert longest and longest + LEEWAY_S <= FAMILY_REVOCATION_S
+
     def test_an_expired_or_revoked_refresh_token_is_refused(self, api: Api) -> None:
         pair = api.token()
         api.clock.t += 604800 + 1
@@ -314,6 +350,11 @@ class TestRevoke:
             json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
         )
         assert again.status_code == 401
-        # The denylist is pruned once the token would have expired anyway.
+        # The denylist is pruned once every token it refuses (the family's
+        # included) would have expired anyway.
+        from lantern.api.auth.store import FAMILY_REVOCATION_S
+
         api.clock.t += 901
+        assert api.client.get("/v1/status", headers=headers).status_code == 401
+        api.clock.t += FAMILY_REVOCATION_S
         assert api.auth.prune(api.clock()) >= 1

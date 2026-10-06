@@ -3094,7 +3094,10 @@ Ed25519-signed access token (`iss=lantern`, `aud=lantern-api`, `scope`, a
 `jti`; the algorithm list is exactly `EdDSA`) and a refresh token stored by
 digest in a *family* — one grant and every rotation descended from it, so a
 refresh token presented twice revokes the family and the client
-re-authenticates with its secret. Expiry is judged by the daemon's clock. A
+re-authenticates with its secret. Each access token carries its family
+(`family`), and a revoked family's entry in the revocation list refuses
+every access token minted beside it until the longest of them would have
+expired. Expiry is judged by the daemon's clock. A
 token's scope is what its client still holds: a grant narrowed after minting
 narrows the live token at once, and a revoked client is refused on its next
 request. The signing key lives at `config/api-signing.key` (0600); a rotation
