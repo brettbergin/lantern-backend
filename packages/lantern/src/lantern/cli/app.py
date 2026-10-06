@@ -3290,7 +3290,7 @@ def daemon_ctl(
             "[--retry] | queue | items | abandon <item> [reason] | retry <item> | "
             "requeue <item> | grant-rounds <run> <n> | reset-breaker | "
             "log [--tail N] [--level L] [--grep T] "
-            "| stop (the chat !sbx verbs)."
+            "| stop (the chat !lantern verbs)."
         ),
     ],
     timeout: Annotated[
@@ -3312,7 +3312,7 @@ def daemon_ctl(
     ] = False,
 ) -> None:
     """Send a command to the daemon running against this home — the
-    programmatic twin of Discord's `!sbx`, for scripts, cron and remote
+    programmatic twin of Discord's `!lantern`, for scripts, cron and remote
     operators (the bot ignores its own messages by design)."""
     from lantern.daemon.control import ControlClient, plain
 

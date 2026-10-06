@@ -1,7 +1,7 @@
 """Which configuration keys chat may never change (#970, #971).
 
 The concierge's config tools run in the daemon process against the
-operator's own file, with the same authority as ``!sbx``. Two things bound
+operator's own file, with the same authority as ``!lantern``. Two things bound
 that. A key that could sever the channel the outcome is reported on — the
 chat sections, the concierge's own switch — is refused from chat whatever
 the operator's lock list says, because a wrong value there leaves nobody

@@ -285,9 +285,13 @@ def test_the_control_channel_keeps_its_commands_when_it_is_linked(linked: Any) -
     assert linked.messages() == []
 
 
-def test_a_link_code_still_maps_an_author_from_a_linked_surface(elsewhere: Any) -> None:
+@pytest.mark.parametrize("prefix", ["!lantern", "!sbx"])
+def test_a_link_code_still_maps_an_author_from_a_linked_surface(
+    elsewhere: Any, prefix: str
+) -> None:
+    # The default prefix and the legacy one it still answers to.
     code, _expires = elsewhere.store.create_link_code(elsewhere.user.id, time.time())
-    elsewhere.type(f"!sbx link {code}")
+    elsewhere.type(f"{prefix} link {code}")
     assert wait_for(lambda: elsewhere.store.identity_user("discord", "1") == elsewhere.user.id)
     assert wait_for(lambda: any("linked" in sent.casefold() for sent in elsewhere.sent()))
 

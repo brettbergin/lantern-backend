@@ -36,6 +36,19 @@ class TestControlChannel:
         )
         assert route(f"!sbx <@!{BOT}> queue", mentioned_ids={BOT}) == Route("command", "queue")
 
+    def test_any_of_several_prefixes_is_a_command(self) -> None:
+        prefixes = ("!lantern", "!sbx")
+        assert route("!lantern status", prefix=prefixes) == Route("command", "status")
+        assert route("!sbx status", prefix=prefixes) == Route("command", "status")
+        assert route(f"<@{BOT}> !sbx queue", mentioned_ids={BOT}, prefix=prefixes) == Route(
+            "command", "queue"
+        )
+        assert route("!other status", prefix=prefixes) == Route("ignore", "")
+
+    def test_only_the_given_prefix_is_a_command(self) -> None:
+        assert route("!sbx status", prefix="!bot") == Route("ignore", "")
+        assert route("!bot status", prefix="!bot") == Route("command", "status")
+
     def test_mention_forms_go_to_the_concierge(self) -> None:
         assert route(f"<@{BOT}> what's running?", mentioned_ids={BOT}) == Route(
             "concierge", "what's running?"

@@ -113,7 +113,7 @@ class LanternTui(App[None]):
         self.emoji = bool(config.tui.emoji)
         self.state = ConsoleState(version=__version__, read_only=read_only)
         self.chat = ChatSession(
-            mailbox, read_only=read_only, prefix=config.tui.command_prefix, clock=clock
+            mailbox, read_only=read_only, prefix=config.tui.command_prefixes, clock=clock
         )
         self.deps = Deps(
             ctl=self.ctl,

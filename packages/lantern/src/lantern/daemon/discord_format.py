@@ -48,6 +48,7 @@ from lantern.cli.tui import (
     TOOL_ARGS_LINE_CLIP,
     _one_line as _one_line_mid,
 )
+from lantern.config import DEFAULT_COMMAND_PREFIX
 from lantern.daemon.model import DaemonNotice, RunReport, TaskOutcome, WorkItem, live_runs
 from lantern.engine.model import PIPELINE_STAGES, WORKLOAD_STAGES, Published
 from lantern.events import Event, HostEventTypes
@@ -949,7 +950,7 @@ class ToolDigest:
     def __init__(
         self,
         *,
-        cancel_hint: str = "!sbx cancel",
+        cancel_hint: str = f"{DEFAULT_COMMAND_PREFIX} cancel",
         output_lines: int = 0,
         fail_output_lines: int = TOOL_FAIL_OUTPUT_LINES_DEFAULT,
     ) -> None:
@@ -1949,7 +1950,7 @@ def _cancel_note(item_id: str | None, report: RunReport) -> str:
         return note + " — re-queued; a fresh run starts on the next tick"
     note += f" — {code(f'lantern resume {report.run_id}')} continues the run"
     if item_id:
-        note += f"; `!sbx retry {normalize_item_id(item_id)}` reruns it fresh"
+        note += f"; `!lantern retry {normalize_item_id(item_id)}` reruns it fresh"
     return note
 
 

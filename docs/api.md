@@ -1672,8 +1672,8 @@ is no thread to link and steering from the bridge stays as it was.
 While a surface is linked, what people type there becomes a turn in the
 channel it mirrors, instead of reaching the daemon's concierge. A link is a
 window on a channel, not a grant of operator powers: it never widens where
-`!sbx` runs, so on a linked surface that is not the control channel the one
-command is `!sbx link`, and every other is refused with a note saying where
+`!lantern` runs, so on a linked surface that is not the control channel the one
+command is `!lantern link`, and every other is refused with a note saying where
 it does run. Commands on the control channel, run-thread steering and an
 unlinked surface behave exactly as they did. Every message appended to the
 channel — a person's, an agent's, a run's delivery, a failed turn's error,
@@ -1709,7 +1709,7 @@ Who somebody is on a bridge is theirs to prove, once:
 | `DELETE /v1/users/me/identities/{backend}` | write | `204`; `404 identity_not_found`                                                     |
 
 The person sends `command` on the bridge — `<prefix> link <code>`, the
-prefix the bridge's `[chat] command_prefix` sets (`!sbx` by default), so a
+prefix the bridge's `[chat] command_prefix` sets (`!lantern` by default), so a
 client shows it rather than building it — from the account they want
 mapped. A message from an author nobody has mapped is refused with a
 short reply pointing at that command — unless the link was created with

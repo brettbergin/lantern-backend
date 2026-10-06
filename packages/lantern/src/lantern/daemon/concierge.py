@@ -2,7 +2,7 @@
 
 The daemon's chat bridge relays chronology out and steering in; the
 concierge is the agent people *talk to* in the control channel itself.
-It knows how to operate lantern — every ``!sbx`` verb, through the same
+It knows how to operate lantern — every ``!lantern`` verb, through the same
 :func:`lantern.daemon.control.dispatch` the commands use — how to queue new
 work, and how to look up and explain runs, PRs and diffs.
 

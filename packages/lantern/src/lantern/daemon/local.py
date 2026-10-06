@@ -2,7 +2,7 @@
 
 The service-agnostic bridge — event pump, chronology rendering, steering,
 run watches, concierge turns, clarifying questions, the merge gate and
-``!sbx`` commands — is :class:`lantern.daemon.chat.ChatBridge`; this
+``!lantern`` commands — is :class:`lantern.daemon.chat.ChatBridge`; this
 module is its transport for ``lantern tui``. There is no service to dial:
 the transport is a **mailbox in the daemon's own ``state.db``**
 (``daemon_local_messages``). Every message the bridge would have posted to
@@ -268,7 +268,10 @@ class LocalBridge(ChatBridge):
         )
         run_id = prompt.gate_run_id if prompt is not None else None
         if run_id is None:
-            reply = "that merge prompt is no longer open — `!sbx merge <item>` still works"
+            reply = (
+                "that merge prompt is no longer open — "
+                f"`{self.chat.command_prefix} merge <item>` still works"
+            )
         elif self.loop_ref is None:
             reply = "daemon loop not attached"
         else:
@@ -280,7 +283,10 @@ class LocalBridge(ChatBridge):
                 reply = f"merge failed: {exc.args[0] if exc.args else exc}"
             except Exception:
                 self.log.warning("local.gate_click_failed", run=run_id, exc_info=True)
-                reply = "something went wrong approving the merge — `!sbx merge` still works"
+                reply = (
+                    "something went wrong approving the merge — "
+                    f"`{self.chat.command_prefix} merge` still works"
+                )
         await self._send(
             LocalTarget(row.channel_id), str(reply), reply_to=LocalRef(row.id, row.channel_id)
         )

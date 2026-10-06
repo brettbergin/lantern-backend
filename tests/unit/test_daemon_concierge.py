@@ -3132,7 +3132,7 @@ class TestSurface:
         assert concierge._chat is cfg.discord and concierge._chat_name == "Discord"
         concierge._turn_via = "local"
         assert concierge._chat is cfg.tui and concierge._chat_name == "the operator console"
-        assert concierge._chat.command_prefix == "!sbx"
+        assert concierge._chat.command_prefix == "!lantern"
         concierge._turn_via = None
         assert concierge._chat is cfg.discord
 

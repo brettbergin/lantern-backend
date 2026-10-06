@@ -1766,7 +1766,7 @@ class DaemonStore:
         * finished and the content is unchanged — **re-queued in place**:
           state back to ``queued``, unclaimed, no pinned run, no stale
           error, attempts reset. Re-adding the label used to be silently
-          inert here, which left an operator ``!sbx retry`` as the only way
+          inert here, which left an operator ``!lantern retry`` as the only way
           back in (issue #596). What the finished attempt pushed to origin
           is not lost: its run id, branch and PR are carried onto the
           re-queued row (``prior_*``, read back with :meth:`prior_attempt`)
@@ -2463,7 +2463,7 @@ class DaemonStore:
 
     def items(self, states: Sequence[ItemState] | None = None) -> list[WorkItem]:
         """Every known item (optionally filtered by state), oldest first —
-        the operator's view for ``lantern daemon items`` / ``!sbx items``."""
+        the operator's view for ``lantern daemon items`` / ``!lantern items``."""
         stmt = select(WorkItemRow).order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
         if states:
             stmt = stmt.where(WorkItemRow.state.in_(list(states)))

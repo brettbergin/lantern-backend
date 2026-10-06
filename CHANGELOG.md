@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+**Chat commands are `!lantern` now; `!sbx` still works.** The default
+`command_prefix` of `[discord]`, `[slack]`, `[mattermost]` and `[tui]` was
+still `!sbx`, from before the rename, so every reply, hint, merge prompt
+and the link command the apps show named it. The default is `!lantern`, and
+a section left at the default answers to `!sbx` as well, so habits, pinned
+notes and older docs keep working. A section that sets its own prefix
+answers to that prefix only, as before.
+
 **A sign-in no longer fails with 500 while runs are recording.** Under load
 `POST /v1/auth/local/login` (and `/v1/auth/token` with client credentials)
 could answer 500 `internal_error`; server side it was

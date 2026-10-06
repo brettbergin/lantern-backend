@@ -788,7 +788,7 @@ class TestBridge:
             control = client.channels[42]
             bridge._handle_message(FakeMessage("<@777> status?", control, mentions=[BOT_USER]))
             assert wait_for(lambda: any("chat is off" in s for s in control.sent))
-            assert "`!sbx status`" in control.sent[-1]
+            assert "`!lantern status`" in control.sent[-1]
         finally:
             bridge.close()
 
@@ -2842,7 +2842,7 @@ class TestGatePrompt:
         prompt = thread.sent[-1]
         assert "ready to merge" in prompt
         assert "<@1>" in prompt
-        assert "!sbx merge gh:issue:7" in prompt
+        assert "!lantern merge gh:issue:7" in prompt
         assert "abandon gh:issue:7" in prompt
         stored = bridge.dstore.gate_prompt("r77", "discord")
         assert stored is not None, "the prompt id is persisted for restarts"
@@ -2862,7 +2862,7 @@ class TestGatePrompt:
         asyncio.run(bridge._post_gate_prompt(make_gate(kind="publish")))
         prompt = client.channels[421].sent[-1]
         assert "result held" in prompt and "<@1>" in prompt
-        assert "!sbx release gh:issue:7" in prompt
+        assert "!lantern release gh:issue:7" in prompt
         assert "abandon gh:issue:7" in prompt
         assert "merge" not in prompt and "pull/9" not in prompt
         assert "no deadline" in prompt
