@@ -135,7 +135,7 @@ class TestReplay:
 
     def test_a_run_begun_after_a_prune_replays_from_its_start(self, api: Api) -> None:
         api.loop.store.create_run("old", "Compile a report", kind="workload")
-        api.loop.store.append_event(Event(type="run.start", run_id="old", ts=api.clock()))
+        api.loop.store.append_event(Event(type="agent.message", run_id="old", ts=api.clock()))
         api.ctx.chronology.project(api.clock())
         api.clock.t += 604800 + 10
         api.ctx.chronology.prune(api.clock() - 604800)
@@ -145,11 +145,41 @@ class TestReplay:
         headers = api.bearer()
         fresh = api.client.get("/v1/runs/run_fresh/events", headers=headers)
         assert fresh.status_code == 200, fresh.text
-        assert [e["type"] for e in fresh.json()["data"]] == ["run.start", "agent.message"]
+        # The engine's own `run.start` is not carried (the daemon announces
+        # the start), so the first event the run has in the chronology is
+        # what decides it lost nothing.
+        assert [e["type"] for e in fresh.json()["data"]] == ["agent.message"]
         # The run that lost its start, and the whole chronology, still say so.
         old = api.client.get("/v1/runs/run_old/events", headers=headers)
         assert old.status_code == 410 and old.json()["code"] == "cursor_expired"
         assert api.client.get("/v1/events", headers=headers).status_code == 410
+
+    def test_a_run_starts_and_finishes_once(self, api: Api) -> None:
+        """The daemon announces a run's start and finish; the engine's own
+        pair is not carried beside them, or every client draws both."""
+        api.loop.store.create_run("once", "Compile a report", kind="workload")
+        api.ctx.chronology.record(
+            "run.started", api.clock(), run_id="once", data={"kind": "workload", "attempt": 1}
+        )
+        for type_ in ("run.start", "agent.message", "run.end"):
+            api.loop.store.append_event(Event(type=type_, run_id="once", ts=api.clock()))
+        api.ctx.chronology.project(api.clock())
+        api.ctx.chronology.record(
+            "run.finished", api.clock(), run_id="once", data={"state": "completed"}
+        )
+        headers = api.bearer()
+        got = api.client.get("/v1/runs/run_once/events", headers=headers)
+        assert got.status_code == 200, got.text
+        assert [e["type"] for e in got.json()["data"]] == [
+            "run.started",
+            "agent.message",
+            "run.finished",
+        ]
+        everything = api.client.get("/v1/events", params={"type_prefix": "run."}, headers=headers)
+        types = [e["type"] for e in everything.json()["data"]]
+        assert "run.start" not in types and "run.end" not in types
+        # Passed over, never left behind: nothing is waiting to be copied.
+        assert api.ctx.chronology.lag() == 0
 
     def test_bad_cursors_and_permissions(self, api: Api) -> None:
         headers = api.bearer()

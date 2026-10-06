@@ -2271,8 +2271,10 @@ alone when nothing does. Deleting twice answers `200`. `item.delete` and
 ## Following the work: events, SSE and the WebSocket
 
 The **chronology** is one durable, ordered stream: the daemon's notices, a
-run's start and finish, its engine events (every persisted one, `worker.stdout`
-included — filter with `type_prefix`), gate transitions, steering receipts,
+run's start and finish (`run.started` and `run.finished`, once each), its
+engine events (every persisted one, `worker.stdout` included — filter with
+`type_prefix` — except the engine's own `run.start` and `run.end`, which the
+daemon's pair stands for), gate transitions, steering receipts,
 every operation any surface recorded, and — with `attention.act` —
 [`attention.opened`, `attention.resolved` and `attention.reminder`](#hearing-that-an-entry-appeared-or-left)
 when something starts and stops waiting on a person, and while it still
