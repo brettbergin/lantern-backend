@@ -5789,7 +5789,7 @@
       },
       "GoalOut": {
         "additionalProperties": false,
-        "description": "A standing objective an owner wrote for one repository. ``plans`` are\nthe plans proposed from it, most recently changed first;\n``open_plan_id`` is the one currently serving it (the most recently\nchanged plan that is not archived), or ``null``.",
+        "description": "A standing objective an owner wrote for one repository. ``plans`` are\nthe plans proposed from it, most recently changed first;\n``open_plan_id`` is the one currently serving it (the most recently\nchanged plan that is not archived), or ``null``. ``proposing`` says\nwhether the planner drafts plans toward it on its own.",
         "properties": {
           "created_at": {
             "title": "Created At",
@@ -5839,6 +5839,9 @@
             "title": "Plans",
             "type": "array"
           },
+          "proposing": {
+            "$ref": "#/components/schemas/GoalProposingOut"
+          },
           "repository": {
             "title": "Repository",
             "type": "string"
@@ -5882,7 +5885,8 @@
           "state",
           "created_at",
           "updated_at",
-          "revision"
+          "revision",
+          "proposing"
         ],
         "title": "GoalOut",
         "type": "object"
@@ -5924,6 +5928,37 @@
           "advance"
         ],
         "title": "GoalPlanOut",
+        "type": "object"
+      },
+      "GoalProposingOut": {
+        "additionalProperties": false,
+        "description": "Whether the planner drafts plans toward a goal on its own here, and\nwhen it does not, why \u2014 so a client can say so rather than promise a\nplan that never comes.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "every_s": {
+            "title": "Every S",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "enabled",
+          "every_s"
+        ],
+        "title": "GoalProposingOut",
         "type": "object"
       },
       "GoalResult": {
