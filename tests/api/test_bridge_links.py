@@ -217,6 +217,27 @@ def test_a_link_code_maps_an_external_author_to_the_account(api: Any) -> None:
     assert api.client.get("/v1/users/me/identities", headers=owner).json()["data"] == []
 
 
+def test_a_link_code_carries_the_exact_command_to_send(api: Any) -> None:
+    """A client shows what to type rather than hard-coding the bridge's
+    verb: the configured prefix, the verb and the code."""
+    owner = bearer(register(api))
+    issued = api.client.post("/v1/users/me/identities/link-code", headers=owner).json()
+    assert issued["command"] == f"!sbx link {issued['code']}"
+
+
+def test_the_link_command_follows_the_configured_prefix(tmp_path: Any) -> None:
+    from tests.api.conftest import build
+
+    served = build(tmp_path, config={"discord": {"channel_id": 123456, "command_prefix": "!lan"}})
+    with served.client:
+        owner = bearer(register(served))
+        issued = served.client.post("/v1/users/me/identities/link-code", headers=owner)
+        assert issued.status_code == 201, issued.text
+        body = issued.json()
+        assert body["command"] == f"!lan link {body['code']}"
+    served.ctx.close()
+
+
 def test_a_link_code_is_spent_once(api: Any) -> None:
     owner = bearer(register(api))
     code = api.client.post("/v1/users/me/identities/link-code", headers=owner).json()["code"]

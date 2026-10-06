@@ -1702,14 +1702,16 @@ Lantern shows it as a "via" badge; it is `null` for everything typed here.
 
 Who somebody is on a bridge is theirs to prove, once:
 
-| Route                                      | Needs | Result                                                                     |
-| ------------------------------------------ | ----- | -------------------------------------------------------------------------- |
-| `POST /v1/users/me/identities/link-code`   | write | `{code, expires_at}` — shown here and nowhere else, single use, 10 minutes |
-| `GET /v1/users/me/identities`              | read  | `{data: [{backend, external_user_id, display_name, verified_at}]}`         |
-| `DELETE /v1/users/me/identities/{backend}` | write | `204`; `404 identity_not_found`                                            |
+| Route                                      | Needs | Result                                                                              |
+| ------------------------------------------ | ----- | ----------------------------------------------------------------------------------- |
+| `POST /v1/users/me/identities/link-code`   | write | `{code, expires_at, command}` — shown here and nowhere else, single use, 10 minutes |
+| `GET /v1/users/me/identities`              | read  | `{data: [{backend, external_user_id, display_name, verified_at}]}`                  |
+| `DELETE /v1/users/me/identities/{backend}` | write | `204`; `404 identity_not_found`                                                     |
 
-The person types `!sbx link <code>` on the bridge, from the account they
-want mapped. A message from an author nobody has mapped is refused with a
+The person sends `command` on the bridge — `<prefix> link <code>`, the
+prefix the bridge's `[chat] command_prefix` sets (`!sbx` by default), so a
+client shows it rather than building it — from the account they want
+mapped. A message from an author nobody has mapped is refused with a
 short reply pointing at that command — unless the link was created with
 `allow_guests`, in which case it is stored as a person with no account,
 under the name they use on that service. A map is only as good as the
