@@ -40,13 +40,14 @@ extra's packages into the home's venv and switch it on:
 enabled = true
 bind = "127.0.0.1"        # loopback by default; your reverse proxy terminates TLS
 port = 8420
-trusted_proxies = []      # the proxy's address, so client addresses are read from it
+# trusted_proxies = ["10.0.0.2"]  # a proxy on another host; a local one is believed unset
 ```
 
 A daemon with `enabled = true` and the extra missing refuses to start and
 names the extra. The listener speaks plain HTTP and never terminates TLS:
-put a reverse proxy in front for anything beyond the host, and list it in
-`trusted_proxies` ([deploy.md](deploy.md#the-remote-api-behind-a-proxy)).
+put a reverse proxy in front for anything beyond the host. A proxy on the same
+host is believed while `trusted_proxies` is unset; list one elsewhere there
+([deploy.md](deploy.md#the-remote-api-behind-a-proxy)).
 Every `[api]` key is in the [user guide's knob table](user-guide.md#configuration).
 
 `GET /health/live` answers as soon as the process is up; `GET /health/ready`

@@ -107,9 +107,15 @@ wanted.
 
 `[api] enabled = true` makes the daemon serve its remote API on `127.0.0.1:8420`.
 It speaks plain HTTP and never terminates TLS itself: put a reverse proxy in front
-(Caddy, nginx, your ingress), let it terminate TLS and forward to loopback, and
-list the proxy's address in `[api] trusted_proxies` so the client address behind
-`X-Forwarded-For` is the one the authentication limiter keys on. Nothing else on
+(Caddy, nginx, your ingress), let it terminate TLS and forward to loopback. The
+client address behind `X-Forwarded-For` is the one the authentication limiter keys
+on: while `[api] trusted_proxies` is unset and the listener is bound to loopback, a
+proxy on the same host is believed; a proxy anywhere else (with a wider `bind`) is
+listed in `[api] trusted_proxies`. Setting it to `[]` believes nobody, and then every
+proxied client is one address — the daemon logs that once and `lantern doctor`
+names it, because ten failed sign-ins from anyone would lock everyone out. Refreshing
+an access token is never held back by an address, and failed password sign-ins never
+hold back single sign-on. Nothing else on
 the host needs to change: the listener runs inside `lantern daemon`, under the same
 unit, and stops with it. `lantern api client create` registers a client and prints
 its secret once; `lantern api key rotate` replaces the token signing key (restart

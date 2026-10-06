@@ -584,6 +584,13 @@ def test_repeated_failures_are_rate_limited(served: Api, idp: FakeIdP) -> None:
     assert limited.json()["code"] == "too_many_attempts"
 
 
+def test_failed_password_sign_ins_do_not_block_single_sign_on(served: Api, idp: FakeIdP) -> None:
+    from tests.api.test_auth import lock_the_shared_address
+
+    lock_the_shared_address(served)
+    assert _sign_in(served, idp, "alice")["access_token"]
+
+
 # -- groups and roles --------------------------------------------------------------
 
 

@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from lantern import __version__
 from lantern.api import errors, ws
 from lantern.api.context import ApiContext
+from lantern.api.forwarding import UNTRUSTED_FORWARDING_KEY, ForwardingWatch
 from lantern.api.routes import (
     admin,
     agents,
@@ -98,6 +99,9 @@ def create_app(ctx: ApiContext) -> FastAPI:
     )
     app.state.ctx = ctx
     max_body = int(ctx.api.max_body_bytes)
+    forwarding = ForwardingWatch(
+        ctx.api, lambda note: ctx.loop.dstore.set_value(UNTRUSTED_FORWARDING_KEY, note)
+    )
 
     async def _request_id(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -108,6 +112,9 @@ def create_app(ctx: ApiContext) -> FastAPI:
         trace_id = "req_" + uuid.uuid4().hex[:16]
         request.state.request_id = given[:64] if given else trace_id
         started = time.monotonic()
+        peer = request.client.host if request.client else None
+        if peer is not None and forwarding.wants(peer, "x-forwarded-for" in request.headers):
+            await ctx.call(forwarding.note, peer, ctx.clock())
         status = 500
         try:
             response = await call_next(request)

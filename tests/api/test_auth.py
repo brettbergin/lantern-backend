@@ -262,6 +262,43 @@ class TestRefresh:
         assert self._refresh(api, "rt_unknown").json()["code"] == "invalid_grant"  # type: ignore[attr-defined]
 
 
+def lock_the_shared_address(api: Api) -> None:
+    """Ten failed password sign-ins for names that do not exist: behind a
+    proxy whose forwarded addresses are not believed, from anyone at all."""
+    for n in range(10):
+        response = api.client.post(
+            "/v1/auth/local/login", json={"username": f"nobody-{n}", "password": "wrong"}
+        )
+        assert response.status_code == 401
+    locked = api.client.post(
+        "/v1/auth/local/login", json={"username": "someone-else", "password": "wrong"}
+    )
+    assert locked.status_code == 429
+
+
+class TestOneAddressForEveryone:
+    """Every client can share one address (a proxy nobody told the listener
+    about). Failed sign-ins from that address must not sign everyone out."""
+
+    def test_a_locked_address_does_not_block_refresh(self, api: Api) -> None:
+        pair = api.token()
+        lock_the_shared_address(api)
+        refreshed = api.client.post(
+            "/v1/auth/token",
+            json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
+        )
+        assert refreshed.status_code == 200, refreshed.text
+
+    def test_failed_refreshes_do_not_lock_the_address(self, api: Api) -> None:
+        for _ in range(12):
+            refused = api.client.post(
+                "/v1/auth/token",
+                json={"grant_type": "refresh_token", "refresh_token": "rt_unknown"},
+            )
+            assert refused.status_code == 401
+        assert api.token()["access_token"]
+
+
 class TestRevoke:
     def test_revoke_ends_the_access_token_and_a_named_family(self, api: Api) -> None:
         pair = api.token()

@@ -25,6 +25,7 @@ strings.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import string
@@ -3160,6 +3161,20 @@ class ApiOidcConfig(_ConfigModel):
         return self
 
 
+#: What an unset ``[api] trusted_proxies`` believes on a loopback bind.
+LOOPBACK_PROXIES = ("127.0.0.1", "::1")
+
+
+def is_loopback_bind(bind: str) -> bool:
+    """Whether a listener bound here is reachable only from this host."""
+    if bind.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bind.strip()).is_loopback
+    except ValueError:
+        return False
+
+
 class ApiConfig(_ConfigModel):
     """The remote operations API, served by ``lantern daemon`` in-process.
 
@@ -3182,7 +3197,8 @@ class ApiConfig(_ConfigModel):
     bind: str = "127.0.0.1"
     port: int = Field(default=8420, ge=1, le=65535)
     # Proxies (addresses or CIDRs) whose X-Forwarded-* headers are believed;
-    # empty means none are.
+    # empty means none are. Left unset on a loopback bind, the loopback
+    # proxy is believed: see ``forwarding_proxies``.
     trusted_proxies: list[str] = Field(default_factory=list)
     # A minted access token lives this long; a refresh token this long.
     access_token_ttl_s: int = Field(default=900, ge=60, le=3600)
@@ -3217,6 +3233,20 @@ class ApiConfig(_ConfigModel):
         if "*" in value:
             raise ValueError("api.cors_origins must list origins; '*' is refused")
         return value
+
+    @property
+    def forwarding_proxies(self) -> list[str]:
+        """Whose ``X-Forwarded-*`` headers the listener believes.
+
+        ``trusted_proxies`` as written when it is set, even to ``[]``. Unset
+        on a loopback bind, the loopback proxy: nothing but a process on
+        this host can reach that listener, so a request that names another
+        client came through a local proxy — and believing nobody would make
+        every client one address to the sign-in limiter.
+        """
+        if "trusted_proxies" in self.model_fields_set:
+            return list(self.trusted_proxies)
+        return list(LOOPBACK_PROXIES) if is_loopback_bind(self.bind) else []
 
 
 class PushConfig(_ConfigModel):

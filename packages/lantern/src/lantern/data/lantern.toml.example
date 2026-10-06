@@ -1007,7 +1007,8 @@ service_memory = "2g"
 # enabled = false
 # bind = "127.0.0.1"               # loopback unless a proxy in front needs more
 # port = 8420                      # the listener's TCP port
-# trusted_proxies = []             # proxies whose X-Forwarded-* headers are believed
+# trusted_proxies = ["10.0.0.2"]   # proxies whose X-Forwarded-* headers are believed;
+#                                  # unset on a loopback bind, the local proxy is; [] is nobody
 # access_token_ttl_s = 900         # an access token lives 15 minutes
 # refresh_token_ttl_s = 604800     # a refresh token a week; rotated on every use
 # cors_origins = []                # browser origins allowed; empty disables CORS
