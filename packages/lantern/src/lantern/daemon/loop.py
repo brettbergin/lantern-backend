@@ -84,6 +84,7 @@ from lantern.daemon.epicruns import EpicRunDriver
 from lantern.daemon.github import DaemonGithub
 from lantern.daemon.goals import GoalStore
 from lantern.daemon.holds import OPERATOR_HOLD, hold_name
+from lantern.daemon.inputs import inputs_note, stage_chat_inputs
 from lantern.daemon.logsink import event_log_subscriber
 from lantern.daemon.model import (
     DaemonNotice,
@@ -5790,9 +5791,22 @@ class DaemonLoop:
         # pushed branch and PR where they are still usable (#600); the
         # engine confirms that with GitHub and falls back to a fresh start.
         prior = self.dstore.prior_attempt(item.item_id)
+        outcome = self.outcome_text(item)
+        # A workload a chat message asked for reads that message's
+        # attachments from its own data directory; the ask names them.
+        staged = (
+            stage_chat_inputs(self.dstore, item_config, item, run_id)
+            if item.kind == "workload"
+            else ()
+        )
+        if staged:
+            outcome = f"{outcome}\n\n{inputs_note(staged)}"
         return engine.start(
-            self.outcome_text(item),
+            outcome,
             run_id=run_id,
+            # Files were copied in: a run that cannot see its data directory
+            # must fail closed rather than work in an empty one.
+            expects_mount=True if staged else None,
             warm=self._warm_run(run_id),
             repo=self._item_repo(item),
             prior_branch=prior.branch if prior else None,

@@ -1526,7 +1526,12 @@ ask ─▶ PLAN (task DAG, needs declared) ─▶ grant needs against the profil
   through its `start_workload` tool, `[[schedules]]` ticks
   (`sched:<name>:<due minute>`) the daemon fires by itself on an `every`
   or `cron` cadence, and an ask a remote client admits through the API
-  as an `api:<key>` item (#1036). `lantern run --kind workload` is the same run from the
+  as an `api:<key>` item (#1036). A chat ask's attachments are the
+  asking message's, which only that turn's own tools read: before the run
+  starts, the daemon copies them into the run's data directory under
+  `inputs/` (`daemon/inputs.py`), names each there in the ask, and requires
+  the mount, so the run reads what the person attached rather than
+  searching for tools it does not have. `lantern run --kind workload` is the same run from the
   CLI; `lantern init --preset workload` writes a config with one of each
   section, and `lantern doctor` lists the profiles, schedules and where
   the daemon would get its work. See [The daemon](#the-daemon) for the
