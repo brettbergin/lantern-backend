@@ -590,8 +590,10 @@ class _SessionState:
     def _tool_result(self, block: Any) -> None:
         call_id = getattr(block, "tool_use_id", None)
         tool, args, duration_ms = self.registry.end(call_id)
-        is_error = getattr(block, "is_error", None)
-        success = None if is_error is None else not is_error
+        # The SDK sets ``is_error`` only on a failed result and leaves it
+        # unset (None) on most successful ones: a result block is a finished
+        # call, and only an explicit error flag makes it a failure.
+        success = getattr(block, "is_error", None) is not True
         raw = _result_text(getattr(block, "content", None))
         output = None if raw is None else excerpt_output(raw)
         self.tracker.record_tool_end(tool, success, tool_call_id=call_id)

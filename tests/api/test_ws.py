@@ -112,6 +112,30 @@ class TestSubscription:
             assert (started["type"], finished["type"]) == ("run.started", "run.finished")
             assert started["run_id"] == f"run_{run_id}"
 
+    def test_refresh_reuse_closes_a_connection_on_the_familys_token(
+        self, api: Api, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ws_module, "ACCESS_RECHECK_S", 0.0)
+        pair = api.token()
+        rotated = api.client.post(
+            "/v1/auth/token",
+            json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
+        ).json()
+        headers = {"Authorization": f"Bearer {rotated['access_token']}"}
+        with api.client.websocket_connect("/v1/ws", headers=headers) as ws:
+            _recv(ws, kind="hello")
+            replay = api.client.post(
+                "/v1/auth/token",
+                json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
+            )
+            assert replay.json()["code"] == "refresh_reuse_detected"
+            ws.send_text(json.dumps({"type": "ping"}))
+            closing = _recv(ws, kind="closing")
+            assert closing["reason"] == "token_revoked"
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_text()
+            assert closed.value.code == 4401
+
     def test_a_revoked_token_closes_the_connection(
         self, api: Api, monkeypatch: pytest.MonkeyPatch
     ) -> None:
