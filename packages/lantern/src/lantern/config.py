@@ -1924,7 +1924,7 @@ class LandingConfig(_ConfigModel):
     ``"chat"`` makes a run that cleared every bar — review, CI,
     reconciliation — park ``gated`` instead of merging, with an approval
     prompt in the run's chat thread (the platform comes from ``[chat]
-    backend``). A click on the prompt, ``!sbx merge <item>`` in chat, or
+    backend``). A click on the prompt, ``!lantern merge <item>`` in chat, or
     ``lantern daemon ctl merge <item>`` on the host completes the landing:
     update-branch if behind, re-checked CI, the same reconciliation gate,
     then the merge — gh-ops only, no sandbox. There is no deadline; the
@@ -2150,7 +2150,7 @@ class DaemonConfig(_ConfigModel):
     # no run executing, any non-terminal run whose last activity (engine
     # chronology, falling back to the run row's updated timestamp) is older
     # than this is reconciled to a terminal state, so list_runs and
-    # `!sbx status` agree on what is active. The in-flight run is never
+    # `!lantern status` agree on what is active. The in-flight run is never
     # considered stale. 0 disables the sweep.
     run_stale_after_s: float = Field(default=21600.0, ge=0)
     # The daemon's own log stream (stderr → journald under systemd). INFO is
@@ -2239,6 +2239,15 @@ CHAT_BACKENDS: tuple[ChatBackend, ...] = tuple(
 BridgeBackend = Literal["discord", "slack", "mattermost", "local"]
 #: The local bridge's control channel id (its threads are ``thread:<id>``).
 TUI_CONTROL_CHANNEL = "control"
+#: What a chat message starts with to be an operator command, unless a
+#: section sets ``command_prefix``.
+DEFAULT_COMMAND_PREFIX = "!lantern"
+#: The prefix the project shipped with before its rename. A section left at
+#: the default still answers to it, so muscle memory and older docs keep
+#: working; a section with a prefix of its own answers to that one only.
+LEGACY_COMMAND_PREFIX = "!sbx"
+#: Every prefix a section left at the default answers to, the default first.
+DEFAULT_COMMAND_PREFIXES = (DEFAULT_COMMAND_PREFIX, LEGACY_COMMAND_PREFIX)
 
 
 class ChatBridgeConfig(_ConfigModel):
@@ -2248,7 +2257,7 @@ class ChatBridgeConfig(_ConfigModel):
     serves them (``lantern.daemon.chat.ChatBridge``) reads only these fields
     plus ``channel_id`` and ``enabled``."""
 
-    command_prefix: str = "!sbx"
+    command_prefix: str = DEFAULT_COMMAND_PREFIX
     thread_per_run: bool = True
     # quiet: lifecycle + links + chat; normal: plus agent messages, with each
     # burst of tool calls digested into one line edited in place (#235:
@@ -2258,7 +2267,7 @@ class ChatBridgeConfig(_ConfigModel):
     # renderer never exceeds 2000 either way, so one ceiling serves both.
     max_message_chars: int = Field(default=1900, ge=200, le=2000)
     # Rich output: embed cards (Discord) / coloured attachments (Slack) for
-    # the run headline, finished report and `!sbx status`; a per-run status
+    # the run headline, finished report and `!lantern status`; a per-run status
     # message edited in place as tasks progress; at the verbose level,
     # consecutive tool calls batched into one code block of at most
     # tool_batch_lines.
@@ -2277,6 +2286,16 @@ class ChatBridgeConfig(_ConfigModel):
     # named by its host path instead (Discord's cap for an unboosted server
     # is 10 MB). 0 attaches nothing and names every file.
     max_attachment_bytes: int = Field(default=10_000_000, ge=0, le=100_000_000)
+
+    @property
+    def command_prefixes(self) -> tuple[str, ...]:
+        """Every prefix that makes a message a command, the configured one
+        first (it is the one replies and hints name). The default prefix
+        also answers to :data:`LEGACY_COMMAND_PREFIX`; a custom one is the
+        only one."""
+        if self.command_prefix == DEFAULT_COMMAND_PREFIX:
+            return DEFAULT_COMMAND_PREFIXES
+        return (self.command_prefix,)
 
     @property
     def enabled(self) -> bool:  # pragma: no cover - overridden
@@ -2487,13 +2506,13 @@ DEFAULT_CONFIG_LOCKED: tuple[str, ...] = (
 
 class ConciergeConfig(_ConfigModel):
     """The control channel's agent: an LLM session that answers @mentions
-    in the chat control channel, operates the daemon (every ``!sbx``
+    in the chat control channel, operates the daemon (every ``!lantern``
     verb), enqueues new work and explains runs, PRs and diffs. It runs in
     a long-lived agent-role sandbox and reaches the daemon only through
     host tools. Effective only when a chat backend (``[discord]`` or
     ``[slack]``) is enabled; needs
     ``COPILOT_GITHUB_TOKEN`` on the daemon host like any agent session.
-    It acts with the same authority as ``!sbx`` — anyone who can mention
+    It acts with the same authority as ``!lantern`` — anyone who can mention
     the bot can drive the daemon; restrict the channel accordingly."""
 
     enabled: bool = True
@@ -2765,7 +2784,7 @@ class WorkloadProfile(_ConfigModel):
     ``publish = "hold"`` parks a finished run at its publishing stage —
     judged, persisted, nothing delivered — until a person releases it
     (#760): the daemon posts a release prompt in the run's thread (a button
-    where the backend has one) and `!sbx release <item>` or
+    where the backend has one) and `!lantern release <item>` or
     `lantern daemon ctl release <item>` work everywhere; a CLI run resumes
     with `lantern resume <run>`. ``auto`` (the default) publishes as soon
     as the judge passes.

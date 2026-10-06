@@ -8,13 +8,13 @@ is the three inbound kinds the bridge takes: a typed message, a choice
 click, an approve click.
 
 The routing rules are the bridge's (:mod:`lantern.daemon.chat_routing`):
-``!sbx …`` is a command; a message addressed to the bot — the literal
-``@sbx`` token in the text, or a reply to one of its rows — is a concierge
-turn in the control channel and a steer in a run thread; plain text is left
-alone. :func:`compose_outbound` is where the console's "address the bot"
-gesture becomes that token, and :func:`is_addressed` asks
-:func:`~lantern.daemon.chat_routing.route_message` itself, so the rules
-live in one place.
+``!lantern …`` is a command (``!sbx …`` too, at the default prefix); a
+message addressed to the bot — the literal ``@sbx`` token in the text, or a
+reply to one of its rows — is a concierge turn in the control channel and a
+steer in a run thread; plain text is left alone. :func:`compose_outbound`
+is where the console's "address the bot" gesture becomes that token, and
+:func:`is_addressed` asks :func:`~lantern.daemon.chat_routing.route_message`
+itself, so the rules live in one place.
 """
 
 from __future__ import annotations
@@ -22,13 +22,13 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from lantern.config import TUI_CONTROL_CHANNEL
+from lantern.config import DEFAULT_COMMAND_PREFIXES, TUI_CONTROL_CHANNEL
 from lantern.daemon.chat_choices import Choice, ChoiceQuestion, match_free_text
-from lantern.daemon.chat_routing import route_message
+from lantern.daemon.chat_routing import command_text, route_message
 from lantern.daemon.local import LOCAL_BOT_ID, LOCAL_MENTION_RE
 from lantern.daemon.mailbox import MailboxClient
 from lantern.daemon.store import LocalMessage
@@ -37,10 +37,12 @@ from lantern.daemon.store import LocalMessage
 MENTION = f"@{LOCAL_BOT_ID}"
 
 
-def compose_outbound(text: str, *, addressed: bool, prefix: str = "!sbx") -> str:
+def compose_outbound(
+    text: str, *, addressed: bool, prefix: str | Sequence[str] = DEFAULT_COMMAND_PREFIXES
+) -> str:
     """The text to write for what the operator typed.
 
-    A command (``!sbx …``) goes as typed. With the address gesture on, the
+    A command (``!lantern …``) goes as typed. With the address gesture on, the
     mention token is guaranteed once at the front — unless the operator
     already wrote it anywhere in the text. Without it the text goes as
     typed: unaddressed, and left alone by the bridge like a person talking
@@ -48,14 +50,14 @@ def compose_outbound(text: str, *, addressed: bool, prefix: str = "!sbx") -> str
     body = text.strip()
     if not body:
         return ""
-    if body.startswith(prefix):
+    if command_text(body, prefix) is not None:
         return body
     if addressed and not LOCAL_MENTION_RE.search(body):
         return f"{MENTION} {body}"
     return body
 
 
-def is_addressed(text: str, *, prefix: str = "!sbx") -> bool:
+def is_addressed(text: str, *, prefix: str | Sequence[str] = DEFAULT_COMMAND_PREFIXES) -> bool:
     """Whether the bridge would act on ``text`` as typed — the routing
     function's own answer, on the control channel's terms."""
     route = route_message(
@@ -187,7 +189,7 @@ class ChatSession:
         mailbox: MailboxClient,
         *,
         read_only: bool = False,
-        prefix: str = "!sbx",
+        prefix: str | Sequence[str] = DEFAULT_COMMAND_PREFIXES,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.mailbox = mailbox

@@ -15,7 +15,7 @@ from lantern.ghids import normalize_item_id
 if TYPE_CHECKING:
     from lantern.plans.model import Advance
 
-# ``cancelled`` is an operator's decision (``!sbx cancel``), not a failure:
+# ``cancelled`` is an operator's decision (``!lantern cancel``), not a failure:
 # it is terminal for the daemon (no retry, no breaker count) while the run
 # itself stays resumable from the CLI. ``blocked`` is the run having cleared
 # its own bar and GitHub refusing to finish the PR — terminal for the daemon
@@ -305,7 +305,7 @@ class RunReport(NamedTuple):
     # daemon's point of view even though the persisted run is still
     # resumable — the finish card tells the human how to continue it).
     cancelled_by: str | None = None
-    # ``!sbx cancel --retry``: the item went straight back to the queue.
+    # ``!lantern cancel --retry``: the item went straight back to the queue.
     requeued: bool = False
     # Which run shape the cards render (#757): a workload's finish card
     # shows its tasks' outputs and verdicts where a code run's shows the PR.

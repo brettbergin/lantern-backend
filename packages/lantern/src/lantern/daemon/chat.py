@@ -8,7 +8,7 @@ that thread to the running agent as steering — the same
 ``post_user_message`` / ``chat.reply`` contract the CLI's ``--chat`` uses
 (engine.py), so no engine changes are needed. Daemon-level events
 (queueing, breaker, cap, recovery) go to the control channel itself. In the
-control channel, ``!sbx <verb>`` runs an operator command and @mentioning
+control channel, ``!lantern <verb>`` runs an operator command and @mentioning
 the bot (or replying to it) talks to the **concierge** — the channel's
 agent (``lantern.daemon.concierge``). Its ``watch_run`` tool calls back
 into :meth:`ChatBridge.on_watch`, which remembers the asker's user id and
@@ -64,7 +64,12 @@ from lantern.daemon.chat_choices import (
     match_free_text,
     render_prose,
 )
-from lantern.daemon.chat_routing import DISCORD_MENTION_RE, route_message, strip_mentions
+from lantern.daemon.chat_routing import (
+    DISCORD_MENTION_RE,
+    command_text,
+    route_message,
+    strip_mentions,
+)
 from lantern.daemon.concierge import VIA_CONCIERGE_SUFFIX, ConciergeReply
 from lantern.daemon.control import ITEM_COMMANDS, dispatch
 from lantern.daemon.controls.principal import Principal
@@ -395,7 +400,7 @@ class ChatBridge(ABC):
         self.config = config
         self.chat: ChatBridgeConfig = config.chat_section(self.backend)
         self.dstore = dstore
-        self.loop_ref = loop_ref  # DaemonLoop, for !sbx commands + steering
+        self.loop_ref = loop_ref  # DaemonLoop, for !lantern commands + steering
         # The control channel's agent (None: mentions get a "chat is off" reply).
         self.concierge = concierge
         self._client_factory = client_factory or self._default_client
@@ -872,7 +877,7 @@ class ChatBridge(ABC):
             # channel the run lives in, so a reply there is a turn there and
             # steers the run the way a reply typed in the app does; a thread
             # opened before the link existed keeps the direct steer below.
-            # ``!sbx`` still runs an operator command (``link`` among them).
+            # ``!lantern`` still runs an operator command (``link`` among them).
             link = self._channel_link(msg)
             if link is not None:
                 self._handle_linked(msg, link)
@@ -884,7 +889,7 @@ class ChatBridge(ABC):
             mentioned_ids=msg.mentioned_ids,
             reply_to_bot=not msg.author_is_bot and msg.reply_to_bot,
             control_channel_id=control,
-            prefix=self.chat.command_prefix,
+            prefix=self.chat.command_prefixes,
             bot_user_id=self._bot_user_id(),
             is_run_thread=is_run_thread,
             mention_re=self.mention_re,
@@ -993,9 +998,8 @@ class ChatBridge(ABC):
         text = strip_mentions(
             (msg.content or "").strip(), self._bot_user_id(), mention_re=self.mention_re
         )
-        prefix = self.chat.command_prefix
-        if text.startswith(prefix):
-            cmd = text[len(prefix) :].strip()
+        cmd = command_text(text, self.chat.command_prefixes)
+        if cmd is not None:
             if self._may_command(msg, cmd):
                 self._ack(msg, ACK_RECEIVED)
                 self._schedule(self._command(msg, cmd))
@@ -1080,7 +1084,7 @@ class ChatBridge(ABC):
         await self._ack_now(msg, ACK_ANSWERED)
 
     async def _link_identity(self, msg: Inbound, cmd: str) -> None:
-        """``!sbx link <code>``: prove that this service account is the one
+        """``!lantern link <code>``: prove that this service account is the one
         behind a local user, with a code they asked their own profile for."""
         store = self._collaboration()
         parts = cmd.split()
@@ -1541,7 +1545,7 @@ class ChatBridge(ABC):
                     # The control channel is the operator's (restricted by
                     # them, on a bridge with no authority model of its own),
                     # so a turn from it acts with every capability, as
-                    # `!sbx` does: said explicitly, never assumed (#1274).
+                    # `!lantern` does: said explicitly, never assumed (#1274).
                     principal=Principal.trusted(author, self.backend),
                     on_tool=on_tool,
                     via=self.backend,

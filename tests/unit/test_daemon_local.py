@@ -384,7 +384,7 @@ class TestMergeGate:
             assert wait_for(lambda: any(r.kind == "gate" for r in rows(dstore, thread)))
             prompt = next(r for r in rows(dstore, thread) if r.kind == "gate")
             assert prompt.gate_run_id == "r77" and prompt.mention_users
-            assert "@brett" in prompt.text and "!sbx merge gh:issue:7" in prompt.text
+            assert "@brett" in prompt.text and "!lantern merge gh:issue:7" in prompt.text
             assert dstore.gate_prompt("r77", "local") == (thread, str(prompt.id))
             # The console's approve button is an `approve` row under the prompt.
             typed(dstore, thread, "", kind="approve", reply_to_id=prompt.id)

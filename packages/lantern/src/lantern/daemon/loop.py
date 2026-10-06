@@ -308,7 +308,7 @@ class PlanAnswered(NamedTuple):
 
 
 class CancelRequest(NamedTuple):
-    """An operator's ``!sbx cancel`` for one specific run. Recorded so the
+    """An operator's ``!lantern cancel`` for one specific run. Recorded so the
     settle step can tell it from a failure: the engine surfaces both as an
     exception at the next boundary (field: a Discord cancel was settled as
     a failed attempt, re-run fresh after the backoff and counted toward the
@@ -3775,7 +3775,7 @@ class DaemonLoop:
             attempt=item.attempts,
         )
         # An item-level operator decision (abandon/requeue, possibly from
-        # another process) outranks a pending `!sbx cancel`: the row already
+        # another process) outranks a pending `!lantern cancel`: the row already
         # says what the item's fate is.
         override = self._operator_override(item.item_id, run_id)
         if override is not None:
@@ -4155,7 +4155,7 @@ class DaemonLoop:
         self.dstore.finish_ledger(run_id, "cancelled", now)
         self.dstore.mark_cancelled(item.item_id, reason, now)
         if cancel.retry:
-            # cancelled → queued is the same transition `!sbx retry` makes.
+            # cancelled → queued is the same transition `!lantern retry` makes.
             self.dstore.retry(item.item_id, now, reason)
             # report_cancelled(requeued=True) below is the source-side report.
             self.dstore.take_pending_report(item.item_id)
@@ -4171,7 +4171,7 @@ class DaemonLoop:
             self._notice(
                 "run.cancelled",
                 f"⏹ {item.item_id} {reason} — `lantern resume {run_id}` continues it, "
-                f"`!sbx retry {item.item_id}` reruns it fresh",
+                f"`!lantern retry {item.item_id}` reruns it fresh",
                 item=item.item_id,
                 run=run_id,
                 by=cancel.requester,
@@ -4243,7 +4243,7 @@ class DaemonLoop:
         self._notice(
             "run.gated",
             f"⏸ {item.item_id} ready to merge — waiting for approval · PR #{pr_number} — "
-            f"approve in the run's thread or `!sbx merge {item.item_id}` (no deadline)",
+            f"approve in the run's thread or `!lantern merge {item.item_id}` (no deadline)",
             item=item.item_id,
             run=run_id,
             url=pr_url or None,
@@ -4287,7 +4287,7 @@ class DaemonLoop:
         self._notice(
             "run.held",
             f"⏸ {item.item_id} result held ({report.summary or report.task_summary}) — "
-            f"release in the run's thread or `!sbx release {item.item_id}` (no deadline)",
+            f"release in the run's thread or `!lantern release {item.item_id}` (no deadline)",
             item=item.item_id,
             run=run_id,
             tasks=report.task_summary,
@@ -6162,7 +6162,7 @@ class DaemonLoop:
         The run row is only ever written by the in-process run loop, so a
         cancelled item or a dead process left phantom ``running`` /
         ``decomposing`` runs behind: ``list_runs`` disagreed with
-        ``!sbx status`` and anything counting active runs was misled.
+        ``!lantern status`` and anything counting active runs was misled.
 
         Two kinds of run are deliberately left alone: the run genuinely
         executing in this process, and one queued for resume (item

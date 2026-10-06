@@ -222,7 +222,8 @@ def test_a_link_code_carries_the_exact_command_to_send(api: Any) -> None:
     verb: the configured prefix, the verb and the code."""
     owner = bearer(register(api))
     issued = api.client.post("/v1/users/me/identities/link-code", headers=owner).json()
-    assert issued["command"] == f"!sbx link {issued['code']}"
+    # The default prefix, never the legacy alias it also answers to.
+    assert issued["command"] == f"!lantern link {issued['code']}"
 
 
 def test_the_link_command_follows_the_configured_prefix(tmp_path: Any) -> None:

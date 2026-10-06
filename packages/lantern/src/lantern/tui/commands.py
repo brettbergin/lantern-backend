@@ -62,7 +62,7 @@ CATALOGUE: tuple[Command, ...] = (
     Command("Overview", "the run in flight, the queue, who waits on a human", _mode("overview")),
     Command("Runs", "every run; Enter opens one", _mode("runs")),
     Command("Queue", "dispatch order and every work item", _mode("items")),
-    Command("Chat", "the control channel: concierge, !sbx verbs, notices", _mode("chat")),
+    Command("Chat", "the control channel: concierge, !lantern verbs, notices", _mode("chat")),
     Command("Sandboxes", "sbx ls against the store; shell, remove, prune, gc", _mode("sandboxes")),
     Command("Daemon", "the unit, the process, versions, repos, the journal", _mode("daemon")),
     Command(

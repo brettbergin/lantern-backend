@@ -134,7 +134,9 @@ class ThreadView(Vertical):
         text, addressed, reply = box.take()
         if not text:
             return
-        unaddressed = not addressed and reply is None and not is_addressed(text, prefix=box.prefix)
+        unaddressed = (
+            not addressed and reply is None and not is_addressed(text, prefix=self.session.prefix)
+        )
         # In a run's thread plain text is direction for the run: the thread
         # is the run's channel, and whatever is typed there reaches it.
         if unaddressed and not self.thread and not self._toasted:

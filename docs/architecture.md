@@ -475,7 +475,7 @@ The daemon's `_settle_held` is the merge gate's shape with no PR: a
 `daemon_merge_gates` row of `kind = 'publish'` (`pr_number` 0), the item in
 `gated` owing a `held` report (the issue gets a how-to-release comment, no
 label), the same prompt in the run's thread — the Discord button reads
-*Release result*. `!sbx release <item>` (or `merge`/`approve`, one
+*Release result*. `!lantern release <item>` (or `merge`/`approve`, one
 `approve_merge` either way, the gate's kind deciding) wins the store CAS
 and `resume_for_release` re-queues the item with its run pinned; the next
 tick's `_resume` sees the `approving` publish gate and dispatches
@@ -483,7 +483,7 @@ tick's `_resume` sees the `approving` publish gate and dispatches
 gate `released` (or `dismissed` when the resumed run ended some other way —
 the retry that follows is a fresh run). `_reconcile_gates` leaves publish
 gates alone at boot: a released hold is a queued item, and the tick resumes
-it. `!sbx abandon <item>` drops the held result unpublished.
+it. `!lantern abandon <item>` drops the held result unpublished.
 
 The service sandbox (`sbxl-<instance>-<run>-run-credential-service`, #765) is the github sandbox's
 pattern generalized to the operator's own credentials. `[[credentials]]`
@@ -2035,7 +2035,7 @@ be picked, and a configured alias absent from the catalog remains visible.
 
 Because the run row is only ever written by the in-process run loop, a dead
 process (or a cancelled work item) used to leave runs stuck in `running` or
-`decomposing` forever, so `list_runs` and `!sbx status` disagreed about what
+`decomposing` forever, so `list_runs` and `!lantern status` disagreed about what
 was active (#374). Two sweeps keep them honest, and both only ever *append*
 chronology (a `run.reconciled` event) — historical events are never mutated:
 
@@ -2221,13 +2221,13 @@ CI, then mergeability, and only then the merge:
    daemon persists the gate (`daemon_merge_gates`), frees the sandboxes,
    resets the breaker, labels the issue `lantern:awaiting-merge`, posts the
    approval prompt into the run's chat thread (@mentioning whoever asked
-   for the work) and moves on. One approval — `!sbx merge <item>` on any
+   for the work) and moves on. One approval — `!lantern merge <item>` on any
    backend, `lantern daemon ctl merge <item>` headless — re-runs this same
    `land()` with gh ops alone (no sandbox, no engine): update if behind,
    re-checked CI, the same reconciliation gate, so a review left during
    the park is honoured, never merged over. A failed approval puts the
    gate back up; an approval interrupted by a restart re-opens at boot; a
-   double-approve loses a store CAS instead of double-merging; `!sbx abandon <item>` declines and dismisses the gate. `"off"` (the default)
+   double-approve loses a store CAS instead of double-merging; `!lantern abandon <item>` declines and dismisses the gate. `"off"` (the default)
    skips straight to the merge.
 6. **Merge**, sending the head sha the loop actually judged. A push that
    landed since loses the race with a 409 rather than being merged over.
@@ -2416,7 +2416,7 @@ repository: chat intake or schedules alone are a valid daemon). The store's
 repo-attribution passes skip `sched:` rows as they skip `chat:` rows;
 `_item_config` and `outcome_text` treat both as *local* ids
 (`ghids.is_local_id`) — no issue behind them, provenance names the schedule
-and its due. `schedules` (ctl, `!sbx`, the concierge's `sbx_control`) lists
+and its due. `schedules` (ctl, `!lantern`, the concierge's `sbx_control`) lists
 each schedule's cadence, last fire and next due.
 
 **Configuration from chat (#967).** The concierge's `config_keys` and
@@ -2444,7 +2444,7 @@ advice after it.
 
 ### Typed controls
 
-Every operator verb — `!sbx` in chat, `lantern daemon ctl`, the console,
+Every operator verb — `!lantern` in chat, `lantern daemon ctl`, the console,
 the concierge's `sbx_control` tool — used to land in one prose dispatcher
 (`daemon/control.py::_dispatch`) that called the loop and composed a
 sentence, taking a free-form `by` string for the source-facing attribution.
@@ -3756,7 +3756,7 @@ A workload the concierge queued is `chat:<message id>` (`ghids.chat_item_id`
 / `is_chat_id`) — the Discord or Slack message that asked for it, so the
 id is stable across a re-ask and the thread can be found from the item.
 Operator commands that take an `<item>` argument — `items`, `queue`,
-`abandon`, `retry`, `requeue`, on both `lantern daemon` and `!sbx` — accept
+`abandon`, `retry`, `requeue`, on both `lantern daemon` and `!lantern` — accept
 either form and always *print* the typed one.
 
 The **run cap** is a wall-clock calendar-day gate: it counts the runs whose
@@ -3816,7 +3816,7 @@ transports. `lantern.daemon.chat.ChatBridge` owns everything a reader of a
 run thread sees and everything an operator types — the non-blocking bus
 subscription and its pump, coalescing, the tool digest and status line edited
 in place, steer notes, run watches (persisted in `daemon_run_watches`),
-concierge turns and `!sbx` commands — against a small set of abstract seams:
+concierge turns and `!lantern` commands — against a small set of abstract seams:
 build/run/close a client, normalise an inbound message into `chat.Inbound`
 (content, surface id, author, mentions), send / edit / react / open a thread,
 and spell a user mention or a thread pointer. `daemon/discord.py`

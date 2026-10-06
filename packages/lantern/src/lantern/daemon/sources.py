@@ -1053,9 +1053,9 @@ class GitHubIssueSource:
                 n,
                 f"{_pr_ref(pr_number, pr_url)} is ready and green — lantern is parked "
                 "awaiting merge approval (`[landing] merge_gate`). Approve from the "
-                f"run's chat thread, with `!sbx merge {item.item_id}` in chat, or with "
+                f"run's chat thread, with `!lantern merge {item.item_id}` in chat, or with "
                 f"`lantern daemon ctl merge {item.item_id}` on the daemon host; "
-                f"`!sbx abandon {item.item_id}` declines and leaves the PR open. "
+                f"`!lantern abandon {item.item_id}` declines and leaves the PR open. "
                 "There is no deadline.",
             )
             self._add_label(ops, n, self.labels.gated)
@@ -1091,9 +1091,9 @@ class GitHubIssueSource:
                 item.source_key,
                 "The result is ready and lantern is holding it (the profile's "
                 '`publish = "hold"`). Release it from the run\'s chat thread, with '
-                f"`!sbx release {item.item_id}` in chat, or with "
+                f"`!lantern release {item.item_id}` in chat, or with "
                 f"`lantern daemon ctl release {item.item_id}` on the daemon host; "
-                f"`!sbx abandon {item.item_id}` drops it unpublished. There is no deadline.",
+                f"`!lantern abandon {item.item_id}` drops it unpublished. There is no deadline.",
             )
             return True
 
@@ -1165,7 +1165,7 @@ class GitHubIssueSource:
                 lines.append(
                     f"To continue it: re-add `{self.labels.trigger_for(item)}` — the next poll "
                     "picks the issue back up and resumes from the branch and PR this run already "
-                    f"pushed. `!sbx retry {item.item_id}` in Discord restarts it from scratch "
+                    f"pushed. `!lantern retry {item.item_id}` in Discord restarts it from scratch "
                     "instead."
                 )
             self._comment(ops, n, "\n".join(lines))
