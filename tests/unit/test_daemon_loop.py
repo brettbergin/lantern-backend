@@ -1526,6 +1526,73 @@ class TestOperatorItemControls:
             ("abandoned", "operator says stop")
         ]
 
+    def test_abandon_is_refused_while_the_run_publishes(self, tmp_path: Path) -> None:
+        """A run at its publishing stage is delivering its result: an abandon
+        then could not stop it, only contradict it."""
+        h = Harness(tmp_path)
+        h.source.items = [gh_item()]
+        started = threading.Event()
+        release = threading.Event()
+
+        def runner(
+            item: WorkItem, cfg: Config, run_id: str, bus: EventBus, resume: bool
+        ) -> RunResult:
+            h.runs.append((run_id, resume))
+            h.store.create_run(run_id, "x")
+            h.store.set_run_state(run_id, "publishing")
+            started.set()
+            assert release.wait(5)
+            h.store.set_run_state(run_id, "merged")
+            return RunResult(run_id=run_id, state="merged")
+
+        h.loop._runner = runner
+        results: list[Any] = []
+        t = threading.Thread(target=lambda: results.append(h.loop.tick()))
+        t.start()
+        assert started.wait(5)
+        with pytest.raises(ValueError, match="publishing its result"):
+            h.loop.abandon_item("gh:issue:1", "too late")
+        release.set()
+        t.join(10)
+        assert results and results[0].outcome == "done"
+        assert h.dstore.get("gh:issue:1").state == "done"  # type: ignore[union-attr]
+        assert not any(c[0] == "abandoned" for c in h.source.calls)
+
+    def test_an_abandon_that_lands_after_delivery_settles_to_the_real_outcome(
+        self, tmp_path: Path
+    ) -> None:
+        """An abandon that slipped in before publishing but whose cancel the
+        run never honoured: the run delivered, so the item is done and the
+        abandon was too late — never failed beside a delivered result."""
+        h = Harness(tmp_path)
+        h.source.items = [gh_item()]
+        started = threading.Event()
+        release = threading.Event()
+
+        def runner(
+            item: WorkItem, cfg: Config, run_id: str, bus: EventBus, resume: bool
+        ) -> RunResult:
+            h.runs.append((run_id, resume))
+            h.store.create_run(run_id, "x")
+            h.store.set_run_state(run_id, "landing")
+            started.set()
+            assert release.wait(5)
+            h.store.set_run_state(run_id, "merged")
+            return RunResult(run_id=run_id, state="merged")
+
+        h.loop._runner = runner
+        results: list[Any] = []
+        t = threading.Thread(target=lambda: results.append(h.loop.tick()))
+        t.start()
+        assert started.wait(5)
+        h.loop.abandon_item("gh:issue:1", "operator says stop")
+        release.set()
+        t.join(10)
+        assert results and results[0].outcome == "done"
+        item = h.dstore.get("gh:issue:1")
+        assert item is not None and item.state == "done" and item.last_error is None
+        assert not any(c[0] == "abandoned" for c in h.source.calls)
+
     def test_loop_abandon_queued_item_reports_immediately(self, tmp_path: Path) -> None:
         h = Harness(tmp_path)
         h.dstore.upsert_new(gh_item(), now=1.0)
