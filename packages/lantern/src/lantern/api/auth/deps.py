@@ -79,7 +79,7 @@ def _resolve(ctx: ApiContext, token: str) -> Authenticated:
         raise Problem(
             401, exc.code, exc.message, headers={"WWW-Authenticate": 'Bearer realm="lantern"'}
         ) from exc
-    if ctx.auth.is_revoked(claims.jti):
+    if ctx.auth.is_revoked(claims.jti, claims.family_id):
         raise Problem(401, "token_revoked", "the access token was revoked")
     client = ctx.auth.get_client(claims.client_id)
     if client is None or not client.active:

@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from lantern.api.auth.deps import Authenticated, current, get_ctx
 from lantern.api.auth.oidc import OidcError, OidcProvider, role_for_groups
-from lantern.api.auth.store import AuthError, Client, OidcSession
+from lantern.api.auth.store import AuthError, Client, OidcSession, new_family_id
 from lantern.api.auth.tokens import mint_access, scope_from
 from lantern.api.collaboration import CollaborationError
 from lantern.api.context import ApiContext
@@ -82,6 +82,7 @@ def grant_tokens(
         access_ttl = min(access_ttl, remaining)
         refresh_ttl = min(refresh_ttl, remaining)
         family_id = session.id
+    family_id = family_id or new_family_id()
     access, claims = mint_access(
         ctx.keys,
         client_id=client.id,
@@ -89,6 +90,7 @@ def grant_tokens(
         ttl_s=access_ttl,
         now=now,
         session_id=None if session is None else session.id,
+        family_id=family_id,
     )
     refresh = ctx.auth.issue_refresh(client.id, family_id=family_id, now=now, ttl_s=refresh_ttl)
     return TokenResponse(
@@ -127,7 +129,7 @@ def _refresh(ctx: ApiContext, body: TokenRequest) -> TokenResponse:
         raise Problem(422, "invalid_request", "refresh_token is required")
     api = ctx.api
     try:
-        client, fresh = ctx.auth.rotate_refresh(
+        client, fresh, family_id = ctx.auth.rotate_refresh(
             body.refresh_token,
             now=ctx.clock(),
             ttl_s=api.refresh_token_ttl_s,
@@ -154,6 +156,7 @@ def _refresh(ctx: ApiContext, body: TokenRequest) -> TokenResponse:
         ttl_s=access_ttl,
         now=now,
         session_id=None if session is None else session.id,
+        family_id=family_id,
     )
     return TokenResponse(
         access_token=access,
