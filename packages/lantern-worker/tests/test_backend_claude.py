@@ -421,6 +421,21 @@ class TestSession:
         assert result.health is not None
         assert result.health.tool_failures == {"Bash": 1}
 
+    def test_a_result_with_no_error_flag_is_a_success(self, sdk: types.ModuleType) -> None:
+        """The SDK leaves ``is_error`` unset (``None``) on most successful
+        built-in tool results: that is a finished call, not an unknown one."""
+        sdk.script = [
+            AssistantMessage([ToolUseBlock("t1", "Read", {"file_path": "a.txt"})]),
+            UserMessage([ToolResultBlock("t1", "hello", is_error=None)]),
+            ResultMessage(session_id="s", result="done"),
+        ]
+        events, emit = collect_emit()
+        result = ClaudeBackend().run_session(job(), emit)
+        end = next(e for e in events if e.type == EventTypes.AGENT_TOOL_END)
+        assert end.data["success"] is True
+        assert end.data["error"] is None
+        assert result.health is None
+
     def test_sdk_error_carries_auth_diagnostic(
         self, sdk: types.ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:

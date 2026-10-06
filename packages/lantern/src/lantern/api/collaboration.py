@@ -3690,6 +3690,18 @@ class CollaborationStore:
         self._appended(accepted[1])
         return accepted
 
+    def accepted_turn_ids(self, channel_id: str) -> list[str]:
+        """The channel's turns still waiting to start, oldest first."""
+        with self.dstore.read() as session:
+            return [
+                str(turn_id)
+                for turn_id in session.scalars(
+                    select(TurnRow.id)
+                    .where(TurnRow.channel_id == channel_id, TurnRow.status == "accepted")
+                    .order_by(TurnRow.created_at, TurnRow.id)
+                )
+            ]
+
     def start_turn(self, turn_id: str, now: float) -> bool:
         with self.dstore.transaction() as session:
             turn = session.get(TurnRow, turn_id)
