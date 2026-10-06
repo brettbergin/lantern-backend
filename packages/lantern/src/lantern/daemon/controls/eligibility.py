@@ -193,6 +193,10 @@ def _refusal(action: Action, s: Subject) -> str | None:
         if s.review_hold_state not in ("open", "paused"):
             return f"review wait is {s.review_hold_state}"
         return None
+    if action == "abandon" and s.is_current and state == "publishing":
+        # Mirrors the loop: a result being handed to its sinks cannot be
+        # taken back, so the item settles to what the run did.
+        return "run is publishing its result"
     if action in _ITEM_TRANSITIONS:
         if s.item_state is None:
             return "no work item"
