@@ -1611,7 +1611,8 @@ A person has the last word over all of it:
 | `PUT /v1/channels/{id}/silence` | delegate | Body `{until}` (a timestamp, or null to lift it); the channel        |
 | `PUT /v1/channels/{id}/read`    | write    | Body `{sequence}`; the caller's channel member entry                 |
 
-Stop cancels the channel's queued and running turns, cancels the runs its
+Stop cancels the channel's queued and running turns (a turn still accepted
+that nothing is running included), cancels the runs its
 work items are executing, abandons the work items it queued that have not
 started, and silences the channel for an hour; resume lifts the silence but
 restarts nothing. The runs and items are cancelled through the daemon's
@@ -2187,6 +2188,13 @@ dismissed row out of whatever it shows as needing attention.
   The daemon's own abandon (a pull request closed unmerged) dismisses nothing;
   nobody has looked at that yet. A cancelled run needs no dismissal: it rests
   in `cancelled`, which is not a failure.
+- **Too late to give up.** A run at its `publishing` stage is handing its
+  result to the sinks, and nothing can take that back: abandoning its item
+  then is `409 not_eligible` ("run is publishing its result"), and `abandon`
+  leaves `available_actions`. An abandon that arrived just before, whose
+  cancel the run never honoured, does not outrank what the run did: a run
+  that ended delivered (`completed` with nothing to land, or `merged`)
+  settles its item `done`, not `failed`.
 - **A run without an item.** Work an item carries is dismissed through the
   item; `POST /v1/runs/{id}/dismiss` on such a run leaves the same mark. A run
   nothing pins — its item row is gone, or has moved on to a later attempt —

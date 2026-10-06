@@ -1381,6 +1381,7 @@ class DaemonLoop:
         why = reason or "abandoned by operator"
         now = self.clock()
         before = self.dstore.get(item_id)
+        self._refuse_abandon_while_publishing(item_id)
         fresh = self.dstore.abandon(item_id, why, now, queued_only=queued_only)
         if before is not None and before.state == "gated" and before.run_id is not None:
             gate = self.dstore.merge_gate_for(before.run_id)
@@ -1423,6 +1424,24 @@ class DaemonLoop:
             self._close_dead_run(fresh.run_id, "abandoned", now, repo=fresh.repo)
         self._deliver_report(fresh)
         return fresh
+
+    def _refuse_abandon_while_publishing(self, item_id: str) -> None:
+        """A run at its publishing stage is handing its result to the
+        sinks: a cancel cannot take that back, so an abandon then would
+        only leave the item failed beside a delivered result. Refused; the
+        item settles to what the run did."""
+        for handle in self.runs:
+            if handle.item.item_id != item_id:
+                continue
+            try:
+                stage = self.store.get_run(handle.run_id).state
+            except LanternError:
+                continue
+            if stage == "publishing":
+                raise ValueError(
+                    f"{item_id} is publishing its result (run {handle.run_id}); "
+                    "it settles to that outcome when the run ends"
+                )
 
     def _withdraw_questions(self, item: WorkItem, why: str, now: float) -> None:
         """An abandoned plan run was parked on its questions (#2345): take
@@ -3859,6 +3878,18 @@ class DaemonLoop:
         otherwise take the failure path and re-queue an abandoned item).
         Operator decisions never count toward the circuit breaker."""
         now = self.clock()
+        if fresh.state == "failed" and self._delivered(item, result):
+            # The abandon came after the run had already delivered (its
+            # cancel was never honoured): what happened outranks it, and
+            # the item settles to the run's own outcome, never failed beside
+            # a delivered result.
+            log.info(
+                "item.abandon_too_late",
+                item=item.item_id,
+                run=run_id,
+                state=result.state if result is not None else None,
+            )
+            return self._settle(item, run_id, result, None)
         report = self._report(run_id, result)
         if fresh.state == "failed":
             self._end_run_cancelled(
@@ -3881,6 +3912,15 @@ class DaemonLoop:
             state=report.state,
         )
         return "requeued"
+
+    def _delivered(self, item: WorkItem, result: RunResult | None) -> bool:
+        """Whether the run did the whole job: merged, or ``completed`` where
+        there is no pull request to land — a workload (#760), or a code
+        run with no repository to deliver to."""
+        state = result.state if result is not None else None
+        return state == "merged" or (
+            state == "completed" and (item.kind != "code" or not self.config.vcs.enabled)
+        )
 
     def _run_is_resumable(self, run_id: str) -> bool:
         """Whether the run was left mid-flight (interrupted) rather than
@@ -3956,9 +3996,7 @@ class DaemonLoop:
         # (#760) ends `completed` once its result is published, whatever
         # `[github]` says — there is no pull request to merge.
         workload = item.kind != "code"
-        landed = state == "merged" or (
-            state == "completed" and (workload or not self.config.vcs.enabled)
-        )
+        landed = self._delivered(item, result)
         self._resolve_publish_gate(item, run_id, released=landed, now=now, state=state)
         if landed:
             self.dstore.finish_ledger(run_id, "done", now)
