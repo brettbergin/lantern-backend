@@ -19,12 +19,14 @@ from lantern.api.models import (
     GoalCreate,
     GoalOut,
     GoalPlanOut,
+    GoalProposingOut,
     GoalResult,
     GoalUpdate,
     OperationOut,
     rfc3339,
 )
 from lantern.api.projections import not_found
+from lantern.config import Config
 from lantern.daemon.controls.operations import Operation
 from lantern.daemon.controls.results import Outcome
 from lantern.daemon.goals import Goal, GoalPlan, GoalState, GoalStore, open_plan
@@ -36,7 +38,29 @@ def store_of(ctx: ApiContext) -> GoalStore:
     return store
 
 
-def goal_out(goal: Goal, plans: list[GoalPlan]) -> GoalOut:
+#: Why the planner does not propose toward any goal on this server.
+PROPOSING_OFF = (
+    "proposing is off on this server: an operator sets [delegation] propose_every "
+    "to let the planner draft plans toward goals"
+)
+
+
+def proposing_out(config: Config, goal: Goal) -> GoalProposingOut:
+    """Whether the planner drafts plans toward ``goal`` on its own: only
+    while ``[delegation] propose_every`` is set and the goal is active."""
+    every = int(config.delegation.propose_every)
+    if every <= 0:
+        return GoalProposingOut(enabled=False, every_s=0, reason=PROPOSING_OFF)
+    if goal.state != "active":
+        return GoalProposingOut(
+            enabled=False,
+            every_s=every,
+            reason=f"the goal is {goal.state}; the planner proposes only toward active goals",
+        )
+    return GoalProposingOut(enabled=True, every_s=every)
+
+
+def goal_out(goal: Goal, plans: list[GoalPlan], config: Config) -> GoalOut:
     serving = open_plan(plans)
     return GoalOut(
         id=goal.id,
@@ -59,6 +83,7 @@ def goal_out(goal: Goal, plans: list[GoalPlan]) -> GoalOut:
             for plan in plans
         ],
         open_plan_id=None if serving is None else serving.plan_id,
+        proposing=proposing_out(config, goal),
     )
 
 
@@ -69,7 +94,7 @@ def list_goals(
     store = store_of(ctx)
     goals = store.goals(repository=repository, state=state)
     served = store.plans_by_goal(goal.id for goal in goals)
-    return [goal_out(goal, served.get(goal.id, [])) for goal in goals]
+    return [goal_out(goal, served.get(goal.id, []), ctx.config) for goal in goals]
 
 
 def get_goal(ctx: ApiContext, goal_id: str) -> GoalOut:
@@ -77,14 +102,14 @@ def get_goal(ctx: ApiContext, goal_id: str) -> GoalOut:
     goal = store.goal(goal_id)
     if goal is None:
         raise not_found()
-    return goal_out(goal, store.plans_for(goal.id))
+    return goal_out(goal, store.plans_for(goal.id), ctx.config)
 
 
 def _result(ctx: ApiContext, goal_id: str, message: str, operation: Operation) -> GoalResult:
     store = store_of(ctx)
     goal = store.goal(goal_id)
     return GoalResult(
-        goal=None if goal is None else goal_out(goal, store.plans_for(goal.id)),
+        goal=None if goal is None else goal_out(goal, store.plans_for(goal.id), ctx.config),
         message=message,
         operation=OperationOut.from_operation(operation),
     )

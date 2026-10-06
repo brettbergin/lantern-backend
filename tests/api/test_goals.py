@@ -131,6 +131,33 @@ class TestAnOwnerSetsGoals:
             assert "plans:publish" in problem["detail"]
         assert api.client.get("/v1/goals", headers=api.bearer(READ)).json()["data"] == [goal]
 
+    def test_a_goal_says_proposing_is_off_while_propose_every_is_unset(self, api: Api) -> None:
+        """The feature is served, but this server never proposes: the goal
+        says so, and why, instead of promising a plan that never comes."""
+        owner = _headers(_register_owner(api))
+        goal = _goal(api, owner)
+        assert goal["proposing"]["enabled"] is False
+        assert goal["proposing"]["every_s"] == 0
+        assert "[delegation] propose_every" in goal["proposing"]["reason"]
+        listed = api.client.get("/v1/goals", headers=owner).json()["data"]
+        assert listed[0]["proposing"] == goal["proposing"]
+
+    def test_a_goal_says_proposing_is_on_and_only_while_active(self, tmp_path: Path) -> None:
+        served = build(tmp_path, config={"delegation": {"propose_every": 3600}})
+        with served.client:
+            owner = _headers(_register_owner(served))
+            goal = _goal(served, owner)
+            assert goal["proposing"] == {"enabled": True, "every_s": 3600, "reason": None}
+            paused = served.client.patch(
+                f"/v1/goals/{goal['id']}",
+                json={"expected_revision": 1, "state": "paused"},
+                headers=owner,
+            ).json()["goal"]
+            assert paused["proposing"]["enabled"] is False
+            assert paused["proposing"]["every_s"] == 3600
+            assert "paused" in paused["proposing"]["reason"]
+        served.ctx.close()
+
     def test_a_goal_that_is_not_there_is_a_plain_404(self, api: Api) -> None:
         headers = api.bearer(WRITE)
         assert api.client.get("/v1/goals/goal_nope", headers=headers).status_code == 404

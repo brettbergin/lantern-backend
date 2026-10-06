@@ -437,6 +437,30 @@ def test_a_post_into_a_channel_that_is_gone_is_dropped(api: Any) -> None:
     )
 
 
+def test_a_workload_answer_is_not_posted_beside_its_work_result(api: Any) -> None:
+    """The channel that asked gets a workload's answer once, as the work
+    result with its files; the run's chronicle posts no clipped copy."""
+    from lantern.agents.chronicle import RunChronicle
+    from lantern.events import HostEventTypes
+
+    headers, channel, item = _channel_with_work(api)
+    chronicle = RunChronicle.for_item(
+        api.ctx.poster, None, item, api.ctx.config, api.clock, artifacts=api.ctx.poster
+    )
+    assert chronicle is not None and chronicle.channel_id == channel
+    chronicle.on_event(
+        Event.now(
+            HostEventTypes.RUN_PUBLISHED,
+            "r1",
+            sink="chat",
+            tasks=["t1"],
+            message="Here is the bread list: " + "flour, " * 100,
+        )
+    )
+    chronicle.on_event(Event.now(HostEventTypes.RUN_END, "r1", state="completed"))
+    assert [m for m in _messages(api, headers, channel) if m["post_kind"] == "delivery"] == []
+
+
 def test_the_daemon_loop_takes_the_poster_the_listener_supplies(api: Any) -> None:
     # Building the listener's context over a daemon is what gives that
     # daemon a poster: the API server does nothing else to arrange it.

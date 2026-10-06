@@ -2188,6 +2188,13 @@ dismissed row out of whatever it shows as needing attention.
   The daemon's own abandon (a pull request closed unmerged) dismisses nothing;
   nobody has looked at that yet. A cancelled run needs no dismissal: it rests
   in `cancelled`, which is not a failure.
+- **Too late to give up.** A run at its `publishing` stage is handing its
+  result to the sinks, and nothing can take that back: abandoning its item
+  then is `409 not_eligible` ("run is publishing its result"), and `abandon`
+  leaves `available_actions`. An abandon that arrived just before, whose
+  cancel the run never honoured, does not outrank what the run did: a run
+  that ended delivered (`completed` with nothing to land, or `merged`)
+  settles its item `done`, not `failed`.
 - **A run without an item.** Work an item carries is dismissed through the
   item; `POST /v1/runs/{id}/dismiss` on such a run leaves the same mark. A run
   nothing pins — its item row is gone, or has moved on to a later attempt —
@@ -2264,8 +2271,10 @@ alone when nothing does. Deleting twice answers `200`. `item.delete` and
 ## Following the work: events, SSE and the WebSocket
 
 The **chronology** is one durable, ordered stream: the daemon's notices, a
-run's start and finish, its engine events (every persisted one, `worker.stdout`
-included — filter with `type_prefix`), gate transitions, steering receipts,
+run's start and finish (`run.started` and `run.finished`, once each), its
+engine events (every persisted one, `worker.stdout` included — filter with
+`type_prefix` — except the engine's own `run.start` and `run.end`, which the
+daemon's pair stands for), gate transitions, steering receipts,
 every operation any surface recorded, and — with `attention.act` —
 [`attention.opened`, `attention.resolved` and `attention.reminder`](#hearing-that-an-entry-appeared-or-left)
 when something starts and stops waiting on a person, and while it still
@@ -3040,8 +3049,10 @@ disagree on who proposed them, `proposers`. An `escalate` row carries `resolved_
 When `/v1/capabilities` lists `goals`, an owner or an admin can set a
 **goal** for a repository: a standing objective, in their own words, that
 plans are proposed from. `goals` is served with `planning`: a goal is for a
-repository that can hold a plan. Goals ship empty, and nothing in the daemon
-proposes a plan from one yet: this release stores and reads them.
+repository that can hold a plan. Goals ship empty, and the planner proposes
+plans from them only where `[delegation] propose_every` is set ("Plans
+proposed from goals" under [Plans](#plans)); each goal's `proposing` says
+which.
 
 `GET /v1/goals` (`runs:read`) lists every goal, oldest first, narrowed by
 `repository` (case is ignored) and `state` (`active`, `paused`, `done`).
@@ -3063,7 +3074,8 @@ proposes a plan from one yet: this release stores and reads them.
   "plans": [
     {"plan_id": "plan_…", "title": "Build pipeline", "state": "published", "advance": "auto"}
   ],
-  "open_plan_id": "plan_…"
+  "open_plan_id": "plan_…",
+  "proposing": {"enabled": false, "every_s": 0, "reason": "proposing is off on this server: …"}
 }
 ```
 
@@ -3071,7 +3083,14 @@ proposes a plan from one yet: this release stores and reads them.
 it), most recently changed first, each with its root's `title`, the `state` a
 plan reads as (`draft`, `published`, `archived`) and its `advance`.
 `open_plan_id` is the plan currently serving the goal — the most recently
-changed one that is not archived — or `null`.
+changed one that is not archived — or `null`. `proposing` says whether the
+planner drafts plans toward the goal on its own here: `enabled` only while
+`[delegation] propose_every` is set (`every_s`, `0` when off) and the goal is
+`active`, and otherwise a `reason` a client can show ("proposing is off on
+this server", "the goal is paused") rather than leave the goal waiting for
+a plan that never comes. `goals.proposing` in `/v1/capabilities` says the
+server can propose; `proposing.enabled` says whether it will. A missing or
+short `plan.propose` grant is judged per proposal and shows as an escalation.
 
 `POST /v1/goals` (`plans:publish`) takes `repository`, `title` (1–200
 characters), `text` (1–4000 characters, the objective) and optionally `state`
