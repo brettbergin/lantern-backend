@@ -63,6 +63,11 @@ def _artifacts(refs: Sequence[ArtifactRef]) -> list[dict[str, Any]]:
 class ApiChannelPoster:
     """Run posts over the collaboration store."""
 
+    #: A workload or tool run's result reaches the channel that asked for
+    #: it as a work result (:mod:`lantern.api.work_delivery`), with its
+    #: files: a run's chronicle does not post that answer a second time.
+    delivers_work_results = True
+
     def __init__(self, ctx: ApiContext) -> None:
         self.ctx = ctx
 
