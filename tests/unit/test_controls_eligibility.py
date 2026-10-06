@@ -282,6 +282,19 @@ class TestDelete:
             assert refused(action, subject).message == "work was deleted"
 
 
+def test_a_run_publishing_its_result_is_not_abandoned() -> None:
+    """Its result is being handed to the sinks; the item settles to that."""
+    publishing = Subject(
+        run_kind="workload", run_state="publishing", item_state="running", is_current=True
+    )
+    assert refused("abandon", publishing).message == "run is publishing its result"
+    assert "abandon" not in available_actions(publishing)
+    executing = Subject(
+        run_kind="workload", run_state="executing", item_state="running", is_current=True
+    )
+    assert "abandon" in available_actions(executing)
+
+
 def test_available_actions_is_exactly_what_check_allows() -> None:
     subject = Subject(run_state="building", item_state="running", is_current=True)
     expected = set()

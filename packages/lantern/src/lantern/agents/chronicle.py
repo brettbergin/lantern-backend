@@ -54,6 +54,9 @@ _DELIVERED_STATES = frozenset({"merged", "completed", "published"})
 _ANSWERING_SINK = "chat"
 #: One post's text is cut to this; a channel is not a log.
 _MAX_TEXT = 500
+#: Run kinds whose result the channel that asked for them receives as a
+#: work result, when the poster delivers those.
+_RESULT_KINDS = frozenset({"workload", "tool"})
 
 
 def _clip(text: str, limit: int = _MAX_TEXT) -> str:
@@ -279,6 +282,19 @@ class RunChronicle:
             if landed and landed not in self._landed:
                 self._landed.append(landed)
             return
+        if self._result_follows():
+            # The channel gets the answer, whole and with its files, as the
+            # work result; a second, clipped copy here only repeats it. What
+            # another sink delivered is still worth a line.
+            if self._landed:
+                self._post(
+                    event,
+                    "delivery",
+                    _clip("; ".join(self._landed)),
+                    dedupe=f"{event.run_id}:delivery",
+                    agent=self._lead(),
+                )
+            return
         artifacts = self._run_artifacts(event.run_id)
         self._post(
             event,
@@ -360,6 +376,17 @@ class RunChronicle:
         )
 
     # -- text and files ----------------------------------------------------
+
+    def _result_follows(self) -> bool:
+        """Whether this channel receives the run's result as a work result:
+        a workload or tool run told in the channel that asked for it, by a
+        poster that delivers those."""
+        return (
+            bool(getattr(self.poster, "delivers_work_results", False))
+            and self.item.kind in _RESULT_KINDS
+            and bool(self.item.channel_id)
+            and str(self.item.channel_id) == self.channel_id
+        )
 
     def _delivery_text(self, data: dict[str, Any], artifacts: tuple[ArtifactRef, ...]) -> str:
         url = str(data.get("url") or "").strip()

@@ -101,6 +101,12 @@ PAGE_MAX = 200
 #: How long a channel stop keeps the channel quiet before it lifts on its
 #: own; a person who wants it quiet for longer says so with `silence`.
 STOP_SILENCE_S = 3600.0
+#: The waits before a turn's start is tried again after the store refused
+#: it (a write lock held past the busy timeout); one more refusal after the
+#: last settles the turn failed rather than leave it accepted for nobody.
+TURN_START_BACKOFF_S = (0.5, 2.0)
+#: What the channel is told when a turn could not start.
+TURN_START_FAILED = "This message could not start (the daemon was busy). Send it again."
 #: The session prefix the history compaction job runs under. One session
 #: per channel, reset before every call: an SDK session is resumed message
 #: after message, so a shared one would carry a private channel's
@@ -914,7 +920,7 @@ class ApiContext:
                     return
             if self.stopping.is_set():
                 return
-            if not store.start_turn(turn.id, self.clock()):
+            if not self._start_turn(turn):
                 self.hub.notify()
                 return
             try:
@@ -935,6 +941,38 @@ class ApiContext:
             return changed
 
         self.turns.submit(turn, run, cancel=cancel)
+
+    def _start_turn(self, turn: Turn) -> bool:
+        """Move an accepted turn to running; whether it is now this
+        thread's to run. A store that refuses the write is tried again
+        after :data:`TURN_START_BACKOFF_S`; one that still refuses settles
+        the turn failed, with an error the channel shows, so the person
+        can send it again — it never stays accepted with nobody on it."""
+        store = self.collaboration
+        for wait in (*TURN_START_BACKOFF_S, None):
+            try:
+                return bool(store.start_turn(turn.id, self.clock()))
+            except Exception:
+                log.warning(
+                    "collaboration.turn_start_failed",
+                    turn_id=turn.id,
+                    channel_id=turn.channel_id,
+                    retrying=wait is not None,
+                    exc_info=True,
+                )
+            if wait is None or self.stopping.wait(wait):
+                break
+        if self.stopping.is_set():
+            # Left accepted on purpose: the next daemon's recovery runs it.
+            return False
+        try:
+            store.finish_turn(turn.id, error=TURN_START_FAILED, now=self.clock())
+        except Exception:
+            # Still accepted: a channel stop or the next recovery settles it.
+            log.exception(
+                "collaboration.turn_settle_failed", turn_id=turn.id, channel_id=turn.channel_id
+            )
+        return False
 
     def _execute_collaboration_turn(
         self,
@@ -1632,6 +1670,16 @@ class ApiContext:
         ``keep_turn`` is left running (see :meth:`stop_channel`).
         """
         turns = self.turns.cancel_channel(channel_id, keep=keep_turn)
+        # A turn still accepted that no lane holds — its start failed, or
+        # it was dropped — is the channel's too, and nothing else settles it.
+        for turn_id in self.collaboration.accepted_turn_ids(channel_id):
+            if turn_id == keep_turn or turn_id in turns:
+                continue
+            try:
+                if self.collaboration.request_turn_cancel(turn_id, self.clock()):
+                    turns.append(turn_id)
+            except Exception:
+                log.warning("collaboration.turn_cancel_failed", turn_id=turn_id, exc_info=True)
         scoped = _channel_stop_principal(principal)
         running, queued = self._channel_work(channel_id)
         # The store names the runs the channel's items are executing; the
