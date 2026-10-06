@@ -5,14 +5,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator, model_validator
 
 from lantern.engine.model import Published, RunKind, RunState
 from lantern.ghids import normalize_item_id
 
-# ``cancelled`` is an operator's decision (``!sbx cancel``), not a failure:
+if TYPE_CHECKING:
+    from lantern.plans.model import Advance
+
+# ``cancelled`` is an operator's decision (``!lantern cancel``), not a failure:
 # it is terminal for the daemon (no retry, no breaker count) while the run
 # itself stays resumable from the CLI. ``blocked`` is the run having cleared
 # its own bar and GitHub refusing to finish the PR — terminal for the daemon
@@ -68,10 +71,44 @@ def is_epic_run_id(value: str | None) -> bool:
     return bool(value) and str(value).startswith(EPIC_RUN_PREFIX)
 
 
-def requested_roles_json(roles: Mapping[str, str]) -> str:
+def binds_without_memories(kind: RunKind, *, advance: Advance | None) -> bool:
+    """Whether a run of ``kind`` binds its agents without their memories.
+
+    Any workspace member may write a memory on any agent, and a binding
+    carries its agent's memories into the system message. A run whose
+    result an owner's grant acts on unattended must not be steerable that
+    way, so it binds every agent with none. Today that is the breakdown of
+    a plan that advances itself (``advance`` is the plan's; None: the run
+    is not for a plan). A person-requested breakdown of a ``manual`` plan,
+    and every other run, keeps its agents' memories. Every admission that
+    a delegated decision will depend on asks this, and carries the answer
+    with :func:`requested_roles_json`."""
+    return kind == "plan" and advance == "auto"
+
+
+def requested_roles_json(roles: Mapping[str, str], *, memoryless: bool = False) -> str:
     """What an item's ``assignment_json`` holds before dispatch plans an
-    assignment: the agent asked for in each run role."""
-    return json.dumps({"roles": {role: roles[role] for role in sorted(roles)}})
+    assignment: the agent asked for in each run role, and — only when it is
+    on — that the run binds its agents without memories
+    (:func:`binds_without_memories`). Dispatch carries the switch into the
+    planned assignment that replaces this, so a restart and a resume keep
+    it."""
+    payload: dict[str, Any] = {"roles": {role: roles[role] for role in sorted(roles)}}
+    if memoryless:
+        payload["memoryless"] = True
+    return json.dumps(payload)
+
+
+def requests_memoryless(assignment_json: str | None) -> bool:
+    """True when an item's ``assignment_json``, requested or planned, says
+    its run binds agents without memories."""
+    if not assignment_json:
+        return False
+    try:
+        data = json.loads(assignment_json)
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get("memoryless") is True
 
 
 def requested_roles(assignment_json: str | None) -> dict[str, str]:
@@ -268,7 +305,7 @@ class RunReport(NamedTuple):
     # daemon's point of view even though the persisted run is still
     # resumable — the finish card tells the human how to continue it).
     cancelled_by: str | None = None
-    # ``!sbx cancel --retry``: the item went straight back to the queue.
+    # ``!lantern cancel --retry``: the item went straight back to the queue.
     requeued: bool = False
     # Which run shape the cards render (#757): a workload's finish card
     # shows its tasks' outputs and verdicts where a code run's shows the PR.
@@ -355,6 +392,7 @@ NoticeKind = Literal[
     "daemon.holds_restored",
     "daemon.daily_cap",
     "daemon.token_budget",
+    "daemon.digest",
     "daemon.gc",
     "daemon.state_archived",
     "daemon.repoless_items_stranded",
@@ -372,6 +410,10 @@ NoticeKind = Literal[
     "daemon.repository_updated",
     "daemon.repository_removed",
     "daemon.repository_labels_synced",
+    "daemon.grant_added",
+    "daemon.grant_updated",
+    "daemon.grant_removed",
+    "daemon.grants_restored",
     "daemon.restart_requested",
     "daemon.restarted",
     "daemon.restart_marker_stale",

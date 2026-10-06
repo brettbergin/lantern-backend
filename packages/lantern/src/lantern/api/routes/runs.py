@@ -26,17 +26,23 @@ async def list_runs(
     _auth: Authenticated = Depends(require("runs:read")),  # noqa: B008
     state: Annotated[list[str] | None, Query()] = None,
     kind: Annotated[list[str] | None, Query()] = None,
+    include_deleted: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=PAGE_MAX)] = PAGE_DEFAULT,
     cursor: Annotated[str | None, Query()] = None,
 ) -> Page[Run]:
-    """Runs touched most recently first, filterable by state and kind."""
+    """Runs touched most recently first, filterable by state and kind.
+    Runs a person deleted are left out unless ``include_deleted``."""
     states = [s for s in state or [] if s in RUN_STATES]
     if state and len(states) != len(state):
         raise Problem(422, "invalid_request", f"state must be one of {', '.join(RUN_STATES)}")
     kinds = [k for k in kind or [] if k in RUN_KINDS]
     if kind and len(kinds) != len(kind):
         raise Problem(422, "invalid_request", f"kind must be one of {', '.join(RUN_KINDS)}")
-    filters: dict[str, Any] = {"state": sorted(states), "kind": sorted(kinds)}
+    filters: dict[str, Any] = {
+        "state": sorted(states),
+        "kind": sorted(kinds),
+        **({"include_deleted": True} if include_deleted else {}),
+    }
     after: tuple[float, str] | None = None
     if cursor is not None:
         key = decode_cursor(cursor, filters)
@@ -48,7 +54,11 @@ async def list_runs(
     def read() -> tuple[list[Run], list[RunRecord], bool]:
         views = Views(ctx)
         rows: list[RunRecord] = views.store.page_runs(
-            states=states or None, kinds=kinds or None, after=after, limit=limit + 1
+            states=states or None,
+            kinds=kinds or None,
+            after=after,
+            limit=limit + 1,
+            exclude=() if include_deleted else views.dstore.deleted_run_ids(),
         )
         more = len(rows) > limit
         rows = rows[:limit]

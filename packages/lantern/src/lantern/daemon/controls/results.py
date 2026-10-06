@@ -160,6 +160,35 @@ class ScheduleOutcome(Outcome):
     message: str
 
 
+class GrantOutcome(Outcome):
+    """A grant written, edited or removed; ``revision`` is the grant's
+    after the write (``None`` once it is removed)."""
+
+    verb: Literal["add", "update", "remove"]
+    grant_id: str
+    revision: int | None = None
+    message: str
+
+
+class GrantsRestoredOutcome(Outcome):
+    """Lantern's default grants written again: ``grant_ids`` are the ones
+    this restore wrote, in the table's order (empty when every default was
+    already in place)."""
+
+    grant_ids: list[str]
+    message: str
+
+
+class GoalOutcome(Outcome):
+    """A goal written, edited or removed; ``revision`` is the goal's after
+    the write (``None`` once it is removed)."""
+
+    verb: Literal["add", "update", "remove"]
+    goal_id: str
+    revision: int | None = None
+    message: str
+
+
 class RepositoryOutcome(Outcome):
     """A registration added, changed or removed; ``repo`` as registered."""
 
@@ -226,6 +255,56 @@ class GateOutcome(Outcome):
 class ItemOutcome(Outcome):
     verb: Literal["abandon", "retry", "requeue"]
     item: WorkItem
+
+
+class DismissOutcome(Outcome):
+    """An alert acknowledged, or the acknowledgement taken back. The mark
+    stands on the work item when one pins the run, on the run otherwise;
+    ``item`` is that item, for a surface that answers with it."""
+
+    verb: Literal["dismiss", "undismiss"]
+    subject_kind: Literal["item", "run"]
+    subject_key: str
+    #: ``False`` when nothing changed: the alert was already dismissed (or,
+    #: for ``undismiss``, was not) — idempotent per subject.
+    fresh: bool = True
+    item: WorkItem | None = None
+
+
+class DeleteOutcome(Outcome):
+    """Work hidden from every listing, its run directories and sandboxes
+    removed; the rows stay as the audit trail. ``runs`` are the runs hidden
+    with it and ``removed`` the ones whose directory was actually removed
+    (the rest had none left)."""
+
+    subject_kind: Literal["item", "run"]
+    subject_key: str
+    #: ``False`` when the work was already deleted — idempotent.
+    fresh: bool = True
+    item: WorkItem | None = None
+    runs: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+
+
+class DismissedTarget(BaseModel):
+    """What became of one alert a bulk dismissal named, by its place in
+    the request."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    index: int
+    outcome: Literal["dismissed", "already_dismissed", "skipped"]
+    #: Why it was skipped: the refusal's code and the sentence to show.
+    code: str | None = None
+    detail: str | None = None
+
+
+class DismissAllOutcome(Outcome):
+    """Several alerts dismissed under one operation. A target that could
+    not be dismissed — it moved since the person looked, or raises no
+    alert — is skipped by name, never fatal to the rest."""
+
+    results: list[DismissedTarget]
 
 
 class AdmitOutcome(Outcome):

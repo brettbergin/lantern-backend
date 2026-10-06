@@ -217,6 +217,28 @@ def test_a_link_code_maps_an_external_author_to_the_account(api: Any) -> None:
     assert api.client.get("/v1/users/me/identities", headers=owner).json()["data"] == []
 
 
+def test_a_link_code_carries_the_exact_command_to_send(api: Any) -> None:
+    """A client shows what to type rather than hard-coding the bridge's
+    verb: the configured prefix, the verb and the code."""
+    owner = bearer(register(api))
+    issued = api.client.post("/v1/users/me/identities/link-code", headers=owner).json()
+    # The default prefix, never the legacy alias it also answers to.
+    assert issued["command"] == f"!lantern link {issued['code']}"
+
+
+def test_the_link_command_follows_the_configured_prefix(tmp_path: Any) -> None:
+    from tests.api.conftest import build
+
+    served = build(tmp_path, config={"discord": {"channel_id": 123456, "command_prefix": "!lan"}})
+    with served.client:
+        owner = bearer(register(served))
+        issued = served.client.post("/v1/users/me/identities/link-code", headers=owner)
+        assert issued.status_code == 201, issued.text
+        body = issued.json()
+        assert body["command"] == f"!lan link {body['code']}"
+    served.ctx.close()
+
+
 def test_a_link_code_is_spent_once(api: Any) -> None:
     owner = bearer(register(api))
     code = api.client.post("/v1/users/me/identities/link-code", headers=owner).json()["code"]
@@ -415,17 +437,20 @@ def test_linking_a_surface_takes_a_workspace_admin(api: Any) -> None:
     _link(api, admin, theirs)
 
 
-def test_a_run_thread_cannot_be_linked(api: Any) -> None:
+def test_a_run_thread_is_a_link_like_any_other_surface(api: Any) -> None:
+    """A run's thread is the work channel's window on the service
+    (docs/spikes/work-channels.md): the daemon links it as the run opens
+    it, and a person may link one the same way."""
     owner = bearer(register(api))
     channel_id = _channel(api, owner)
     api.harness.dstore.record_chat_thread("run-1", "C1", "T9", None, backend="slack")
-    refused = api.client.post(
+    linked = api.client.post(
         f"/v1/channels/{channel_id}/links",
         json={"backend": "slack", "surface_id": "C1", "thread_id": "T9"},
         headers=owner,
     )
-    assert refused.status_code == 409, refused.text
-    assert refused.json()["code"] == "link_run_thread"
+    assert linked.status_code == 201, linked.text
+    assert linked.json()["thread_id"] == "T9"
 
 
 def test_a_deleted_thread_link_can_be_made_again(api: Any) -> None:
@@ -555,3 +580,30 @@ def test_a_mapped_turn_recovered_after_a_restart_runs_for_its_author(api: Any) -
     assert recovered[turn.id].id == member_id
     kept = store.get_turn(None, channel_id, turn.id)
     assert kept is not None and kept.status == "accepted"
+
+
+def test_the_consoles_run_thread_link_lists_like_any_other(api: Any) -> None:
+    """The daemon links the console's run thread (backend ``local``) to the
+    run's work channel (docs/spikes/work-channels.md); the listing serves
+    it rather than refusing the page it is on."""
+    owner = bearer(register(api))
+    channel_id = _channel(api, owner)
+    api.ctx.collaboration.create_channel_link(
+        None,
+        channel_id,
+        backend="local",
+        surface_id="thread:20",
+        thread_id=None,
+        allow_guests=True,
+        created_by=None,
+        now=api.clock(),
+    )
+    listed = api.client.get(f"/v1/channels/{channel_id}/links", headers=owner)
+    assert listed.status_code == 200, listed.text
+    (link,) = listed.json()["data"]
+    assert (link["backend"], link["surface_id"], link["allow_guests"], link["created_by"]) == (
+        "local",
+        "thread:20",
+        True,
+        None,
+    )

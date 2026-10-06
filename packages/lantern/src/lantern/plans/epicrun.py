@@ -1,9 +1,11 @@
 """Epic runs: an epic's tasks admitted as issue runs in dependency order (#2347).
 
-A person starts an epic run on a published epic (``plans:publish``); the
-daemon owns it from there (:mod:`lantern.daemon.epicruns` drives it each
-tick). This module holds its shapes, its rows and the rules that decide
-what a task is waiting for — nothing here talks to the forge or the queue.
+A person starts an epic run on a published epic (``plans:publish``) — or,
+on a plan an owner set to advance on its own, the plan driver does under the
+owner's ``plan.run`` grant; the daemon owns it from there
+(:mod:`lantern.daemon.epicruns` drives it each tick). This module holds
+its shapes, its rows and the rules that decide what a task is waiting
+for — nothing here talks to the forge or the queue.
 
 A task is:
 

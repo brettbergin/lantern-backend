@@ -16,6 +16,11 @@ def test_the_chat_sections_and_the_concierges_own_switches_are_never_from_chat()
     assert never_from_chat("concierge.enabled") == "it is the concierge's own switch"
     assert "no self-widening" in (never_from_chat("concierge.edit_config") or "")
     assert "no self-widening" in (never_from_chat("concierge.config_locked") or "")
+    # The hold window before an agent-approved level is published: the
+    # concierge is an agent, and never edits the rules it is judged by.
+    assert never_from_chat("delegation.publish_delay_s") == NEVER_FROM_CHAT["delegation"]
+    # ... nor how often the planner may propose work from a goal.
+    assert never_from_chat("delegation.propose_every") == NEVER_FROM_CHAT["delegation"]
 
 
 def test_a_prefix_matches_whole_segments_only() -> None:

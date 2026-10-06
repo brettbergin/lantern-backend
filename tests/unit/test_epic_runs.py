@@ -583,6 +583,12 @@ class TestCancel:
         assert cancelled.task("a").reason.startswith("withdrawn: ")  # type: ignore[union-attr]
         assert cancelled.task("c").reason.startswith("never admitted: ")  # type: ignore[union-attr]
         assert {i.source_key: i.state for i in h.dstore.items()} == {"11": "failed", "12": "failed"}
+        # The person who stopped the run has seen what they stopped: the
+        # withdrawn items rest in `failed` without asking for attention.
+        marks = h.dstore.work_marks(item_ids=[i.item_id for i in h.dstore.items()])
+        assert len(marks) == 2
+        assert {(m.mark, m.cause) for m in marks.values()} == {("dismissed", "abandoned")}
+        assert all(m.actor == dict(ACTOR) for m in marks.values())
         # Nothing had been written to the issues, and nothing is now.
         assert [c for c in ops.raw_calls[len(before) :] if c[0] != "GET"] == []
         events = _events(h)[since:]
@@ -763,3 +769,32 @@ class TestClosingTheEpic:
         (summary,) = _summaries(ops)
         assert "No epic run took part" in summary and "- #11 A — closed" in summary
         assert len(_epic_closes(ops)) == 1
+
+
+class TestATaskThatJoinsMidRun:
+    def test_a_task_published_under_a_running_epic_is_admitted(self, tmp_path: Path) -> None:
+        """An approved re-plan adds a task to a running epic (or an issue
+        is attached to it): the run picks it up on its next pass, waits
+        on its dependencies like any other, and does not complete without
+        it."""
+        ops = _issues(1, 2)
+        h = _harness(tmp_path, ops)
+        _plan(h, _node("a", 1))
+        run = _start(h)
+        assert _states(h, run) == {"a": "queued"}
+
+        store = PlanStore(h.dstore)
+        plan = store.get("plan_1")
+        assert plan is not None
+        store.apply(
+            plan.id,
+            expected_revision=plan.revision,
+            now=h.clock(),
+            upsert=[_node("b", 2, depends_on=("a",))],
+        )
+
+        h.loop.epic_runs.tick(h.clock())
+        assert _states(h, run) == {"a": "queued", "b": "waiting"}
+        after = h.loop.epic_runs.runs.get(run.id)
+        assert after is not None and after.state == "running"
+        assert any(d.get("task_node_id") == "b" for _, d in _events(h)), _events(h)

@@ -133,7 +133,9 @@ class ConfigScreen(ConsoleScreen):
             )
         except Exception as exc:
             if not get_current_worker().is_cancelled:
-                self.app.call_from_thread(self._apply, None, {}, {}, None, str(exc), [])
+                self.app.call_from_thread(
+                    self.apply_from_worker, self._apply, None, {}, {}, None, str(exc), []
+                )
             return
         flat = flatten_config(config)
         view = policy_view(config)
@@ -142,7 +144,9 @@ class ConfigScreen(ConsoleScreen):
         profiles = profile_views(config, [s.spec for s in stored_schedules(config)])
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply, config, flat, sources, view, None, profiles)
+        self.app.call_from_thread(
+            self.apply_from_worker, self._apply, config, flat, sources, view, None, profiles
+        )
 
     def _apply(
         self,
@@ -447,7 +451,7 @@ class ConfigScreen(ConsoleScreen):
         verdict = validate_text(text, home=self.console_app.deps.home, env=os.environ)
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._validated, verdict, text, edit)
+        self.app.call_from_thread(self.apply_from_worker, self._validated, verdict, text, edit)
 
     def _validated(self, verdict: Verdict, text: str, edit: ValueEdit) -> None:
         self.last_verdict = f"{edit.path}: {verdict.text}"

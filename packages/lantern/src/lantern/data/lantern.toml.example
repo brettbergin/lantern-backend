@@ -463,7 +463,7 @@ service_memory = "2g"
 # overridden for this profile's runs. `publish`: "auto" (the default)
 # publishes as soon as the judge passes; "hold" parks the finished run —
 # judged, kept, nothing delivered — until a person releases it (the run's
-# chat thread, `!sbx release <item>`, `lantern daemon ctl release <item>`,
+# chat thread, `!lantern release <item>`, `lantern daemon ctl release <item>`,
 # or `lantern resume <run>` for a CLI run). A workload run with no profile
 # at all may declare no needs.
 # [[workloads]]
@@ -498,7 +498,7 @@ service_memory = "2g"
 # has a `profile` (a [[workloads]] entry), the `ask` (a workload's ask, in
 # your words), and one cadence: `--every` (a period — "24h", "90m",
 # "1h30m" — on a grid from creation) or `--cron` (five fields, read in the
-# timezone, `[daemon] run_cap_timezone` when unset). `!sbx schedules`
+# timezone, `[daemon] run_cap_timezone` when unset). `!lantern schedules`
 # lists them with the last fire and the next due; `schedules pause <name>`
 # parks one without pausing the daemon; `schedules remove <name>` deletes
 # it. A `[[schedules]]` entry in this file still loads: the daemon imports
@@ -706,8 +706,8 @@ service_memory = "2g"
 # human. On a repo whose merges publish, every merged run is a release.
 # merge_gate is the ONE opt-in human touchpoint: "chat" parks a run that
 # cleared every bar (`gated`) and asks for one approval in the run's chat
-# thread — `!sbx merge <item>` or `lantern daemon ctl merge <item>` lands
-# it; `!sbx abandon <item>` declines. No deadline; survives restarts.
+# thread — `!lantern merge <item>` or `lantern daemon ctl merge <item>` lands
+# it; `!lantern abandon <item>` declines. No deadline; survives restarts.
 # A base branch that REQUIRES an approving review is not a block: the run
 # parks `awaiting_review` (PR un-drafted, [github] reviewers requested,
 # the requester and review_notify mentioned once) and the daemon polls
@@ -715,7 +715,7 @@ service_memory = "2g"
 # changes-requested review resumes it for a fix round; the PR closed
 # abandons it. After review_wait_s without a verdict the item goes
 # `paused_review` (one more mention, no more polling) until
-# `!sbx resume <item>` picks it up again. Survives restarts. A person
+# `!lantern resume <item>` picks it up again. Survives restarts. A person
 # converting the PR to draft is the same park: it waits for the PR to be
 # marked ready for review (approvals alone do not end it), then lands.
 # merge_gate = "off"         # off | chat
@@ -745,7 +745,7 @@ service_memory = "2g"
 # ignore_reviewers = []      # User-type logins treated as automated reviewers (a bot on a personal token): one fix round, never a block
 # followups = "issues"       # after the merge, the review's out-of-scope notes: issues | comment | off
 # Issues require a completed lookup; existing matches are linked, uncertain notes stay on the PR.
-# followup_label = "lantern:follow-up"  # never the trigger label — a human promotes a follow-up
+# followup_label = "lantern:follow-up"  # never the trigger label — the loop never promotes a follow-up
 # max_followups_per_run = 5
 # review_diff_max_chars = 150000  # diff budget handed to the self-review
 
@@ -824,12 +824,15 @@ service_memory = "2g"
 # work, opens a draft PR, reviews and fixes it, waits for CI and merges it
 # (the landing knobs live under [landing]). The issue closes with
 # completed_label when the PR merges, gets failed_label when the run gave
-# up, blocked_label when GitHub would not let the loop finish. The daemon
-# never files work of its own; a label alone starts a run, so the guardrails
-# below are what stand between a mislabeled issue and your budget. All of
-# them are DAEMON-WIDE: with several repositories configured, the daily run
-# cap, the per-item attempt/resume caps, the consecutive-failure circuit
-# breaker and one-run-at-a-time are shared across every repository.
+# up, blocked_label when GitHub would not let the loop finish. Nothing starts
+# a run without a person's act or an owner's standing word: a label, a
+# schedule someone created, or a grant (Lantern's default grants are on, but
+# no plan advances until a person sets it to Auto; triage retries a recent
+# transient failure once; an unlabeled issue is never picked up). A label
+# alone starts a run, so the guardrails below are what stand between a
+# mislabeled issue and your budget. All of them are DAEMON-WIDE: with several repositories configured,
+# the daily run cap, the per-item attempt/resume caps, the consecutive-failure
+# circuit breaker and one-run-at-a-time are shared across every repository.
 # poll_interval_s = 60.0
 # trigger_label = "lantern:run"    # issue label that queues work
 # in_progress_label = "lantern:in-progress"
@@ -892,11 +895,11 @@ service_memory = "2g"
 
 # [chat]
 # Which service carries the daemon's human channel — the run headline cards,
-# the per-run thread streaming each run's chronology, `!sbx` operator commands,
-# @mention steering of a live run and the concierge. Exactly one of [discord]
-# / [slack] / [mattermost] is active: name it here, or leave `backend` unset
-# and the one section with a channel_id is used (more than one set without a
-# choice is an error).
+# the per-run thread streaming each run's chronology, `!lantern` operator
+# commands, @mention steering of a live run and the concierge. Exactly one of
+# [discord] / [slack] / [mattermost] is active: name it here, or leave
+# `backend` unset and the one section with a channel_id is used (more than
+# one set without a choice is an error).
 # No channel_id anywhere = headless: no chronology, `lantern daemon ctl` only.
 # backend = "discord"              # "discord" | "slack" | "mattermost"
 
@@ -904,12 +907,14 @@ service_memory = "2g"
 # The Discord backend: a gateway bot posts each run's chronology (agent
 # messages, tool lines, issue/PR links) into a thread under a control channel
 # and relays @mentions typed in the thread to the running agent as steering.
-# Needs discord.py in the venv lantern runs from (`lantern init` installs it)
+# Needs discord.py in the venv Lantern runs from (`lantern init` installs it)
 # and DISCORD_BOT_TOKEN in the
 # environment / .env (never here). Anyone who can post in the channel can
 # steer — restrict the channel. Unset channel_id = Discord off.
 # channel_id = 123456789012345678
-# command_prefix = "!sbx"          # !sbx status|pause|resume|cancel|queue
+# command_prefix = "!lantern"      # !lantern status|pause|resume|cancel|queue; left at
+#                                  # the default, the legacy !sbx works too. A prefix
+#                                  # of your own is the only one answered
 # thread_per_run = true
 # chronology_level = "normal"      # quiet (lifecycle+links+chat) | normal (tool bursts
 #                                  # digested into one edited line) | verbose (every call)
@@ -932,14 +937,14 @@ service_memory = "2g"
 # [slack]
 # The Slack backend: the same channel, threads, commands and steering over a
 # Socket Mode app (the app dials out — no public URL). Needs
-# slack-sdk and aiohttp in the venv lantern runs from (`lantern init` installs
+# slack-sdk and aiohttp in the venv Lantern runs from (`lantern init` installs
 # them) plus SLACK_BOT_TOKEN (xoxb-…) and
 # SLACK_APP_TOKEN (xapp-…) in the environment / .env (never here); the README
 # lists the app scopes and event subscriptions. Same knobs as [discord];
 # `embeds` renders the cards as coloured attachments. Unset channel_id =
 # Slack off. Use the channel's *id* (channel details → copy ID), not #name.
 # channel_id = "C0123ABCDEF"
-# command_prefix = "!sbx"
+# command_prefix = "!lantern"
 # thread_per_run = true
 # chronology_level = "normal"
 # max_message_chars = 1900
@@ -953,7 +958,7 @@ service_memory = "2g"
 # The Mattermost backend: the same channel, threads, commands and steering on
 # an instance you host. The bot dials out over a websocket, so the daemon
 # needs no public URL and no inbound hole — a box behind NAT works. Needs
-# aiohttp in the venv lantern runs from (`lantern init` installs it) plus
+# aiohttp in the venv Lantern runs from (`lantern init` installs it) plus
 # MATTERMOST_BOT_TOKEN in the
 # environment / .env (never here); create a bot account in the System Console
 # and add it to the channel. Same knobs as [discord]. Unset channel_id =
@@ -962,7 +967,7 @@ service_memory = "2g"
 #                                  # private host and a port are fine
 # channel_id = "abcdefghijklmnopqrstuvwxyz"  # the channel's 26-character id
 #                                  # (channel name → View Info), not a ~name
-# command_prefix = "!sbx"
+# command_prefix = "!lantern"
 # thread_per_run = true
 # chronology_level = "normal"
 # max_message_chars = 1900
@@ -998,13 +1003,14 @@ service_memory = "2g"
 # under /v1 with generated OpenAPI, for a client that admits work, watches
 # it, steers it and fetches results without parsing CLI prose. Off by
 # default; needs the `api` extra's packages (fastapi, uvicorn, pyjwt) in the
-# venv lantern runs from. Clients authenticate with a
+# venv Lantern runs from. Clients authenticate with a
 # short-lived access token minted from credentials created with
 # `lantern api client create`. TLS is your reverse proxy's job.
 # enabled = false
 # bind = "127.0.0.1"               # loopback unless a proxy in front needs more
 # port = 8420                      # the listener's TCP port
-# trusted_proxies = []             # proxies whose X-Forwarded-* headers are believed
+# trusted_proxies = ["10.0.0.2"]   # proxies whose X-Forwarded-* headers are believed;
+#                                  # unset on a loopback bind, the local proxy is; [] is nobody
 # access_token_ttl_s = 900         # an access token lives 15 minutes
 # refresh_token_ttl_s = 604800     # a refresh token a week; rotated on every use
 # cors_origins = []                # browser origins allowed; empty disables CORS
@@ -1072,9 +1078,10 @@ service_memory = "2g"
 # Planning work into the forge: a person describes an initiative or an epic
 # in the Lantern web or iOS app, the planner proposes its next level from a read-only
 # checkout, and a person edits, approves and publishes each level as linked
-# issues, then starts an epic run. Nothing reaches the forge or the queue
-# without a person. Offered on every forge that can hold a plan (GitHub
-# natively, GitLab as labels and a checklist; Gitea cannot).
+# issues, then starts an epic run. A plan an owner sets to advance on its own
+# may take those steps under the owner's grants (none by default); any step
+# no grant covers waits for a person. Offered on every forge that can hold
+# a plan (GitHub natively, GitLab as labels and a checklist; Gitea cannot).
 # enabled = true
 # max_epics_per_initiative = 8     # the most epics one initiative may hold
 # max_tasks_per_epic = 12          # the most tasks one epic may hold
@@ -1082,13 +1089,51 @@ service_memory = "2g"
 # close_completed = true           # summarise and close a finished epic or initiative
 # reconcile_interval_s = 120       # re-read a published plan on open when older; 0 = sync only
 
+# [attention]
+# What waits on a person — a merge gate, a publish hold, a plan's questions,
+# a blocked run — never expires to yes or to no; it waits until someone
+# acts. After remind_after_s the chronology records an attention.reminder
+# for it and the people who can act on it (and can see where it is) get a
+# push, then one more every remind_every_s. A daemon that was down past
+# several intervals sends one reminder on return, never a burst. Both
+# intervals are 300 s to 30 days; needs [api] enabled (the tracker runs
+# there). Workspace-wide: an entry need not belong to a repository.
+# remind_after_s = 14400           # first reminder after 4 hours; 0 = no reminders
+# remind_every_s = 86400           # then one a day
+# The daily digest: at digest_at ("HH:MM", 24-hour, read in [daemon]
+# run_cap_timezone) the chronology records a briefing.digest event with
+# what finished, what waits and what was decided since the last one (a day,
+# the first time), the control channel gets one line saying so, and every
+# member with a device gets one work push. Once a day: a daemon down at the
+# time sends it when it is back that day; a day missed entirely is skipped.
+# digest_at = ""                   # e.g. "07:00"; empty = no digest
+
+# [delegation]
+# How the daemon acts on the grants (GET /v1/grants; they live in the
+# daemon's database, never here). Every install starts with Lantern's
+# default grants, enabled, and an owner pauses, edits, deletes or restores
+# them there (POST /v1/grants/defaults/restore). A plan whose advance
+# is auto moves itself forward under them: its breakdown is admitted, its
+# level approved, published and run, each only when a grant allows it, and
+# anything a grant does not cover waits for a person. An approved level
+# waits publish_delay_s before it is published, measured from the approval
+# as the plan records it — the window a person has to hold it (flip the
+# plan back to manual, or edit a child). Workspace-wide: a grant's
+# repositories condition narrows a repository. Never changed from chat.
+# propose_every is how often the planner may propose a plan for one active
+# goal (POST /v1/goals) under a plan.propose grant: an auto plan briefed
+# from the goal and the repository's open follow-up issues, at most once
+# per period per goal and never while a plan for it is still open.
+# publish_delay_s = 900            # 15 minutes; 0 = publish on the next tick
+# propose_every = 0                # seconds, e.g. 86400 = daily; 0 = off
+
 # [concierge]
 # The control channel's agent: @mention the bot (or reply to it) to ask
-# about runs, PRs and diffs, operate the daemon (every !sbx verb) or queue
+# about runs, PRs and diffs, operate the daemon (every !lantern verb) or queue
 # new work in plain language. Runs as a Copilot session in a long-lived
 # agent sandbox and reaches the daemon only through host tools; needs
 # COPILOT_GITHUB_TOKEN on the daemon host. Acts with the same authority as
-# !sbx. Answers the operator console too, so it runs whenever enabled.
+# !lantern. Answers the operator console too, so it runs whenever enabled.
 # enabled = true
 # model = ""                       # empty = the top-level model
 # timeout_s = 180                  # one message's wall-clock budget

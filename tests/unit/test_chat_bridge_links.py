@@ -285,9 +285,13 @@ def test_the_control_channel_keeps_its_commands_when_it_is_linked(linked: Any) -
     assert linked.messages() == []
 
 
-def test_a_link_code_still_maps_an_author_from_a_linked_surface(elsewhere: Any) -> None:
+@pytest.mark.parametrize("prefix", ["!lantern", "!sbx"])
+def test_a_link_code_still_maps_an_author_from_a_linked_surface(
+    elsewhere: Any, prefix: str
+) -> None:
+    # The default prefix and the legacy one it still answers to.
     code, _expires = elsewhere.store.create_link_code(elsewhere.user.id, time.time())
-    elsewhere.type(f"!sbx link {code}")
+    elsewhere.type(f"{prefix} link {code}")
     assert wait_for(lambda: elsewhere.store.identity_user("discord", "1") == elsewhere.user.id)
     assert wait_for(lambda: any("linked" in sent.casefold() for sent in elsewhere.sent()))
 
@@ -792,3 +796,65 @@ def test_a_channel_linked_while_the_bridge_runs_is_heard_at_once(
     s.deliver("plan the bread", channel=unlinked, mid=mid(s.backend, 12))
     assert wait_for(lambda: len(s.messages()) >= 1)
     assert s.messages()[0].origin.get("surface_id") == unlinked
+
+
+def test_a_run_thread_is_linked_to_its_channel_while_the_run_is_live(
+    unlinked: Any,
+) -> None:
+    """The thread the bridge opens for a run is a link of the channel the
+    run lives in (docs/spikes/work-channels.md) for as long as the run is
+    live: made by the daemon as the headline is posted, admitting guests,
+    so a plain reply in the thread is a turn in the channel rather than a
+    hand-over to the engine."""
+    from lantern.daemon.model import WorkItem
+    from lantern.db.job_models import ExternalRunRow
+    from lantern.events import EventBus
+    from tests.unit.test_daemon_discord import FakeEngine
+
+    work = unlinked.channel.id
+    with unlinked.bridge.dstore.immediate_transaction() as session:
+        session.add(
+            ExternalRunRow(
+                run_id="r1",
+                work_id="job_r1",
+                channel_id=work,
+                created_at=1.0,
+                state="building",
+                kind="code",
+                updated_at=1.0,
+                revision=1,
+                historical=0,
+                title="Do A",
+                source_json="{}",
+            )
+        )
+    item = WorkItem(item_id="inbox:a.md", source_key="a.md", title="Do A")
+    engine = FakeEngine()
+    unlinked.bridge.run_started(item, "r1", engine, EventBus())  # type: ignore[arg-type]
+    assert wait_for(lambda: unlinked.bridge.dstore.discord_thread("r1") is not None)
+    thread_id = unlinked.bridge.dstore.discord_thread("r1").thread_id  # type: ignore[union-attr]
+    assert wait_for(lambda: len(unlinked.store.list_channel_links(None, work)) == 1)
+    (link,) = unlinked.store.list_channel_links(None, work)
+    assert (link.backend, link.surface_id, link.thread_id) == ("discord", str(thread_id), None)
+    assert link.allow_guests is True
+
+    thread = unlinked.client.channels[thread_id]
+    reply = FakeMessage("use the other library", thread, mid=900)
+    reply.author = FakeUser(99, "stranger")
+    thread.messages[900] = reply
+    unlinked.bridge._handle_message(reply)
+    assert wait_for(lambda: len(unlinked.messages()) >= 1)
+    message = unlinked.messages()[0]
+    assert message.content == "use the other library"
+    assert message.author.display_name == "stranger"
+    assert message.origin["surface_id"] == str(thread_id)
+    # The channel's turn carries the instruction; the engine is not told twice.
+    assert engine.posted == []
+
+    # The channel goes on to host other runs, each with a thread of its own:
+    # once this run has ended its thread stops being the channel's window.
+    from lantern.daemon.model import RunReport
+
+    unlinked.bridge.run_finished(item, RunReport("r1", "merged", "1/1 tasks done"))
+    assert wait_for(lambda: unlinked.store.list_channel_links(None, work) == [])
+    assert unlinked.store.link_for_surface("discord", str(thread_id)) is None

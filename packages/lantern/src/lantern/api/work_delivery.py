@@ -360,6 +360,7 @@ def project_work(ctx: Any, channel_id: str | None = None) -> list[dict[str, Any]
     # browser's poll costs the daemon.
     items = ctx.loop.dstore.get_many([link.item_id for link in links])
     runs = ctx.loop.store.get_runs([item.run_id for item in items.values() if item.run_id])
+    views.load_dismissals(item_ids=[item.item_id for item in items.values()])
     for link in links:
         item = items.get(link.item_id)
         if item is None:
@@ -381,6 +382,8 @@ def project_work(ctx: Any, channel_id: str | None = None) -> list[dict[str, Any]
                         "artifacts": [],
                     }
                 )
+            continue
+        if views.deleted_at(item) is not None:
             continue
         public_item = views.item(item)
         run = runs.get(item.run_id) if item.run_id else None
@@ -412,6 +415,7 @@ def project_work(ctx: Any, channel_id: str | None = None) -> list[dict[str, Any]
             "item_actions": public_item.available_actions,
             "run_actions": public_run.available_actions if public_run else [],
             "artifacts": artifacts,
+            "dismissal": public_item.dismissal,
         }
         snapshots.append(snapshot)
         if not terminal:

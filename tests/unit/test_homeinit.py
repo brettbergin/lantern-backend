@@ -1160,3 +1160,34 @@ class TestUvDirectories:
         ).execute()
         assert again.seen == []  # no uv command at all: nothing to rebuild
         assert all(os.environ[key] == self.DECOY for key in RecordingRun.KEYS)
+
+
+class TestFetchHeaders:
+    """A GitHub API listing goes out with the token the environment holds:
+    the unauthenticated allowance is per address, and a shared CI runner
+    had spent it ("HTTP Error 403: rate limit exceeded" mid-init)."""
+
+    def test_the_token_goes_to_the_github_api_only(self) -> None:
+        from lantern.homeinit import fetch_headers
+
+        env = {"GH_TOKEN": "ghs_x"}
+        api = fetch_headers(
+            "https://api.github.com/repos/docker/sbx-releases/releases/tags/v1", env
+        )
+        assert api["Authorization"] == "Bearer ghs_x"
+        asset = fetch_headers(
+            "https://github.com/docker/sbx-releases/releases/download/v1/a.tgz", env
+        )
+        assert "Authorization" not in asset
+        assert "User-Agent" in asset
+
+    def test_github_token_is_the_fallback_and_none_is_fine(self) -> None:
+        from lantern.homeinit import fetch_headers
+
+        url = "https://api.github.com/x"
+        assert fetch_headers(url, {"GITHUB_TOKEN": "t"})["Authorization"] == "Bearer t"
+        assert (
+            fetch_headers(url, {"GH_TOKEN": "a", "GITHUB_TOKEN": "b"})["Authorization"]
+            == "Bearer a"
+        )
+        assert "Authorization" not in fetch_headers(url, {})

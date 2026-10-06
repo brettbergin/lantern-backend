@@ -16,6 +16,13 @@ A published node may carry a pending :class:`Replan` (#2346): the planner's
 diff against its children — children to add, changes to a child's
 sections, children to close — waiting for a person to approve or discard
 each entry. Nothing in it is on the forge until it is approved.
+
+A node says who its content is from and who let it through
+(``proposed_by``, ``approved_by``, ``published_by``: a person's id or
+``agent:<slug>``), and may carry a :class:`PlanReview` — a reviewer's
+verdict on its level, good only while :func:`review_is_current`. A plan
+says whether it may move itself forward (``advance``) and which goal it was
+proposed from (``goal_id``).
 """
 
 from __future__ import annotations
@@ -40,6 +47,16 @@ ForgeState = Literal["open", "closed"]
 #: A plan is a draft until something of it is on the forge, then published;
 #: archiving keeps a published plan's record without offering it.
 PlanState = Literal["draft", "published", "archived"]
+
+#: Whether a plan may move itself forward: ``manual`` — a person takes every
+#: step — or ``auto``. Only a holder of ``plans:publish`` sets it.
+Advance = Literal["manual", "auto"]
+ADVANCES: tuple[Advance, ...] = get_args(Advance)
+
+#: What a reviewer says of a level: ``approve`` it, or ``escalate`` it to a
+#: person.
+ReviewVerdict = Literal["approve", "escalate"]
+REVIEW_VERDICTS: tuple[ReviewVerdict, ...] = get_args(ReviewVerdict)
 
 
 def child_level(level: str) -> Level | None:
@@ -156,6 +173,10 @@ class Replan:
     run_id: str | None
     proposed_at: float
     entries: tuple[ReplanEntry, ...] = ()
+    #: The planner agent bound to the run that proposed the diff
+    #: (``agent:<slug>``), which an approved addition is recorded as
+    #: proposed by; ``None`` when the run named none.
+    proposed_by: str | None = None
 
     def entry(self, entry_id: str) -> ReplanEntry | None:
         return next((e for e in self.entries if e.id == entry_id), None)
@@ -166,7 +187,63 @@ class Replan:
             "run_id": self.run_id,
             "proposed_at": self.proposed_at,
             "entries": [e.as_dict() for e in self.entries],
+            "proposed_by": self.proposed_by,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReview:
+    """A reviewer's verdict on one level — a node's children as they were
+    when it was given. ``run_id`` is the run that reviewed (the engine's
+    id), ``reasons`` its short findings, ``reviewed_by`` the reviewer (an
+    ``agent:<slug>`` or a person's id) and ``at`` when. ``digest`` is
+    :func:`review_digest` of what was reviewed: the verdict stands only
+    while the level still reads so (:func:`review_is_current`)."""
+
+    run_id: str
+    verdict: ReviewVerdict
+    digest: str
+    reasons: tuple[str, ...] = ()
+    reviewed_by: str | None = None
+    at: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "verdict": self.verdict,
+            "reasons": list(self.reasons),
+            "digest": self.digest,
+            "reviewed_by": self.reviewed_by,
+            "at": self.at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> PlanReview | None:
+        """The review ``data`` holds, or ``None`` when this build cannot
+        read it (a verdict it does not know, no digest or run, a field of
+        another type): an unreadable review is no review, never a guess at
+        one."""
+        if not isinstance(data, dict):
+            return None
+        verdict, digest = data.get("verdict"), data.get("digest")
+        reasons, at = data.get("reasons", []), data.get("at", 0.0)
+        run_id, reviewed_by = data.get("run_id"), data.get("reviewed_by")
+        if verdict not in REVIEW_VERDICTS or not isinstance(digest, str) or not digest:
+            return None
+        if not isinstance(reasons, list) or not all(isinstance(r, str) for r in reasons):
+            return None
+        if isinstance(at, bool) or not isinstance(at, int | float):
+            return None
+        if not isinstance(run_id, str) or not run_id or not isinstance(reviewed_by, str | None):
+            return None
+        return cls(
+            run_id=run_id,
+            verdict=verdict,
+            digest=digest,
+            reasons=tuple(reasons),
+            reviewed_by=reviewed_by,
+            at=float(at),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +276,19 @@ class PlanNode:
     generation: Clarification | None = None
     #: A re-plan's diff waiting for a person (#2346), or ``None``.
     replan: Replan | None = None
+    #: Who the node's content is from: the person who made it (their id),
+    #: or ``agent:<slug>`` of the planner bound to the run that proposed
+    #: it. ``None`` where nobody is recorded — a node adopted from the
+    #: forge, a run that named no agent, a node from before this was kept.
+    #: An edit does not move it, as it does not move ``origin``.
+    proposed_by: str | None = None
+    #: Who approved the node for publishing; ``None`` until someone does,
+    #: and again when an edit makes it a draft.
+    approved_by: str | None = None
+    #: Who published the node to the forge; ``None`` until someone does.
+    published_by: str | None = None
+    #: The latest review of the node's level (its children), or ``None``.
+    review: PlanReview | None = None
 
     @property
     def followed(self) -> bool:
@@ -225,6 +315,11 @@ class Plan:
     reconcile_error: str | None = None
     #: The person's planning brief, separate from every issue's content.
     input: dict[str, Any] = field(default_factory=dict)
+    #: Whether the plan may move itself forward: an ``auto`` plan is taken
+    #: step by step by the daemon's plan driver, under the owner's grants.
+    advance: Advance = "manual"
+    #: The goal the plan was proposed from; ``None`` for a person's draft.
+    goal_id: str | None = None
 
     @property
     def generation_pending(self) -> bool:
@@ -284,6 +379,11 @@ def content(node: PlanNode) -> dict[str, Any]:
     }
 
 
+def plain(value: Any) -> Any:
+    """A node's field as an entry or a section holds it: tuples as lists."""
+    return list(value) if isinstance(value, tuple) else value
+
+
 def content_version(node: PlanNode) -> str:
     """The version of a published node's issue a direct edit names (#2350):
     a digest of the title and sections as the node holds them — which is
@@ -294,3 +394,55 @@ def content_version(node: PlanNode) -> str:
     digest covers exactly what an edit overwrites."""
     raw = json.dumps(content(node), sort_keys=True, separators=(",", ":"))
     return "c1-" + hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+#: What a reviewer of a level judges about each node, beside its title and
+#: sections (:data:`CONTENT_FIELDS`): which node it is (dependencies name
+#: ids, and a child replaced by another is another child), its level and
+#: repository (the label its issue carries and where it is filed) and its
+#: place among its siblings (the order the level is written and listed in).
+#: With the content, that is everything publishing a node sends to the
+#: forge (:mod:`~lantern.plans.render`, :mod:`~lantern.plans.publish`).
+#: Left out on purpose: ``state``, the forge reference, who proposed,
+#: approved or published it and the timestamps — approving and publishing a
+#: level are what a review is for and must not make it stale — and
+#: ``origin``, drift, questions and a pending re-plan, none of which is
+#: published.
+REVIEWED_FIELDS: tuple[str, ...] = ("id", "level", "repository", "position", *CONTENT_FIELDS)
+
+
+def _reviewed(node: PlanNode) -> dict[str, Any]:
+    return {key: plain(getattr(node, key)) for key in REVIEWED_FIELDS}
+
+
+def review_digest(plan: Plan, node: PlanNode, *, include_node: bool = False) -> str:
+    """The digest of ``node``'s level as a reviewer judges it: every child
+    of ``node`` in the plan — all of them, whatever their state, so a level
+    published part-way keeps its digest — in their order, each as its
+    :data:`REVIEWED_FIELDS`. With ``include_node`` the node itself is
+    covered too: a generated root is published with its level and is never
+    approved, so a review of the root's level has to be able to answer for
+    the root. The two never read the same.
+
+    Stable for the same level; an edit of a child, an addition, a removal
+    or a reorder moves it."""
+    covered = {
+        "node": _reviewed(node) if include_node else None,
+        "children": [_reviewed(child) for child in plan.children(node.id)],
+    }
+    raw = json.dumps(covered, sort_keys=True, separators=(",", ":"))
+    return "r1-" + hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+def review_is_current(plan: Plan, node: PlanNode, *, include_node: bool | None = None) -> bool:
+    """Whether ``node`` carries a review of its level as the level is now:
+    it has one, and its digest is the level's digest computed now.
+
+    ``include_node`` says what the review has to have covered: ``True`` the
+    node and its children, ``False`` the children alone, ``None`` (the
+    default) either — whichever the reviewer covered, it still reads so."""
+    review = node.review
+    if review is None:
+        return False
+    wanted = (False, True) if include_node is None else (include_node,)
+    return any(review.digest == review_digest(plan, node, include_node=scope) for scope in wanted)

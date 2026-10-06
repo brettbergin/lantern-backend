@@ -8,6 +8,7 @@ from typing import ClassVar
 from textual.binding import Binding, BindingType
 from textual.widgets import Input
 
+from lantern.config import DEFAULT_COMMAND_PREFIX
 from lantern.tui.chat import MENTION
 
 
@@ -24,7 +25,7 @@ class ChatInput(Input):
     ChatInput.addressed { border: tall $success; }
     """
 
-    def __init__(self, *, thread: bool = False, prefix: str = "!sbx") -> None:
+    def __init__(self, *, thread: bool = False, prefix: str = DEFAULT_COMMAND_PREFIX) -> None:
         super().__init__(placeholder="")
         self.thread = thread
         self.prefix = prefix
@@ -41,6 +42,8 @@ class ChatInput(Input):
             self.placeholder = (
                 f"{MENTION} ▸ {what}… (ctrl+t: addressed ✓ · {self.prefix} for commands)"
             )
+        elif self.thread:
+            self.placeholder = f"{what}: plain text goes to the run · {self.prefix} for commands"
         else:
             self.placeholder = (
                 f"{what} with {MENTION} or ctrl+t · {self.prefix} for commands · "

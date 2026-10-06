@@ -16,7 +16,7 @@ colour, no axis, and the right answer to every "what share" question here.
 Spread is the exception: *what shape* needs a scale, so that page and the
 Cost trend use :mod:`lantern.tui.widgets.chart`.
 
-The numbers are :mod:`lantern.tui.analytics`, recomputed on a slow timer of
+The numbers are :mod:`lantern.analytics`, recomputed on a slow timer of
 its own — nothing in a week-long window changes between console ticks.
 """
 
@@ -34,8 +34,8 @@ from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Static
 from textual.worker import get_current_worker
 
-from lantern.tui import analytics
-from lantern.tui.analytics import Analytics, Lane, RunRow
+from lantern import analytics
+from lantern.analytics import Analytics, Lane, RunRow
 from lantern.tui.data import ConsoleState
 from lantern.tui.format import age
 from lantern.tui.screens.base import ConsoleScreen
@@ -178,7 +178,7 @@ class OverviewScreen(ConsoleScreen):
         if get_current_worker().is_cancelled:
             return
         self.cache.put(data, now)
-        self.app.call_from_thread(self._apply, data)
+        self.app.call_from_thread(self.apply_from_worker, self._apply, data)
 
     def _apply(self, data: Analytics) -> None:
         self.data = data

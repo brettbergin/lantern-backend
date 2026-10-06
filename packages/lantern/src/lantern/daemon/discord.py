@@ -1,7 +1,7 @@
 """DiscordBridge: the daemon's human channel on Discord.
 
 The service-agnostic bridge — event pump, chronology rendering, steering,
-run watches, concierge turns, ``!sbx`` commands — is
+run watches, concierge turns, ``!lantern`` commands — is
 :class:`lantern.daemon.chat.ChatBridge`; this module is the Discord fifth
 of it: a discord.py gateway client, the send/edit/react/thread primitives,
 the mapping of a discord.py ``Message`` onto :class:`~lantern.daemon.chat.Inbound`,
@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from lantern.chatservices import DISCORD_TOKEN_ENV
-from lantern.config import ChatBackend, Config, DiscordConfig
+from lantern.config import DEFAULT_COMMAND_PREFIX, ChatBackend, Config, DiscordConfig
 from lantern.daemon.chat import (
     CHOICE_QUESTION_TTL_S,
     ChatBridge,
@@ -784,7 +784,10 @@ class _GateHandler:
             reply = f"{verb} failed: {exc.args[0] if exc.args else exc}"
         except Exception:
             log.warning("discord.gate_click_failed", run=self.gate.run_id, exc_info=True)
-            reply = f"something went wrong — `!sbx {verb}` still works"
+            prefix = getattr(getattr(self.bridge, "chat", None), "command_prefix", None)
+            reply = (
+                f"something went wrong — `{prefix or DEFAULT_COMMAND_PREFIX} {verb}` still works"
+            )
         await _ack_interaction(interaction, str(reply))
 
 

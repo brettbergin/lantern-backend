@@ -1,7 +1,7 @@
 """MattermostBridge: the daemon's human channel on Mattermost.
 
 The service-agnostic bridge — event pump, chronology rendering, steering,
-run watches, concierge turns, ``!sbx`` commands — is
+run watches, concierge turns, ``!lantern`` commands — is
 :class:`lantern.daemon.chat.ChatBridge`; this module is the Mattermost
 fifth of it: a websocket connection (the app dials out, so an instance the
 operator hosts needs no public URL and no inbound hole — the property
@@ -391,6 +391,7 @@ class MattermostBridge(ChatBridge):
     backend: ClassVar[ChatBackend] = "mattermost"
     label: ClassVar[str] = "Mattermost"
     mention_re = MATTERMOST_MENTION_RE
+    thread_is_surface = False
 
     def __init__(
         self,

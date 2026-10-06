@@ -74,11 +74,11 @@ class DoctorScreen(ConsoleScreen):
     def run_report(self, *, deep: bool, probe: bool) -> None:
         def progress(message: str) -> None:
             if not get_current_worker().is_cancelled:
-                self.app.call_from_thread(self._progress, message)
+                self.app.call_from_thread(self.apply_from_worker, self._progress, message)
 
         def checks_in(checks: list[Check]) -> None:
             if not get_current_worker().is_cancelled:
-                self.app.call_from_thread(self._checks, checks)
+                self.app.call_from_thread(self.apply_from_worker, self._checks, checks)
 
         try:
             report = doctor_report(
@@ -86,11 +86,11 @@ class DoctorScreen(ConsoleScreen):
             )
         except Exception as exc:
             if not get_current_worker().is_cancelled:
-                self.app.call_from_thread(self._failed, str(exc))
+                self.app.call_from_thread(self.apply_from_worker, self._failed, str(exc))
             return
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply, report)
+        self.app.call_from_thread(self.apply_from_worker, self._apply, report)
 
     def _progress(self, message: str) -> None:
         self.progress = message

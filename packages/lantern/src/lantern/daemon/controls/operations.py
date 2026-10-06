@@ -59,6 +59,13 @@ EFFECTS: dict[str, str] = {
     "item.abandon": "the item is settled as abandoned and the source owed its report",
     "item.retry": "the item is re-queued with attempts reset",
     "item.requeue": "the item is unpinned and re-queued",
+    "item.dismiss": "the item's alert is marked dismissed for everyone",
+    "item.undismiss": "the item's alert asks for attention again",
+    "run.dismiss": "the run's alert is marked dismissed for everyone",
+    "run.undismiss": "the run's alert asks for attention again",
+    "attention.dismiss_all": "each named alert is marked dismissed, or named as skipped",
+    "item.delete": "the item and its runs are hidden and their run directories removed",
+    "run.delete": "the run is hidden and its run directory removed",
     "repo.resume": "the repository is polled again from the next tick",
     "repo.labels_sync": "every label the loop applies exists on the repository",
     "daemon.breaker_reset": "the breaker is closed and its failure count is zero",
@@ -68,6 +75,8 @@ EFFECTS: dict[str, str] = {
     "schedule.resume": "the schedule fires again",
     "daemon.stop": "the graceful stop is committed and signalled",
     "daemon.restart": "the restart is committed and signalled",
+    "plan.propose": "the draft plan is stored for its goal, its root generated from the brief",
+    "plan.approve": "the node's draft and proposed children are approved",
     "plan.publish": "each node of the level is on the forge and recorded, or named as failed",
     "plan.replan.approve": "each approved entry of the re-plan is on the forge, or named as failed",
     "plan.run": "the epic run is recorded and its ready tasks are admitted",
@@ -76,6 +85,14 @@ EFFECTS: dict[str, str] = {
     "plan.run.cancel": "the epic run is cancelled and its queued items withdrawn",
     "plan.run.retry": "the task is re-queued or admitted afresh",
     "plan.run.skip": "the task is recorded as skipped",
+    "grant.create": "the grant is stored and judged from the next decision",
+    "grant.update": "the grant holds the requested change",
+    "grant.delete": "the grant is gone; what it allowed stays in the ledger",
+    "grant.restore_defaults": "every default grant whose agent can act is in place",
+    "decision.decline": "the escalation is resolved; a person declined it unless it was already",
+    "goal.create": "the goal is stored for its repository",
+    "goal.update": "the goal holds the requested change",
+    "goal.delete": "the goal is gone; the plans proposed from it keep naming it",
 }
 
 
@@ -307,6 +324,18 @@ class OperationStore:
             row = session.get(OperationRow, op_id)
             return None if row is None else _row(row)
 
+    def for_idempotency(self, scope: str, key: str) -> Operation | None:
+        """The operation an idempotency pair already names, if any: what a
+        surface asks before it works out what a replay is a replay of."""
+        with self.dstore.read() as session:
+            row = session.scalars(
+                select(OperationRow).where(
+                    OperationRow.idempotency_scope == scope,
+                    OperationRow.idempotency_key == key,
+                )
+            ).first()
+            return None if row is None else _row(row)
+
     def recent(
         self,
         *,
@@ -503,6 +532,66 @@ class OperationRunner:
         return outcome.model_copy(update={"operation_id": op.id})
 
 
+def record_plan_operation[R](
+    store: OperationStore,
+    spec: OperationSpec,
+    *,
+    call: Callable[[], R],
+    result: Callable[[R], dict[str, Any]],
+    clock: Callable[[], float] = time.time,
+    generation: str | None = None,
+) -> tuple[str, R]:
+    """One write to a plan or the forge as a recorded operation, for
+    whoever holds the store: a route answering a person, or the daemon
+    acting for an agent. Accept ``spec``, claim it for ``generation``, make
+    the ``call`` and finish the operation — ``succeeded`` with ``result``
+    of what came back, and the operation's id and that value are returned.
+
+    Nothing is called and nothing new is recorded when the idempotency
+    pair names an operation that exists: :class:`OperationReplay` carries
+    it when the request is the same, :class:`IdempotencyConflict` when it
+    differs. A :class:`~lantern.plans.PlanRefusal` from ``call`` finishes
+    the operation ``failed`` with the refusal's code and detail, its
+    status and extras kept as the result so a replay can answer the same
+    refusal, and is re-raised naming its record (``extra["operation_id"]``).
+    Any other exception finishes it ``failed`` with ``code="crashed"`` and
+    is re-raised too. A process that dies in between leaves the row
+    ``running`` for :func:`reconcile_operations`.
+    """
+    # The plan service imports this package (its principal), so the
+    # refusal is looked up when one can first be raised, not at import.
+    from lantern.plans.service_base import PlanRefusal
+
+    op, created = store.accept(spec, clock())
+    if not created:
+        raise OperationReplay(op)
+    store.claim(op.id, generation, clock())
+    try:
+        value = call()
+    except PlanRefusal as exc:
+        store.finish(
+            op.id,
+            clock(),
+            state="failed",
+            result={"status": exc.status, "extra": dict(exc.extra)},
+            error_code=exc.code,
+            error_detail=exc.detail,
+        )
+        exc.extra.setdefault("operation_id", op.id)
+        raise
+    except Exception as exc:
+        store.finish(
+            op.id,
+            clock(),
+            state="failed",
+            error_code="crashed",
+            error_detail=f"{type(exc).__name__}: {exc}"[:2000],
+        )
+        raise
+    store.finish(op.id, clock(), state="succeeded", result=result(value))
+    return op.id, value
+
+
 def reconcile_operations(loop: Any, *, generation: str, now: float) -> list[Operation]:
     """Settle what a previous generation left unfinished, from evidence.
 
@@ -589,6 +678,13 @@ def _judge(
         ):
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the run was not admitted"
+    if op.action == "item.admit" and (op.request or {}).get("form") == "plan":
+        # A breakdown is queued under the id it was recorded against (a
+        # person's through the routes, or the planner's through the plan
+        # driver): the row being there is the effect.
+        if loop.dstore.get(op.target_key) is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the breakdown was not queued"
     if op.action in ("item.abandon", "item.retry", "item.requeue"):
         item = loop.dstore.get(op.target_key)
         if item is None:
@@ -597,6 +693,55 @@ def _judge(
         if item.state == expected[op.action]:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", f"item is {item.state}"
+    if op.action in ("item.dismiss", "item.undismiss", "run.dismiss", "run.undismiss"):
+        # The mark is the effect: it stands or it does not. A run a work
+        # item pins carries its mark on the item, as the verb wrote it.
+        kind, key = op.target_kind, op.target_key
+        if kind == "run":
+            owner = loop.dstore.item_for_run(key)
+            pinning = loop.dstore.get(owner) if owner else None
+            if pinning is not None and pinning.run_id == key:
+                kind, key = "item", pinning.item_id
+        else:
+            named = loop.dstore.get(key)
+            if named is None:
+                return "failed", "unknown_target", "no such item"
+            key = named.item_id
+        standing = loop.dstore.work_mark(kind, key, "dismissed") is not None
+        if standing != op.action.endswith(".undismiss"):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the alert is still dismissed" if standing else "the alert was not dismissed",
+        )
+    if op.action in ("item.delete", "run.delete"):
+        # The mark is written last, after the directories are gone, and
+        # every step before it is safe to repeat.
+        kind, key = op.target_kind, op.target_key
+        if kind == "item":
+            named = loop.dstore.get(key)
+            key = named.item_id if named is not None else key
+        else:
+            owner = loop.dstore.item_for_run(key)
+            pinning = loop.dstore.get(owner) if owner else None
+            if pinning is not None and pinning.run_id == key:
+                kind, key = "item", pinning.item_id
+        if loop.dstore.work_mark(kind, key, "deleted") is not None:
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the delete was interrupted; sending it again finishes it",
+        )
+    if op.action == "attention.dismiss_all":
+        # Each alert is its own mark and dismissing twice changes nothing,
+        # so what the walk left is safe to send again.
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the bulk dismissal was interrupted; sending it again dismisses what is left",
+        )
     if op.action in ("daemon.stop", "daemon.restart"):
         # The process exited and a new generation is answering: that is
         # exactly the effect these promise.
@@ -607,6 +752,36 @@ def _judge(
         if (op.action == "daemon.pause") == held:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the hold did not survive the restart"
+    if op.action == "plan.propose":
+        # The planner's draft is one transaction under the id the
+        # operation named: the plan being there is the effect.
+        from lantern.plans.store import PlanStore
+
+        if PlanStore(loop.dstore).get(op.target_key) is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the proposed plan was not stored"
+    if op.action == "plan.approve":
+        # One transaction on the plan, which moves its revision: the
+        # children it named say whether it landed, and a plan still at the
+        # revision the approve read was never written to at all.
+        from lantern.plans.store import PlanStore
+
+        request = op.request or {}
+        plan = PlanStore(loop.dstore).get(op.target_key)
+        if plan is None:
+            return "failed", "unknown_target", "no such plan"
+        children = plan.children(str(request.get("node_id") or ""))
+        if request.get("node_ids") is not None:
+            named = set(request["node_ids"])
+            children = [child for child in children if child.id in named]
+        written = op.expected_revision is None or plan.revision > op.expected_revision
+        if written and children and all(c.state not in ("draft", "proposed") for c in children):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            "the approval was interrupted before it was written; approving the level again is safe",
+        )
     if op.action == "plan.publish":
         # Each node is recorded as it lands and found again by its marker,
         # so what the walk left is safe to repeat under a new key.
@@ -668,9 +843,111 @@ def _judge(
                 return "succeeded", None, None
         done = "skipped" if verb == "skip" else "retried"
         return "failed", "interrupted_before_effect", f"the task was not {done}"
+    if op.action.startswith("grant."):
+        return _judge_grant(loop, op)
+    if op.action == "decision.decline":
+        # One write to the ledger row: it is resolved, or it is not.
+        from lantern.daemon.controls.delegation_store import DelegationStore
+
+        decision = DelegationStore(loop.dstore).decision(op.target_key)
+        if decision is None:
+            return "failed", "unknown_target", "no such decision"
+        if decision.resolved_at is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the escalation is still waiting"
+    if op.action.startswith("goal."):
+        return _judge_goal(loop, op)
     if op.action == "daemon.breaker_reset":
         opened_at, _ = loop.dstore.breaker()
         if opened_at is None:
             return "succeeded", None, None
         return "failed", "interrupted_before_effect", "the breaker is still open"
+    return "reconciling", None, "the effect could not be established from the record"
+
+
+def _judge_grant(
+    loop: Any, op: Operation
+) -> tuple[Literal["succeeded", "failed", "reconciling"], str | None, str | None]:
+    """A grant write is one transaction, so the stored grant says whether
+    it happened: it is there, it holds the change, or it is gone."""
+    from lantern.daemon.controls.delegation_store import DelegationStore
+
+    if op.action == "grant.restore_defaults":
+        # One transaction writes every missing default: they are all in
+        # place, or the restore did not happen.
+        from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS
+
+        store = DelegationStore(loop.dstore)
+        present = {grant.default_key for grant in store.grants() if grant.default_key}
+        ready = getattr(loop, "_seedable_defaults", None)
+        wanted = ready() if callable(ready) else list(DEFAULT_GRANTS)
+        missing = [default.key for default in wanted if default.key not in present]
+        if not missing:
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the default grants were not restored ({', '.join(missing)} missing)",
+        )
+    grant = DelegationStore(loop.dstore).grant(op.target_key)
+    if op.action == "grant.create":
+        if grant is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the grant was not written"
+    if op.action == "grant.delete":
+        if grant is None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the grant is still there"
+    if op.action == "grant.update":
+        if grant is None:
+            return "failed", "unknown_target", "no such grant"
+        changes = dict((op.request or {}).get("changes") or {})
+        held = {
+            "conditions": grant.conditions.as_dict(),
+            "daily_limit": grant.daily_limit,
+            "enabled": grant.enabled,
+            "note": grant.note,
+        }
+        moved = op.expected_revision is None or grant.revision > op.expected_revision
+        if changes and moved and all(held.get(key) == value for key, value in changes.items()):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the grant does not hold the requested change (it is at revision {grant.revision}); "
+            "read it and send the change again if it is still wanted",
+        )
+    return "reconciling", None, "the effect could not be established from the record"
+
+
+def _judge_goal(
+    loop: Any, op: Operation
+) -> tuple[Literal["succeeded", "failed", "reconciling"], str | None, str | None]:
+    """A goal write is one transaction, so the stored goal says whether it
+    happened: it is there, it holds the change, or it is gone."""
+    from lantern.daemon.goals import GoalStore
+
+    goal = GoalStore(loop.dstore).goal(op.target_key)
+    if op.action == "goal.create":
+        if goal is not None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the goal was not written"
+    if op.action == "goal.delete":
+        if goal is None:
+            return "succeeded", None, None
+        return "failed", "interrupted_before_effect", "the goal is still there"
+    if op.action == "goal.update":
+        if goal is None:
+            return "failed", "unknown_target", "no such goal"
+        changes = dict((op.request or {}).get("changes") or {})
+        held = {"title": goal.title, "text": goal.text, "state": goal.state}
+        moved = op.expected_revision is None or goal.revision > op.expected_revision
+        if changes and moved and all(held.get(key) == value for key, value in changes.items()):
+            return "succeeded", None, None
+        return (
+            "failed",
+            "interrupted_before_effect",
+            f"the goal does not hold the requested change (it is at revision {goal.revision}); "
+            "read it and send the change again if it is still wanted",
+        )
     return "reconciling", None, "the effect could not be established from the record"

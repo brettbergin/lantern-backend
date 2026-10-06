@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lantern.daemon.controls.operations import Operation
 from lantern.daemon.controls.principal import WORKSPACE_ID, Capability
@@ -77,6 +77,21 @@ class Actor(ApiModel):
 class Target(ApiModel):
     kind: str
     id: str
+
+
+class Dismissal(ApiModel):
+    """A person acknowledged the alert this work raises: it keeps its state
+    and its controls and no longer asks anyone for attention. ``cause`` is
+    ``dismissed`` for a plain acknowledgement and ``abandoned`` when the
+    person gave the work up — the abandon is its own acknowledgement. Gone
+    again the moment the work changes state, so a new failure is a new
+    alert."""
+
+    at: str
+    by: Actor | None = None
+    cause: str = "dismissed"
+    reason: str | None = None
+    operation_id: str | None = None
 
 
 class OperationOut(ApiModel):
@@ -344,6 +359,11 @@ class Item(ApiModel):
     updated_at: str
     revision: int = 0
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a person's dismissal of this item's alert stands.
+    dismissal: Dismissal | None = None
+    #: When a person deleted the item: it is left out of every listing and
+    #: takes no further command; the record stays readable by its id.
+    deleted_at: str | None = None
     #: The agent asked to lead the work, or, once the run is planned, the
     #: agent that leads it. ``None`` for work admitted without one.
     lead_agent: str | None = None
@@ -410,6 +430,12 @@ class Run(ApiModel):
     review_wait: str | None = None
     revision: int = 0
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a dismissal of this run's alert stands: its work item's
+    #: when one pins the run, the run's own otherwise.
+    dismissal: Dismissal | None = None
+    #: When a person deleted the run's work: left out of every listing,
+    #: its run directory removed; the record stays readable by its id.
+    deleted_at: str | None = None
 
 
 class TaskOutputOut(ApiModel):
@@ -656,6 +682,14 @@ class ItemCommand(ApiModel):
     expected_revision: int | None = Field(default=None, ge=0)
 
 
+class WorkDeleteCommand(ApiModel):
+    reason: str | None = Field(default=None, max_length=2000)
+    expected_revision: int | None = Field(default=None, ge=0)
+    #: Delete even when a run's workspace is the only copy of work that
+    #: was never delivered. Off by default: that work would be lost.
+    discard_undelivered: bool = False
+
+
 class ItemCommandResult(ApiModel):
     item: Item
     operation: OperationOut
@@ -763,10 +797,123 @@ class Gate(ApiModel):
     revision: int = 0
     required_capability: str = "gates:approve"
     available_actions: list[str] = Field(default_factory=list)
+    #: Set while a dismissal of the gated item's alert stands.
+    dismissal: Dismissal | None = None
 
 
 class GateApproval(ApiModel):
     expected_revision: int = Field(ge=0)
+
+
+#: The most alerts one bulk dismissal may name: a page of them.
+ATTENTION_DISMISS_MAX = 200
+
+
+class AttentionTarget(ApiModel):
+    """One alert a bulk dismissal names: an item, or a run no item
+    carries. ``expected_revision`` pins the state the person was shown."""
+
+    item_id: str | None = None
+    run_id: str | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_subject(self) -> AttentionTarget:
+        if (self.item_id is None) == (self.run_id is None):
+            raise ValueError("name item_id or run_id, not both")
+        return self
+
+
+class AttentionDismissRequest(ApiModel):
+    targets: list[AttentionTarget] = Field(min_length=1, max_length=ATTENTION_DISMISS_MAX)
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class AttentionDismissResult(ApiModel):
+    """What became of one named alert. ``skipped`` carries the refusal the
+    same dismissal would have had on its own route."""
+
+    item_id: str | None = None
+    run_id: str | None = None
+    outcome: Literal["dismissed", "already_dismissed", "skipped"]
+    code: str | None = None
+    detail: str | None = None
+
+
+class AttentionDismissed(ApiModel):
+    operation: OperationOut
+    #: One entry per target, in the order the request named them.
+    results: list[AttentionDismissResult]
+
+
+AttentionGroup = Literal["decision", "failed", "paused"]
+
+
+class AttentionAction(ApiModel):
+    """One action the server offers on an entry right now, the capability
+    it needs, and whether the caller holds that capability."""
+
+    action: str
+    capability: str
+    allowed: bool
+
+
+class AttentionEntry(ApiModel):
+    """One thing waiting on a person. ``id`` is ``<kind>:<natural key>``,
+    opaque and stable while the same thing waits; the reference fields say
+    what it is about. ``kind`` is open: a later release adds kinds, and a
+    client leaves out an entry whose kind it does not know."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    kind: str
+    group: AttentionGroup
+    #: The state word of what waits, in its own resource's vocabulary.
+    state: str
+    title: str
+    reason: str | None = None
+    #: When it started waiting; ``null`` when nothing recorded it.
+    since: str | None = None
+    repository: str | None = None
+    repository_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    gate_id: str | None = None
+    plan_id: str | None = None
+    node_id: str | None = None
+    epic_run_id: str | None = None
+    #: Set only when the caller can read the conversation.
+    channel_id: str | None = None
+    #: The revision of the gate (a ``gate`` entry), the item (an ``item``
+    #: entry) or the plan (a ``plan_questions`` or ``plan_proposal`` entry,
+    #: and an ``escalation`` about a plan); ``null`` where the thing
+    #: waiting has none.
+    revision: int | None = None
+    #: An ``escalation``: the agent (its slug) that asked, the ledger row
+    #: (``GET /v1/decisions``) and the delegable action it asked to take.
+    agent: str | None = None
+    decision_id: str | None = None
+    decision_action: str | None = None
+    actions: list[AttentionAction] = Field(default_factory=list)
+    #: Set only on an entry listed with ``include_dismissed``.
+    dismissal: Dismissal | None = None
+
+
+class AttentionCounts(ApiModel):
+    """How much is waiting, in every group, whatever the page shows."""
+
+    total: int = 0
+    decision: int = 0
+    failed: int = 0
+    paused: int = 0
+
+
+class AttentionPage(ApiModel):
+    data: list[AttentionEntry]
+    next_cursor: str | None = None
+    has_more: bool = False
+    counts: AttentionCounts
+    observed_at: str
 
 
 class GateResult(ApiModel):
@@ -877,6 +1024,298 @@ class UsagePool(ApiModel):
     daily_token_budget: int | None = None
     runs_tokens_today: int
     turns_tokens_today: int
+
+
+# -- fleet analytics ----------------------------------------------------------------
+
+
+class AnalyticsLane(ApiModel):
+    """One run kind's totals over a window — or every kind together
+    (``all``), or the window before this one (``previous``)."""
+
+    kind: str
+    runs: int
+    #: Runs that finished the way they were meant to: merged or completed.
+    landed: int
+    failed: int
+    #: A person's decision, not an outcome: counted, never judged.
+    cancelled: int
+    turns: int
+    #: Input plus output tokens the backends reported.
+    tokens: int
+    cache_read_tokens: int
+    #: Seconds the runs' phase attempts were actually running.
+    active_s: float
+    #: Seconds from each run's creation to its last update.
+    elapsed_s: float
+    #: Elapsed time the loop did not spend working: waiting on a person.
+    parked_s: float
+    #: Landed over landed plus failed; ``null`` when no run was judged.
+    ok_rate: float | None
+    parked_share: float
+
+
+class AnalyticsPhase(ApiModel):
+    """One phase's share of the window, by the attempts that started in it."""
+
+    phase: str
+    attempts: int
+    #: Attempts past the first: where the loop went round again.
+    retries: int
+    turns: int
+    tokens: int
+    cache_read_tokens: int
+    active_s: float
+
+
+class AnalyticsBucket(ApiModel):
+    """One slice of the window, by the runs that began in it."""
+
+    since: str
+    until: str
+    #: Every run that began here, whatever its state now.
+    runs: int
+    landed: int
+    failed: int
+    cancelled: int
+    turns: int
+
+
+class AnalyticsRework(ApiModel):
+    tasks: int
+    revisions: int
+    replans: int
+    #: Tasks flagged as having a suspect verify.
+    suspect: int
+    retried_share: float
+
+
+class AnalyticsFailure(ApiModel):
+    #: The head of the failed runs' reason: the class, not one run's detail.
+    reason: str
+    count: int
+
+
+class AnalyticsRun(ApiModel):
+    run_id: str
+    kind: str
+    state: str
+    turns: int
+    tokens: int
+    active_s: float
+    parked_s: float
+
+
+class AnalyticsSpread(ApiModel):
+    median: float
+    p90: float
+
+
+class AnalyticsSpreads(ApiModel):
+    """Median and p90 across the window's runs; ``null`` where no run
+    gives one."""
+
+    turns: AnalyticsSpread | None
+    #: Creation to last update, over the runs that landed: time to land.
+    cycle_s: AnalyticsSpread | None
+    active_s: AnalyticsSpread | None
+
+
+class AnalyticsDelta(ApiModel):
+    """This window's total against the previous window's, as a share of
+    the previous value (``0.25`` is a quarter more). ``null`` when nothing
+    preceded the window or the previous value was zero."""
+
+    runs: float | None
+    landed: float | None
+    failed: float | None
+    cancelled: float | None
+    turns: float | None
+    tokens: float | None
+    cache_read_tokens: float | None
+    active_s: float | None
+    elapsed_s: float | None
+    parked_s: float | None
+    ok_rate: float | None
+    parked_share: float | None
+
+
+class AnalyticsWindow(ApiModel):
+    """A window of runs, folded: outcomes, time, turns and failures by
+    cause. A run is attributed whole to the window it began in. Telemetry,
+    never a currency."""
+
+    workspace_id: str = WORKSPACE_ID
+    since: str
+    until: str
+    observed_at: str
+    window_s: int
+    #: No run began in the window.
+    empty: bool
+    total: AnalyticsLane
+    lanes: list[AnalyticsLane]
+    phases: list[AnalyticsPhase]
+    buckets: list[AnalyticsBucket]
+    rework: AnalyticsRework
+    review_rounds: int
+    ci_rounds: int
+    failures: list[AnalyticsFailure]
+    costliest: list[AnalyticsRun]
+    longest_parked: list[AnalyticsRun]
+    spreads: AnalyticsSpreads
+    #: The window before this one, every kind together; ``null`` when no
+    #: run began in it.
+    previous: AnalyticsLane | None
+    delta: AnalyticsDelta
+
+
+# -- the briefing -------------------------------------------------------------------
+#
+# One small summary for a landing screen, a widget and a digest. Every
+# field is always present; what cannot be said is ``null``. Each part is
+# its own object so a later release adds a field inside it — clients
+# ignore fields they do not know.
+
+
+class BriefingLane(ApiModel):
+    """How the runs of one kind ended inside the window."""
+
+    kind: str
+    landed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+
+
+class BriefingLandedRun(ApiModel):
+    """One run that landed in the window: the work it did and where."""
+
+    run_id: str
+    kind: str
+    #: The work item's title; the run's own ask when no item carries it.
+    title: str
+    repository: str | None = None
+    pull_request_number: int | None = None
+    pull_request_url: str | None = None
+    landed_at: str
+
+
+class BriefingOutcomes(ApiModel):
+    """The runs that reached an end inside the window — by when they
+    finished, not when they began. ``blocked`` is not an end: it waits."""
+
+    #: Merged or completed.
+    landed: int = 0
+    failed: int = 0
+    #: A person's decision, not an outcome.
+    cancelled: int = 0
+    by_kind: list[BriefingLane]
+    #: Newest first, at most ten; deleted runs are left out.
+    recent_landed: list[BriefingLandedRun]
+
+
+class BriefingWaiting(ApiModel):
+    """The attention list's counts, and when its longest wait began."""
+
+    total: int = 0
+    decision: int = 0
+    failed: int = 0
+    paused: int = 0
+    oldest_since: str | None = None
+
+
+class BriefingDecision(ApiModel):
+    """One act an agent was allowed to take, with what it was about."""
+
+    id: str
+    grant_id: str | None = None
+    agent_slug: str
+    action: str
+    reason: str
+    at: str
+    plan_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    epic_run_id: str | None = None
+    repository: str | None = None
+    operation_id: str | None = None
+
+
+class BriefingDecided(ApiModel):
+    """What agents decided under grants inside the window, and the
+    escalations still waiting for a person, however old."""
+
+    allow: int = 0
+    deny: int = 0
+    escalate: int = 0
+    unresolved_escalations: int = 0
+    #: The allowed acts, newest first, at most ten — for a caller holding
+    #: ``audit:read``; ``null`` for anyone else, who reads the counts.
+    recent: list[BriefingDecision] | None = None
+
+
+class BriefingSupply(ApiModel):
+    """How much work is lined up, as it stands now."""
+
+    #: Plan nodes awaiting a person's approval.
+    proposed: int = 0
+    #: Plan nodes approved and not yet published.
+    approved: int = 0
+    #: Published tasks on the forge, open, that no epic run has started.
+    ready_tasks: int = 0
+    #: The daemon queue's depth.
+    queued: int = 0
+    #: Runs in flight.
+    running: int = 0
+    #: Work parked on a person: the attention list's decisions and pauses.
+    parked: int = 0
+
+
+class BriefingRunway(ApiModel):
+    """How long the tasks lined up would take at the trailing week's rate
+    of landed ``code`` runs. Both rates are ``null`` when nothing landed in
+    that week: no rate is invented."""
+
+    ready_tasks: int = 0
+    landed_per_day: float | None = None
+    days: float | None = None
+
+
+class BriefingBudget(ApiModel):
+    """Today against the daily cap and the token budget, as the usage pool
+    counts them."""
+
+    runs_today: int
+    max_runs_per_day: int
+    tokens_today: int
+    #: ``null`` when no budget is configured.
+    daily_token_budget: int | None = None
+    resets_at: str
+
+
+class BriefingGrants(ApiModel):
+    """The grants in force, and how many have spent today's limit."""
+
+    enabled: int = 0
+    at_limit: int = 0
+
+
+class Briefing(ApiModel):
+    """What happened in a window, what needs a person now, and what is
+    lined up. Durations are seconds and timestamps RFC 3339; nothing is a
+    currency."""
+
+    workspace_id: str = WORKSPACE_ID
+    since: str
+    until: str
+    observed_at: str
+    outcomes: BriefingOutcomes
+    waiting: BriefingWaiting
+    decided: BriefingDecided
+    supply: BriefingSupply
+    runway: BriefingRunway
+    budget: BriefingBudget
+    grants: BriefingGrants
 
 
 # -- diagnostics and administration (#1040) -----------------------------------------
@@ -1017,5 +1456,184 @@ class ScheduleUpdate(ScheduleCreate):
 
 class ScheduleResult(ApiModel):
     schedule: Schedule | None = None
+    message: str
+    operation: OperationOut
+
+
+class GrantConditions(ApiModel):
+    """What must hold for a grant to cover an act. A key left out (or
+    ``null``, or ``false`` for ``require_review``) constrains nothing; which
+    keys an action accepts is checked when the grant is written."""
+
+    repositories: list[str] | None = None
+    levels: list[str] | None = None
+    max_children: int | None = Field(default=None, ge=1)
+    require_review: bool = False
+    causes: list[str] | None = None
+    max_retries: int | None = Field(default=None, ge=1)
+
+
+class GrantOut(ApiModel):
+    """A standing rule: ``agent_slug`` may take ``action`` while
+    ``conditions`` hold, at most ``daily_limit`` times a day (``null`` is
+    unlimited). ``used_today`` is how many acts it allowed in the current
+    cap day, counted from the decisions ledger. ``source`` is ``default``
+    for one of Lantern's default grants (``default_key`` names which) and
+    ``owner`` for one a person wrote."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    agent_slug: str
+    action: str
+    conditions: GrantConditions
+    daily_limit: int | None = None
+    used_today: int = 0
+    enabled: bool = True
+    note: str | None = None
+    created_by: str | None = None
+    created_by_display: str | None = None
+    created_at: str
+    updated_at: str
+    revision: int
+    source: Literal["default", "owner"] = "owner"
+    default_key: str | None = None
+
+
+class GrantCreate(ApiModel):
+    agent_slug: str
+    action: str
+    conditions: GrantConditions = Field(default_factory=GrantConditions)
+    daily_limit: int | None = Field(default=None, ge=1)
+    enabled: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class GrantUpdate(ApiModel):
+    """An edit against the revision the client read. Only the fields sent
+    change: ``daily_limit: null`` lifts the limit, ``note: null`` clears the
+    note, and ``conditions`` replaces the whole set. A grant's agent and
+    action are not edited."""
+
+    expected_revision: int
+    conditions: GrantConditions | None = None
+    daily_limit: int | None = Field(default=None, ge=1)
+    enabled: bool | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class GrantResult(ApiModel):
+    grant: GrantOut | None = None
+    message: str
+    operation: OperationOut
+
+
+class GrantsRestored(ApiModel):
+    """The default grants a restore wrote, in the table's order: empty when
+    every default was already in place."""
+
+    grants: list[GrantOut]
+    message: str
+    operation: OperationOut
+
+
+class DecisionOut(ApiModel):
+    """One judged act from the ledger: who asked to take what, the outcome
+    (``allow``, ``deny`` or ``escalate``) and why, the grant that allowed it,
+    what it was about, and the facts it was judged on. An escalation carries
+    how it was resolved once it is."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    grant_id: str | None = None
+    agent_slug: str
+    action: str
+    outcome: str
+    reason: str
+    plan_id: str | None = None
+    node_id: str | None = None
+    item_id: str | None = None
+    run_id: str | None = None
+    epic_run_id: str | None = None
+    repository: str | None = None
+    operation_id: str | None = None
+    attrs: dict[str, Any] = Field(default_factory=dict)
+    at: str
+    resolved_at: str | None = None
+    resolved_by: str | None = None
+    resolution: str | None = None
+
+
+GoalStateName = Literal["active", "paused", "done"]
+
+
+class GoalPlanOut(ApiModel):
+    """A plan proposed from a goal: its id, title, the state a plan reads as
+    and its ``advance`` switch."""
+
+    plan_id: str
+    title: str
+    state: Literal["draft", "published", "archived"]
+    advance: Literal["manual", "auto"]
+
+
+class GoalProposingOut(ApiModel):
+    """Whether the planner drafts plans toward a goal on its own here, and
+    when it does not, why — so a client can say so rather than promise a
+    plan that never comes."""
+
+    enabled: bool
+    #: ``[delegation] propose_every``: at most one proposal per goal per this
+    #: many seconds. ``0`` is off.
+    every_s: int
+    #: Why proposing is off for this goal (``propose_every`` is 0, or the
+    #: goal is not ``active``); ``null`` while it is on. Whether the
+    #: planner holds a ``plan.propose`` grant is judged per proposal and
+    #: shows as an escalation, not here.
+    reason: str | None = None
+
+
+class GoalOut(ApiModel):
+    """A standing objective an owner wrote for one repository. ``plans`` are
+    the plans proposed from it, most recently changed first;
+    ``open_plan_id`` is the one currently serving it (the most recently
+    changed plan that is not archived), or ``null``. ``proposing`` says
+    whether the planner drafts plans toward it on its own."""
+
+    id: str
+    workspace_id: str = WORKSPACE_ID
+    repository: str
+    title: str
+    text: str
+    state: GoalStateName
+    created_by: str | None = None
+    created_by_display: str | None = None
+    created_at: str
+    updated_at: str
+    revision: int
+    plans: list[GoalPlanOut] = Field(default_factory=list)
+    open_plan_id: str | None = None
+    proposing: GoalProposingOut
+
+
+class GoalCreate(ApiModel):
+    repository: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=200)
+    #: The objective, in the owner's words.
+    text: str = Field(min_length=1, max_length=4000)
+    state: GoalStateName = "active"
+
+
+class GoalUpdate(ApiModel):
+    """An edit against the revision the client read. Only the fields sent
+    change. A goal's repository is not edited."""
+
+    expected_revision: int
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    text: str | None = Field(default=None, min_length=1, max_length=4000)
+    state: GoalStateName | None = None
+
+
+class GoalResult(ApiModel):
+    goal: GoalOut | None = None
     message: str
     operation: OperationOut

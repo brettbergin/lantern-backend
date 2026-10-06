@@ -16,7 +16,7 @@ host are trusted completely; the console has no authority model of its own.
   `seq`, work items, merge gates, review holds, the breaker and the local
   bridge's mailbox all come from there.
 - **Control.** The `ctl` file queue under the home's `state/daemon/ctl/` —
-  `lantern.daemon.control.ControlClient`, the same dispatcher `lantern daemon ctl` and chat's `!sbx` use, so the console cannot drift from them.
+  `lantern.daemon.control.ControlClient`, the same dispatcher `lantern daemon ctl` and chat's `!lantern` use, so the console cannot drift from them.
   `status` is asked every few seconds; a `None` answer is "daemon down",
   a `stale` one is "daemon starting".
 - **Chat.** The daemon's local chat bridge (`lantern.daemon.local`): a
@@ -167,7 +167,8 @@ plotext silently paints every series the same blue. Convert it with
 `chart.rgb` first; `tests/unit/tui/test_tui_charts.py` asserts on the
 painted output rather than on the argument for exactly this reason.
 
-The numbers are `lantern.tui.analytics`, folded from
+The numbers are `lantern.analytics` (the fold `GET /v1/analytics` serves
+too), folded from
 `StateStore.runs_between` / `phases_between` in one grouped pass each and
 recomputed on a slow timer of its own — nothing in a week-long window
 changes between console ticks. An empty window says so rather than drawing
@@ -270,7 +271,7 @@ questions, the merge-gate prompt.
 │ 13:55:40  sbx     ⏸ ready to merge — waiting for your approval             │
 │           [ Approve merge ]                                                │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ @sbx ▸ ask the concierge…  (ctrl+t: addressed ✓ · !sbx for commands)       │
+│ @sbx ▸ ask the concierge…  (ctrl+t: addressed ✓ · !lantern for commands)   │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -278,7 +279,7 @@ The routing rules are the bridge's, not the console's:
 
 | you type                                                                        | the daemon reads it as                                                     |
 | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `!sbx status` (any `!sbx` verb)                                                 | a command — the same dispatcher `lantern daemon ctl` uses                  |
+| `!lantern status` (any `!lantern` verb; `!sbx` too at the default prefix)       | a command — the same dispatcher `lantern daemon ctl` uses                  |
 | `@sbx …`, or anything with the address gesture on (`ctrl+t`, sticky per screen) | in the control channel a **concierge** turn; in a run's thread a **steer** |
 | `r`, then text                                                                  | a reply to the bot's latest row — addressed by definition                  |
 | plain text                                                                      | left alone, as on Discord: people talking among themselves                 |
@@ -291,7 +292,7 @@ mouse (with no question open the numbers are the mode keys again) and `r`
 replies to the bot's latest row. In a run's thread, click the button or
 type the number. Typing the answer works too. A long channel opens on its newest rows, with a note counting the
 older ones the daemon still keeps. A merge gate shows
-**Approve merge** while the gate stands; `!sbx merge <item>` is its typed
+**Approve merge** while the gate stands; `!lantern merge <item>` is its typed
 twin. Your own rows show dimmed until the daemon claims them; a row typed
 while no daemon was reading is refused with a note, never executed. Edits,
 reactions (`⏳` → `✅` under a steer) and resolved gates repaint in place.
@@ -343,8 +344,8 @@ console's lifetime.
 
 On the Queue screen `n` asks for an outcome and posts it to the control
 channel addressed to the concierge, which files the issue with the trigger
-label; the daemon claims it like any labeled issue. That is the daemon's
-way to a run — a human asks, the daemon never files work for itself. `N`
+label; the daemon claims it like any labeled issue. That is the console's
+way to a daemon run: a human asks, and the issue is filed for them. `N`
 instead starts a detached `lantern run "…" --no-tui --no-chat` on this
 host, outside the daemon.
 
@@ -416,7 +417,7 @@ orphan verdicts (the prompt says so, and their kept marker is cleared).
   streamed, every line through the credential redactor. `/` greps, `l`
   cycles the level floor (lines without a level — a traceback, or every
   line under `[daemon] log_format = "json"` — always pass), `f` toggles
-  follow. The stream and the polls stop while another screen is shown. The `!sbx log` verb in chat is the on-demand
+  follow. The stream and the polls stop while another screen is shown. The `!lantern log` verb in chat is the on-demand
   twin from the daemon's own ring buffer.
 
 ### Config (`7`)

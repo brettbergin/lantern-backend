@@ -3,7 +3,7 @@
 The Discord bridge grew its routing inline (command / canned hint / thread
 steer); with the concierge there are four destinations and the mention
 rules are easy to get subtly wrong (``<@id>`` vs ``<@!id>``, a reply to
-the bot, a ``!sbx`` command that happens to mention the bot). Slack adds a
+the bot, a ``!lantern`` command that happens to mention the bot). Slack adds a
 second dialect of the same facts (``<@U…>`` / ``<@U…|name>``).
 :func:`route_message` takes plain facts a bridge extracts from its own
 message object and returns a :class:`Route`, so every rule is
@@ -18,9 +18,12 @@ unit-testable without a client and identical on both services:
   folds it in before calling this (``Inbound.parent_channel_id``), so an
   @mention under a notice or a concierge answer is not lost between the
   two surfaces;
-- on either surface, text starting with the command prefix is a
-  ``command`` (mention or not), and a message that @mentions the bot or
-  replies to one of its messages is *addressed* to it: in the control
+- on either surface, text starting with a command prefix is a
+  ``command`` (mention or not) — a section left at the default prefix
+  answers to the legacy one too
+  (:attr:`~lantern.config.ChatBridgeConfig.command_prefixes`) — and a
+  message that @mentions the bot or replies to one of its messages is
+  *addressed* to it: in the control
   channel that goes to the ``concierge``, in a run thread it is a
   ``steer``. The mention token is stripped either way;
 - anything else is ignored — people talk among themselves, in the control
@@ -38,7 +41,7 @@ Mattermost username.
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from typing import Literal, NamedTuple
 
 RouteKind = Literal["command", "concierge", "steer", "ignore"]
@@ -77,6 +80,16 @@ def strip_mentions(
     return " ".join(mention_re.sub(keep, content).split())
 
 
+def command_text(text: str, prefix: str | Sequence[str]) -> str | None:
+    """The command after whichever of ``prefix`` starts ``text``, or None
+    when none does. ``prefix`` is one prefix or several (the configured
+    one and the legacy alias the default answers to)."""
+    for candidate in (prefix,) if isinstance(prefix, str) else prefix:
+        if candidate and text.startswith(candidate):
+            return text[len(candidate) :].strip()
+    return None
+
+
 def route_message(
     *,
     content: str,
@@ -85,7 +98,7 @@ def route_message(
     mentioned_ids: Collection[int | str],
     reply_to_bot: bool,
     control_channel_id: int | str | None,
-    prefix: str,
+    prefix: str | Sequence[str],
     bot_user_id: int | str | None,
     is_run_thread: bool,
     mention_re: re.Pattern[str] = DISCORD_MENTION_RE,
@@ -96,8 +109,9 @@ def route_message(
     if not in_control and not is_run_thread:
         return Route("ignore", "")
     stripped = strip_mentions((content or "").strip(), bot_user_id, mention_re=mention_re)
-    if stripped.startswith(prefix):
-        return Route("command", stripped[len(prefix) :].strip())
+    command = command_text(stripped, prefix)
+    if command is not None:
+        return Route("command", command)
     mentioned = bot_user_id is not None and str(bot_user_id) in {str(m) for m in mentioned_ids}
     if not ((mentioned or reply_to_bot) and stripped):
         return Route("ignore", "")

@@ -2,13 +2,13 @@
 queue so scripts can drive the daemon without Discord.
 
 Field evidence (#232): during a spiraling run the only ways to stop the
-daemon were a human typing ``!sbx cancel`` in Discord or a signal to the
+daemon were a human typing ``!lantern cancel`` in Discord or a signal to the
 process — a remote-control script posting from the bot's own token was
 (correctly) ignored, because the bridge drops bot-authored messages to
 prevent echo loops. Rather than weaken that filter, this module gives the
 daemon a programmatic path: ``lantern daemon ctl <cmd>`` drops a request
 into the home's ``state/daemon/ctl/`` and the running daemon answers it. Discord's
-``!sbx`` and ``ctl`` both go through :func:`dispatch`, so the two surfaces
+``!lantern`` and ``ctl`` both go through :func:`dispatch`, so the two surfaces
 cannot drift.
 
 The queue is files, not a socket: it needs no new dependency, works
@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast, get_args
 
+from lantern.config import DEFAULT_COMMAND_PREFIX
 from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import ControlError
 from lantern.daemon.controls.service import ControlService
@@ -146,7 +147,7 @@ def format_log_tail(
 ) -> str:
     """The daemon's recent log records from the in-process ring buffer,
     rendered for an operator — the journal without ssh. One implementation
-    for `!sbx log`, `ctl log` and the concierge's `daemon_log` tool.
+    for `!lantern log`, `ctl log` and the concierge's `daemon_log` tool.
 
     ``tail`` is clamped to ``LOG_TAIL_MAX``; ``level`` keeps records at or
     above it (an unknown name is a message, not an exception); ``grep`` is
@@ -229,7 +230,7 @@ def dispatch(
     loop: Any,
     cmd: str,
     *,
-    prefix: str = "!sbx",
+    prefix: str = DEFAULT_COMMAND_PREFIX,
     by: str | None = None,
     via: str = "ctl",
     max_chars: int | None = None,
@@ -902,7 +903,7 @@ class ControlClient:
         request = self.dir / f"{req_id}{_REQUEST_SUFFIX}"
         reply = self.dir / f"{req_id}{_REPLY_SUFFIX}"
         # The prefix only shapes the usage line, so `ctl bogus` names the
-        # CLI, not Discord's `!sbx`.
+        # CLI, not Discord's `!lantern`.
         _write_atomic(
             request,
             {
@@ -1053,7 +1054,11 @@ class ControlServer:
                 continue
             try:
                 reply = dispatch(
-                    self.loop, cmd, prefix=str(payload.get("prefix", "!sbx")), by=by, via="ctl"
+                    self.loop,
+                    cmd,
+                    prefix=str(payload.get("prefix", DEFAULT_COMMAND_PREFIX)),
+                    by=by,
+                    via="ctl",
                 )
             except Exception as exc:  # a broken command must not kill the server
                 log.warning("ctl.command_crashed", by=by, command=cmd[:200], exc_info=True)

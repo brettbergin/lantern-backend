@@ -325,7 +325,7 @@ class TestRollbackExtrasParity:
 def test_deploy_preserves_the_operator_installed_sbx(
     fixture: str, step: str, request: pytest.FixtureRequest
 ) -> None:
-    """Plain init would replace a newer runtime with lantern's pinned sbx,
+    """Plain init would replace a newer runtime with Lantern's pinned sbx,
     including during rollback, when the newer runtime may have migrated
     its state. Refreshing the service must leave that runtime untouched."""
     text = request.getfixturevalue(fixture)
@@ -336,7 +336,7 @@ def test_deploy_preserves_the_operator_installed_sbx(
 
 class TestStructuredControl:
     """#639: the job reads the daemon through `ctl status --json` and
-    speaks through lantern's notifier — never prose, the secrets file or
+    speaks through Lantern's notifier — never prose, the secrets file or
     the daemon's config."""
 
     @pytest.mark.parametrize("fixture", ["deploy", "example"])

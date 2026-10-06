@@ -8,7 +8,7 @@ that thread to the running agent as steering — the same
 ``post_user_message`` / ``chat.reply`` contract the CLI's ``--chat`` uses
 (engine.py), so no engine changes are needed. Daemon-level events
 (queueing, breaker, cap, recovery) go to the control channel itself. In the
-control channel, ``!sbx <verb>`` runs an operator command and @mentioning
+control channel, ``!lantern <verb>`` runs an operator command and @mentioning
 the bot (or replying to it) talks to the **concierge** — the channel's
 agent (``lantern.daemon.concierge``). Its ``watch_run`` tool calls back
 into :meth:`ChatBridge.on_watch`, which remembers the asker's user id and
@@ -64,7 +64,12 @@ from lantern.daemon.chat_choices import (
     match_free_text,
     render_prose,
 )
-from lantern.daemon.chat_routing import DISCORD_MENTION_RE, route_message, strip_mentions
+from lantern.daemon.chat_routing import (
+    DISCORD_MENTION_RE,
+    command_text,
+    route_message,
+    strip_mentions,
+)
 from lantern.daemon.concierge import VIA_CONCIERGE_SUFFIX, ConciergeReply
 from lantern.daemon.control import ITEM_COMMANDS, dispatch
 from lantern.daemon.controls.principal import Principal
@@ -95,6 +100,7 @@ from lantern.daemon.discord_format import (
 )
 from lantern.daemon.model import TERMINAL_NOTICE_KINDS, DaemonNotice, RunReport, WorkItem
 from lantern.daemon.store import ChatThread, DaemonStore, MergeGate, PendingClarification
+from lantern.db.event_scope import channel_for_run
 from lantern.engine.engine import LoopEngine
 from lantern.engine.planning import PlanAnswer, PlanQuestion
 from lantern.events import Event, EventBus, HostEventTypes
@@ -182,6 +188,17 @@ _STATUS_EVENTS = (
 # A tool burst ends at a phase/task boundary even when that event renders
 # nothing at the normal level — the next phase's calls start a fresh line.
 _BURST_BOUNDARY = ("phase.end", "task.start", "task.end", "run.end")
+#: The moments a run's channel posts itself (its chronicle: the plan,
+#: a verdict, a steering reply). When the thread is a link of that channel
+#: the mirror carries those posts in, so the bridge does not render them.
+_CHANNEL_SAYS = frozenset(
+    {
+        HostEventTypes.RUN_TASKS,
+        HostEventTypes.REVIEW_VERDICT,
+        HostEventTypes.JUDGE_VERDICT,
+        HostEventTypes.CHAT_REPLY,
+    }
+)
 
 
 # -- inbound messages ---------------------------------------------------------------
@@ -366,6 +383,10 @@ class ChatBridge(ABC):
     label: ClassVar[str]
     #: How this service spells a user mention in message text.
     mention_re: ClassVar[re.Pattern[str]] = DISCORD_MENTION_RE
+    #: Whether a thread is a surface of its own here (a message typed in it
+    #: arrives with the thread's id as its channel), as on Discord and the
+    #: console; Slack and Mattermost address a thread as (channel, thread).
+    thread_is_surface: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -379,7 +400,7 @@ class ChatBridge(ABC):
         self.config = config
         self.chat: ChatBridgeConfig = config.chat_section(self.backend)
         self.dstore = dstore
-        self.loop_ref = loop_ref  # DaemonLoop, for !sbx commands + steering
+        self.loop_ref = loop_ref  # DaemonLoop, for !lantern commands + steering
         # The control channel's agent (None: mentions get a "chat is off" reply).
         self.concierge = concierge
         self._client_factory = client_factory or self._default_client
@@ -410,6 +431,11 @@ class ChatBridge(ABC):
         # be dropped for lack of an item.
         self._items: dict[str, WorkItem] = {}
         self._pending: dict[str, _Pending] = {}  # message_id -> pending steer
+        # run_id -> whether its thread is a link of the run's channel
+        # (docs/spikes/work-channels.md): the channel's own posts reach the
+        # thread through the mirror, so the lines that would say the same
+        # thing twice are not rendered here.
+        self._linked: dict[str, bool] = {}
         self._lock = threading.Lock()
         # Run watches (#335). The concierge is transport-agnostic: it hands a
         # requester *display string* to `on_watch`, and the bridge turns it
@@ -844,11 +870,14 @@ class ChatBridge(ABC):
             # to fall between them. It is control-channel traffic, and the
             # answer goes to ``msg.channel``, which is still the thread.
             surface = control
-        if not msg.author_is_bot and not is_run_thread:
+        if not msg.author_is_bot:
             # A linked surface is a window onto a collaboration channel, so
             # what is typed there belongs to that channel rather than to the
-            # daemon-wide concierge. Steering a run keeps its thread, and
-            # ``!sbx`` still runs an operator command (``link`` among them).
+            # daemon-wide concierge. A live run's thread is a link of the
+            # channel the run lives in, so a reply there is a turn there and
+            # steers the run the way a reply typed in the app does; a thread
+            # opened before the link existed keeps the direct steer below.
+            # ``!lantern`` still runs an operator command (``link`` among them).
             link = self._channel_link(msg)
             if link is not None:
                 self._handle_linked(msg, link)
@@ -860,7 +889,7 @@ class ChatBridge(ABC):
             mentioned_ids=msg.mentioned_ids,
             reply_to_bot=not msg.author_is_bot and msg.reply_to_bot,
             control_channel_id=control,
-            prefix=self.chat.command_prefix,
+            prefix=self.chat.command_prefixes,
             bot_user_id=self._bot_user_id(),
             is_run_thread=is_run_thread,
             mention_re=self.mention_re,
@@ -969,9 +998,8 @@ class ChatBridge(ABC):
         text = strip_mentions(
             (msg.content or "").strip(), self._bot_user_id(), mention_re=self.mention_re
         )
-        prefix = self.chat.command_prefix
-        if text.startswith(prefix):
-            cmd = text[len(prefix) :].strip()
+        cmd = command_text(text, self.chat.command_prefixes)
+        if cmd is not None:
             if self._may_command(msg, cmd):
                 self._ack(msg, ACK_RECEIVED)
                 self._schedule(self._command(msg, cmd))
@@ -985,16 +1013,19 @@ class ChatBridge(ABC):
 
     def _may_command(self, msg: Inbound, cmd: str) -> bool:
         """May this command run from the surface it was typed on? Only on
-        the control channel — the operator surface ``route_message`` already
-        trusts — or when it is ``link``, which is identity, not control."""
+        the operator surfaces ``route_message`` already trusts — the control
+        channel and a run's own thread — or when it is ``link``, which is
+        identity, not control."""
         if (cmd.split() or [""])[0].lower() == "link":
             return True
         control = self.chat.channel_ref or None
-        return (
+        if (
             control is not None
             and msg.channel_id is not None
             and str(msg.channel_id) == str(control)
-        )
+        ):
+            return True
+        return self._is_run_thread(msg.channel_id)
 
     async def _refuse_command(self, msg: Inbound, cmd: str) -> None:
         """Say no to an operator command typed on a linked surface, and say
@@ -1053,7 +1084,7 @@ class ChatBridge(ABC):
         await self._ack_now(msg, ACK_ANSWERED)
 
     async def _link_identity(self, msg: Inbound, cmd: str) -> None:
-        """``!sbx link <code>``: prove that this service account is the one
+        """``!lantern link <code>``: prove that this service account is the one
         behind a local user, with a code they asked their own profile for."""
         store = self._collaboration()
         parts = cmd.split()
@@ -1111,6 +1142,90 @@ class ChatBridge(ABC):
         if channel_id is None or channel_id == self.chat.channel_ref:
             return False
         return self.dstore.run_for_thread(channel_id, self.backend) is not None
+
+    # -- a run's thread as a link of the channel it lives in ------------------------------
+
+    def _link_run_thread(self, run_id: str, thread_id: str) -> bool:
+        """Register the thread opened for ``run_id`` as a link of the
+        channel the run lives in (docs/spikes/work-channels.md), so the
+        channel's traffic reaches the thread and a reply there is a turn in
+        the channel. Admits guests: whoever can post in the thread steers,
+        as they always could. False when this daemon has no channels, the
+        run no channel yet, or the link already exists."""
+        store = self._collaboration()
+        if store is None:
+            return False
+        try:
+            with self.dstore.read() as session:
+                channel_id = channel_for_run(session, run_id)
+        except Exception:
+            self.log.warning("chat.work_channel_lookup_failed", run=run_id, exc_info=True)
+            return False
+        if channel_id is None:
+            self.log.info("chat.thread_unlinked", run=run_id, reason="no channel")
+            return False
+        control = str(self.chat.channel_ref or "")
+        surface, thread = (thread_id, None) if self.thread_is_surface else (control, thread_id)
+        try:
+            if store.link_for_surface(self.backend, surface, thread) is not None:
+                return True
+            store.create_channel_link(
+                None,
+                channel_id,
+                backend=self.backend,
+                surface_id=surface,
+                thread_id=thread,
+                allow_guests=True,
+                created_by=None,
+                now=time.time(),
+            )
+        except Exception:
+            self.log.warning("chat.thread_link_failed", run=run_id, exc_info=True)
+            return False
+        self.log.info("chat.thread_linked", run=run_id, channel=channel_id, thread=thread_id)
+        return True
+
+    def _retire_run_thread(self, run_id: str) -> None:
+        """Stop mirroring the channel into ``run_id``'s thread now the run
+        has ended. A channel hosts one run after another, each with a
+        thread of its own, so a thread left linked would go on receiving
+        every later run's traffic. A run that resumes links it again."""
+        if not self._linked.pop(run_id, None):
+            return
+        store = self._collaboration()
+        known = self.dstore.chat_thread(run_id, self.backend)
+        if store is None or known is None:
+            return
+        control = str(self.chat.channel_ref or "")
+        surface, thread = (
+            (known.thread_id, None) if self.thread_is_surface else (control, known.thread_id)
+        )
+        try:
+            link = store.link_for_surface(self.backend, surface, thread)
+            if link is not None:
+                store.delete_channel_link(None, link.channel_id, link.id, time.time())
+        except Exception:
+            self.log.warning("chat.thread_unlink_failed", run=run_id, exc_info=True)
+            return
+        self.log.info("chat.thread_retired", run=run_id, thread=known.thread_id)
+
+    def _thread_linked(self, run_id: str, thread_id: str) -> bool:
+        """Whether ``run_id``'s thread is a link of its channel, read once
+        per run and remembered."""
+        known = self._linked.get(run_id)
+        if known is not None:
+            return known
+        store = self._collaboration()
+        linked = False
+        if store is not None:
+            control = str(self.chat.channel_ref or "")
+            surface, thread = (thread_id, None) if self.thread_is_surface else (control, thread_id)
+            try:
+                linked = store.link_for_surface(self.backend, surface, thread) is not None
+            except Exception:
+                linked = False
+        self._linked[run_id] = linked
+        return linked
 
     def _author_name(self, msg: Inbound) -> str:
         """Who sent a control-channel command, for attribution on the source
@@ -1430,7 +1545,7 @@ class ChatBridge(ABC):
                     # The control channel is the operator's (restricted by
                     # them, on a bridge with no authority model of its own),
                     # so a turn from it acts with every capability, as
-                    # `!sbx` does: said explicitly, never assumed (#1274).
+                    # `!lantern` does: said explicitly, never assumed (#1274).
                     principal=Principal.trusted(author, self.backend),
                     on_tool=on_tool,
                     via=self.backend,
@@ -1603,6 +1718,7 @@ class ChatBridge(ABC):
             "your own words; reply `skip` to let the planner decide. The questions are in "
             "the plan too.",
         )
+        posts: dict[str, str] = {}
         for index, question in enumerate(questions, start=1):
             prefix = f"{index}/{count} · " if count > 1 else ""
             choice = plan_choice_question(question, prefix)
@@ -1624,7 +1740,20 @@ class ChatBridge(ABC):
                     moved = self._plan_questions.pop(provisional, None)
                     if moved is not None:
                         self._plan_questions[message_id] = moved
+                posts[self._post_key(message_id)] = question.id
         self.log.info("chat.plan_questions_posted", run=run_id, questions=count)
+        # On the plan record too, so a reply or a click finds its question
+        # after a restart has emptied this bridge's memory of the posts.
+        record = getattr(self.loop_ref, "record_plan_question_posts", None)
+        if posts and callable(record):
+            try:
+                record(run_id, posts)
+            except Exception:
+                self.log.warning("chat.plan_posts_not_recorded", run=run_id, exc_info=True)
+
+    def _post_key(self, message_id: str) -> str:
+        """How the plan record names one of this bridge's posts."""
+        return f"{self.backend}:{message_id}"
 
     def _remember_plan_question(self, key: str, post: _PlanQuestionPost) -> None:
         with self._lock:
@@ -1639,6 +1768,8 @@ class ChatBridge(ABC):
         recorded on the plan. None when the message is no plan question."""
         with self._lock:
             post = self._plan_questions.get(message_id)
+        if post is None:
+            post = self._plan_post_on_record(message_id)
         if post is None:
             return None
         if value not in post.question.values:
@@ -1657,6 +1788,31 @@ class ChatBridge(ABC):
                 self._plan_questions.pop(message_id, None)
         self._schedule(self._say_in_thread(post.run_id, reply))
         return ok
+
+    def _plan_post_on_record(self, message_id: str) -> _PlanQuestionPost | None:
+        """The plan question ``message_id`` carried, as the plan record
+        remembers the post: how a click lands after a restart. None when
+        no waiting run posted it, or its question is answered already."""
+        lookup = getattr(self.loop_ref, "plan_question_for_post", None)
+        if not callable(lookup):
+            return None
+        try:
+            found = lookup(self._post_key(message_id))
+        except Exception:
+            self.log.warning("chat.plan_post_lookup_failed", message=message_id, exc_info=True)
+            return None
+        if found is None:
+            return None
+        waiting, question = found
+        if question.id in waiting.clarification.answers:
+            return None
+        return _PlanQuestionPost(
+            waiting.run_id,
+            waiting.plan_id,
+            waiting.node_id,
+            question.id,
+            plan_choice_question(question),
+        )
 
     def _plan_reply(self, msg: Inbound, run_id: str, text: str) -> bool:
         """A message in the thread of a plan run parked on its questions: an
@@ -1695,11 +1851,20 @@ class ChatBridge(ABC):
                 with self._lock:
                     post = self._plan_questions.get(str(msg.reply_to_id))
                 if post is not None and post.run_id == run_id:
-                    target = next(
-                        (q for q in clarification.questions if q.id == post.question_id), None
-                    )
+                    target = clarification.question(post.question_id)
+                if target is None:
+                    # The bridge that posted it may be gone: the plan
+                    # record remembers where each question was posted.
+                    target = clarification.posted(self._post_key(str(msg.reply_to_id)))
             if target is None:
                 still = clarification.unanswered()
+                if len(still) > 1:
+                    # Words that name a choice only one open question
+                    # offers answer that question; anything else is asked
+                    # about rather than guessed at.
+                    naming = [q for q in still if match_free_text(plan_choice_question(q), words)]
+                    if len(naming) == 1:
+                        still = naming
                 if len(still) != 1:
                     self._schedule(
                         self._send(
@@ -2314,6 +2479,11 @@ class ChatBridge(ABC):
             status.observe(event)
             if status.dirty:
                 self._schedule_status_edit(run_id)
+        if event.type in _CHANNEL_SAYS and self._linked.get(run_id):
+            # The run's channel posts this moment itself (the plan, a
+            # verdict, a steering reply) and the mirror carries it into the
+            # thread; rendering it here too would say it twice.
+            return []
         d = event.data
         if level == "normal":
             # Field (#235): streaming every tool line buried the agent
@@ -2728,6 +2898,7 @@ class ChatBridge(ABC):
             await self._post_plan_questions(run_id, thread, asked)
         await self._refresh_headline(run_id, item=item, state=state)
         await self._post_watch_notice(run_id, state, report)
+        self._retire_run_thread(run_id)
         # Per-run render state is no longer needed.
         self._batchers.pop(run_id, None)
         self._digests.pop(run_id, None)
@@ -3022,12 +3193,20 @@ class ChatBridge(ABC):
         known = self.dstore.chat_thread(run_id, self.backend)
         if known is not None:
             try:
-                return await self._thread_handle(known.thread_id)
+                handle = await self._thread_handle(known.thread_id)
             except Exception:
                 self.log.warning(
                     "chat.thread_lost", run=run_id, thread=known.thread_id, exc_info=True
                 )
                 return None
+            if self.chat.thread_per_run and run_id not in self._linked:
+                # A thread opened before its run had a channel (the run was
+                # queued, the job not yet bound) is linked at the next
+                # sighting; one linked already is remembered as such.
+                self._linked[run_id] = self._thread_linked(
+                    run_id, known.thread_id
+                ) or self._link_run_thread(run_id, known.thread_id)
+            return handle
         with self._lock:
             item = self._items.get(run_id)
         if item is None:
@@ -3064,6 +3243,12 @@ class ChatBridge(ABC):
                 item=normalize_item_id(item.item_id),
                 thread=self._handle_id(thread),
                 headline=self._message_id(headline),
+            )
+            # The thread is the run's channel seen from this service. With
+            # everything posted top-level there is no thread to link: the
+            # control channel is the concierge's, not one run's.
+            self._linked[run_id] = self.chat.thread_per_run and self._link_run_thread(
+                run_id, self._handle_id(thread)
             )
             return thread
         except Exception:

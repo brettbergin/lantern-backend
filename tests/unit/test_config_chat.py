@@ -12,11 +12,15 @@ import pytest
 from lantern.chatservices import CHAT_SERVICES, service_named
 from lantern.config import (
     CHAT_BACKENDS,
+    DEFAULT_COMMAND_PREFIX,
+    LEGACY_COMMAND_PREFIX,
     ChatBackend,
     ChatBridgeConfig,
     Config,
     DiscordConfig,
+    MattermostConfig,
     SlackConfig,
+    TuiConfig,
     load_config,
 )
 from lantern.errors import ConfigError
@@ -96,6 +100,32 @@ class TestBackendSelection:
         assert slack.chat_backend == "slack"
 
 
+class TestCommandPrefix:
+    SECTIONS = (DiscordConfig, SlackConfig, MattermostConfig, TuiConfig)
+
+    def test_the_default_prefix_is_lantern(self) -> None:
+        assert DEFAULT_COMMAND_PREFIX == "!lantern"
+        for section in self.SECTIONS:
+            assert section().command_prefix == "!lantern", section.__name__
+
+    def test_the_default_also_answers_the_legacy_prefix(self) -> None:
+        # The prefix the project shipped with before its rename keeps
+        # working on an install that never chose one, so muscle memory,
+        # pinned messages and older docs do not break.
+        assert LEGACY_COMMAND_PREFIX == "!sbx"
+        for section in self.SECTIONS:
+            assert section().command_prefixes == ("!lantern", "!sbx"), section.__name__
+
+    def test_an_explicit_default_answers_the_legacy_prefix_too(self) -> None:
+        assert DiscordConfig(command_prefix="!lantern").command_prefixes == ("!lantern", "!sbx")
+
+    def test_a_custom_prefix_is_the_only_one(self) -> None:
+        # An operator who chose a prefix chose exactly that one: neither
+        # the default nor the legacy prefix rides along with it.
+        assert SlackConfig(command_prefix="!bot").command_prefixes == ("!bot",)
+        assert SlackConfig(command_prefix="!sbx").command_prefixes == ("!sbx",)
+
+
 class TestSlackSection:
     def test_shared_knobs_have_the_discord_defaults(self) -> None:
         slack, discord = SlackConfig(), DiscordConfig()
@@ -161,7 +191,7 @@ class TestServiceDescriptors:
         # would send pip to a package index for our own name.
         discord = service_named("discord").missing_extra_detail
         assert discord.startswith("discord.py missing (install 'discord")
-        assert discord.endswith("into the venv lantern runs from)")
+        assert discord.endswith("into the venv Lantern runs from)")
         slack = service_named("slack").missing_extra_detail
         assert slack.startswith("slack_sdk missing (install ")
         assert "'slack-sdk>=" in slack and "'aiohttp>=" in slack
@@ -185,7 +215,7 @@ class TestExtraInstallHint:
         ]
         monkeypatch.setattr(releases.metadata, "requires", lambda _name: requires)
         assert releases.extra_install_hint("slack", "slack-sdk") == (
-            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv lantern runs from"
+            "install 'aiohttp>=3.9' 'slack-sdk>=3.44.1' into the venv Lantern runs from"
         )
         assert "discord-py>=2.3" in releases.extra_install_hint("discord", "discord.py")
 
@@ -201,5 +231,5 @@ class TestExtraInstallHint:
 
         monkeypatch.setattr(releases.metadata, "requires", missing)
         assert releases.extra_install_hint("discord", "discord.py") == (
-            "install 'discord.py' into the venv lantern runs from"
+            "install 'discord.py' into the venv Lantern runs from"
         )

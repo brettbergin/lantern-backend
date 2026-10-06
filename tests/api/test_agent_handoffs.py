@@ -206,7 +206,7 @@ def handoff_diagnostics(
     ("agent", "message", "reason"),
     [
         ("planner", "Review my own plan", "Address a different agent."),
-        ("unknown", "Review this plan", "Choose a native lantern agent."),
+        ("unknown", "Review this plan", "Choose a native Lantern agent."),
         ("critic", " ", "Provide a message of 1 to 4000 characters."),
         (42, "Review this plan", "An agent slug and message are required."),
         ("critic", None, "An agent slug and message are required."),

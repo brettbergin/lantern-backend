@@ -63,6 +63,14 @@ def run_question_turn(tmp_path: Path, name: str = "a") -> tuple[Any, Any, Any]:
     ask(bridge, client, "please file a thing")
     control = client.channels[42]
     assert wait_for(lambda: any("The wording" in s for s in control.sent))
+    # The question is registered under a provisional key before the post
+    # and re-keyed to the message id once the transport reports it, a beat
+    # after the send lands: wait for the key a reply can name.
+    assert wait_for(
+        lambda: (
+            bool(bridge._questions) and not any(k.startswith("pending:") for k in bridge._questions)
+        )
+    )
     return bridge, client, concierge
 
 

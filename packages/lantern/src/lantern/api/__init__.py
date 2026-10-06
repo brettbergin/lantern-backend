@@ -14,7 +14,7 @@ import importlib.util
 
 MISSING_EXTRA = (
     "the remote API needs the `api` extra's packages (fastapi, uvicorn, pyjwt); "
-    "install them into the venv lantern runs from, or set `[api] enabled = false`"
+    "install them into the venv Lantern runs from, or set `[api] enabled = false`"
 )
 
 

@@ -6,7 +6,7 @@ the client read: an issue that changed on the forge since is refused with
 its current version and nothing is written. ``POST .../attach`` links an
 existing open issue as a child, ``POST .../detach`` unlinks one without
 closing it — a sub-issue on GitHub, a checklist line on GitLab. None of
-lantern's own writes shows up as drift on the next reconcile.
+Lantern's own writes shows up as drift on the next reconcile.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _changes(api: Api) -> list[str]:
 
 
 def _no_drift_after(api: Api, plan: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    """A sync right after lantern's own write: nothing drifted."""
+    """A sync right after Lantern's own write: nothing drifted."""
     synced = _sync(api, plan, headers)
     assert synced.status_code == 200, synced.text
     body = dict(synced.json())

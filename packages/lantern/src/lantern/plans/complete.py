@@ -32,15 +32,15 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
 
 from lantern.config import Config
 from lantern.errors import LanternError
 from lantern.log import get_logger
 from lantern.plans.epicrun import EpicRun
-from lantern.plans.model import ForgeRef, ForgeState, Plan, PlanNode
+from lantern.plans.forgeread import issue_ref, state_of
+from lantern.plans.model import ForgeState, Plan, PlanNode
 from lantern.plans.render import issue_reference
-from lantern.plans.store import PlanEvent, PlanStore, StaleRevision
+from lantern.plans.store import PlanEvent, PlanStore, StaleRevision, retry_stale
 from lantern.vcs.checklist import (
     ChecklistMangled,
     parse_checklist,
@@ -50,9 +50,6 @@ from lantern.vcs.checklist import (
 from lantern.vcs.protocol import IssueOps
 
 log = get_logger(__name__)
-
-#: How many times a recording write re-reads a plan that kept moving.
-RECORD_TRIES = 3
 
 #: Where a task's run left its result, when that is known: a pull request's
 #: or a delivery's URL. Given the task and the epic run's task state for it
@@ -79,17 +76,12 @@ class CompletionResult:
     open: list[str] = field(default_factory=list)
 
 
-def _state(row: Mapping[str, Any]) -> ForgeState:
-    return "closed" if str(row.get("state") or "") == "closed" else "open"
-
-
 def _on_forge(nodes: Sequence[PlanNode]) -> list[PlanNode]:
-    return [n for n in nodes if n.state == "published" and n.forge is not None]
-
-
-def _ref(node: PlanNode) -> str:
-    assert node.forge is not None  # nosec B101 - only published nodes
-    return f"{node.repository}#{node.forge.number}"
+    """The children a parent's completion is judged by: those on the forge
+    and still following their issue. One reconcile detached (it left its
+    parent there, or the forge) is left as reconcile left it — it neither
+    keeps the parent open nor is ticked, recorded or summarised."""
+    return [n for n in nodes if n.followed and n.forge is not None]
 
 
 class Completion:
@@ -248,7 +240,7 @@ class Completion:
         states: dict[str, ForgeState] = {}
         for child in children:
             assert child.forge is not None  # nosec B101 - _on_forge
-            states[child.id] = _state(self.ops.issue_get(child.repository, child.forge.number))
+            states[child.id] = state_of(self.ops.issue_get(child.repository, child.forge.number))
         if children:
             self._tick(parent, children, states, result)
         moved = [
@@ -283,9 +275,9 @@ class Completion:
             moved.clear()
             for child in children:
                 closed = states[child.id] == "closed"
-                if listed.get(_ref(child), closed) != closed:
+                if listed.get(issue_ref(child), closed) != closed:
                     moved.append(child.id)
-                body = set_child_closed(body, _ref(child), closed=closed)
+                body = set_child_closed(body, issue_ref(child), closed=closed)
             return body
 
         try:
@@ -306,7 +298,7 @@ class Completion:
         (a person did it) is only recorded."""
         assert node.forge is not None  # nosec B101 - checked by the callers
         repo, number = node.repository, node.forge.number
-        if _state(self.ops.issue_get(repo, number)) == "closed":
+        if state_of(self.ops.issue_get(repo, number)) == "closed":
             if self._record(plan_id, node.id, "closed", "closed"):
                 result.recorded.append(node.id)
             return
@@ -323,7 +315,8 @@ class Completion:
     def _record(self, plan_id: str, node_id: str, state: ForgeState, change: str) -> bool:
         """The node's forge state written as ``state``, with a
         ``plan.node.changed`` event saying ``change``; whether it moved."""
-        for _ in range(RECORD_TRIES):
+
+        def attempt() -> bool:
             plan = self.store.get(plan_id)
             node = None if plan is None else plan.node(node_id)
             if plan is None or node is None or node.forge is None:
@@ -331,30 +324,34 @@ class Completion:
             if node.forge.state == state:
                 return False
             now = self.clock()
-            forge = ForgeRef(number=node.forge.number, url=node.forge.url, state=state)
-            try:
-                self.store.apply(
-                    plan.id,
-                    expected_revision=plan.revision,
-                    now=now,
-                    upsert=[replace(node, forge=forge, updated_at=now)],
-                    events=[
-                        PlanEvent(
-                            "plan.node.changed",
-                            {
-                                "plan_id": plan.id,
-                                "node_id": node.id,
-                                "change": change,
-                                "number": node.forge.number,
-                            },
-                        )
-                    ],
-                )
-            except StaleRevision:
-                continue
+            # Only the state moves: what reconcile knew of the issue (its
+            # version, a missing marker, a checklist it could not read)
+            # stays on record.
+            forge = replace(node.forge, state=state)
+            self.store.apply(
+                plan.id,
+                expected_revision=plan.revision,
+                now=now,
+                upsert=[replace(node, forge=forge, updated_at=now)],
+                events=[
+                    PlanEvent(
+                        "plan.node.changed",
+                        {
+                            "plan_id": plan.id,
+                            "node_id": node.id,
+                            "change": change,
+                            "number": node.forge.number,
+                        },
+                    )
+                ],
+            )
             return True
-        log.warning("plan_completion.record_failed", plan=plan_id, node=node_id, state=state)
-        return False
+
+        try:
+            return retry_stale(attempt)
+        except StaleRevision:
+            log.warning("plan_completion.record_failed", plan=plan_id, node=node_id, state=state)
+            return False
 
 
 def complete(

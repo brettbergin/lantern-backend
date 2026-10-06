@@ -189,9 +189,11 @@ Phase = Literal[
     "execute",
     "judge",
     # A plan run's agent phases: the planner's clarifying questions (or its
-    # `ready`), and its proposal of a level.
+    # `ready`), its proposal of a level, and — for a plan that advances
+    # itself — the critic's review of that proposal before it is delivered.
     "clarify",
     "propose",
+    "plan_review",
 ]
 
 # What a fix round is for. `review` rounds are charged to the review budget;

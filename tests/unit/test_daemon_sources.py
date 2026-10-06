@@ -574,7 +574,7 @@ class TestGitHubSource:
         assert not any(m == "POST" for m, _, _ in ops.raw_calls)  # no failed label
         body = ops.comments[-1][1]
         assert "cancelled by Discord user `b`" in body
-        assert "`lantern resume r1`" in body and "!sbx retry gh:issue:4" in body
+        assert "`lantern resume r1`" in body and "!lantern retry gh:issue:4" in body
 
     def test_cancelled_with_requeue_keeps_in_progress(self) -> None:
         ops = RecordingOps({"4": issue(4, "lantern:in-progress")})

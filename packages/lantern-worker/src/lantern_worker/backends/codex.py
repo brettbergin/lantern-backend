@@ -103,7 +103,7 @@ def _tool_boundary(job: JobRequest, local: list[str]) -> str | None:
             "Workspace access in this session: the workspace is writable. If your "
             "environment context describes a read-only sandbox, that describes only "
             "Codex's native tools, which are disabled here. The function tools "
-            f"{names} are provided by the lantern worker, run directly in the "
+            f"{names} are provided by the Lantern worker, run directly in the "
             "workspace, and can create, modify and delete files there. When the task "
             f"requires changing files, make the changes with {names}; do not stop "
             "or report that the session is read-only."

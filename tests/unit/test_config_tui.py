@@ -22,7 +22,7 @@ def test_defaults_and_always_enabled(tmp_path: Path) -> None:
     assert config.tui.refresh_s == 0.5
     assert config.tui.retention_days == 14.0
     # The shared rendering knobs come along.
-    assert config.tui.command_prefix == "!sbx" and config.tui.thread_per_run is True
+    assert config.tui.command_prefix == "!lantern" and config.tui.thread_per_run is True
 
 
 def test_local_is_a_bridge_section_but_never_the_chat_backend(tmp_path: Path) -> None:

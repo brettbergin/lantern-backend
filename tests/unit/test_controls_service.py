@@ -138,6 +138,10 @@ class TestAttribution:
         requeued = service.requeue(OPERATOR, "gh:issue:8")
         assert requeued.verb == "requeue" and requeued.item.run_id is None
         abandoned = service.abandon(OPERATOR, "gh:issue:8", "scope changed")
+        # The abandon is its own acknowledgement, attributed to who made it.
+        mark = floop.dstore.work_mark("item", "gh:issue:8", "dismissed")
+        assert mark is not None and mark.cause == "abandoned"
+        assert mark.actor == OPERATOR.audit() and mark.reason == "scope changed"
         assert abandoned.item.state == "failed" and abandoned.item.last_error == "scope changed"
 
     def test_gate_and_schedules(self, service: ControlService, floop: ServiceLoop) -> None:
@@ -234,6 +238,10 @@ class TestCapabilities:
             (lambda s: s.abandon(READER, "gh:issue:1", None), "runs:control"),
             (lambda s: s.retry(READER, "gh:issue:1"), "runs:control"),
             (lambda s: s.requeue(READER, "gh:issue:1"), "runs:control"),
+            (lambda s: s.dismiss(READER, item_id="gh:issue:1"), "runs:control"),
+            (lambda s: s.dismiss(READER, run_id="r1", undo=True), "runs:control"),
+            (lambda s: s.dismiss_all(READER, [("item", "gh:issue:1", None)]), "runs:control"),
+            (lambda s: s.delete(READER, item_id="gh:issue:1"), "runs:control"),
             (lambda s: s.resume_repo(READER, "o/r"), "daemon:manage"),
             (lambda s: s.reset_breaker(READER), "daemon:manage"),
             (lambda s: s.schedule_control(READER, "pause", "n"), "daemon:manage"),

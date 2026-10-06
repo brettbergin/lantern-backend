@@ -565,7 +565,7 @@ def _print_github_summary(result: RunResult, config: Config) -> None:
                 f"({data.get('blocking', 0)} blocking finding(s))"
             )
         elif event.type == HostEventTypes.RUN_MERGED:
-            who = "by a human" if data.get("by_human") else "by lantern"
+            who = "by a human" if data.get("by_human") else "by Lantern"
             lines.append(f"[bold green]merged[/] {who}: {str(data.get('sha') or '')[:12]}")
         elif event.type == HostEventTypes.RUN_BLOCKED:
             lines.append(f"[bold yellow]blocked[/]: {data.get('why')}")
@@ -1453,7 +1453,7 @@ def secrets_list(
         ),
     ] = True,
 ) -> None:
-    """Show lantern's custom-secret registrations across scopes.
+    """Show Lantern's custom-secret registrations across scopes.
 
     Flags registrations that no longer match what provisioning would
     register (stale scopes, wrong host bindings) — the pre-collision
@@ -2135,8 +2135,9 @@ def init(
         typer.Option(
             "--from-sbxloop",
             help="Carry an sbxloop home (e.g. ~/.sbxloop) into this home first: its config, "
-            "secrets and App key renamed for Lantern, and its workspaces. The source is "
-            "left untouched; state starts fresh.",
+            "secrets and App key renamed for Lantern, and its workspaces, and install the sbx "
+            "release it ran unless --sbx-version says otherwise. The source is left "
+            "untouched; state starts fresh.",
         ),
     ] = None,
 ) -> None:
@@ -2175,6 +2176,10 @@ def init(
         console.print(f"unknown preset {preset!r} (available: {available})")
         raise typer.Exit(2)
     home = LanternHome(resolve_home_root())
+    if from_sbxloop is not None and sbx_version is None:
+        from lantern.fromsbxloop import sbx_version_of
+
+        sbx_version = sbx_version_of(from_sbxloop)
     options = InitOptions(
         systemd=systemd,
         runner_dir=runner_dir.expanduser().resolve() if runner_dir else None,
@@ -2947,7 +2952,7 @@ def daemon(
         # answers with the installed half.
         log.info("versions.check_disabled")
     elif not once:
-        # lantern's releases ship often while upgrading a host is an
+        # Lantern's releases ship often while upgrading a host is an
         # operator's step, so a long-lived daemon drifts behind silently.
         # Check once in the background (never on the startup path) and
         # narrate it only when behind — nobody has to remember to ask.
@@ -3245,6 +3250,14 @@ def _item_control(action: str, item_id: str, reason: str | None) -> None:
         now = time.time()
         if action == "abandon":
             item = dstore.abandon(item_id, reason or "abandoned by operator", now)
+            # Giving the item up is the acknowledgement: it must not go on
+            # asking for attention as an unattended failure would.
+            dstore.dismiss_abandoned(
+                item.item_id,
+                now,
+                actor={"kind": "operator", "id": "cli", "display": "operator (CLI)", "via": "cli"},
+                reason=reason,
+            )
         else:
             item = apply_item_verb(dstore, action, item_id, now=now, by="operator (CLI)")
     except KeyError:
@@ -3277,7 +3290,7 @@ def daemon_ctl(
             "[--retry] | queue | items | abandon <item> [reason] | retry <item> | "
             "requeue <item> | grant-rounds <run> <n> | reset-breaker | "
             "log [--tail N] [--level L] [--grep T] "
-            "| stop (the chat !sbx verbs)."
+            "| stop (the chat !lantern verbs)."
         ),
     ],
     timeout: Annotated[
@@ -3299,7 +3312,7 @@ def daemon_ctl(
     ] = False,
 ) -> None:
     """Send a command to the daemon running against this home — the
-    programmatic twin of Discord's `!sbx`, for scripts, cron and remote
+    programmatic twin of Discord's `!lantern`, for scripts, cron and remote
     operators (the bot ignores its own messages by design)."""
     from lantern.daemon.control import ControlClient, plain
 

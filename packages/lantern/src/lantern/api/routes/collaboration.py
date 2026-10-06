@@ -97,6 +97,7 @@ from lantern.api.routes.agents import addressable
 from lantern.api.routes.artifacts import stream_artifact
 from lantern.api.routes.auth import grant_tokens
 from lantern.chatservices import CHAT_SERVICES
+from lantern.config import ChatBridgeConfig
 from lantern.log import get_logger
 
 log = get_logger(__name__)
@@ -1028,7 +1029,7 @@ async def create_turn(
         raise Problem(
             503,
             "collaboration_runtime_unavailable",
-            "the lantern concierge is disabled or still starting",
+            "the Lantern concierge is disabled or still starting",
         )
     # The member is checked after availability, so a stopped concierge is
     # reported as such whoever asks.
@@ -1538,13 +1539,18 @@ async def create_link_code(
     auth: Authenticated = Depends(require("collaboration:write")),  # noqa: B008
     member: Member = Depends(current_member),  # noqa: B008
 ) -> LinkCodeOut:
-    """A code to type on a bridge, as ``!sbx link <code>``, so messages you
-    send on a linked surface post under this account. It is single use and
-    short-lived, and this is the only place it is shown."""
+    """A code to type on a bridge, as ``<prefix> link <code>``, so messages
+    you send on a linked surface post under this account. ``command`` is
+    that message exactly, with the bridge's configured prefix. It is single
+    use and short-lived, and this is the only place it is shown."""
     code, expires_at = await ctx.call(
         ctx.collaboration.create_link_code, member.user.id, ctx.clock()
     )
-    return LinkCodeOut(code=code, expires_at=rfc3339(expires_at) or "")
+    settings = ctx.config.chat_settings
+    prefix = (settings or ChatBridgeConfig()).command_prefix
+    return LinkCodeOut(
+        code=code, expires_at=rfc3339(expires_at) or "", command=f"{prefix} link {code}"
+    )
 
 
 @router.get("/users/me/identities", response_model=ExternalIdentityPage)

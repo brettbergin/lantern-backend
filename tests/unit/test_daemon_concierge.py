@@ -43,6 +43,8 @@ from lantern.engine.model import TaskSpec
 from lantern.engine.store import StateStore
 from lantern.errors import DaemonError, GithubOpsError, WorkerError, WorkerTimeoutError
 from lantern.events import EventBus
+from lantern.plans import PlanService
+from lantern.plans.store import PlanStore
 from lantern_worker.protocol import (
     ErrorInfo,
     HostToolCall,
@@ -206,11 +208,21 @@ class FakeVersions:
 class LoopWithRuns(FakeLoop):
     """FakeLoop plus the report/current surface the concierge's tools use."""
 
-    def __init__(self, dstore: DaemonStore) -> None:
+    def __init__(self, dstore: DaemonStore, config: Config | None = None) -> None:
         super().__init__(dstore)
         self.reports: dict[str, RunReport] = {}
         self.current = None
         self.runs: list[Any] = []
+        self.config = config
+        self._plans: PlanService | None = None
+
+    @property
+    def plans(self) -> PlanService:
+        """The one plan service the daemon owns, as the real loop has it."""
+        if self._plans is None:
+            assert self.config is not None
+            self._plans = PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self._plans
 
     def report_for(self, run_id: str) -> RunReport:
         return self.reports.get(run_id, RunReport(run_id, "completed", "1/1 tasks done"))
@@ -240,7 +252,7 @@ def make(
         raw["github"].pop("repo", None)
     cfg = Config.model_validate(raw)
     dstore = DaemonStore(cfg.paths.state_db)
-    loop = LoopWithRuns(dstore)
+    loop = LoopWithRuns(dstore, cfg)
     client = FakeClient(scripts)
     host = FakeHost(client)
     concierge = Concierge(
@@ -465,7 +477,7 @@ class TestJobShape:
         assert job.system_message is not None
         assert "Complete your assigned work before handing it off" in job.system_message
         assert "does not replace your deliverable" in job.system_message
-        assert "Do not recreate lantern's execution pipelines" in job.system_message
+        assert "Do not recreate Lantern's execution pipelines" in job.system_message
         assert "incorporate it into revised work" in job.system_message
         assert "do not follow a fixed role order" in job.system_message
         handoff = next(tool for tool in job.host_tools if tool.name == "handoff_agent")
@@ -3120,7 +3132,7 @@ class TestSurface:
         assert concierge._chat is cfg.discord and concierge._chat_name == "Discord"
         concierge._turn_via = "local"
         assert concierge._chat is cfg.tui and concierge._chat_name == "the operator console"
-        assert concierge._chat.command_prefix == "!sbx"
+        assert concierge._chat.command_prefix == "!lantern"
         concierge._turn_via = None
         assert concierge._chat is cfg.discord
 

@@ -260,7 +260,7 @@ class TestApprovingAChange:
     ) -> None:
         """The change goes through the direct edit's write, which reads the
         issue itself: an edit the reconcile did not see still refuses it."""
-        from lantern.plans import service
+        from lantern.plans import service_planner as service
 
         fake, plan, headers = _published(api)
         a = _node(plan, "A")
@@ -300,6 +300,63 @@ class TestApprovingAClose:
         assert node["forge"]["state"] == "closed" and node["state"] == "published"
         (published,) = _events(api, "plan.published")[-1:]
         assert published["closed"] == [node["id"]]
+
+    def test_a_child_rewritten_on_the_forge_since_the_diff_is_not_closed(self, api: Api) -> None:
+        """The planner suggested closing B as it read it. A person has since
+        rewritten B's issue — it may well be wanted now — so the close is
+        refused like a change would be, and nothing is closed."""
+        fake, plan, headers = _published(api)
+        b = _node(plan, "B")
+        plan = _propose(
+            api, plan, suggest_close=[{"target": b["id"], "rationale": "A covers it now."}]
+        )
+        (entry,) = _entries(plan)
+        assert entry["forge_version"] == b["forge"]["version"]
+        fake.person_edits("o/r", b["forge"]["number"], title="B, still needed: the audit log")
+        response = _approve(api, headers, plan)
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["outcome"] == "failed"
+        assert "changed on the forge since the re-plan was proposed" in result["error"]
+        assert fake.issues_closed == [] and fake.issue_answers == []
+        node = next(n for n in response.json()["plan"]["nodes"] if n["id"] == b["id"])
+        assert node["forge"]["state"] == "open"
+        assert node["title"] == "B, still needed: the audit log", "the reconcile folded it in"
+
+    def test_the_close_reads_the_issue_itself_when_the_reconcile_could_not(
+        self, api: Api, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A forge the reconcile could not read is no reason to close an
+        issue blind: the close reads it first, like a change does."""
+        from lantern.plans import service_planner as service
+
+        fake, plan, headers = _published(api)
+        b = _node(plan, "B")
+        plan = _propose(
+            api, plan, suggest_close=[{"target": b["id"], "rationale": "A covers it now."}]
+        )
+        monkeypatch.setattr(service, "reconcile_plan", lambda *args, **kwargs: None)
+        fake.person_edits("o/r", b["forge"]["number"], title="B, still needed")
+        response = _approve(api, headers, plan)
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["outcome"] == "failed"
+        assert "changed on the forge since the re-plan was proposed" in result["error"]
+        assert fake.issues_closed == []
+
+    def test_an_issue_a_person_closed_meanwhile_is_left_as_it_is(self, api: Api) -> None:
+        fake, plan, headers = _published(api)
+        b = _node(plan, "B")
+        plan = _propose(
+            api, plan, suggest_close=[{"target": b["id"], "rationale": "A covers it now."}]
+        )
+        fake.person_edits("o/r", b["forge"]["number"], state="closed")
+        response = _approve(api, headers, plan)
+        assert response.status_code == 200, response.text
+        (result,) = response.json()["results"]
+        assert result["outcome"] == "closed"
+        assert "already closed" in (result["reason"] or "")
+        assert fake.issues_closed == [] and fake.issue_answers == []
 
 
 class TestDiscard:

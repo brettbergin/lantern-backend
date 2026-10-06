@@ -19,6 +19,7 @@ from lantern.api.models import (
     ItemCommandResult,
     ItemDetail,
     QueuePage,
+    WorkDeleteCommand,
     rfc3339,
 )
 from lantern.api.pagination import Page, decode_cursor, encode_cursor
@@ -38,10 +39,12 @@ async def list_items(
     state: Annotated[list[str] | None, Query()] = None,
     kind: Annotated[list[str] | None, Query()] = None,
     repository_id: Annotated[str | None, Query()] = None,
+    include_deleted: Annotated[bool, Query()] = False,
     limit: Annotated[int, Query(ge=1, le=PAGE_MAX)] = PAGE_DEFAULT,
     cursor: Annotated[str | None, Query()] = None,
 ) -> Page[Item]:
-    """Work items, newest first, filterable by state, kind and repository."""
+    """Work items, newest first, filterable by state, kind and repository.
+    Items a person deleted are left out unless ``include_deleted``."""
     states = [s for s in state or [] if s in ITEM_STATES]
     if state and len(states) != len(state):
         raise Problem(422, "invalid_request", f"state must be one of {', '.join(ITEM_STATES)}")
@@ -52,6 +55,9 @@ async def list_items(
         "state": sorted(states),
         "kind": sorted(kinds),
         "repository_id": repository_id,
+        # Only when asked for, so a cursor issued before this filter
+        # existed still reads the listing it was issued for.
+        **({"include_deleted": True} if include_deleted else {}),
     }
     after: tuple[float, str] | None = None
     if cursor is not None:
@@ -65,7 +71,12 @@ async def list_items(
         views = Views(ctx)
         repo = views.repository_by_public_id(repository_id).repo if repository_id else None
         rows: list[WorkItem] = views.dstore.page_items(
-            states=states or None, kinds=kinds or None, repo=repo, after=after, limit=limit + 1
+            states=states or None,
+            kinds=kinds or None,
+            repo=repo,
+            after=after,
+            limit=limit + 1,
+            include_deleted=include_deleted,
         )
         more = len(rows) > limit
         rows = rows[:limit]
@@ -156,9 +167,9 @@ async def admit_item(
 
 
 async def _item_command(
-    verb: Literal["retry", "requeue", "abandon"],
+    verb: Literal["retry", "requeue", "abandon", "dismiss", "undismiss", "delete"],
     public_id: str,
-    body: ItemCommand | None,
+    body: ItemCommand | WorkDeleteCommand | None,
     request: Request,
     ctx: ApiContext,
     auth: Authenticated,
@@ -204,3 +215,49 @@ async def abandon_item(
     """Give the item up with an attributed reason; the source hears the
     ordinary abandon report."""
     return await _item_command("abandon", item_id, body, request, ctx, auth)
+
+
+@router.post("/items/{item_id}/dismiss", response_model=ItemCommandResult)
+async def dismiss_item(
+    item_id: str,
+    request: Request,
+    body: ItemCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> ItemCommandResult:
+    """Acknowledge the alert this item raises, for everyone: it keeps its
+    state and its controls and stops asking for attention. Refused for an
+    item that raises none (queued, running, done). The dismissal ends by
+    itself when the item changes state, so a retry that fails is a new
+    alert; dismissing twice answers with the first dismissal."""
+    return await _item_command("dismiss", item_id, body, request, ctx, auth)
+
+
+@router.post("/items/{item_id}/undismiss", response_model=ItemCommandResult)
+async def undismiss_item(
+    item_id: str,
+    request: Request,
+    body: ItemCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> ItemCommandResult:
+    """Take a dismissal back: the item asks for attention again."""
+    return await _item_command("undismiss", item_id, body, request, ctx, auth)
+
+
+@router.post("/items/{item_id}/delete", response_model=ItemCommandResult)
+async def delete_item(
+    item_id: str,
+    request: Request,
+    body: WorkDeleteCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> ItemCommandResult:
+    """Put a finished item away: it and its runs leave every listing, and
+    their sandboxes and run directories are removed. The records and the
+    event trail stay, readable by id, and nothing on the forge is touched.
+    Refused for an item that is not at rest (abandon it first), and —
+    unless ``discard_undelivered`` — when a run's workspace is the only
+    copy of work that was never delivered. Deleting twice answers with the
+    item as it stands."""
+    return await _item_command("delete", item_id, body, request, ctx, auth)

@@ -796,7 +796,7 @@ class TestEmbeds:
         report = RunReport("r1", "cancelled", "1/3 tasks done", cancelled_by="ops")
         cancelled = finish_embed(legacy, report, "cancelled")
         note = {n: v for n, v, _ in cancelled.fields}["Cancelled"]
-        assert "!sbx retry gh:issue:4" in note
+        assert "!lantern retry gh:issue:4" in note
 
     def test_finish_card_and_text(self) -> None:
         item = WorkItem(item_id="gh:issue:4", source_key="4", title="Fix login")
@@ -953,7 +953,7 @@ class TestEmbeds:
         assert card.title == "⏹ finished: cancelled"
         assert card.fields[0][0] == "Cancelled"
         assert "`lantern resume r1`" in card.fields[0][1]
-        assert "!sbx retry gh:issue:8" in card.fields[0][1]
+        assert "!lantern retry gh:issue:8" in card.fields[0][1]
         requeued = finish_embed(item, report._replace(requeued=True), "cancelled")
         assert "re-queued" in requeued.fields[0][1] and "resume" not in requeued.fields[0][1]
 

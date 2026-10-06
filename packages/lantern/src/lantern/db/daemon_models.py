@@ -37,6 +37,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+import lantern.db.work_marks  # noqa: F401 - registers the mark triggers on Base
 from lantern.db.base import Base
 from lantern.db.revisions import attach as attach_revision_trigger
 
@@ -548,7 +549,10 @@ class PlanRow(Base):
     """
 
     __tablename__ = "daemon_plans"
-    __table_args__ = (Index("idx_daemon_plans_updated", "updated_at"),)
+    __table_args__ = (
+        Index("idx_daemon_plans_updated", "updated_at"),
+        Index("idx_daemon_plans_goal", "goal_id"),
+    )
 
     plan_id: Mapped[str] = mapped_column(Text, primary_key=True)
     workspace_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -565,6 +569,12 @@ class PlanRow(Base):
     reconciled_at: Mapped[float | None] = mapped_column(REAL)
     reconcile_error: Mapped[str | None] = mapped_column(Text)
     input_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
+    # Whether the plan may move itself forward (revision 0051): "manual"
+    # (a person takes every step) or "auto". Nothing sets "auto" but a
+    # holder of plans:publish.
+    advance: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'manual'"))
+    # The goal the plan was proposed from; NULL for a plan a person drafted.
+    goal_id: Mapped[str | None] = mapped_column(Text)
 
 
 class PlanNodeRow(Base):
@@ -627,6 +637,16 @@ class PlanNodeRow(Base):
     # that proposed it and its entries, as a JSON object; NULL when none is
     # waiting.
     replan_json: Mapped[str | None] = mapped_column(Text)
+    # Who the node's content is from and who let it through (revision
+    # 0051): a person's id or ``agent:<slug>``; NULL where nobody is
+    # recorded (a node from before the revision, one adopted from the
+    # forge, a planner run that named no agent).
+    proposed_by: Mapped[str | None] = mapped_column(Text)
+    approved_by: Mapped[str | None] = mapped_column(Text)
+    published_by: Mapped[str | None] = mapped_column(Text)
+    # A reviewer's verdict on the node's level (its children), as a JSON
+    # object with the digest of what was reviewed; NULL until one is given.
+    review_json: Mapped[str | None] = mapped_column(Text)
 
 
 class PlanEpicRunRow(Base):
@@ -668,3 +688,134 @@ class PlanEpicRunTaskRow(Base):
     reason: Mapped[str | None] = mapped_column(Text)
     admitted_at: Mapped[float | None] = mapped_column(REAL)
     updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+
+
+class WorkMarkRow(Base):
+    """What a person did to an alert, not to the work: ``dismissed`` (the
+    alert is acknowledged and stops asking for attention) or ``deleted``
+    (the work is hidden from every listing; its rows stay as the audit
+    trail).
+
+    A side table rather than a column on the work it marks: every write to
+    ``daemon_work_items`` or ``runs`` bumps the row's ``revision``, so a
+    mark kept there would refuse the next command of everyone who had read
+    the row before it — and some work has no item row at all, only a run.
+    ``subject_kind`` is ``item`` or ``run``; ``subject_key`` is the id as
+    stored. ``cause`` says how the mark came to stand (``dismissed``,
+    ``abandoned``, ``cancelled``, ``deleted``). The row is current state
+    only — who did it and when is the operation ``operation_id`` names —
+    and :mod:`lantern.db.work_marks` drops it when the work moves again.
+    """
+
+    __tablename__ = "daemon_work_marks"
+    __table_args__ = (PrimaryKeyConstraint("subject_kind", "subject_key", "mark"),)
+
+    subject_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    subject_key: Mapped[str] = mapped_column(Text, nullable=False)
+    mark: Mapped[str] = mapped_column(Text, nullable=False)
+    cause: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[float] = mapped_column(REAL, nullable=False)
+    actor_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
+    reason: Mapped[str | None] = mapped_column(Text)
+    operation_id: Mapped[str | None] = mapped_column(Text)
+
+
+class GrantRow(Base):
+    """A standing rule an owner wrote: ``agent_slug`` may take ``action``
+    while ``conditions_json`` holds, at most ``daily_limit`` times a day
+    (NULL is unlimited). See :mod:`lantern.daemon.controls.delegation` for
+    what the conditions mean and which actions can be named at all.
+
+    ``revision`` is bumped by every edit, in the store, and an edit names
+    the revision it read. ``source`` is ``default`` for a grant Lantern
+    seeded at start (revision 0054) and ``owner`` for one a person wrote;
+    ``default_key`` names which default a seeded grant is, unique so two
+    processes starting at once cannot seed it twice.
+    """
+
+    __tablename__ = "daemon_grants"
+    __table_args__ = (
+        Index("idx_daemon_grants_subject", "agent_slug", "action"),
+        Index("idx_daemon_grants_default_key", "default_key", unique=True),
+    )
+
+    grant_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    # Only the condition keys that constrain something, as a JSON object.
+    conditions_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=sql_text("'{}'")
+    )
+    daily_limit: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_by_display: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+    source: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'owner'"))
+    default_key: Mapped[str | None] = mapped_column(Text)
+
+
+class GoalRow(Base):
+    """A standing objective an owner wrote for one repository (revision
+    0053): a title, the objective in the owner's words (``text``) and
+    whether it is ``active``, ``paused`` or ``done``. The plans proposed
+    from it name it in ``daemon_plans.goal_id``.
+
+    ``revision`` is bumped by every edit, in the store, and an edit names
+    the revision it read.
+    """
+
+    __tablename__ = "daemon_goals"
+    __table_args__ = (Index("idx_daemon_goals_repository", "repository", "state"),)
+
+    goal_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    repository: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'active'"))
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_by_display: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    updated_at: Mapped[float] = mapped_column(REAL, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=sql_text("1"))
+
+
+class DecisionRow(Base):
+    """One judged act: which agent asked to take which action, what the
+    judge answered (``allow``, ``deny`` or ``escalate``) and why, the grant
+    that allowed it, what it was about, and the facts it was judged on
+    (``attrs_json``), kept for audit.
+
+    A grant's daily use is counted from the ``allow`` rows here, so a
+    deleted grant's rows stay: the ledger is the record, not the grant. An
+    ``escalate`` row waits for a person; ``resolved_at``, ``resolved_by``
+    and ``resolution`` say how it ended, and stay NULL until it does.
+    """
+
+    __tablename__ = "daemon_decisions"
+    __table_args__ = (
+        Index("idx_daemon_decisions_at", "at", "decision_id"),
+        Index("idx_daemon_decisions_grant", "grant_id", "at"),
+    )
+
+    decision_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    grant_id: Mapped[str | None] = mapped_column(Text)
+    agent_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_id: Mapped[str | None] = mapped_column(Text)
+    node_id: Mapped[str | None] = mapped_column(Text)
+    item_id: Mapped[str | None] = mapped_column(Text)
+    run_id: Mapped[str | None] = mapped_column(Text)
+    epic_run_id: Mapped[str | None] = mapped_column(Text)
+    repository: Mapped[str | None] = mapped_column(Text)
+    operation_id: Mapped[str | None] = mapped_column(Text)
+    attrs_json: Mapped[str] = mapped_column(Text, nullable=False, server_default=sql_text("'{}'"))
+    at: Mapped[float] = mapped_column(REAL, nullable=False)
+    resolved_at: Mapped[float | None] = mapped_column(REAL)
+    resolved_by: Mapped[str | None] = mapped_column(Text)
+    resolution: Mapped[str | None] = mapped_column(Text)

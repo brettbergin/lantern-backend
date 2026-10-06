@@ -62,6 +62,15 @@ reaches the queue, without a person doing it.** The planner proposes; a
 person publishes; a person starts an epic run. Agents hold none of the new
 capabilities.
 
+> **Since 2026-10-03.** The constraint above was the first version's. A plan
+> an owner sets to `advance = "auto"` may now be broken down, approved (after
+> an independent critic's review), published and run by agents under grants
+> (`/v1/grants`). Since 2026-10-04 every install starts with Lantern's
+> default grants, but a plan still behaves as described here until a person
+> sets it to `auto`. What still holds: agents' capabilities are not widened;
+> an unlabeled issue still needs a person's label; and any step no grant
+> covers waits for a person. See `docs/architecture.md` "Delegation".
+
 ## Decisions
 
 | Question             | Decision                                                                                                                                                                                                                                                                                                                           |
@@ -410,6 +419,8 @@ while 4–6 land. Lantern still ports behaviour from Angie screen by screen.
 - Tasks that span repositories.
 - Publishing or running anything without a person's action. Agents never
   start plans on their own; the concierge drafts one only on a person's yes.
+  (Lifted 2026-10-03 for plans an owner sets to advance on their own, under
+  the owner's grants; see the note under "The constraint".)
 - Two-way sync of arbitrary body edits back into the plan's structured
   sections beyond the rendered headings.
 

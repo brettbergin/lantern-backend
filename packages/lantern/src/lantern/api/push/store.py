@@ -14,7 +14,7 @@ import json
 import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -23,6 +23,14 @@ from lantern.daemon.store import DaemonStore
 from lantern.db.api_models import PushDeviceRow, PushNotificationRow
 
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+
+#: How urgent a notification is: ``passive`` (news to read when convenient),
+#: ``active`` (worth a look now) or ``time_sensitive`` (something waits on
+#: the recipient's decision).
+Level = Literal["passive", "active", "time_sensitive"]
+LEVELS: tuple[Level, ...] = ("passive", "active", "time_sensitive")
+#: The level a row recorded before levels existed reads as.
+DEFAULT_LEVEL: Level = "active"
 
 
 def _token(size: int) -> str:
@@ -79,6 +87,25 @@ class Notification:
     title: str
     body: str
     created_at: float
+    #: The attention entry it is about, when it is about one.
+    entry_id: str | None = None
+    #: That entry's actions the recipient may take, in the list's order.
+    actions: tuple[str, ...] = ()
+    level: Level = DEFAULT_LEVEL
+
+
+def _actions(text: str | None) -> tuple[str, ...]:
+    try:
+        found = json.loads(text) if text else []
+    except ValueError:
+        return ()
+    if not isinstance(found, list):
+        return ()
+    return tuple(a for a in found if isinstance(a, str) and a)
+
+
+def _level(text: str | None) -> Level:
+    return text if text in LEVELS else DEFAULT_LEVEL
 
 
 def _device(row: PushDeviceRow) -> Device:
@@ -108,6 +135,9 @@ def _notification(row: PushNotificationRow) -> Notification:
         title=str(row.title),
         body=str(row.body),
         created_at=float(row.created_at),
+        entry_id=row.entry_id or None,
+        actions=_actions(row.actions_json),
+        level=_level(row.level),
     )
 
 
@@ -295,6 +325,9 @@ class DeviceStore:
         body: str,
         event_seq: int | None,
         now: float,
+        entry_id: str | None = None,
+        actions: Iterable[str] = (),
+        level: Level = DEFAULT_LEVEL,
     ) -> str:
         """Keep what a push is about; returns its ref."""
         ref = "ntf_" + _token(24)
@@ -310,6 +343,9 @@ class DeviceStore:
                     body=body,
                     event_seq=event_seq,
                     created_at=now,
+                    entry_id=entry_id,
+                    actions_json=json.dumps(list(actions)),
+                    level=level,
                 )
             )
         return ref
@@ -331,6 +367,7 @@ __all__ = [
     "Device",
     "DeviceStore",
     "DeviceTarget",
+    "Level",
     "Notification",
     "default_prefs",
     "token_digest",

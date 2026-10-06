@@ -849,7 +849,7 @@ class TestBreaker:
         text = plain(dispatch(floop, "reset-breaker").text)
         assert text == (
             "breaker reset (3 consecutive failure(s) cleared); still paused by operator "
-            "(!sbx resume --all releases every hold)."
+            "(!lantern resume --all releases every hold)."
         )
 
     def test_resume_all_does_not_reset_the_breaker(self, tmp_path: Path) -> None:

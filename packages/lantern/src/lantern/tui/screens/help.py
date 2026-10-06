@@ -12,7 +12,7 @@ HELP = """\
 # lantern tui
 
 The operator console reads the daemon's `state.db` read-only and drives the
-daemon through the same `ctl` queue `lantern daemon ctl` and chat's `!sbx` use.
+daemon through the same `ctl` queue `lantern daemon ctl` and chat's `!lantern` use.
 
 ## Screens
 
@@ -21,7 +21,7 @@ daemon through the same `ctl` queue `lantern daemon ctl` and chat's `!sbx` use.
 | `1` | Overview — the run in flight, the queue, who waits on a human, recent runs |
 | `2` | Runs — every run; `Enter` opens one |
 | `3` | Queue — dispatch order and every work item |
-| `4` | Chat — the control channel: the concierge, `!sbx` verbs, daemon notices |
+| `4` | Chat — the control channel: the concierge, `!lantern` verbs, daemon notices |
 | `5` | Sandboxes — `sbx ls` classified against the store; shell, remove, prune, gc |
 | `6` | Daemon — the unit, the process, versions, repositories, the journal |
 | `7` | Config — the resolved configuration with its sources, the policy, the repos, an editor |
@@ -47,7 +47,8 @@ verbs fall back to the CLI's row-only twin when none is running.
 ## Chat
 
 The Chat screen and a run's **Thread** tab are the daemon's local chat
-bridge — the same rows Discord or Slack would show. `!sbx …` is a command.
+bridge — the same rows Discord or Slack would show. `!lantern …` is a command
+(`!sbx …` too, while `command_prefix` is left at its default).
 A message **addressed to the bot** — `@sbx` in the text, `ctrl+t` to keep
 it on, or `r` to reply to the bot's last row — is a concierge turn in the
 control channel and a **steer** in a run's thread. Plain text is left
@@ -58,7 +59,7 @@ answers takes `1`-`5` (or a click; with no question open the numbers are
 the mode keys again), `r` replies to the bot's latest row, and on a run
 with no thread `r` refreshes. In a run's thread answer with the buttons or
 by typing the number. A merge gate shows **Approve merge**;
-`!sbx merge <item>` is its typed twin.
+`!lantern merge <item>` is its typed twin.
 
 ## A run
 

@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 from lantern.daemon.model import WorkItem
 from lantern.daemon.usagepool import fairness_key
 from lantern.db.collaboration_models import ChannelRow, MessageRow, TurnRow
-from lantern.db.daemon_models import WorkItemRow
+from lantern.db.daemon_models import RunResumeRow, WorkItemRow
 from lantern.db.engine_models import Run
 from lantern.db.job_models import ExternalJobRow, ExternalPendingRow, ExternalRunRow
 from lantern_worker.protocol import Event
@@ -228,6 +228,9 @@ def test_repeated_terminal_polls_and_resume_have_distinct_real_transitions(api: 
     assert len([entry for entry in _entries(api, channel.id) if entry.kind == "work_result"]) == 1
     with api.harness.dstore.immediate_transaction() as session:
         session.execute(update(Run).where(Run.run_id == "resumable").values(state="building"))
+        # A resume opens a new segment: the result's key is shared with the
+        # live chronicle's, which says each segment's stop once.
+        session.add(RunResumeRow(run_id="resumable", item_id="resumable", resumed_at=api.clock()))
     api.ctx.project_work()
     with api.harness.dstore.immediate_transaction() as session:
         session.execute(

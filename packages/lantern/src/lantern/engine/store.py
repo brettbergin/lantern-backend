@@ -25,7 +25,7 @@ import json
 import sqlite3
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, NamedTuple, cast
@@ -36,7 +36,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from lantern.db import begin_immediate, ensure_schema, open_engine
+from lantern.db import begin_immediate, ensure_schema, open_engine, write_engine
 from lantern.db.engine_models import EventRow, PhaseAttempt, Reconciliation, Run, Task
 from lantern.engine.model import (
     TERMINAL_RUN_STATES,
@@ -184,6 +184,25 @@ class TaskTotalsRecord(NamedTuple):
     revisions: int
     replans: int
     suspect: int
+
+
+class EndedCountRecord(NamedTuple):
+    """How many runs of one kind rest in one end state, having reached it
+    inside a window (:meth:`StateStore.ended_between`)."""
+
+    kind: str
+    state: str
+    runs: int
+
+
+#: The states a run has *ended* in: an outcome (merged, completed), a
+#: failure, or a person's decision to stop. ``blocked``, ``gated`` and the
+#: review and answer waits are not ends: they wait on a person.
+ENDED_RUN_STATES: tuple[str, ...] = ("merged", "completed", "failed", "cancelled")
+#: The ends a run was meant to reach: a merged pull request, a delivered
+#: workload or tool result. The same pair :mod:`lantern.analytics` calls
+#: ``LANDED``.
+LANDED_RUN_STATES: tuple[str, ...] = ("merged", "completed")
 
 
 # FROZEN. Everything below is the body of Alembic revision 0001, and 0001
@@ -427,13 +446,22 @@ class StateStore:
         if readonly and not path.exists():
             raise StateError(f"{path} does not exist")
         self._engine = open_engine(path, readonly=readonly)
+        # A read-only handle cannot take the write lock, and a block of the
+        # console's that only reads must not ask for it.
+        self._writer = self._engine if readonly else write_engine(self._engine)
         if not readonly:
             ensure_schema(self._engine)
 
     @contextmanager
     def _write(self) -> Iterator[Session]:
-        """A session that commits on the way out, under the store's lock."""
-        with self._lock, Session(self._engine) as session:
+        """A session that commits on the way out, under the store's lock.
+
+        The transaction opens with ``BEGIN IMMEDIATE``, at its first
+        statement: a block that reads before it writes must not lose its
+        write to another connection's commit (see :meth:`_immediate`, which
+        takes the same lock on entry, and :mod:`lantern.db.session`).
+        """
+        with self._lock, Session(self._writer) as session:
             yield session
             session.commit()
 
@@ -884,6 +912,55 @@ class StateStore:
         with self._read() as session:
             return [RunWindowRecord(*row) for row in session.execute(stmt)]
 
+    def ended_between(self, since: float, until: float) -> list[EndedCountRecord]:
+        """How many runs *ended* in the window, by kind and end state: the
+        runs resting in one of :data:`ENDED_RUN_STATES` whose last change
+        falls in ``[since, until)``. A run in an end state is not written
+        again except to settle its reason, so ``updated_at`` is when it got
+        there; a run resumed out of ``failed`` leaves the count and is
+        counted again when it ends anew. This is "what finished in the
+        window", where :meth:`runs_between` is "what began in it"."""
+        stmt = (
+            select(Run.kind, Run.state, func.count())
+            .where(
+                Run.state.in_(ENDED_RUN_STATES),
+                Run.updated_at >= since,
+                Run.updated_at < until,
+            )
+            .group_by(Run.kind, Run.state)
+        )
+        with self._read() as session:
+            return [
+                EndedCountRecord(str(kind or "code"), str(state), int(count))
+                for kind, state, count in session.execute(stmt)
+            ]
+
+    def landed_between(
+        self, since: float, until: float, *, limit: int, exclude: Collection[str] = ()
+    ) -> list[RunRecord]:
+        """The runs that landed (merged or completed) in ``[since, until)``,
+        the most recently landed first, at most ``limit`` of them.
+        ``exclude`` names runs to leave out (the ones a person deleted),
+        skipped in the same read so the list is still full."""
+        stmt = (
+            select(Run)
+            .where(
+                Run.state.in_(LANDED_RUN_STATES),
+                Run.updated_at >= since,
+                Run.updated_at < until,
+            )
+            .order_by(Run.updated_at.desc(), Run.run_id.desc())
+        )
+        out: list[RunRecord] = []
+        with self._read() as session:
+            for row in session.scalars(stmt):
+                if row.run_id in exclude:
+                    continue
+                out.append(self._run_record(row))
+                if len(out) >= limit:
+                    break
+        return out
+
     def phases_between(self, since: float, until: float) -> list[PhaseWindowRecord]:
         """Each phase in the window, by the attempts that *started* in it:
         how long it ran, what it cost, and how often it had to go round
@@ -1013,13 +1090,16 @@ class StateStore:
         kinds: Sequence[str] | None = None,
         after: tuple[float, str] | None = None,
         limit: int = 50,
+        exclude: Collection[str] = (),
     ) -> list[RunRecord]:
         """A page of runs in :meth:`recent_runs` order (touched most
         recently first), keyed on ``(updated_at, run_id)`` so a reader
         paging while runs move sees no gap and no repeat (#1036).
         ``states`` are matched on the record, after the legacy spellings
         are remapped, so the filter is applied in Python on a bounded
-        over-read rather than trusted to the column."""
+        over-read rather than trusted to the column. ``exclude`` names
+        runs to leave out (the ones a person deleted), skipped in the same
+        read so a page is still full."""
         stmt = select(Run).order_by(Run.updated_at.desc(), Run.run_id.desc())
         if kinds:
             stmt = stmt.where(Run.kind.in_(list(kinds)))
@@ -1035,6 +1115,8 @@ class StateStore:
         out: list[RunRecord] = []
         with self._read() as session:
             for row in session.scalars(stmt):
+                if row.run_id in exclude:
+                    continue
                 record = self._run_record(row)
                 if wanted and record.state not in wanted:
                     continue

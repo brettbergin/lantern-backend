@@ -39,6 +39,7 @@ FEATURES: tuple[str, ...] = (
     "artifacts",
     "usage",
     "usage.pool",
+    "briefing",
     "diagnostics.logs",
     "diagnostics.configuration",
     "daemon.holds",
@@ -75,9 +76,23 @@ FEATURES: tuple[str, ...] = (
     "collaboration.read_state",
     "collaboration.mention_steering",
     "collaboration.external_work",
+    "collaboration.channel_runs",
     "repositories.discover",
     "repositories.manage",
     "repositories.labels",
+    "work.dismiss",
+    "work.dismiss_all",
+    "work.delete",
+    "analytics",
+    "attention",
+    "delegation",
+    # The operator agent retries failures and grants rounds under grants.
+    "delegation.triage",
+    # Every install starts with Lantern's default grants (`source`,
+    # `default_key`, `POST /v1/grants/defaults/restore`).
+    "delegation.defaults",
+    "attention.act",
+    "attention.decisions",
 )
 
 
@@ -100,6 +115,21 @@ def features(config: Config) -> list[str]:
         served.append("planning.generated_root")
         # Epic runs admit a published epic's tasks as issue runs (#2347).
         served.append("planning.run")
+        # A plan carries `advance` and each node who proposed, approved and
+        # published it and its level's review; `advance` is set under
+        # `plans:publish`.
+        served.append("planning.advance")
+        # ... and an `auto` plan is moved forward by the daemon's plan
+        # driver under the owner's grants: approved, published and run as
+        # an agent, every judgement on the decisions ledger.
+        served.append("planning.driver")
+        # Goals (`/v1/goals`): the standing objectives an owner sets for a
+        # repository that can hold a plan, and the plans proposed from each.
+        served.append("goals")
+        # ... and the planner may draft an `auto` plan from an active goal
+        # under a `plan.propose` grant, at most once per `[delegation]
+        # propose_every` (off by default).
+        served.append("goals.proposing")
     return served
 
 

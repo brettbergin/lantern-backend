@@ -171,7 +171,9 @@ class RunDetailScreen(ConsoleScreen):
         # cannot be cancelled); its rows are not applied.
         if get_current_worker().is_cancelled:
             return
-        self.app.call_from_thread(self._apply, detail, thread, events, artifacts, generation)
+        self.app.call_from_thread(
+            self.apply_from_worker, self._apply, detail, thread, events, artifacts, generation
+        )
 
     def _scan_artifacts(self, detail: RunDetail | None) -> tuple[Path | None, list[Path], str]:
         if detail is None:

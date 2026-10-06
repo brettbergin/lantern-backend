@@ -156,6 +156,18 @@ class TestADraftOnTheAskersYes:
         actor = json.loads(event.actor_json or "{}")
         assert (actor["id"], actor["display"], actor["via"]) == ("u-guest", "Guest", "concierge")
 
+    def test_a_draft_never_advances_on_its_own_whoever_asks(self, tmp_path: Path) -> None:
+        """The switch is flipped by a person holding ``plans:publish``, over
+        the API: the tool has no argument for it, and one passed anyway —
+        even on an owner's turn — is not read."""
+        _, dstore, _ = _turn(
+            tmp_path,
+            {**DRAFT, "advance": "auto", "goal_id": "goal_1"},
+            _person("owner", "u-owner", "Owner"),
+        )
+        (plan,) = _plans(dstore)
+        assert (plan.advance, plan.goal_id) == ("manual", None)
+
     def test_a_lone_epic_can_be_drafted(self, tmp_path: Path) -> None:
         (text,), dstore, _ = _turn(
             tmp_path,

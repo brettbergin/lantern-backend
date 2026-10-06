@@ -1,11 +1,14 @@
 """Which configuration keys chat may never change (#970, #971).
 
 The concierge's config tools run in the daemon process against the
-operator's own file, with the same authority as ``!sbx``. Two things bound
+operator's own file, with the same authority as ``!lantern``. Two things bound
 that. A key that could sever the channel the outcome is reported on — the
 chat sections, the concierge's own switch — is refused from chat whatever
 the operator's lock list says, because a wrong value there leaves nobody
-able to see the report or ask for the revert. And the keys the loader
+able to see the report or ask for the revert. So is ``[delegation]``: it
+sets how the daemon acts on an owner's grants (the window a person has to
+hold what an agent approved), and the concierge is itself an agent, which
+never edits the rules it is judged by. And the keys the loader
 takes from the environment alone are refused because a file line would do
 nothing. Everything else is the operator's to lock or unlock (#971).
 """
@@ -32,6 +35,10 @@ NEVER_FROM_CHAT: dict[str, str] = {
     "concierge.enabled": "it is the concierge's own switch",
     "concierge.edit_config": "it is the gate on these tools — no self-widening",
     "concierge.config_locked": "it is the lock list these tools honour — no self-widening",
+    "delegation": (
+        "it sets how the daemon acts on the grants that let agents decide, and the "
+        "concierge is an agent — no self-widening"
+    ),
 }
 
 

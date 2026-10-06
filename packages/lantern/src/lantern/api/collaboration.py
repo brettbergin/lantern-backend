@@ -97,6 +97,11 @@ LINKED_SURFACES_TTL_S = 30.0
 #: Written as an escape, never a raw byte: an invisible character is easy to
 #: strip by accident, and an empty prefix would reserve every key.
 SCOPED_POST_KEY_PREFIX = "\x1f"
+#: Bridges on which a thread is a surface of its own: a message typed in
+#: one arrives with the thread's id as its channel, and a post to it goes
+#: to that id, so a link to such a thread is stored with the thread as
+#: its surface. Slack and Mattermost address a thread as (channel, thread).
+THREAD_IS_SURFACE: frozenset[str] = frozenset({"discord", "local"})
 
 
 def scoped_run_post_key(run_id: str, channel_id: str, dedupe_key: str) -> str:
@@ -1164,6 +1169,9 @@ class CollaborationStore:
             raise CollaborationError("weak_password", "password must contain at least 8 characters")
         user_id = "usr_" + _token(12)
         client_id = "local_" + _token(12)
+        # scrypt, tens of milliseconds by design: made before the transaction
+        # opens, so the write lock is held for its statements and not for this.
+        secret_hash = hash_secret(password)
         try:
             with self.dstore.transaction() as session:
                 invite: WorkspaceInviteRow | None = None
@@ -1180,7 +1188,7 @@ class CollaborationStore:
                     insert(ClientRow).values(
                         id=client_id,
                         name=username,
-                        secret_hash=hash_secret(password),
+                        secret_hash=secret_hash,
                         capabilities_json=capabilities_json,
                         created_at=now,
                         created_by="local-onboarding" if invite is None else "workspace-invite",
@@ -2814,26 +2822,21 @@ class CollaborationStore:
 
         Takes managing the channel *and* administering the workspace: a link
         makes the channel capture what everyone on that surface says and post
-        its own traffic there, which reaches past the channel. A run's thread
-        belongs to its run and is refused.
+        its own traffic there, which reaches past the channel. The daemon
+        itself (``viewer`` None) links the thread a bridge opens for a run
+        to the channel the run lives in (docs/spikes/work-channels.md).
         """
-        if backend == "discord" and thread_id is not None:
-            # A Discord thread is a channel of its own: messages typed there
-            # arrive with the thread's id as their channel, and a post to it
-            # goes to that id. So the thread is the surface.
+        if backend in THREAD_IS_SURFACE and thread_id is not None:
+            # A Discord thread (and the console's) is a channel of its own:
+            # messages typed there arrive with the thread's id as their
+            # channel, and a post to it goes to that id. So the thread is
+            # the surface.
             surface_id, thread_id = thread_id, None
-        # A run's thread is recorded once, when the run opens it, so reading
-        # it ahead of the write transaction races nothing that matters.
-        run_thread = self.dstore.run_for_thread(thread_id or surface_id, backend) is not None
         with self.dstore.immediate_transaction() as session:
             _, member = _access(session, channel_id, viewer, "manage", now=now)
             if member is not None and member.role not in MANAGING_ROLES:
                 raise CollaborationError(
                     "channel_forbidden", "linking a surface takes a workspace admin"
-                )
-            if run_thread:
-                raise CollaborationError(
-                    "link_run_thread", "that surface is a run's thread and cannot be linked"
                 )
             existing = _active_link(session, backend, surface_id, thread_id)
             if existing is not None:
@@ -3686,6 +3689,18 @@ class CollaborationStore:
             accepted = (_turn(session, turn_row), _message(session, message_row))
         self._appended(accepted[1])
         return accepted
+
+    def accepted_turn_ids(self, channel_id: str) -> list[str]:
+        """The channel's turns still waiting to start, oldest first."""
+        with self.dstore.read() as session:
+            return [
+                str(turn_id)
+                for turn_id in session.scalars(
+                    select(TurnRow.id)
+                    .where(TurnRow.channel_id == channel_id, TurnRow.status == "accepted")
+                    .order_by(TurnRow.created_at, TurnRow.id)
+                )
+            ]
 
     def start_turn(self, turn_id: str, now: float) -> bool:
         with self.dstore.transaction() as session:
@@ -4771,7 +4786,7 @@ class CollaborationStore:
             is_agent(agent_slug) if is_agent is not None else agent_slug in {a.slug for a in AGENTS}
         )
         if not known:
-            raise CollaborationError("unknown_agent", "Choose a native lantern agent.")
+            raise CollaborationError("unknown_agent", "Choose a native Lantern agent.")
         if not 1 <= len(message.strip()) <= 4000:
             raise CollaborationError(
                 "invalid_handoff", "Provide a message of 1 to 4000 characters."

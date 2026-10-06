@@ -666,6 +666,616 @@
         "title": "AgentUpdate",
         "type": "object"
       },
+      "AnalyticsBucket": {
+        "additionalProperties": false,
+        "description": "One slice of the window, by the runs that began in it.",
+        "properties": {
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "landed": {
+            "title": "Landed",
+            "type": "integer"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns"
+        ],
+        "title": "AnalyticsBucket",
+        "type": "object"
+      },
+      "AnalyticsDelta": {
+        "additionalProperties": false,
+        "description": "This window's total against the previous window's, as a share of\nthe previous value (``0.25`` is a quarter more). ``null`` when nothing\npreceded the window or the previous value was zero.",
+        "properties": {
+          "active_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active S"
+          },
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Tokens"
+          },
+          "cancelled": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled"
+          },
+          "elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elapsed S"
+          },
+          "failed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed"
+          },
+          "landed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landed"
+          },
+          "ok_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok Rate"
+          },
+          "parked_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parked S"
+          },
+          "parked_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parked Share"
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns"
+          }
+        },
+        "required": [
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s",
+          "elapsed_s",
+          "parked_s",
+          "ok_rate",
+          "parked_share"
+        ],
+        "title": "AnalyticsDelta",
+        "type": "object"
+      },
+      "AnalyticsFailure": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "count"
+        ],
+        "title": "AnalyticsFailure",
+        "type": "object"
+      },
+      "AnalyticsLane": {
+        "additionalProperties": false,
+        "description": "One run kind's totals over a window \u2014 or every kind together\n(``all``), or the window before this one (``previous``).",
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cancelled": {
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "elapsed_s": {
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed": {
+            "title": "Landed",
+            "type": "integer"
+          },
+          "ok_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ok Rate"
+          },
+          "parked_s": {
+            "title": "Parked S",
+            "type": "number"
+          },
+          "parked_share": {
+            "title": "Parked Share",
+            "type": "number"
+          },
+          "runs": {
+            "title": "Runs",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "runs",
+          "landed",
+          "failed",
+          "cancelled",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s",
+          "elapsed_s",
+          "parked_s",
+          "ok_rate",
+          "parked_share"
+        ],
+        "title": "AnalyticsLane",
+        "type": "object"
+      },
+      "AnalyticsPhase": {
+        "additionalProperties": false,
+        "description": "One phase's share of the window, by the attempts that started in it.",
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "string"
+          },
+          "retries": {
+            "title": "Retries",
+            "type": "integer"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "attempts",
+          "retries",
+          "turns",
+          "tokens",
+          "cache_read_tokens",
+          "active_s"
+        ],
+        "title": "AnalyticsPhase",
+        "type": "object"
+      },
+      "AnalyticsRework": {
+        "additionalProperties": false,
+        "properties": {
+          "replans": {
+            "title": "Replans",
+            "type": "integer"
+          },
+          "retried_share": {
+            "title": "Retried Share",
+            "type": "number"
+          },
+          "revisions": {
+            "title": "Revisions",
+            "type": "integer"
+          },
+          "suspect": {
+            "title": "Suspect",
+            "type": "integer"
+          },
+          "tasks": {
+            "title": "Tasks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tasks",
+          "revisions",
+          "replans",
+          "suspect",
+          "retried_share"
+        ],
+        "title": "AnalyticsRework",
+        "type": "object"
+      },
+      "AnalyticsRun": {
+        "additionalProperties": false,
+        "properties": {
+          "active_s": {
+            "title": "Active S",
+            "type": "number"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "parked_s": {
+            "title": "Parked S",
+            "type": "number"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "tokens": {
+            "title": "Tokens",
+            "type": "integer"
+          },
+          "turns": {
+            "title": "Turns",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "state",
+          "turns",
+          "tokens",
+          "active_s",
+          "parked_s"
+        ],
+        "title": "AnalyticsRun",
+        "type": "object"
+      },
+      "AnalyticsSpread": {
+        "additionalProperties": false,
+        "properties": {
+          "median": {
+            "title": "Median",
+            "type": "number"
+          },
+          "p90": {
+            "title": "P90",
+            "type": "number"
+          }
+        },
+        "required": [
+          "median",
+          "p90"
+        ],
+        "title": "AnalyticsSpread",
+        "type": "object"
+      },
+      "AnalyticsSpreads": {
+        "additionalProperties": false,
+        "description": "Median and p90 across the window's runs; ``null`` where no run\ngives one.",
+        "properties": {
+          "active_s": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cycle_s": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsSpread"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "turns",
+          "cycle_s",
+          "active_s"
+        ],
+        "title": "AnalyticsSpreads",
+        "type": "object"
+      },
+      "AnalyticsWindow": {
+        "additionalProperties": false,
+        "description": "A window of runs, folded: outcomes, time, turns and failures by\ncause. A run is attributed whole to the window it began in. Telemetry,\nnever a currency.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsBucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "ci_rounds": {
+            "title": "Ci Rounds",
+            "type": "integer"
+          },
+          "costliest": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsRun"
+            },
+            "title": "Costliest",
+            "type": "array"
+          },
+          "delta": {
+            "$ref": "#/components/schemas/AnalyticsDelta"
+          },
+          "empty": {
+            "title": "Empty",
+            "type": "boolean"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsFailure"
+            },
+            "title": "Failures",
+            "type": "array"
+          },
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsLane"
+            },
+            "title": "Lanes",
+            "type": "array"
+          },
+          "longest_parked": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsRun"
+            },
+            "title": "Longest Parked",
+            "type": "array"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "phases": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsPhase"
+            },
+            "title": "Phases",
+            "type": "array"
+          },
+          "previous": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsLane"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_rounds": {
+            "title": "Review Rounds",
+            "type": "integer"
+          },
+          "rework": {
+            "$ref": "#/components/schemas/AnalyticsRework"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "spreads": {
+            "$ref": "#/components/schemas/AnalyticsSpreads"
+          },
+          "total": {
+            "$ref": "#/components/schemas/AnalyticsLane"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          },
+          "window_s": {
+            "title": "Window S",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "observed_at",
+          "window_s",
+          "empty",
+          "total",
+          "lanes",
+          "phases",
+          "buckets",
+          "rework",
+          "review_rounds",
+          "ci_rounds",
+          "failures",
+          "costliest",
+          "longest_parked",
+          "spreads",
+          "previous",
+          "delta"
+        ],
+        "title": "AnalyticsWindow",
+        "type": "object"
+      },
       "ArtifactOut": {
         "additionalProperties": false,
         "properties": {
@@ -828,6 +1438,610 @@
         "title": "ArtifactRefOut",
         "type": "object"
       },
+      "AttentionActRequest": {
+        "additionalProperties": false,
+        "description": "One action on one entry. ``action`` is a name the entry lists in\n``actions``; ``expected_revision`` is the entry's ``revision`` as the\nperson read it; ``params`` are the action's own arguments, the fields\nits own route takes in its body.",
+        "properties": {
+          "action": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "AttentionActRequest",
+        "type": "object"
+      },
+      "AttentionActResult": {
+        "additionalProperties": false,
+        "description": "What became of an act: the command's own answer under ``result``,\nthe operation it recorded, and whether the entry still waits.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecisionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ItemCommandResult"
+              },
+              {
+                "$ref": "#/components/schemas/RunCommandResult"
+              },
+              {
+                "$ref": "#/components/schemas/SteerResult"
+              },
+              {
+                "$ref": "#/components/schemas/GateResult"
+              },
+              {
+                "$ref": "#/components/schemas/RepositoryResult"
+              },
+              {
+                "$ref": "#/components/schemas/EpicRunChanged"
+              },
+              {
+                "$ref": "#/components/schemas/EpicRunStarted"
+              },
+              {
+                "$ref": "#/components/schemas/PlanPublished"
+              },
+              {
+                "$ref": "#/components/schemas/PlanBreakdownAccepted"
+              },
+              {
+                "$ref": "#/components/schemas/PlanApproved"
+              },
+              {
+                "$ref": "#/components/schemas/EscalationDeclined"
+              }
+            ],
+            "title": "Result"
+          },
+          "still_waiting": {
+            "title": "Still Waiting",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entry_id",
+          "action",
+          "still_waiting",
+          "result"
+        ],
+        "title": "AttentionActResult",
+        "type": "object"
+      },
+      "AttentionAction": {
+        "additionalProperties": false,
+        "description": "One action the server offers on an entry right now, the capability\nit needs, and whether the caller holds that capability.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "capability": {
+            "title": "Capability",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "capability",
+          "allowed"
+        ],
+        "title": "AttentionAction",
+        "type": "object"
+      },
+      "AttentionCounts": {
+        "additionalProperties": false,
+        "description": "How much is waiting, in every group, whatever the page shows.",
+        "properties": {
+          "decision": {
+            "default": 0,
+            "title": "Decision",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "paused": {
+            "default": 0,
+            "title": "Paused",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "AttentionCounts",
+        "type": "object"
+      },
+      "AttentionDismissRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionTarget"
+            },
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "AttentionDismissRequest",
+        "type": "object"
+      },
+      "AttentionDismissResult": {
+        "additionalProperties": false,
+        "description": "What became of one named alert. ``skipped`` carries the refusal the\nsame dismissal would have had on its own route.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "outcome": {
+            "enum": [
+              "dismissed",
+              "already_dismissed",
+              "skipped"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "AttentionDismissResult",
+        "type": "object"
+      },
+      "AttentionDismissed": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionDismissResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "operation",
+          "results"
+        ],
+        "title": "AttentionDismissed",
+        "type": "object"
+      },
+      "AttentionEntry": {
+        "additionalProperties": false,
+        "description": "One thing waiting on a person. ``id`` is ``<kind>:<natural key>``,\nopaque and stable while the same thing waits; the reference fields say\nwhat it is about. ``kind`` is open: a later release adds kinds, and a\nclient leaves out an entry whose kind it does not know.",
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionAction"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "channel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel Id"
+          },
+          "decision_action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Action"
+          },
+          "decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Id"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "gate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Id"
+          },
+          "group": {
+            "enum": [
+              "decision",
+              "failed",
+              "paused"
+            ],
+            "title": "Group",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "repository_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "group",
+          "state",
+          "title"
+        ],
+        "title": "AttentionEntry",
+        "type": "object"
+      },
+      "AttentionPage": {
+        "additionalProperties": false,
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/AttentionCounts"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AttentionEntry"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "counts",
+          "observed_at"
+        ],
+        "title": "AttentionPage",
+        "type": "object"
+      },
+      "AttentionTarget": {
+        "additionalProperties": false,
+        "description": "One alert a bulk dismissal names: an item, or a run no item\ncarries. ``expected_revision`` pins the state the person was shown.",
+        "properties": {
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "title": "AttentionTarget",
+        "type": "object"
+      },
       "AuthProviders": {
         "additionalProperties": false,
         "properties": {
@@ -876,7 +2090,7 @@
       },
       "AuthorOut": {
         "additionalProperties": false,
-        "description": "Who wrote a message: a person, an agent, or lantern itself.",
+        "description": "Who wrote a message: a person, an agent, or Lantern itself.",
         "properties": {
           "display_name": {
             "anyOf": [
@@ -991,7 +2205,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -1028,6 +2243,534 @@
           "data"
         ],
         "title": "BridgePage",
+        "type": "object"
+      },
+      "Briefing": {
+        "additionalProperties": false,
+        "description": "What happened in a window, what needs a person now, and what is\nlined up. Durations are seconds and timestamps RFC 3339; nothing is a\ncurrency.",
+        "properties": {
+          "budget": {
+            "$ref": "#/components/schemas/BriefingBudget"
+          },
+          "decided": {
+            "$ref": "#/components/schemas/BriefingDecided"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/BriefingGrants"
+          },
+          "observed_at": {
+            "title": "Observed At",
+            "type": "string"
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/BriefingOutcomes"
+          },
+          "runway": {
+            "$ref": "#/components/schemas/BriefingRunway"
+          },
+          "since": {
+            "title": "Since",
+            "type": "string"
+          },
+          "supply": {
+            "$ref": "#/components/schemas/BriefingSupply"
+          },
+          "until": {
+            "title": "Until",
+            "type": "string"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/BriefingWaiting"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "since",
+          "until",
+          "observed_at",
+          "outcomes",
+          "waiting",
+          "decided",
+          "supply",
+          "runway",
+          "budget",
+          "grants"
+        ],
+        "title": "Briefing",
+        "type": "object"
+      },
+      "BriefingBudget": {
+        "additionalProperties": false,
+        "description": "Today against the daily cap and the token budget, as the usage pool\ncounts them.",
+        "properties": {
+          "daily_token_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Token Budget"
+          },
+          "max_runs_per_day": {
+            "title": "Max Runs Per Day",
+            "type": "integer"
+          },
+          "resets_at": {
+            "title": "Resets At",
+            "type": "string"
+          },
+          "runs_today": {
+            "title": "Runs Today",
+            "type": "integer"
+          },
+          "tokens_today": {
+            "title": "Tokens Today",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runs_today",
+          "max_runs_per_day",
+          "tokens_today",
+          "resets_at"
+        ],
+        "title": "BriefingBudget",
+        "type": "object"
+      },
+      "BriefingDecided": {
+        "additionalProperties": false,
+        "description": "What agents decided under grants inside the window, and the\nescalations still waiting for a person, however old.",
+        "properties": {
+          "allow": {
+            "default": 0,
+            "title": "Allow",
+            "type": "integer"
+          },
+          "deny": {
+            "default": 0,
+            "title": "Deny",
+            "type": "integer"
+          },
+          "escalate": {
+            "default": 0,
+            "title": "Escalate",
+            "type": "integer"
+          },
+          "recent": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BriefingDecision"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recent"
+          },
+          "unresolved_escalations": {
+            "default": 0,
+            "title": "Unresolved Escalations",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingDecided",
+        "type": "object"
+      },
+      "BriefingDecision": {
+        "additionalProperties": false,
+        "description": "One act an agent was allowed to take, with what it was about.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "reason",
+          "at"
+        ],
+        "title": "BriefingDecision",
+        "type": "object"
+      },
+      "BriefingGrants": {
+        "additionalProperties": false,
+        "description": "The grants in force, and how many have spent today's limit.",
+        "properties": {
+          "at_limit": {
+            "default": 0,
+            "title": "At Limit",
+            "type": "integer"
+          },
+          "enabled": {
+            "default": 0,
+            "title": "Enabled",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingGrants",
+        "type": "object"
+      },
+      "BriefingLandedRun": {
+        "additionalProperties": false,
+        "description": "One run that landed in the window: the work it did and where.",
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed_at": {
+            "title": "Landed At",
+            "type": "string"
+          },
+          "pull_request_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull Request Number"
+          },
+          "pull_request_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pull Request Url"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "title",
+          "landed_at"
+        ],
+        "title": "BriefingLandedRun",
+        "type": "object"
+      },
+      "BriefingLane": {
+        "additionalProperties": false,
+        "description": "How the runs of one kind ended inside the window.",
+        "properties": {
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "landed": {
+            "default": 0,
+            "title": "Landed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "BriefingLane",
+        "type": "object"
+      },
+      "BriefingOutcomes": {
+        "additionalProperties": false,
+        "description": "The runs that reached an end inside the window \u2014 by when they\nfinished, not when they began. ``blocked`` is not an end: it waits.",
+        "properties": {
+          "by_kind": {
+            "items": {
+              "$ref": "#/components/schemas/BriefingLane"
+            },
+            "title": "By Kind",
+            "type": "array"
+          },
+          "cancelled": {
+            "default": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "landed": {
+            "default": 0,
+            "title": "Landed",
+            "type": "integer"
+          },
+          "recent_landed": {
+            "items": {
+              "$ref": "#/components/schemas/BriefingLandedRun"
+            },
+            "title": "Recent Landed",
+            "type": "array"
+          }
+        },
+        "required": [
+          "by_kind",
+          "recent_landed"
+        ],
+        "title": "BriefingOutcomes",
+        "type": "object"
+      },
+      "BriefingRunway": {
+        "additionalProperties": false,
+        "description": "How long the tasks lined up would take at the trailing week's rate\nof landed ``code`` runs. Both rates are ``null`` when nothing landed in\nthat week: no rate is invented.",
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "landed_per_day": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Landed Per Day"
+          },
+          "ready_tasks": {
+            "default": 0,
+            "title": "Ready Tasks",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingRunway",
+        "type": "object"
+      },
+      "BriefingSupply": {
+        "additionalProperties": false,
+        "description": "How much work is lined up, as it stands now.",
+        "properties": {
+          "approved": {
+            "default": 0,
+            "title": "Approved",
+            "type": "integer"
+          },
+          "parked": {
+            "default": 0,
+            "title": "Parked",
+            "type": "integer"
+          },
+          "proposed": {
+            "default": 0,
+            "title": "Proposed",
+            "type": "integer"
+          },
+          "queued": {
+            "default": 0,
+            "title": "Queued",
+            "type": "integer"
+          },
+          "ready_tasks": {
+            "default": 0,
+            "title": "Ready Tasks",
+            "type": "integer"
+          },
+          "running": {
+            "default": 0,
+            "title": "Running",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingSupply",
+        "type": "object"
+      },
+      "BriefingWaiting": {
+        "additionalProperties": false,
+        "description": "The attention list's counts, and when its longest wait began.",
+        "properties": {
+          "decision": {
+            "default": 0,
+            "title": "Decision",
+            "type": "integer"
+          },
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "oldest_since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Since"
+          },
+          "paused": {
+            "default": 0,
+            "title": "Paused",
+            "type": "integer"
+          },
+          "total": {
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "title": "BriefingWaiting",
         "type": "object"
       },
       "Capabilities": {
@@ -1251,6 +2994,16 @@
             "title": "Created At",
             "type": "string"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "historical": {
             "default": false,
             "title": "Historical",
@@ -1385,7 +3138,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -1434,7 +3188,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -2021,6 +3776,16 @@
             "title": "Artifacts",
             "type": "array"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "item_actions": {
             "items": {
               "type": "string"
@@ -2559,6 +4324,177 @@
         "title": "DaemonCommandResult",
         "type": "object"
       },
+      "DecisionOut": {
+        "additionalProperties": false,
+        "description": "One judged act from the ledger: who asked to take what, the outcome\n(``allow``, ``deny`` or ``escalate``) and why, the grant that allowed it,\nwhat it was about, and the facts it was judged on. An escalation carries\nhow it was resolved once it is.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "attrs": {
+            "additionalProperties": true,
+            "title": "Attrs",
+            "type": "object"
+          },
+          "epic_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epic Run Id"
+          },
+          "grant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "item_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item Id"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "repository": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repository"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "outcome",
+          "reason",
+          "at"
+        ],
+        "title": "DecisionOut",
+        "type": "object"
+      },
       "DetailOut": {
         "additionalProperties": false,
         "properties": {
@@ -2800,6 +4736,58 @@
           "mode"
         ],
         "title": "DiscoveryCredential",
+        "type": "object"
+      },
+      "Dismissal": {
+        "additionalProperties": false,
+        "description": "A person acknowledged the alert this work raises: it keeps its state\nand its controls and no longer asks anyone for attention. ``cause`` is\n``dismissed`` for a plain acknowledgement and ``abandoned`` when the\nperson gave the work up \u2014 the abandon is its own acknowledgement. Gone\nagain the moment the work changes state, so a new failure is a new\nalert.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Actor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cause": {
+            "default": "dismissed",
+            "title": "Cause",
+            "type": "string"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "at"
+        ],
+        "title": "Dismissal",
         "type": "object"
       },
       "EpicRunChanged": {
@@ -3240,6 +5228,30 @@
         "title": "EpicRunTaskOut",
         "type": "object"
       },
+      "EscalationDeclined": {
+        "additionalProperties": false,
+        "description": "An escalation a person said no to: the decision as the ledger now\nholds it, and the ``decision.decline`` operation that recorded it.",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/DecisionOut"
+          },
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision",
+          "operation_id"
+        ],
+        "title": "EscalationDeclined",
+        "type": "object"
+      },
       "EventOut": {
         "additionalProperties": false,
         "description": "One public event. ``id`` is the replay cursor (``evt_<seq>``);\n``native_seq`` is the engine's own sequence when the event is a\nprojection of the run's chronology; ``actor`` is absent where nothing\ntruthful can be said.",
@@ -3357,7 +5369,8 @@
             "enum": [
               "discord",
               "slack",
-              "mattermost"
+              "mattermost",
+              "local"
             ],
             "title": "Backend",
             "type": "string"
@@ -3550,6 +5563,16 @@
             ],
             "title": "Detail"
           },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "head_sha": {
             "anyOf": [
               {
@@ -3722,6 +5745,673 @@
           "state"
         ],
         "title": "GateSummary",
+        "type": "object"
+      },
+      "GoalCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Repository",
+            "type": "string"
+          },
+          "state": {
+            "default": "active",
+            "enum": [
+              "active",
+              "paused",
+              "done"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "title",
+          "text"
+        ],
+        "title": "GoalCreate",
+        "type": "object"
+      },
+      "GoalOut": {
+        "additionalProperties": false,
+        "description": "A standing objective an owner wrote for one repository. ``plans`` are\nthe plans proposed from it, most recently changed first;\n``open_plan_id`` is the one currently serving it (the most recently\nchanged plan that is not archived), or ``null``. ``proposing`` says\nwhether the planner drafts plans toward it on its own.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Display"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "open_plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open Plan Id"
+          },
+          "plans": {
+            "items": {
+              "$ref": "#/components/schemas/GoalPlanOut"
+            },
+            "title": "Plans",
+            "type": "array"
+          },
+          "proposing": {
+            "$ref": "#/components/schemas/GoalProposingOut"
+          },
+          "repository": {
+            "title": "Repository",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "paused",
+              "done"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "repository",
+          "title",
+          "text",
+          "state",
+          "created_at",
+          "updated_at",
+          "revision",
+          "proposing"
+        ],
+        "title": "GoalOut",
+        "type": "object"
+      },
+      "GoalPlanOut": {
+        "additionalProperties": false,
+        "description": "A plan proposed from a goal: its id, title, the state a plan reads as\nand its ``advance`` switch.",
+        "properties": {
+          "advance": {
+            "enum": [
+              "manual",
+              "auto"
+            ],
+            "title": "Advance",
+            "type": "string"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "draft",
+              "published",
+              "archived"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_id",
+          "title",
+          "state",
+          "advance"
+        ],
+        "title": "GoalPlanOut",
+        "type": "object"
+      },
+      "GoalProposingOut": {
+        "additionalProperties": false,
+        "description": "Whether the planner drafts plans toward a goal on its own here, and\nwhen it does not, why \u2014 so a client can say so rather than promise a\nplan that never comes.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "every_s": {
+            "title": "Every S",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "enabled",
+          "every_s"
+        ],
+        "title": "GoalProposingOut",
+        "type": "object"
+      },
+      "GoalResult": {
+        "additionalProperties": false,
+        "properties": {
+          "goal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoalOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          }
+        },
+        "required": [
+          "message",
+          "operation"
+        ],
+        "title": "GoalResult",
+        "type": "object"
+      },
+      "GoalUpdate": {
+        "additionalProperties": false,
+        "description": "An edit against the revision the client read. Only the fields sent\nchange. A goal's repository is not edited.",
+        "properties": {
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "paused",
+                  "done"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "GoalUpdate",
+        "type": "object"
+      },
+      "GrantConditions": {
+        "additionalProperties": false,
+        "description": "What must hold for a grant to cover an act. A key left out (or\n``null``, or ``false`` for ``require_review``) constrains nothing; which\nkeys an action accepts is checked when the grant is written.",
+        "properties": {
+          "causes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Causes"
+          },
+          "levels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Levels"
+          },
+          "max_children": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Children"
+          },
+          "max_retries": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Retries"
+          },
+          "repositories": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repositories"
+          },
+          "require_review": {
+            "default": false,
+            "title": "Require Review",
+            "type": "boolean"
+          }
+        },
+        "title": "GrantConditions",
+        "type": "object"
+      },
+      "GrantCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/GrantConditions"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "agent_slug",
+          "action"
+        ],
+        "title": "GrantCreate",
+        "type": "object"
+      },
+      "GrantOut": {
+        "additionalProperties": false,
+        "description": "A standing rule: ``agent_slug`` may take ``action`` while\n``conditions`` hold, at most ``daily_limit`` times a day (``null`` is\nunlimited). ``used_today`` is how many acts it allowed in the current\ncap day, counted from the decisions ledger. ``source`` is ``default``\nfor one of Lantern's default grants (``default_key`` names which) and\n``owner`` for one a person wrote.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_slug": {
+            "title": "Agent Slug",
+            "type": "string"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/GrantConditions"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "created_by_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Display"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "default_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Key"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source": {
+            "default": "owner",
+            "enum": [
+              "default",
+              "owner"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "used_today": {
+            "default": 0,
+            "title": "Used Today",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "default": "local",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent_slug",
+          "action",
+          "conditions",
+          "created_at",
+          "updated_at",
+          "revision"
+        ],
+        "title": "GrantOut",
+        "type": "object"
+      },
+      "GrantResult": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          }
+        },
+        "required": [
+          "message",
+          "operation"
+        ],
+        "title": "GrantResult",
+        "type": "object"
+      },
+      "GrantUpdate": {
+        "additionalProperties": false,
+        "description": "An edit against the revision the client read. Only the fields sent\nchange: ``daily_limit: null`` lifts the limit, ``note: null`` clears the\nnote, and ``conditions`` replaces the whole set. A grant's agent and\naction are not edited.",
+        "properties": {
+          "conditions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrantConditions"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "expected_revision": {
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "GrantUpdate",
+        "type": "object"
+      },
+      "GrantsRestored": {
+        "additionalProperties": false,
+        "description": "The default grants a restore wrote, in the table's order: empty when\nevery default was already in place.",
+        "properties": {
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/GrantOut"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/OperationOut"
+          }
+        },
+        "required": [
+          "grants",
+          "message",
+          "operation"
+        ],
+        "title": "GrantsRestored",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -4013,6 +6703,27 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4254,6 +6965,27 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -4436,10 +7168,14 @@
       },
       "LinkCodeOut": {
         "additionalProperties": false,
-        "description": "A code to type on a bridge, once, to prove an account is yours.",
+        "description": "A code to type on a bridge, once, to prove an account is yours.\n``command`` is the exact message to send there: the bridge's configured\n``[chat] command_prefix``, the ``link`` verb and the code.",
         "properties": {
           "code": {
             "title": "Code",
+            "type": "string"
+          },
+          "command": {
+            "title": "Command",
             "type": "string"
           },
           "expires_at": {
@@ -4449,7 +7185,8 @@
         },
         "required": [
           "code",
-          "expires_at"
+          "expires_at",
+          "command"
         ],
         "title": "LinkCodeOut",
         "type": "object"
@@ -4800,7 +7537,8 @@
                 "collaboration:write",
                 "collaboration:delegate",
                 "plans:create",
-                "plans:publish"
+                "plans:publish",
+                "policy:manage"
               ],
               "type": "string"
             },
@@ -5254,6 +7992,16 @@
         "title": "NotificationKind",
         "type": "string"
       },
+      "NotificationLevel": {
+        "description": "How urgent a push is, for the device to present it by.\n\n``passive``: news to read when convenient (work or a reply that\narrived, a test). ``active``: worth a look now (a mention, something\nthat could not finish, a plan waiting on you, a reminder about work\nthat failed or is held). ``time_sensitive``: something is waiting on a\ndecision the recipient can make (a gate, work that needs a person, a\nreminder about a decision). A notification recorded before levels\nexisted reads ``active``.",
+        "enum": [
+          "passive",
+          "active",
+          "time_sensitive"
+        ],
+        "title": "NotificationLevel",
+        "type": "string"
+      },
       "OidcProviderOut": {
         "additionalProperties": false,
         "description": "What a signed-out browser needs to start Authorization Code + PKCE.",
@@ -5589,6 +8337,38 @@
         "title": "Origin",
         "type": "object"
       },
+      "Page_DecisionOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[DecisionOut]",
+        "type": "object"
+      },
       "Page_EventOut_": {
         "properties": {
           "data": {
@@ -5651,6 +8431,70 @@
           "data"
         ],
         "title": "Page[Gate]",
+        "type": "object"
+      },
+      "Page_GoalOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/GoalOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[GoalOut]",
+        "type": "object"
+      },
+      "Page_GrantOut_": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/GrantOut"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "Page[GrantOut]",
         "type": "object"
       },
       "Page_Hold_": {
@@ -6208,6 +9052,30 @@
         "title": "PlanApprove",
         "type": "object"
       },
+      "PlanApproved": {
+        "additionalProperties": false,
+        "description": "A level approved from the list: the plan as it now is and the\n``plan.approve`` operation that approved it.",
+        "properties": {
+          "operation_id": {
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanOut"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "plan",
+          "operation_id"
+        ],
+        "title": "PlanApproved",
+        "type": "object"
+      },
       "PlanAttach": {
         "additionalProperties": false,
         "description": "Attach an existing open issue as a child of the node: its\n``repository`` and ``number``, or its web ``url``.",
@@ -6423,6 +9291,21 @@
               }
             ],
             "title": "Acceptance Criteria"
+          },
+          "advance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advance"
           },
           "constraints": {
             "anyOf": [
@@ -7002,6 +9885,17 @@
             "title": "Acceptance Criteria",
             "type": "array"
           },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          },
           "constraints": {
             "default": "",
             "title": "Constraints",
@@ -7112,6 +10006,28 @@
             "title": "Position",
             "type": "integer"
           },
+          "proposed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed By"
+          },
+          "published_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published By"
+          },
           "replan": {
             "anyOf": [
               {
@@ -7125,6 +10041,16 @@
           "repository": {
             "title": "Repository",
             "type": "string"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanReviewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "state": {
             "enum": [
@@ -7355,6 +10281,15 @@
         "additionalProperties": false,
         "description": "The whole tree: the root first, then each parent's children in\norder.",
         "properties": {
+          "advance": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "auto"
+            ],
+            "title": "Advance",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -7390,6 +10325,17 @@
             "default": false,
             "title": "Generation Pending",
             "type": "boolean"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
           },
           "id": {
             "title": "Id",
@@ -7954,6 +10900,63 @@
         "title": "PlanReplanResult",
         "type": "object"
       },
+      "PlanReviewOut": {
+        "additionalProperties": false,
+        "description": "A reviewer's verdict on a node's level \u2014 its children as they were\nwhen it was given: ``approve``, or ``escalate`` to a person, with the\n``reasons``, the run that reviewed and who did (``agent:<slug>``).\n``digest`` names what was reviewed; ``current`` is whether the level\nstill reads so \u2014 any edit, addition, removal or reorder of the children\nsince makes it ``false``, and a review that is not current says nothing\nabout the level as it is now. Written by the daemon, never through the\nAPI.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "current": {
+            "title": "Current",
+            "type": "boolean"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "approve",
+              "escalate"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "verdict",
+          "digest",
+          "at",
+          "current"
+        ],
+        "title": "PlanReviewOut",
+        "type": "object"
+      },
       "PlanRollup": {
         "additionalProperties": false,
         "description": "How far the plan has got: its epics and tasks, how many tasks the\nforge has closed, and how many nodes are published.",
@@ -7985,6 +10988,15 @@
       "PlanSummary": {
         "additionalProperties": false,
         "properties": {
+          "advance": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "auto"
+            ],
+            "title": "Advance",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -8015,6 +11027,17 @@
             "default": 0,
             "title": "Drift",
             "type": "integer"
+          },
+          "goal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal Id"
           },
           "id": {
             "title": "Id",
@@ -8105,7 +11128,7 @@
       },
       "PlanUpdate": {
         "additionalProperties": false,
-        "description": "Edit the inference brief while generation_pending, otherwise the\ngenerated root's sections.",
+        "description": "Edit the inference brief while generation_pending, otherwise the\ngenerated root's sections; and, with ``advance``, the plan's switch.",
         "properties": {
           "acceptance_criteria": {
             "anyOf": [
@@ -8121,6 +11144,21 @@
               }
             ],
             "title": "Acceptance Criteria"
+          },
+          "advance": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "auto"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advance"
           },
           "constraints": {
             "anyOf": [
@@ -8410,6 +11448,14 @@
         "additionalProperties": false,
         "description": "What a push was about: the text a device shows in place of the\nrelay's generic alert.",
         "properties": {
+          "actions": {
+            "description": "The entry's actions the recipient may take, by the attention list's action names (`gate_approve`, `retry`, `dismiss`, ...): never one the server would refuse them when it was recorded. Empty without an entry.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Actions",
+            "type": "array"
+          },
           "body": {
             "title": "Body",
             "type": "string"
@@ -8430,8 +11476,24 @@
             "title": "Created At",
             "type": "string"
           },
+          "entry_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id of the `GET /v1/attention` entry it is about, when it is about one: what `POST /v1/attention/{id}/act` takes.",
+            "title": "Entry Id"
+          },
           "kind": {
             "$ref": "#/components/schemas/NotificationKind"
+          },
+          "level": {
+            "$ref": "#/components/schemas/NotificationLevel",
+            "description": "How urgent it is: `active` for a push recorded before levels were."
           },
           "ref": {
             "description": "The ref the push carried.",
@@ -8462,7 +11524,10 @@
           "turn_id",
           "title",
           "body",
-          "created_at"
+          "created_at",
+          "entry_id",
+          "actions",
+          "level"
         ],
         "title": "PushNotificationOut",
         "type": "object"
@@ -9238,6 +12303,27 @@
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "dismissal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Dismissal"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "gate": {
             "anyOf": [
@@ -11212,6 +14298,42 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WorkDeleteCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "discard_undelivered": {
+            "default": false,
+            "title": "Discard Undelivered",
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "WorkDeleteCommand",
+        "type": "object"
+      },
       "WorkflowCreate": {
         "additionalProperties": false,
         "properties": {
@@ -12299,6 +15421,81 @@
         ]
       }
     },
+    "/v1/analytics": {
+      "get": {
+        "description": "How the runs that began in a window went: outcomes, time to land,\ntime parked on a person, turns, rework and failures by cause, per run\nkind and in total, with the window before it for comparison. The\nwindow is `window_s` seconds (a week when omitted, at most 90 days)\nending at `until` (RFC 3339 or epoch; now when omitted), cut into\n`buckets` equal slices. Telemetry, never a bill.",
+        "operationId": "get_analytics_v1_analytics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "window_s",
+            "required": false,
+            "schema": {
+              "default": 604800,
+              "maximum": 7776000,
+              "minimum": 60,
+              "title": "Window S",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "buckets",
+            "required": false,
+            "schema": {
+              "default": 7,
+              "maximum": 90,
+              "minimum": 1,
+              "title": "Buckets",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyticsWindow"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Analytics",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
     "/v1/artifacts/{artifact_id}": {
       "get": {
         "description": "Digest, media type, size, origin and availability.",
@@ -12380,6 +15577,230 @@
         "summary": "Download Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/attention": {
+      "get": {
+        "description": "Everything waiting on a person, computed as it stands now: an open\nmerge or publication gate (one entry with the item it parks), an item\nwaiting for a review or for answers, an item that ended `failed` or\n`blocked`, a failed task of a live epic run (one entry with its item),\na provider hold nothing will retry by itself, a repository whose\npolling is suspended, a `manual` plan's breakdown questions with no\nparked item standing for them (`plan_questions`) and its proposed\nlevels (`plan_proposal`), and every escalation an agent left for a\nperson (`escalation`, naming the `agent`, the `decision_id` and the\n`decision_action`). Decisions first, then failures, then pauses; the\nlongest wait first within each. A dismissed alert is left out unless\n`include_dismissed`; deleted work never appears. Each entry names what\nit is about, carries the revision an act on it is checked against, and\nlists the actions the server offers on it with the capability each\nneeds and whether the caller holds it. `counts` covers every group\nwhatever `group` the page was narrowed to. `kind` is open: leave out\nan entry whose kind you do not know.",
+        "operationId": "list_attention_v1_attention_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repository_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repository Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_dismissed",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Dismissed",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Attention",
+        "tags": [
+          "attention"
+        ]
+      }
+    },
+    "/v1/attention/dismiss": {
+      "post": {
+        "description": "Dismiss several alerts at once, under one operation. The request\nnames each alert \u2014 the ones the person was looking at, never \"all\" \u2014\nby its item, or by its run when no item carries the work. Each is\ndismissed as its own route would dismiss it; one that cannot be (an\nunknown id, a stale ``expected_revision``, work that raises no alert)\nis ``skipped`` with the reason and does not fail the rest. ``results``\nanswers in the request's order.",
+        "operationId": "dismiss_attention_v1_attention_dismiss_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttentionDismissRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionDismissed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Attention",
+        "tags": [
+          "control"
+        ]
+      }
+    },
+    "/v1/attention/{entry_id}/act": {
+      "post": {
+        "description": "Take one of the actions an entry of `GET /v1/attention` offers,\nnaming only the entry and the action. The entry is looked up as it\nstands now (a dismissed one included, so `undismiss` works) and the\nrequest is handed to the command the action's own route runs: the same\noperation, the same refusals, nothing recorded for the act itself.\n\n`action` is one of the entry's `actions`; the caller needs that\naction's `capability` (`403 forbidden` naming it otherwise). `params`\nare the action's own arguments, validated as its route validates its\nbody: `rounds` for `grant_rounds`; `text` (and `source_refs`,\n`task_id`, `agent_slug`) for `steer`; `reason` for `abandon`,\n`dismiss` and the other item actions; `reason` and\n`discard_undelivered` for `delete`; `retry` and `reason` for `cancel`;\n`rounds` for `approve` on an escalated round grant.\n\nOn an `escalation`, `approve` takes the step the agent asked to take\nas the caller, through that step's own command and operation, then\nresolves the decision `acted`; `decline` records a `decision.decline`\noperation resolving it `declined`. Either needs the capability the\nentry lists (the escalated step's). On a `plan_proposal`, `approve`\napproves the level (`plans:create`). `decision` carries the ledger\nrow after an act on an escalation.\n\n`expected_revision` is the entry's `revision` as the person read it,\nnever defaulted from the entry as it stands. `gate_approve` requires\nit (`422` without). On a `gate_approve`, and on an item action of an\n`item` entry, the command itself checks it and records the refusal;\non any other action the entry's revision is compared before the\ncommand runs. Either way a moved entry is `409 stale_revision` with\nthe current `revision`. An entry whose `revision` is `null` \u2014 an\n`epic_task`, a `repository` \u2014 takes none (`422`).\n\nThe `Idempotency-Key` header is required (`422\nidempotency_key_required`), scoped to the caller and this entry. A\nreplay answers the first act (`replayed: true`), also once the entry\nis gone; another action, or other `params`, under the same key is\n`409 idempotency_conflict`.\n\nAn id nothing is waiting under is `409 not_waiting`: the thing was\nsettled, or waits again as a new entry. An action the entry does not\noffer now is `409 not_eligible` with `offered`; a name that is no\naction is `422 unknown_action`. Every refusal of the action's own\nroute can be answered too.\n\n`200` with `{entry_id, action, operation_id, replayed, still_waiting,\nresult}`; `202` where the action's own route answers `202` (a gate\napproval, a steer, a cancel honoured at the run's next boundary, an\napproved breakdown) and `201` where it answers `201` (an approved\nepic run start).\n`result` is the body the action's own route answers and\n`still_waiting` whether the entry is still on the list (dismissed\nalerts left out) as the answer is written.",
+        "operationId": "act_on_attention_v1_attention__entry_id__act_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttentionActRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Created: an approved escalation started an epic run."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionActResult"
+                }
+              }
+            },
+            "description": "Accepted: the action's effect completes afterwards."
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "409": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
+            "description": "A refusal, as `application/problem+json`."
+          }
+        },
+        "summary": "Act on an entry",
+        "tags": [
+          "attention"
         ]
       }
     },
@@ -12671,6 +16092,57 @@
         "summary": "List Bridges",
         "tags": [
           "collaboration"
+        ]
+      }
+    },
+    "/v1/briefing": {
+      "get": {
+        "description": "What happened since `since` (RFC 3339 or epoch; a day ago when\nomitted; at most 90 days back), what is waiting on a person now, and\nhow much work is lined up \u2014 computed on read, nothing stored. A run\ncounts in the window when it *finished* in it. `decided.recent` is\ndetailed only for a caller holding `audit:read` and `null` otherwise;\nevery other field is for everyone with `runs:read`. Clients ignore\nfields they do not know: a later release adds some.",
+        "operationId": "get_briefing_v1_briefing_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Briefing"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Briefing",
+        "tags": [
+          "briefing"
         ]
       }
     },
@@ -14847,6 +18319,128 @@
         ]
       }
     },
+    "/v1/decisions": {
+      "get": {
+        "description": "What was decided for agents, newest first: filter by `outcome`\n(`allow`, `deny`, `escalate`), `unresolved=true` (escalations still\nwaiting for a person), `agent` (a slug) and `since` (RFC 3339 or\nepoch).",
+        "operationId": "list_decisions_v1_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "outcome",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unresolved",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unresolved",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DecisionOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Decisions",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "description": "Every public event after ``after`` (an event id, or omitted for\nthe oldest held), oldest first, in the order it was recorded.\n``latest`` instead returns the newest bounded snapshot, oldest first;\nit works after retention and cannot be combined with ``after``.\n``channel_id`` narrows to one channel's events (and its runs'). A\nworkspace member sees only what they may: see ``events.scoped``.",
@@ -15216,9 +18810,473 @@
         ]
       }
     },
+    "/v1/goals": {
+      "get": {
+        "description": "Every goal, oldest first, narrowed by `repository` and `state`\n(`active`, `paused`, `done`). Each carries the plans proposed from it\nand `open_plan_id`, the one currently serving it.",
+        "operationId": "list_goals_v1_goals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "repository",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repository"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "done"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_GoalOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Goals",
+        "tags": [
+          "goals"
+        ]
+      },
+      "post": {
+        "description": "Set a goal for a repository. `422` names the field: a repository\nthat is not configured, is disabled or cannot hold a plan.",
+        "operationId": "create_goal_v1_goals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Goal",
+        "tags": [
+          "goals"
+        ]
+      }
+    },
+    "/v1/goals/{goal_id}": {
+      "delete": {
+        "description": "Delete a goal. The plans proposed from it keep naming it.",
+        "operationId": "remove_goal_v1_goals__goal_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Goal",
+        "tags": [
+          "goals"
+        ]
+      },
+      "get": {
+        "operationId": "get_goal_v1_goals__goal_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Goal",
+        "tags": [
+          "goals"
+        ]
+      },
+      "patch": {
+        "description": "Edit a goal's title, text or state against `expected_revision`\n(`409 stale_revision` when it moved on). Its repository is not\nedited.",
+        "operationId": "update_goal_v1_goals__goal_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoalResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Goal",
+        "tags": [
+          "goals"
+        ]
+      }
+    },
+    "/v1/grants": {
+      "get": {
+        "description": "Every grant, with how many acts each allowed today: Lantern's\ndefault grants first, in their table's order (`source: \"default\"`),\nthen the grants owners wrote, oldest first.",
+        "operationId": "list_grants_v1_grants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_GrantOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Grants",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "post": {
+        "description": "Let an agent take one of the delegable actions, under conditions.\n`422` names the field: an action that cannot be delegated, a condition\nthe action does not accept, an agent that is unknown or disabled, a\ndaily limit that is not positive.",
+        "operationId": "create_grant_v1_grants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Grant",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
+    "/v1/grants/defaults/restore": {
+      "post": {
+        "description": "Write again each of Lantern's default grants whose grant was\ndeleted. A default still there, edited or paused, is left as it is;\nthe answer lists the grants written (none when every default is in\nplace).",
+        "operationId": "restore_default_grants_v1_grants_defaults_restore_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantsRestored"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Restore Default Grants",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
+    "/v1/grants/{grant_id}": {
+      "delete": {
+        "description": "Delete a grant. The decisions it allowed stay in the ledger.",
+        "operationId": "remove_grant_v1_grants__grant_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Grant",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "get": {
+        "operationId": "get_grant_v1_grants__grant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Grant",
+        "tags": [
+          "delegation"
+        ]
+      },
+      "patch": {
+        "description": "Edit a grant's conditions, daily limit, note or whether it is\nenabled, against `expected_revision` (`409 stale_revision` when it\nmoved on). Its agent and action are not edited.",
+        "operationId": "update_grant_v1_grants__grant_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "grant_id",
+            "required": true,
+            "schema": {
+              "title": "Grant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Grant",
+        "tags": [
+          "delegation"
+        ]
+      }
+    },
     "/v1/items": {
       "get": {
-        "description": "Work items, newest first, filterable by state, kind and repository.",
+        "description": "Work items, newest first, filterable by state, kind and repository.\nItems a person deleted are left out unless ``include_deleted``.",
         "operationId": "list_items_v1_items_get",
         "parameters": [
           {
@@ -15273,6 +19331,16 @@
                 }
               ],
               "title": "Repository Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
             }
           },
           {
@@ -15494,6 +19562,126 @@
         ]
       }
     },
+    "/v1/items/{item_id}/delete": {
+      "post": {
+        "description": "Put a finished item away: it and its runs leave every listing, and\ntheir sandboxes and run directories are removed. The records and the\nevent trail stay, readable by id, and nothing on the forge is touched.\nRefused for an item that is not at rest (abandon it first), and \u2014\nunless ``discard_undelivered`` \u2014 when a run's workspace is the only\ncopy of work that was never delivered. Deleting twice answers with the\nitem as it stands.",
+        "operationId": "delete_item_v1_items__item_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkDeleteCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
+    "/v1/items/{item_id}/dismiss": {
+      "post": {
+        "description": "Acknowledge the alert this item raises, for everyone: it keeps its\nstate and its controls and stops asking for attention. Refused for an\nitem that raises none (queued, running, done). The dismissal ends by\nitself when the item changes state, so a retry that fails is a new\nalert; dismissing twice answers with the first dismissal.",
+        "operationId": "dismiss_item_v1_items__item_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
     "/v1/items/{item_id}/requeue": {
       "post": {
         "description": "Unpin the item's run so its next dispatch starts fresh, attempts\nintact; the run in flight is cancelled.",
@@ -15609,6 +19797,66 @@
           }
         },
         "summary": "Retry Item",
+        "tags": [
+          "items"
+        ]
+      }
+    },
+    "/v1/items/{item_id}/undismiss": {
+      "post": {
+        "description": "Take a dismissal back: the item asks for attention again.",
+        "operationId": "undismiss_item_v1_items__item_id__undismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "item_id",
+            "required": true,
+            "schema": {
+              "title": "Item Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undismiss Item",
         "tags": [
           "items"
         ]
@@ -15873,7 +20121,7 @@
     },
     "/v1/plans": {
       "get": {
-        "description": "Every plan in the workspace, drafts included, most recently changed\nfirst. ``repository`` matches a plan any of whose nodes targets it.",
+        "description": "Every plan in the workspace, drafts included, most recently changed\nfirst, a page at a time: at most ``limit`` (200, the default, is the\nmost), and ``cursor`` \u2014 the ``next_cursor`` of the page before \u2014 for\nthe rest. ``repository`` matches a plan any of whose nodes targets it;\na cursor belongs to the filters it was issued under (``400\ninvalid_cursor`` otherwise).",
         "operationId": "list_plans_v1_plans_get",
         "parameters": [
           {
@@ -15933,6 +20181,34 @@
               ],
               "title": "State"
             }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
           }
         ],
         "responses": {
@@ -15963,7 +20239,7 @@
         ]
       },
       "post": {
-        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.",
+        "description": "A new draft plan from the form. A repository whose forge cannot hold\na plan is ``409 planning_unsupported``, naming why.\n\n``advance`` (feature ``planning.advance``) is ``manual`` unless the\nbody says otherwise, and saying otherwise needs ``plans:publish``\n(``403 forbidden`` naming it, and nothing is drafted). An ``auto``\nplan is moved forward by the daemon under the owner's grants (feature\n``planning.driver``).",
         "operationId": "create_plan_v1_plans_post",
         "requestBody": {
           "content": {
@@ -15985,6 +20261,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
           },
           "409": {
             "description": "A refusal, as `application/problem+json`."
@@ -16102,7 +20381,7 @@
         ]
       },
       "patch": {
-        "description": "Edit the plan's own sections (its root node's).",
+        "description": "Edit the plan's own sections (its root node's), and its ``advance``\nswitch (feature ``planning.advance``).\n\nChanging ``advance`` needs ``plans:publish``: a caller without it who\nnames a value the plan does not already have is ``403 forbidden``\nnaming the capability, and nothing in the request is written. Naming\nthe value it has changes nothing and is not refused, so the same edit\nwithout ``advance`` \u2014 or echoing it \u2014 still works for them. The switch\nmay be flipped on its own, on a published plan too; it is recorded as\n``plan.node.changed`` with ``change: advance``, ``advance`` and\n``before``, under whoever flipped it. From the next tick the daemon\nmoves an ``auto`` plan forward under the owner's grants, and stops\nbefore its next step once it reads ``manual`` (feature\n``planning.driver``).",
         "operationId": "update_plan_v1_plans__plan_id__patch",
         "parameters": [
           {
@@ -16135,6 +20414,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "description": "A refusal, as `application/problem+json`."
           },
           "404": {
             "description": "A refusal, as `application/problem+json`."
@@ -16206,7 +20488,7 @@
     },
     "/v1/plans/{plan_id}/nodes": {
       "post": {
-        "description": "A new child one level under ``parent_id``; the plan as it now is,\nwith the new node's id in the ``Location`` header.",
+        "description": "A new child one level under ``parent_id``; the plan as it now is,\nwith the new node's id in the ``Location`` header. A parent at\n``[planning]``'s cap refuses it (``409 level_full``) \u2014 the same count\nthe planner's room, attaching and publishing are held to.",
         "operationId": "add_node_v1_plans__plan_id__nodes_post",
         "parameters": [
           {
@@ -16451,7 +20733,7 @@
     },
     "/v1/plans/{plan_id}/nodes/{node_id}/approve": {
       "post": {
-        "description": "A person's \"this is right\": the node's draft and proposed children \u2014\nevery one, or those ``node_ids`` names \u2014 become ``approved``, ready to\npublish.",
+        "description": "A person's \"this is right\": the node's draft and proposed children \u2014\nevery one, or those ``node_ids`` names \u2014 become ``approved``, ready to\npublish. Recorded as a ``plan.approve`` operation under whoever made\nit, so a refusal's problem names its ``operation_id``. The\n``Idempotency-Key`` header is optional: with one, a replay answers the\nplan as it is now (or the refusal the first call recorded) and approves\nnothing again, and a different body under the same key is ``409\nidempotency_conflict``; without one, each call is its own operation.",
         "operationId": "approve_children_v1_plans__plan_id__nodes__node_id__approve_post",
         "parameters": [
           {
@@ -16501,6 +20783,9 @@
             "description": "A refusal, as `application/problem+json`."
           },
           "422": {
+            "description": "A refusal, as `application/problem+json`."
+          },
+          "503": {
             "description": "A refusal, as `application/problem+json`."
           }
         },
@@ -17982,7 +22267,7 @@
     },
     "/v1/runs": {
       "get": {
-        "description": "Runs touched most recently first, filterable by state and kind.",
+        "description": "Runs touched most recently first, filterable by state and kind.\nRuns a person deleted are left out unless ``include_deleted``.",
         "operationId": "list_runs_v1_runs_get",
         "parameters": [
           {
@@ -18021,6 +22306,16 @@
                 }
               ],
               "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_deleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Deleted",
+              "type": "boolean"
             }
           },
           {
@@ -18221,6 +22516,126 @@
           }
         },
         "summary": "Cancel Run",
+        "tags": [
+          "control"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/delete": {
+      "post": {
+        "description": "Put a finished run away. A run its work item pins deletes the item\nwith every run it had (the same as ``POST /v1/items/{id}/delete``); a\nrun nothing pins is deleted alone. Refused for a run that is not at\nrest (cancel it first).",
+        "operationId": "delete_run_v1_runs__run_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WorkDeleteCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Run",
+        "tags": [
+          "control"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/dismiss": {
+      "post": {
+        "description": "Acknowledge the alert this run raises, for everyone. A run its work\nitem pins is dismissed on the item (the same mark ``POST\n/v1/items/{id}/dismiss`` leaves); a run nothing pins carries its own.\nRefused for a run that raises no alert. The dismissal ends by itself\nwhen the work changes state.",
+        "operationId": "dismiss_run_v1_runs__run_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Run",
         "tags": [
           "control"
         ]
@@ -18608,6 +23023,66 @@
         "summary": "Get Tasks",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/undismiss": {
+      "post": {
+        "description": "Take a dismissal back: the run's work asks for attention again.",
+        "operationId": "undismiss_run_v1_runs__run_id__undismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunCommand"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunCommandResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Undismiss Run",
+        "tags": [
+          "control"
         ]
       }
     },
@@ -19532,7 +24007,7 @@
     },
     "/v1/users/me/identities/link-code": {
       "post": {
-        "description": "A code to type on a bridge, as ``!sbx link <code>``, so messages you\nsend on a linked surface post under this account. It is single use and\nshort-lived, and this is the only place it is shown.",
+        "description": "A code to type on a bridge, as ``<prefix> link <code>``, so messages\nyou send on a linked surface post under this account. ``command`` is\nthat message exactly, with the bridge's configured prefix. It is single\nuse and short-lived, and this is the only place it is shown.",
         "operationId": "create_link_code_v1_users_me_identities_link_code_post",
         "responses": {
           "201": {
@@ -19590,7 +24065,7 @@
     },
     "/v1/users/me/notifications/{ref}": {
       "get": {
-        "description": "The text a device shows for the push that carried `ref`.",
+        "description": "The text a device shows for the push that carried `ref`, the\nattention entry it is about, the actions on that entry the caller may\ntake (through `POST /v1/attention/{id}/act`) and how urgent it is.",
         "operationId": "get_notification_v1_users_me_notifications__ref__get",
         "parameters": [
           {

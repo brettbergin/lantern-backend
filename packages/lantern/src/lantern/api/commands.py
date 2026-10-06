@@ -21,6 +21,9 @@ from lantern.api.context import ApiContext
 from lantern.api.errors import CONTROL_STATUS, Problem
 from lantern.api.models import (
     Admitted,
+    AttentionDismissed,
+    AttentionDismissRequest,
+    AttentionDismissResult,
     GateApproval,
     GateResult,
     IntakeRequest,
@@ -35,9 +38,10 @@ from lantern.api.models import (
     SteerRequest,
     SteerResult,
     ToolIntake,
+    WorkDeleteCommand,
     WorkloadIntake,
 )
-from lantern.api.projections import Views, not_found
+from lantern.api.projections import NOT_FOUND, Views, not_found
 from lantern.daemon.controls.eligibility import Subject, check as check_eligibility
 from lantern.daemon.controls.intake import (
     AdmitRequest,
@@ -46,9 +50,21 @@ from lantern.daemon.controls.intake import (
     ToolAdmission,
     WorkloadAdmission,
 )
-from lantern.daemon.controls.operations import IdempotencyConflict, Operation, OperationReplay
+from lantern.daemon.controls.operations import (
+    IdempotencyConflict,
+    Operation,
+    OperationReplay,
+    OperationStore,
+)
 from lantern.daemon.controls.principal import Capability as PrincipalCapability, Principal
-from lantern.daemon.controls.results import AdmitOutcome, ItemOutcome, Outcome
+from lantern.daemon.controls.results import (
+    AdmitOutcome,
+    DeleteOutcome,
+    DismissAllOutcome,
+    DismissOutcome,
+    ItemOutcome,
+    Outcome,
+)
 from lantern.daemon.controls.steering import SteeringStore
 from lantern.db.collaboration_models import ChannelRow
 from lantern.vcs.protocol import Capability
@@ -276,7 +292,7 @@ async def _admitted(ctx: ApiContext, apply: Callable[[], AdmitOutcome]) -> Admit
     return Admitted(item=view, operation=OperationOut.from_operation(op), created=outcome.fresh)
 
 
-ItemVerb = Literal["retry", "requeue", "abandon"]
+ItemVerb = Literal["retry", "requeue", "abandon", "dismiss", "undismiss", "delete"]
 
 
 async def item_command(
@@ -284,17 +300,36 @@ async def item_command(
     auth: Authenticated,
     verb: ItemVerb,
     public_id: str,
-    body: ItemCommand | None,
+    body: ItemCommand | WorkDeleteCommand | None,
     pair: tuple[str, str] | None,
 ) -> ItemCommandResult:
-    """Retry, requeue or abandon an item through the shared service."""
+    """Retry, requeue or abandon an item, or dismiss its alert (and take
+    that back), through the shared service."""
     principal = auth.principal
     command = body or ItemCommand()
     service = ctx.service()
 
-    def apply() -> ItemOutcome:
+    def apply() -> ItemOutcome | DismissOutcome | DeleteOutcome:
         views = Views(ctx)
         item = views.item_by_public_id(public_id)
+        if verb == "delete":
+            return service.delete(
+                principal,
+                item_id=item.item_id,
+                reason=command.reason,
+                discard_undelivered=getattr(command, "discard_undelivered", False),
+                expected_revision=command.expected_revision,
+                idempotency=pair,
+            )
+        if verb in ("dismiss", "undismiss"):
+            return service.dismiss(
+                principal,
+                item_id=item.item_id,
+                reason=command.reason,
+                undo=verb == "undismiss",
+                expected_revision=command.expected_revision,
+                idempotency=pair,
+            )
         if verb == "abandon":
             return service.abandon(
                 principal,
@@ -332,8 +367,9 @@ async def item_command(
         return await ctx.call(reread)
 
     def project() -> ItemCommandResult:
+        views = Views(ctx)
         return ItemCommandResult(
-            item=Views(ctx).item(outcome.item),
+            item=views.item(outcome.item or views.item_by_public_id(public_id)),
             operation=OperationOut.from_operation(_operation(ctx, outcome.operation_id)),
         )
 
@@ -342,15 +378,91 @@ async def item_command(
     return result
 
 
+# -- alerts: several dismissed at once ---------------------------------------------
+
+
+async def dismiss_all(
+    ctx: ApiContext,
+    auth: Authenticated,
+    body: AttentionDismissRequest,
+    pair: tuple[str, str] | None,
+) -> AttentionDismissed:
+    """Dismiss every alert the request names under one operation. A target
+    is skipped, never fatal: an id that names nothing, work that moved
+    since the person looked, work that raises no alert."""
+    principal = auth.principal
+    service = ctx.service()
+    # Where each resolved target sits in the request, so an answer by the
+    # service's index lands on the entry the client named.
+    places: list[int] = []
+    results: list[AttentionDismissResult] = [
+        AttentionDismissResult(
+            item_id=target.item_id,
+            run_id=target.run_id,
+            outcome="skipped",
+            code="not_found",
+            detail=NOT_FOUND,
+        )
+        for target in body.targets
+    ]
+
+    def apply() -> DismissAllOutcome:
+        views = Views(ctx)
+        named: list[tuple[Literal["item", "run"], str, int | None]] = []
+        places.clear()
+        for place, target in enumerate(body.targets):
+            try:
+                if target.item_id is not None:
+                    item = views.item_by_public_id(target.item_id)
+                    named.append(("item", item.item_id, target.expected_revision))
+                else:
+                    record = views.run_by_public_id(target.run_id or "")
+                    named.append(("run", record.run_id, target.expected_revision))
+            except Problem:
+                continue
+            places.append(place)
+        return service.dismiss_all(principal, named, reason=body.reason, idempotency=pair)
+
+    def fill(outcomes: list[dict[str, Any]]) -> None:
+        for entry in outcomes:
+            place = places[int(entry["index"])]
+            results[place] = results[place].model_copy(
+                update={
+                    "outcome": entry["outcome"],
+                    "code": entry.get("code"),
+                    "detail": entry.get("detail"),
+                }
+            )
+
+    try:
+        outcome = await run_command(ctx, apply)
+    except Replayed as replay:
+        existing = replay.operation
+        problem = replayed_problem(existing)
+        if problem is not None:
+            raise problem from replay
+        fill(list((existing.result or {}).get("results") or []))
+        return AttentionDismissed(operation=OperationOut.from_operation(existing), results=results)
+    fill([entry.model_dump() for entry in outcome.results])
+    op = await ctx.call(lambda: _operation(ctx, outcome.operation_id))
+    ctx.hub.notify()
+    return AttentionDismissed(operation=OperationOut.from_operation(op), results=results)
+
+
 # -- runs: cancel, resume, round grants, the review wait ---------------------------
 
-RunVerb = Literal["cancel", "resume", "grant_rounds", "review_resume"]
+RunVerb = Literal[
+    "cancel", "resume", "grant_rounds", "review_resume", "dismiss", "undismiss", "delete"
+]
 
 RUN_ACTIONS: dict[RunVerb, str] = {
     "cancel": "run.cancel",
     "resume": "run.resume",
     "grant_rounds": "run.grant_rounds",
     "review_resume": "run.review_resume",
+    "dismiss": "run.dismiss",
+    "undismiss": "run.undismiss",
+    "delete": "run.delete",
 }
 
 
@@ -359,15 +471,17 @@ async def run_verb(
     auth: Authenticated,
     verb: RunVerb,
     public_id: str,
-    body: RunCommand | RoundGrant | None,
+    body: RunCommand | RoundGrant | WorkDeleteCommand | None,
     pair: tuple[str, str] | None,
 ) -> RunCommandResult:
-    """Cancel, resume, grant rounds to, or re-arm the review wait of a run,
-    through the shared service verbs ctl and chat use."""
+    """Cancel, resume, grant rounds to, re-arm the review wait of a run, or
+    dismiss its alert (and take that back), through the shared service
+    verbs ctl and chat use."""
     principal = auth.principal
     service = ctx.service()
     command = body if isinstance(body, RunCommand) else RunCommand()
     grant = body if isinstance(body, RoundGrant) else None
+    deletion = body if isinstance(body, WorkDeleteCommand) else WorkDeleteCommand()
 
     def apply() -> Outcome:
         views = Views(ctx)
@@ -384,6 +498,24 @@ async def run_verb(
         if verb == "resume":
             return service.resume_run(
                 principal, run_id, expected_revision=command.expected_revision, idempotency=pair
+            )
+        if verb == "delete":
+            return service.delete(
+                principal,
+                run_id=run_id,
+                reason=deletion.reason,
+                discard_undelivered=deletion.discard_undelivered,
+                expected_revision=deletion.expected_revision,
+                idempotency=pair,
+            )
+        if verb in ("dismiss", "undismiss"):
+            return service.dismiss(
+                principal,
+                run_id=run_id,
+                reason=command.reason,
+                undo=verb == "undismiss",
+                expected_revision=command.expected_revision,
+                idempotency=pair,
             )
         if verb == "grant_rounds":
             if grant is None:
@@ -531,6 +663,19 @@ async def approve_gate(
     def apply() -> Outcome:
         views = Views(ctx)
         gate = views.gate_by_public_id(public_id)
+        # A replay is answered from its record before the gate is judged
+        # again: the approval it repeats is what moved the gate, and the
+        # gate as it stands now would refuse it.
+        store = getattr(ctx.loop, "operations", None)
+        earlier = (
+            store.for_idempotency(*pair) if isinstance(store, OperationStore) and pair else None
+        )
+        if (
+            earlier is not None
+            and earlier.action == "gate.approve"
+            and earlier.target_key == gate.run_id
+        ):
+            raise OperationReplay(earlier)
         run = views.run_record(gate.run_id)
         forge = forge_capability(ctx, gate.repo or None) if gate.kind == "merge" else None
         check_eligibility(
@@ -584,8 +729,14 @@ ACTIONS: dict[str, tuple[str, str]] = {
     "item.retry": ("runs:control", "/v1/items/{id}/retry"),
     "item.requeue": ("runs:control", "/v1/items/{id}/requeue"),
     "item.abandon": ("runs:control", "/v1/items/{id}/abandon"),
+    "item.dismiss": ("runs:control", "/v1/items/{id}/dismiss"),
+    "item.undismiss": ("runs:control", "/v1/items/{id}/undismiss"),
+    "item.delete": ("runs:control", "/v1/items/{id}/delete"),
     "run.cancel": ("runs:control", "/v1/runs/{id}/cancel"),
     "run.resume": ("runs:control", "/v1/runs/{id}/resume"),
+    "run.dismiss": ("runs:control", "/v1/runs/{id}/dismiss"),
+    "run.undismiss": ("runs:control", "/v1/runs/{id}/undismiss"),
+    "run.delete": ("runs:control", "/v1/runs/{id}/delete"),
     "run.steer": ("runs:steer", "/v1/runs/{id}/steering"),
     "run.grant_rounds": ("budgets:grant", "/v1/runs/{id}/round-grants"),
     "run.review_resume": ("runs:control", "/v1/runs/{id}/review-wait/resume"),
@@ -648,7 +799,15 @@ async def dispatch(
     try:
         if action.startswith("item."):
             verb: ItemVerb = action.removeprefix("item.")  # type: ignore[assignment]
-            command = ItemCommand(reason=params.get("reason"), expected_revision=expected_revision)
+            command: ItemCommand | WorkDeleteCommand = (
+                WorkDeleteCommand(
+                    reason=params.get("reason"),
+                    expected_revision=expected_revision,
+                    discard_undelivered=bool(params.get("discard_undelivered", False)),
+                )
+                if verb == "delete"
+                else ItemCommand(reason=params.get("reason"), expected_revision=expected_revision)
+            )
             return (
                 (await item_command(ctx, auth, verb, target, command, pair)).model_dump(
                     mode="json"
@@ -671,8 +830,14 @@ async def dispatch(
                 None,
             )
         run_verb_name: RunVerb = action.removeprefix("run.")  # type: ignore[assignment]
-        run_body: RunCommand | RoundGrant
-        if run_verb_name == "grant_rounds":
+        run_body: RunCommand | RoundGrant | WorkDeleteCommand
+        if run_verb_name == "delete":
+            run_body = WorkDeleteCommand(
+                reason=params.get("reason"),
+                expected_revision=expected_revision,
+                discard_undelivered=bool(params.get("discard_undelivered", False)),
+            )
+        elif run_verb_name == "grant_rounds":
             run_body = RoundGrant(
                 rounds=int(params.get("rounds") or 0), expected_revision=expected_revision
             )

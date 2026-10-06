@@ -3,7 +3,10 @@
 Discovers work (GitHub issues by label), runs each item through a fresh
 :class:`~lantern.engine.engine.LoopEngine` that carries it all the way to
 a merged pull request, settles the issue on how the run ended, mirrors the
-chronology to chat (Discord or Slack), and keeps going. It never files work of its own.
+chronology to chat (Discord or Slack), and keeps going. It starts nothing
+on its own account: every run traces to a person's act, a schedule a person
+created, or a grant — Lantern's defaults, which an owner can pause, edit,
+delete and restore, or one an owner wrote.
 """
 
 from lantern.daemon.model import DaemonNotice, RunReport, TickResult, WorkItem

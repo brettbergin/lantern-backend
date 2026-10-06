@@ -63,6 +63,11 @@ def _artifacts(refs: Sequence[ArtifactRef]) -> list[dict[str, Any]]:
 class ApiChannelPoster:
     """Run posts over the collaboration store."""
 
+    #: A workload or tool run's result reaches the channel that asked for
+    #: it as a work result (:mod:`lantern.api.work_delivery`), with its
+    #: files: a run's chronicle does not post that answer a second time.
+    delivers_work_results = True
+
     def __init__(self, ctx: ApiContext) -> None:
         self.ctx = ctx
 
@@ -134,9 +139,15 @@ class ApiChannelPoster:
             )
 
     def channel_for_item(self, item_id: str) -> str | None:
+        """The channel ``item_id``'s work lives in, bound now when the reconciler
+        has not got to it yet, so a run's first post never lands in the
+        chat that asked instead of the channel the work lives in."""
+        from lantern.api.external_work import bind_item_now
+
         try:
+            channel_id = bind_item_now(self.ctx, item_id)
             with self.ctx.loop.dstore.read() as session:
-                channel_id = channel_for_item(session, item_id)
+                channel_id = channel_id or channel_for_item(session, item_id)
                 if channel_id is None:
                     return None
                 channel = session.get(ChannelRow, channel_id)

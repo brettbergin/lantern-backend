@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from lantern.agents.assignment import RUN_ROLES
 from lantern.config import SINK_NAMES, Config
 from lantern.daemon.controls.results import ControlError, ErrorCode
-from lantern.daemon.model import WorkItem, requested_roles_json
+from lantern.daemon.model import WorkItem, binds_without_memories, requested_roles_json
 from lantern.daemon.sources import IssueNotOpen
 from lantern.engine.model import RunKind
 from lantern.entrygraph import resolve_targets
@@ -324,11 +324,15 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
     plan service's rules — a task has no children, planning must be on for
     its repository, a breakdown's level must have room — and against a
     breakdown of it already queued or running. A node on the forge with
-    children there is re-planned: its run proposes a diff (#2346)."""
-    from lantern.plans.service import PlanRefusal, PlanService
-    from lantern.plans.store import PlanStore
+    children there is re-planned: its run proposes a diff (#2346).
 
-    service = PlanService(PlanStore(loop.dstore), lambda: loop.config)
+    A breakdown of a plan that advances itself is a run a delegated
+    decision depends on: its agents are bound without memories
+    (:func:`binds_without_memories`), and the item says so in its
+    assignment request, so dispatch, a restart and a resume all keep it."""
+    from lantern.plans.service import PlanRefusal
+
+    service = loop.plans
     try:
         plan, node = service.breakdown_target(
             request.plan_id, request.node_id, expected_revision=request.expected_revision
@@ -357,6 +361,11 @@ def plan_item(loop: Any, request: PlanAdmission, *, item_id: str) -> WorkItem:
         repo=node.repository,
         plan_id=plan.id,
         plan_node_id=node.id,
+        assignment_json=(
+            requested_roles_json({}, memoryless=True)
+            if binds_without_memories("plan", advance=plan.advance)
+            else None
+        ),
     )
 
 
@@ -401,6 +410,39 @@ def admit_issue(loop: Any, request: IssueAdmission, *, label: bool = True) -> Wo
             "source_unavailable", f"the repository could not be read: {exc}"
         ) from exc
     return item
+
+
+def channel_refusal(loop: Any, channel_id: str | None, *, item_id: str | None = None) -> str | None:
+    """Why ``channel_id`` cannot take new work right now, or None.
+
+    Work asked for in a channel lives in that channel, one run at a time
+    (docs/spikes/work-channels.md): while one is queued or running there the
+    channel is a conversation about it, and a second ask is refused rather
+    than run beside it. ``item_id`` is the item being admitted, so replaying
+    an admission is not refused by the row it already made.
+    """
+    channel = (channel_id or "").strip()
+    if loop is None or not channel:
+        return None
+    live_work = getattr(getattr(loop, "dstore", None), "channel_live_work", None)
+    running, queued = live_work(channel) if callable(live_work) else ([], [])
+    live_runs = getattr(loop, "live_runs_in_channel", None)
+    runs = list(dict.fromkeys([*running, *(live_runs(channel) if callable(live_runs) else ())]))
+    if item_id is not None:
+        queued = [queued_id for queued_id in queued if queued_id != item_id]
+        runs = [run_id for run_id in runs if loop.dstore.item_for_run(run_id) != item_id]
+    if runs:
+        return (
+            f"Run `{runs[0]}` is live in this channel, and a channel works one run at a time. "
+            "Ask about it here, or say what to change and it is handed to the run; stop it, "
+            "or wait for it to finish, to start new work."
+        )
+    if queued:
+        return (
+            f"`{queued[0]}` is already queued in this channel, and a channel works one run at "
+            "a time. Wait for it, or cancel it, to start new work."
+        )
+    return None
 
 
 def upsert(loop: Any, item: WorkItem, *, by: str | None) -> tuple[WorkItem, bool]:

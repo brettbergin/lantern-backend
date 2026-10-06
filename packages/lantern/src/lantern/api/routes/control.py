@@ -8,10 +8,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from lantern.api.auth.deps import Authenticated, get_ctx, ready_daemon, require
-from lantern.api.commands import approve_gate, idempotency, run_verb, steer
+from lantern.api.commands import approve_gate, dismiss_all, idempotency, run_verb, steer
 from lantern.api.context import ApiContext
 from lantern.api.errors import Problem
 from lantern.api.models import (
+    AttentionDismissed,
+    AttentionDismissRequest,
     Gate,
     GateApproval,
     GateResult,
@@ -21,6 +23,7 @@ from lantern.api.models import (
     Steering,
     SteerRequest,
     SteerResult,
+    WorkDeleteCommand,
 )
 from lantern.api.pagination import Page
 from lantern.api.projections import Views
@@ -54,6 +57,70 @@ async def cancel_run(
     if result.operation.state != "running":
         response.status_code = 200
     return result
+
+
+@router.post("/runs/{run_id}/dismiss", response_model=RunCommandResult)
+async def dismiss_run(
+    run_id: str,
+    request: Request,
+    body: RunCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Acknowledge the alert this run raises, for everyone. A run its work
+    item pins is dismissed on the item (the same mark ``POST
+    /v1/items/{id}/dismiss`` leaves); a run nothing pins carries its own.
+    Refused for a run that raises no alert. The dismissal ends by itself
+    when the work changes state."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/dismiss", required=False)
+    return await run_verb(ctx, auth, "dismiss", run_id, body, pair)
+
+
+@router.post("/runs/{run_id}/delete", response_model=RunCommandResult)
+async def delete_run(
+    run_id: str,
+    request: Request,
+    body: WorkDeleteCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Put a finished run away. A run its work item pins deletes the item
+    with every run it had (the same as ``POST /v1/items/{id}/delete``); a
+    run nothing pins is deleted alone. Refused for a run that is not at
+    rest (cancel it first)."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/delete", required=False)
+    return await run_verb(ctx, auth, "delete", run_id, body, pair)
+
+
+@router.post("/runs/{run_id}/undismiss", response_model=RunCommandResult)
+async def undismiss_run(
+    run_id: str,
+    request: Request,
+    body: RunCommand | None = None,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> RunCommandResult:
+    """Take a dismissal back: the run's work asks for attention again."""
+    pair = idempotency(request, auth.principal, f"/v1/runs/{run_id}/undismiss", required=False)
+    return await run_verb(ctx, auth, "undismiss", run_id, body, pair)
+
+
+@router.post("/attention/dismiss", response_model=AttentionDismissed)
+async def dismiss_attention(
+    body: AttentionDismissRequest,
+    request: Request,
+    ctx: ApiContext = Depends(ready_daemon),  # noqa: B008
+    auth: Authenticated = Depends(require("runs:control")),  # noqa: B008
+) -> AttentionDismissed:
+    """Dismiss several alerts at once, under one operation. The request
+    names each alert — the ones the person was looking at, never "all" —
+    by its item, or by its run when no item carries the work. Each is
+    dismissed as its own route would dismiss it; one that cannot be (an
+    unknown id, a stale ``expected_revision``, work that raises no alert)
+    is ``skipped`` with the reason and does not fail the rest. ``results``
+    answers in the request's order."""
+    pair = idempotency(request, auth.principal, "/v1/attention/dismiss", required=False)
+    return await dismiss_all(ctx, auth, body, pair)
 
 
 @router.post("/runs/{run_id}/resume", response_model=RunCommandResult)

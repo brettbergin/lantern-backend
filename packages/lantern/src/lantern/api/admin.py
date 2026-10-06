@@ -13,8 +13,11 @@ process exit is a separate fact it observes through readiness.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any, Literal
+
+from pydantic import ValidationError
 
 from lantern.api.auth.deps import Authenticated
 from lantern.api.commands import Replayed, _operation, replayed_problem, run_command
@@ -242,7 +245,7 @@ async def sync_repository_labels(
                 "create them"
             )
         else:
-            message = f"{entry.repo} already carries every label lantern applies"
+            message = f"{entry.repo} already carries every label Lantern applies"
         return RepositoryLabelSync(
             repository=repository,
             labels=labels,
@@ -387,6 +390,31 @@ async def schedule_command(
     return result
 
 
+#: The config path a schedule's own validators name their field by: a
+#: request has no ``schedules`` table, so the person is shown the field.
+_SCHEDULE_PATH = re.compile(r"^(?:schedules\[\]\.|schedules\.[A-Za-z0-9._-]{1,64}: )")
+#: Fields a schedule's model-level refusal names first.
+_SCHEDULE_FIELDS = ("cron", "every", "timezone", "name", "ask", "profile")
+
+
+def schedule_problem(exc: ValidationError) -> Problem:
+    """A schedule the config model refuses, as the standard problem: a
+    short ``detail`` and ``errors[{loc, msg}]`` naming the body field —
+    never the validator's own text, which carries the model's name, the
+    config path, a dump of the input and a library URL."""
+    errors: list[dict[str, Any]] = []
+    for error in exc.errors():
+        msg = str(error.get("msg", "")).removeprefix("Value error, ")
+        msg = _SCHEDULE_PATH.sub("", msg)
+        loc = [str(part) for part in error.get("loc", ())]
+        if not loc:
+            field = next((f for f in _SCHEDULE_FIELDS if msg.startswith(f"{f} ")), None)
+            loc = [field] if field else []
+        errors.append({"loc": ["body", *loc], "msg": msg})
+    detail = errors[0]["msg"] if len(errors) == 1 else "the schedule did not validate"
+    return Problem(422, "invalid_request", detail, errors=errors)
+
+
 async def create_schedule(
     ctx: ApiContext, auth: Authenticated, body: ScheduleCreate, pair: tuple[str, str] | None
 ) -> ScheduleResult:
@@ -396,8 +424,8 @@ async def create_schedule(
     service = ctx.service()
     try:
         spec = ScheduleConfig.model_validate(body.model_dump())
-    except ValueError as exc:
-        raise Problem(422, "invalid_request", str(exc)) from exc
+    except ValidationError as exc:
+        raise schedule_problem(exc) from exc
 
     def apply() -> Outcome:
         return service.add_schedule(principal, spec, source=SCHEDULE_SOURCE, idempotency=pair)
@@ -431,8 +459,8 @@ async def update_schedule(
     service = ctx.service()
     try:
         spec = ScheduleConfig.model_validate(body.model_dump())
-    except ValueError as exc:
-        raise Problem(422, "invalid_request", str(exc)) from exc
+    except ValidationError as exc:
+        raise schedule_problem(exc) from exc
 
     def apply() -> Outcome:
         return service.update_schedule(

@@ -28,6 +28,9 @@ Action = Literal[
     "retry",
     "requeue",
     "abandon",
+    "dismiss",
+    "undismiss",
+    "delete",
 ]
 ACTIONS: tuple[Action, ...] = get_args(Action)
 
@@ -55,6 +58,39 @@ _ITEM_TRANSITIONS: dict[Action, frozenset[str]] = {
     "requeue": frozenset({"running", "queued"}),
 }
 _RESUMABLE_ITEM_STATES: frozenset[str] = frozenset({"queued", "cancelled", "failed"})
+#: Where finished work rests. Only work at rest can be deleted: work that is
+#: queued, running or parked on a decision is settled first (abandoned or
+#: cancelled), so a delete never doubles as a way to stop something.
+_RESTING_ITEM_STATES: frozenset[str] = frozenset({"done", "failed", "blocked", "cancelled"})
+_RESTING_RUN_STATES: frozenset[str] = frozenset(
+    {"merged", "completed", "failed", "blocked", "cancelled"}
+)
+#: The states that ask a person to look: finished without success, or parked
+#: on a decision. Only these have an alert to dismiss — work that is queued,
+#: running or done has nothing to acknowledge.
+_ATTENTION_ITEM_STATES: frozenset[str] = frozenset(
+    {
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "paused_review",
+        "awaiting_answers",
+    }
+)
+_ATTENTION_RUN_STATES: frozenset[str] = frozenset(
+    {
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "held",
+        "provider_held",
+        "awaiting_answers",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +114,10 @@ class Subject:
     gate_state: str | None = None
     review_hold_state: str | None = None
     forge: Capability | None = None
+    #: A person already dismissed the alert this work raises.
+    dismissed: bool = False
+    #: A person deleted the work: it is hidden, and nothing more applies.
+    deleted: bool = False
 
 
 def check(action: Action, subject: Subject) -> None:
@@ -96,6 +136,8 @@ def check(action: Action, subject: Subject) -> None:
                 "capability_unsupported",
                 "the version-control backend cannot act on the target",
             )
+    if subject.deleted:
+        raise ControlError("not_eligible", "work was deleted")
     refusal = _refusal(action, subject)
     if refusal is not None:
         raise ControlError("not_eligible", refusal)
@@ -151,10 +193,61 @@ def _refusal(action: Action, s: Subject) -> str | None:
         if s.review_hold_state not in ("open", "paused"):
             return f"review wait is {s.review_hold_state}"
         return None
+    if action == "abandon" and s.is_current and state == "publishing":
+        # Mirrors the loop: a result being handed to its sinks cannot be
+        # taken back, so the item settles to what the run did.
+        return "run is publishing its result"
     if action in _ITEM_TRANSITIONS:
         if s.item_state is None:
             return "no work item"
         if s.item_state not in _ITEM_TRANSITIONS[action]:
             return f"work item is {s.item_state}"
         return None
+    if action == "dismiss":
+        if s.dismissed:
+            return "already dismissed"
+        return _nothing_to_dismiss(s)
+    if action == "undismiss":
+        return None if s.dismissed else "not dismissed"
+    if action == "delete":
+        return _not_deletable(s)
+    return None
+
+
+def _not_deletable(s: Subject) -> str | None:
+    """Why the work cannot be deleted yet, or ``None`` when it can: it must
+    be at rest. The work item decides when it carries the work, as for a
+    dismissal."""
+    if s.is_current:
+        return "run is in flight"
+    if s.item_state is not None and (s.pinned or s.run_state is None):
+        if s.item_state in _RESTING_ITEM_STATES:
+            return None
+        return f"work item is {s.item_state}; abandon it first"
+    if s.run_state is None:
+        return "no work to delete"
+    if s.run_state not in _RESTING_RUN_STATES:
+        return f"run is {s.run_state}; cancel it first"
+    return None
+
+
+def _nothing_to_dismiss(s: Subject) -> str | None:
+    """Why the work raises no alert a person could dismiss, or ``None``
+    when it does. The work item decides when it carries the work — it pins
+    the run, or there is no run yet; a run nothing pins (its item row is
+    gone, or has moved on to a later attempt) is judged on its own state."""
+    if s.is_current:
+        return "run is in flight"
+    if s.item_state is not None and (s.pinned or s.run_state is None):
+        if s.item_state in _ATTENTION_ITEM_STATES:
+            return None
+        if s.item_state == "queued" and s.pinned and s.run_state == "provider_held":
+            # Parked on a provider outage: the item waits in the queue, the
+            # run is what asks for attention.
+            return None
+        return f"nothing needs attention: work item is {s.item_state}"
+    if s.run_state is None:
+        return "no work to dismiss"
+    if s.run_state not in _ATTENTION_RUN_STATES:
+        return f"nothing needs attention: run is {s.run_state}"
     return None

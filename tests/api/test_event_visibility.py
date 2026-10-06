@@ -428,7 +428,10 @@ def test_run_events_follow_the_channel_that_asked_for_the_run(api: Api) -> None:
     assert f"run_{shared_run}" in listed
 
 
-def test_a_run_no_channel_asked_for_is_shown_to_owners_and_admins(api: Api) -> None:
+def test_a_run_no_channel_asked_for_is_shown_to_every_member(api: Api) -> None:
+    """Work nobody asked for in a chat lives in a workspace-visible work
+    channel (docs/spikes/work-channels.md), as external work always did,
+    so every member of the workspace reads its events there."""
     owner, guest, admin = _people(api)
     api.harness.source.items = [gh_item("1")]
     api.harness.outcomes = ["merged"]
@@ -439,8 +442,7 @@ def test_a_run_no_channel_asked_for_is_shown_to_owners_and_admins(api: Api) -> N
     def runs_seen(headers: dict[str, str]) -> set[str]:
         return {str(e["run_id"]) for e in _all_events(api, headers) if e["run_id"]}
 
-    assert run_id not in runs_seen(bearer(guest))
-    for everyone in (bearer(owner), bearer(admin), api.bearer()):
+    for everyone in (bearer(owner), bearer(admin), bearer(guest), api.bearer()):
         assert run_id in runs_seen(everyone)
 
 

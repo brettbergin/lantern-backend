@@ -18,7 +18,7 @@ skipped past.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +41,11 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 WATERMARK_KEY = "api.projection.watermark"
+#: Engine events the chronology does not carry. The daemon announces a
+#: run's start and finish itself (``run.started`` / ``run.finished``, which
+#: say more: kind, attempt, summary, pull request), and a client that saw
+#: the engine's pair beside them drew every run starting and finishing twice.
+UNPROJECTED: frozenset[str] = frozenset({HostEventTypes.RUN_START, HostEventTypes.RUN_END})
 CHAT_REPLY = HostEventTypes.CHAT_REPLY
 PRUNED_KEY = "api.projection.pruned_to"
 #: The actor every daemon-originated public event carries: truthful, and
@@ -216,29 +221,32 @@ class Chronology:
             if not rows:
                 return 0
             self.after_read()
+            # Passed over, not copied: the watermark still moves past them.
+            carried = [row for row in rows if str(row[3]) not in UNPROJECTED]
             channels = {
                 str(run_id): self._run_channel(session, str(run_id))
-                for run_id in {row[2] for row in rows}
+                for run_id in {row[2] for row in carried}
             }
-            session.execute(
-                insert(ApiEventRow).values(
-                    [
-                        {
-                            "recorded_at": now,
-                            "occurred_at": float(ts),
-                            "type": str(type_),
-                            "run_id": str(run_id),
-                            "item_id": None,
-                            "operation_id": None,
-                            "actor_json": None,
-                            "source_seq": int(seq),
-                            "data_json": None,
-                            "channel_id": channels.get(str(run_id)),
-                        }
-                        for seq, ts, run_id, type_, _data in rows
-                    ]
+            if carried:
+                session.execute(
+                    insert(ApiEventRow).values(
+                        [
+                            {
+                                "recorded_at": now,
+                                "occurred_at": float(ts),
+                                "type": str(type_),
+                                "run_id": str(run_id),
+                                "item_id": None,
+                                "operation_id": None,
+                                "actor_json": None,
+                                "source_seq": int(seq),
+                                "data_json": None,
+                                "channel_id": channels.get(str(run_id)),
+                            }
+                            for seq, ts, run_id, type_, _data in carried
+                        ]
+                    )
                 )
-            )
             # A steering instruction is answered by the run's `chat.reply`:
             # its record settles in the same transaction as the event, so
             # a reader never sees the reply without the receipt or the
@@ -291,10 +299,23 @@ class Chronology:
         data: dict[str, Any] | None = None,
         occurred_at: float | None = None,
         audience_user_id: str | None = None,
+        state: Mapping[str, str | None] | None = None,
     ) -> int:
         """Append one daemon-originated event; returns its ``seq``. It
-        belongs to the channel that asked for its run or item, if any."""
+        belongs to the channel that asked for its run or item, if any.
+        ``state`` is ``daemon_state`` values set (``None``: deleted) in the
+        event's own transaction, for a writer whose memory of what it has
+        announced must move with the announcement."""
         with self.dstore.transaction() as session:
+            for key, value in (state or {}).items():
+                if value is None:
+                    session.execute(delete(DaemonStateRow).where(DaemonStateRow.key == key))
+                else:
+                    session.execute(
+                        insert(DaemonStateRow)
+                        .prefix_with("OR REPLACE")
+                        .values(key=key, value=value)
+                    )
             channel_id = (
                 self._run_channel(session, run_id)
                 if run_id
@@ -327,6 +348,23 @@ class Chronology:
             newest = session.scalar(select(func.max(ApiEventRow.seq)))
         return None if newest is None else int(newest)
 
+    def recorded_after(self, after: int, prefixes: Sequence[str]) -> bool:
+        """Whether the daemon itself recorded an event whose type starts
+        with one of ``prefixes`` past ``after``. A projected engine event
+        is not one: a run's own output moves the watermark every second
+        and says nothing a reader of this asks about."""
+        with self.dstore.read() as session:
+            found = session.scalar(
+                select(ApiEventRow.seq)
+                .where(
+                    ApiEventRow.seq > after,
+                    ApiEventRow.source_seq.is_(None),
+                    or_(*(ApiEventRow.type.like(prefix + "%") for prefix in prefixes)),
+                )
+                .limit(1)
+            )
+        return found is not None
+
     def bounds(self) -> tuple[int | None, int]:
         """``(oldest seq still held, highest seq ever pruned)``."""
         with self.dstore.read() as session:
@@ -353,10 +391,10 @@ class Chronology:
 
         Pruning goes oldest first and the engine's own events are never
         deleted, so the run lost nothing when the projection of its first
-        engine event is still held and nothing of it sits at or below the
-        pruned mark. A run with no engine event yet, or whose first one is
-        not yet projected, cannot be told apart from one that lost its
-        start, and counts as pruned.
+        projected engine event is still held and nothing of it sits at or
+        below the pruned mark. A run with no such event yet, or whose first
+        one is not yet projected, cannot be told apart from one that lost
+        its start, and counts as pruned.
         """
         with self.dstore.read() as session:
             at_or_below = session.scalar(
@@ -366,7 +404,11 @@ class Chronology:
             )
             if at_or_below is not None:
                 return True
-            first = session.scalar(select(func.min(EventRow.seq)).where(EventRow.run_id == run_id))
+            first = session.scalar(
+                select(func.min(EventRow.seq)).where(
+                    EventRow.run_id == run_id, EventRow.type.notin_(UNPROJECTED)
+                )
+            )
             if first is None:
                 return True
             held = session.scalar(

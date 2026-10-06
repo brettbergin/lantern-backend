@@ -2,7 +2,7 @@
 
 The daemon's chat bridge relays chronology out and steering in; the
 concierge is the agent people *talk to* in the control channel itself.
-It knows how to operate lantern — every ``!sbx`` verb, through the same
+It knows how to operate lantern — every ``!lantern`` verb, through the same
 :func:`lantern.daemon.control.dispatch` the commands use — how to queue new
 work, and how to look up and explain runs, PRs and diffs.
 
@@ -109,7 +109,6 @@ from lantern.ids import new_job_id, new_run_id
 from lantern.log import get_logger
 from lantern.plans import Plan, PlanRefusal, PlanService
 from lantern.plans.hierarchy import repository_planning_for
-from lantern.plans.store import PlanStore
 from lantern.provider import ProviderHeldError, ProviderHold, ProviderRecovery
 from lantern.vcs.github.ops import MalformedResponse
 from lantern.vcs.model import CloseReason
@@ -263,6 +262,12 @@ class TurnContext:
     work_roles: Mapping[str, str] = field(default_factory=dict)
     #: A one-shot call: it resumes no session and leaves none behind.
     stateless: bool = False
+    #: The person picked the Workload runner for this turn: a turn that ends
+    #: without queueing one is queued by the daemon, with the person's own
+    #: words as the ask.
+    must_start_workload: bool = False
+    #: The workloads ``start_workload`` queued (or found queued) this turn.
+    queued_workloads: list[str] = field(default_factory=list)
     work_products: list[str] = field(default_factory=list)
     #: The sandbox generation of the turn's last session call, so a failure
     #: is blamed on the box it happened in.
@@ -713,6 +718,7 @@ class Concierge:
         work_lead: str | None = None,
         work_roles: Mapping[str, str] | None = None,
         stateless: bool = False,
+        must_start_workload: bool = False,
     ) -> Future[ConciergeReply]:
         """Queue one message; the Future resolves with the reply.
         ``author_id`` is the transport's mentionable id for the speaker,
@@ -781,12 +787,15 @@ class Concierge:
                 work_lead=work_lead,
                 work_roles=dict(work_roles or {}),
                 stateless=stateless,
+                must_start_workload=must_start_workload,
             )
             token = _CURRENT_TURN.set(context)
             try:
                 reply = self._run_turn(
                     text, author=author, on_tool=on_tool, session_key=session_key
                 )
+                if reply.ok and context.must_start_workload and not context.queued_workloads:
+                    reply = reply._replace(text=self._workload_the_person_picked(text, author))
             except BaseException:
                 # No reply will be posted, so nothing is waiting on one:
                 # the effects the tools promised still happen.
@@ -812,6 +821,20 @@ class Concierge:
             self._forget_pending()
             raise
         return queued.future
+
+    def _workload_the_person_picked(self, text: str, author: str) -> str:
+        """Queue the workload a turn's runner choice asked for, when the
+        model answered without doing so.
+
+        Picking the Workload runner is an instruction, not a hint: the
+        person wanted a run, and a turn that answers inline instead gave
+        them a reply they did not ask for. The ask is their own words, the
+        profile the daemon's default, and the reply is what the tool would
+        have said — the inline answer is dropped, since the work will
+        produce the real one.
+        """
+        log.info("concierge.workload_intent_enforced", by=author)
+        return self._tool_start_workload({"ask": text}, by=author)
 
     # -- session lanes ----------------------------------------------------------
 
@@ -1030,7 +1053,7 @@ class Concierge:
             persona += (
                 "\n\nUse handoff_agent for a bounded discussion or refinement when a native "
                 "peer's distinct judgment will materially improve the answer. Do not recreate "
-                "lantern's execution pipelines with chat handoffs: repository work belongs in "
+                "Lantern's execution pipelines with chat handoffs: repository work belongs in "
                 "its code runner, and research, documents, data, or other deliverables belong "
                 "in start_workload, whose own planner, executor, judge, revision budget, and "
                 "publisher carry the work to completion. "
@@ -1645,7 +1668,7 @@ class Concierge:
                         "Is this daemon running current code? Reports the installed lantern, "
                         "lantern-worker and sbx versions, the latest lantern/lantern-worker "
                         "releases on GitHub (unless the operator switched that check off), and "
-                        "whether the host is behind. lantern's own releases ship frequently, "
+                        "whether the host is behind. Lantern's own releases ship frequently, "
                         "while upgrading this host is an operator's step, so drift is normal "
                         "and worth checking. You cannot upgrade anything — the report says "
                         "what upgrading takes on the daemon host — so report what you find "
@@ -2474,6 +2497,7 @@ class Concierge:
         item_id = chat_item_id(key)
         existing = self.dstore.get(item_id)
         if existing is not None:
+            self._turn.queued_workloads.append(item_id)
             profile_text = f"profile `{profile.name}`" if profile is not None else "no profile"
             return f"`{item_id}` already exists ({existing.state}; {profile_text})."
         item = WorkItem(
@@ -2504,6 +2528,7 @@ class Concierge:
             fresh=queued,
             title=item.title[:80],
         )
+        self._turn.queued_workloads.append(item.item_id)
         profile_text = f"profile `{profile.name}`" if profile is not None else "no profile"
         if not queued:
             return f"`{item.item_id}` is already queued or running ({profile_text})."
@@ -2752,7 +2777,7 @@ class Concierge:
             "display": asker.display or asker.id,
             "via": "concierge",
         }
-        service = PlanService(PlanStore(self.dstore), lambda: self.config)
+        service = self.loop.plans
         existing = _same_draft(service, asker.id, level, repo, sections["title"])
         if existing is not None:
             return f"{_plan_link(existing)} is already drafted for them — nothing new was written."
@@ -3146,7 +3171,7 @@ class Concierge:
         queue = args.get("queue")
         queued = True if queue is None else bool(queue)
         labels = [trigger] if queued else []
-        full_body = f"{body}\n\n---\nFiled by {by} via the lantern concierge\n"
+        full_body = f"{body}\n\n---\nFiled by {by} via the Lantern concierge\n"
         try:
             ref = self.github.call(
                 lambda ops: ops.issue_create(repo, title, full_body, labels=labels)
@@ -3353,7 +3378,7 @@ class Concierge:
         body = str(args.get("body", "")).strip()
         if not body:
             return "body is required"
-        full_body = f"{body}\n\n---\nPosted by {by} via the lantern concierge\n"
+        full_body = f"{body}\n\n---\nPosted by {by} via the Lantern concierge\n"
         try:
             url = self.github.call(lambda ops: ops.issue_comment(repo, number, full_body))
         except (GithubOpsError, WorkerError, SbxError, DaemonError) as exc:
@@ -3422,7 +3447,7 @@ class Concierge:
             )
         notes: list[str] = []
         if comment:
-            body = f"{comment}\n\n---\nClosed as {reason} by {by} via the lantern concierge\n"
+            body = f"{comment}\n\n---\nClosed as {reason} by {by} via the Lantern concierge\n"
             try:
                 self.github.call(lambda ops: ops.issue_comment(repo, number, body))
             except (GithubOpsError, WorkerError, SbxError, DaemonError) as exc:

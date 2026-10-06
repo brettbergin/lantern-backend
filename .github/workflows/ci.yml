@@ -130,6 +130,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # The browser download is the slow, flaky part of this job: keep it
+      # between runs, keyed on the preset that names the version.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('packages/lantern/src/lantern/data/presets/playwright.toml') }}
       - run: uv sync --locked --all-packages
       - run: uv run --no-sync pytest -n0 tests/unit/test_playwright_preset_runtime.py
         env:
@@ -204,6 +210,9 @@ jobs:
         shell: pwsh
         env:
           LANTERN_HOME: ${{ runner.temp }}\lantern-home
+          # Init lists docker/sbx-releases through the GitHub API, whose
+          # unauthenticated allowance a shared runner address exhausts.
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv build --package lantern-worker -o dist
           uv build --package lantern-backend -o dist

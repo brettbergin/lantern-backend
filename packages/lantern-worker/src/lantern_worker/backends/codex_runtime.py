@@ -219,7 +219,7 @@ def authenticated_client(
                 },
                 config_overrides=runtime_overrides(workdir),
                 client_name="lantern_worker",
-                client_title="lantern worker",
+                client_title="Lantern worker",
                 experimental_api=True,
             ),
             approval_handler=approval_handler or _unexpected_request,

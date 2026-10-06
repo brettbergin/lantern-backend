@@ -2,7 +2,8 @@
 as issue runs, in dependency order, and following them to the end.
 
 A person starts the run (``POST /v1/plans/{id}/nodes/{epic}/run``,
-``plans:publish``); the loop drives it on every tick from then on. One
+``plans:publish``), or the plan driver does under an owner's ``plan.run``
+grant on a plan set to advance on its own; the loop drives it on every tick from then on. One
 pass:
 
 1. follows each admitted task's item as the queue holds it — ``done`` is
@@ -269,7 +270,6 @@ class EpicRunDriver:
         if plan is None or plan.node(run.node_id) is None:
             log.warning("epic_run.plan_gone", epic_run=run.id, plan=run.plan_id)
             return
-        order = [n for n in plan.children(run.node_id) if run.task(n.id) is not None]
         before = {t.node_id: t for t in run.tasks}
         tasks = dict(before)
         changed: dict[str, EpicRunTask] = {}
@@ -279,6 +279,17 @@ class EpicRunDriver:
                 tasks[task.node_id] = task
                 changed[task.node_id] = task
 
+        # The epic is driven, not a snapshot of it: a task that joined it
+        # on the forge since the run started (an approved re-plan's
+        # addition, an issue attached or adopted) gets a row and is
+        # admitted when it is ready; one that left stays followed to its
+        # end. The order is the plan's.
+        children = plan.children(run.node_id)
+        if run.state in LIVE_RUN_STATES:
+            for node in children:
+                if node.followed and node.id not in tasks:
+                    put(EpicRunTask(node_id=node.id, position=node.position, state="waiting"))
+        order = [n for n in children if n.id in tasks]
         for task in list(tasks.values()):
             put(self._follow(task))
         if run.state in LIVE_RUN_STATES:
@@ -620,7 +631,7 @@ class EpicRunDriver:
                 elif (
                     now_task.state == "queued"
                     and now_task.item_id is not None
-                    and self._withdraw(now_task.item_id, why)
+                    and self._withdraw(now_task.item_id, why, actor, now)
                 ):
                     withdrawn.append(task.node_id)
                     now_task = replace(now_task, state="cancelled", reason=f"withdrawn: {why}")
@@ -819,18 +830,44 @@ class EpicRunDriver:
             raise PlanRefusal(404, "not_found", f"{node.title} is not a task of any epic run")
         return run, node
 
-    def _withdraw(self, item_id: str, why: str) -> bool:
+    def _withdraw(self, item_id: str, why: str, actor: Mapping[str, Any], now: float) -> bool:
         """Abandon an item still waiting in the queue — no run started or
         pinned — through the item abandon; ``False`` when it is not (a
-        dispatch took it: its run is left to finish)."""
+        dispatch took it: its run is left to finish). The person who
+        stopped the epic run has seen what they stopped, so the withdrawn
+        item is dismissed with it rather than left asking for attention."""
         item = self.loop.dstore.get(item_id)
         if item is None or item.state != "queued" or item.run_id is not None:
             return False
         try:
-            self.loop.abandon_item(item_id, why, queued_only=True)
+            withdrawn = self.loop.abandon_item(item_id, why, queued_only=True)
         except (KeyError, ValueError):
             return False
+        self.loop.dstore.dismiss_abandoned(withdrawn.item_id, now, actor=actor, reason=why)
         return True
+
+    def _chain(self, plan_id: str) -> tuple[str | None, int]:
+        """``(origin_agent, chain_depth)`` the items of ``plan_id``'s epic
+        runs carry. A plan a person drafted starts no chain: ``(None, 0)``,
+        as every epic run's items always have. A plan an agent drafted
+        (``created_by`` is ``agent:<slug>``) is that agent's work: its
+        items carry the slug and the depth its proposal recorded on the
+        decisions ledger (one more than the deepest follow-up its brief was
+        built from; at least 1), so the follow-ups their runs file carry it
+        on and the proposer can stop the chain at ``[agent_team]
+        max_chain_depth``. Fail closed: a depth the ledger does not have,
+        or cannot be read, is taken as that ceiling."""
+        plan = self.plans.get(plan_id)
+        created_by = (plan.created_by if plan is not None else None) or ""
+        if not created_by.startswith("agent:"):
+            return None, 0
+        slug = created_by.removeprefix("agent:") or "planner"
+        ceiling = max(1, int(self.loop.config.agent_team.max_chain_depth))
+        proposal = self.loop.delegation.proposal_for(plan_id)
+        raw = None if proposal is None else proposal.attrs.get("chain_depth")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+            return slug, ceiling
+        return slug, raw
 
     def _admit(self, run: EpicRun, node: PlanNode, task: EpicRunTask, now: float) -> EpicRunTask:
         """Admit one ready task; the task as it then stands."""
@@ -847,13 +884,14 @@ class EpicRunDriver:
             request = IssueAdmission(
                 repository=node.repository, number=node.forge.number, run_kind=kind
             )
+            origin_agent, chain_depth = self._chain(run.plan_id)
             try:
                 item = admit_issue(self.loop, request, label=False)
                 item = item.model_copy(
                     update={
                         "parent_item_id": run.id,
-                        "origin_agent": None,
-                        "chain_depth": 0,
+                        "origin_agent": origin_agent,
+                        "chain_depth": chain_depth,
                         **({"profile": profile} if profile is not None else {}),
                     }
                 )

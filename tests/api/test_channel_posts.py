@@ -437,6 +437,30 @@ def test_a_post_into_a_channel_that_is_gone_is_dropped(api: Any) -> None:
     )
 
 
+def test_a_workload_answer_is_not_posted_beside_its_work_result(api: Any) -> None:
+    """The channel that asked gets a workload's answer once, as the work
+    result with its files; the run's chronicle posts no clipped copy."""
+    from lantern.agents.chronicle import RunChronicle
+    from lantern.events import HostEventTypes
+
+    headers, channel, item = _channel_with_work(api)
+    chronicle = RunChronicle.for_item(
+        api.ctx.poster, None, item, api.ctx.config, api.clock, artifacts=api.ctx.poster
+    )
+    assert chronicle is not None and chronicle.channel_id == channel
+    chronicle.on_event(
+        Event.now(
+            HostEventTypes.RUN_PUBLISHED,
+            "r1",
+            sink="chat",
+            tasks=["t1"],
+            message="Here is the bread list: " + "flour, " * 100,
+        )
+    )
+    chronicle.on_event(Event.now(HostEventTypes.RUN_END, "r1", state="completed"))
+    assert [m for m in _messages(api, headers, channel) if m["post_kind"] == "delivery"] == []
+
+
 def test_the_daemon_loop_takes_the_poster_the_listener_supplies(api: Any) -> None:
     # Building the listener's context over a daemon is what gives that
     # daemon a poster: the API server does nothing else to arrange it.
@@ -623,6 +647,7 @@ def test_a_channel_that_cannot_be_written_to_does_not_fail_the_run(
 
     monkeypatch.setattr(type(api.ctx.collaboration), "post_agent_update", _boom)
     monkeypatch.setattr("lantern.api.channel_posts.channel_for_item", _boom)
+    monkeypatch.setattr("lantern.api.external_work.bind_item_now", _boom)
 
     assert (
         api.ctx.poster.post(
@@ -884,8 +909,10 @@ def test_labelling_an_existing_issue_grants_only_the_runs_that_follow(
             api.client.get(f"/v1/artifacts/{artifact_id}/content", headers=headers).status_code,
         ]
 
-    # Nobody in the guest's channels asked for the first run.
-    assert reads(guest, first, "art_first") == [403, 403, 403]
+    # A run nobody asked for in a channel lives in a workspace-visible one,
+    # which every member reads; one a private chat asked for is that chat's.
+    before = [200, 200, 410] if filed_from == "host" else [403, 403, 403]
+    assert reads(guest, first, "art_first") == before
     if filed_from == "channel":
         assert reads(owner, first, "art_first") == [200, 200, 410]
 
@@ -899,15 +926,15 @@ def test_labelling_an_existing_issue_grants_only_the_runs_that_follow(
         json={"content": "Run issue 42 again", "intent": "code"},
     ).json()
     settled(api.client, guest, theirs, accepted["turn"]["id"])
-    # The label is on the forge and not yet polled: the run that already
-    # existed is still not theirs.
-    assert reads(guest, first, "art_first") == [403, 403, 403]
+    # The label is on the forge and not yet polled: asking has changed
+    # nothing about the run that already existed.
+    assert reads(guest, first, "art_first") == before
     # The poll re-queues the issue and runs it again: that run is theirs.
     second = _issue_run(api, item, "art_second")
     assert second != first
     assert reads(guest, second, "art_second") == [200, 200, 410]
-    # The earlier run stays with whoever asked for it.
-    assert reads(guest, first, "art_first") == [403, 403, 403]
+    # The earlier run stays in the channel it ran in.
+    assert reads(guest, first, "art_first") == before
     if filed_from == "channel":
         assert reads(owner, first, "art_first") == [200, 200, 410]
 

@@ -3,14 +3,17 @@ refresh token; every failure mode is named, none leaks a secret."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import jwt
 import pytest
 
+from lantern.api.auth.deps import require, resolve_token, role_of
 from lantern.api.auth.keys import load_or_create, rotate
 from lantern.api.auth.store import check_secret, hash_secret, parse_capabilities
 from lantern.api.auth.tokens import LEEWAY_S, TokenError, mint_access, verify_access
+from lantern.api.errors import Problem
 from lantern.daemon.controls.principal import ALL_CAPABILITIES
 from tests.api.conftest import Api
 
@@ -36,6 +39,10 @@ class TestSecrets:
         assert parse_capabilities(["runs:read", "runs:read"]) == frozenset({"runs:read"})
         with pytest.raises(ValueError, match="unknown capabilities: bogus"):
             parse_capabilities(["bogus", "runs:read"])
+
+    def test_policy_manage_is_a_capability_a_client_can_be_registered_with(self) -> None:
+        """The host operator names it like any other; it is never implied."""
+        assert parse_capabilities(["policy:manage"]) == frozenset({"policy:manage"})
 
 
 class TestTokenGrant:
@@ -172,6 +179,35 @@ class TestAccessTokens:
         me = api.client.get("/v1/me", headers=headers).json()
         assert me["capabilities"] == ["runs:read"]
 
+    def test_policy_manage_is_advertised(self, api: Api) -> None:
+        headers = api.bearer(frozenset({"runs:read"}))
+        body = api.client.get("/v1/capabilities", headers=headers).json()
+        assert "policy:manage" in body["capabilities"]
+
+    def test_a_client_holds_policy_manage_only_when_it_was_granted(self, api: Api) -> None:
+        granted = api.bearer(frozenset({"runs:read", "policy:manage"}))
+        me = api.client.get("/v1/me", headers=granted).json()
+        assert me["capabilities"] == ["runs:read", "policy:manage"]
+
+    def test_a_client_that_reads_as_an_owner_does_not_hold_policy_manage(self, api: Api) -> None:
+        """A plain client holding ``daemon:manage`` acts with the owner role
+        where a route asks for a role. That is not a capability: a route
+        gated on ``policy:manage`` refuses it, naming what it lacks."""
+        pair = api.token(frozenset({"runs:read", "daemon:manage"}))
+        me = api.client.get(
+            "/v1/me", headers={"Authorization": f"Bearer {pair['access_token']}"}
+        ).json()
+        assert me["capabilities"] == ["runs:read", "daemon:manage"]
+        auth = resolve_token(api.ctx, pair["access_token"])
+        assert auth.member is None
+        assert role_of(auth) == "owner"
+        assert not auth.principal.can("policy:manage")
+        with pytest.raises(Problem) as refused:
+            asyncio.run(require("policy:manage")(auth))
+        assert refused.value.status == 403
+        assert refused.value.code == "forbidden"
+        assert refused.value.extra == {"capability": "policy:manage"}
+
     def test_the_key_rotates_without_orphaning_live_tokens(self, api: Api) -> None:
         pair = api.token()
         old_kid = api.keys.current.kid
@@ -216,6 +252,42 @@ class TestRefresh:
         # … and a fresh client-credentials grant starts a new family.
         assert api.token()["refresh_token"]
 
+    def test_reuse_refuses_the_familys_live_access_tokens(self, api: Api) -> None:
+        """The leak's working credential is the access token a stolen
+        refresh token was rotated into: reuse ends it at once, and every
+        other access token the family minted, but no other family's."""
+        client, secret = api.register()
+        grant = {
+            "grant_type": "client_credentials",
+            "client_id": client.id,
+            "client_secret": secret,
+        }
+        first = api.client.post("/v1/auth/token", json=grant).json()
+        other = api.client.post("/v1/auth/token", json=grant).json()
+        second = self._refresh(api, first["refresh_token"]).json()  # type: ignore[attr-defined]
+
+        def status(pair: dict[str, str]) -> object:
+            return api.client.get(
+                "/v1/status", headers={"Authorization": f"Bearer {pair['access_token']}"}
+            )
+
+        assert status(second).status_code == 200  # type: ignore[attr-defined]
+        replay = self._refresh(api, first["refresh_token"])
+        assert replay.json()["code"] == "refresh_reuse_detected"  # type: ignore[attr-defined]
+        for pair in (first, second):
+            refused = status(pair)
+            assert refused.status_code == 401  # type: ignore[attr-defined]
+            assert refused.json()["code"] == "token_revoked"  # type: ignore[attr-defined]
+        assert status(other).status_code == 200  # type: ignore[attr-defined]
+
+    def test_a_family_revocation_outlives_the_longest_access_token(self) -> None:
+        from lantern.api.auth.store import FAMILY_REVOCATION_S
+        from lantern.config import ApiConfig
+
+        bounds = ApiConfig.model_fields["access_token_ttl_s"].metadata
+        longest = max(int(getattr(bound, "le", 0)) for bound in bounds)
+        assert longest and longest + LEEWAY_S <= FAMILY_REVOCATION_S
+
     def test_an_expired_or_revoked_refresh_token_is_refused(self, api: Api) -> None:
         pair = api.token()
         api.clock.t += 604800 + 1
@@ -224,6 +296,43 @@ class TestRefresh:
         api.auth.revoke_refresh(again["refresh_token"], api.clock())
         assert self._refresh(api, again["refresh_token"]).status_code == 401  # type: ignore[attr-defined]
         assert self._refresh(api, "rt_unknown").json()["code"] == "invalid_grant"  # type: ignore[attr-defined]
+
+
+def lock_the_shared_address(api: Api) -> None:
+    """Ten failed password sign-ins for names that do not exist: behind a
+    proxy whose forwarded addresses are not believed, from anyone at all."""
+    for n in range(10):
+        response = api.client.post(
+            "/v1/auth/local/login", json={"username": f"nobody-{n}", "password": "wrong"}
+        )
+        assert response.status_code == 401
+    locked = api.client.post(
+        "/v1/auth/local/login", json={"username": "someone-else", "password": "wrong"}
+    )
+    assert locked.status_code == 429
+
+
+class TestOneAddressForEveryone:
+    """Every client can share one address (a proxy nobody told the listener
+    about). Failed sign-ins from that address must not sign everyone out."""
+
+    def test_a_locked_address_does_not_block_refresh(self, api: Api) -> None:
+        pair = api.token()
+        lock_the_shared_address(api)
+        refreshed = api.client.post(
+            "/v1/auth/token",
+            json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
+        )
+        assert refreshed.status_code == 200, refreshed.text
+
+    def test_failed_refreshes_do_not_lock_the_address(self, api: Api) -> None:
+        for _ in range(12):
+            refused = api.client.post(
+                "/v1/auth/token",
+                json={"grant_type": "refresh_token", "refresh_token": "rt_unknown"},
+            )
+            assert refused.status_code == 401
+        assert api.token()["access_token"]
 
 
 class TestRevoke:
@@ -241,6 +350,11 @@ class TestRevoke:
             json={"grant_type": "refresh_token", "refresh_token": pair["refresh_token"]},
         )
         assert again.status_code == 401
-        # The denylist is pruned once the token would have expired anyway.
+        # The denylist is pruned once every token it refuses (the family's
+        # included) would have expired anyway.
+        from lantern.api.auth.store import FAMILY_REVOCATION_S
+
         api.clock.t += 901
+        assert api.client.get("/v1/status", headers=headers).status_code == 401
+        api.clock.t += FAMILY_REVOCATION_S
         assert api.auth.prune(api.clock()) >= 1

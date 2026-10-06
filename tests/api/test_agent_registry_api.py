@@ -627,7 +627,7 @@ def test_a_custom_agent_answers_a_mention_in_its_own_persona(api: Any) -> None:
     assert call["allow_actions"] is True
     assert call["persona"].startswith(
         "\n\n## Collaboration role\n\n"
-        "You are lantern's **Scout**, responding in Lantern as `@scout`. "
+        "You are **Scout**, one of Lantern's agents, responding in Lantern as `@scout`. "
         "Gather the facts first and cite where each came from. "
     )
     messages = api.client.get(f"/v1/channels/{channel}/messages", headers=headers).json()

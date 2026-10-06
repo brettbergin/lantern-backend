@@ -1,5 +1,576 @@
 ## [Unreleased]
 
+**Chat commands are `!lantern` now; `!sbx` still works.** The default
+`command_prefix` of `[discord]`, `[slack]`, `[mattermost]` and `[tui]` was
+still `!sbx`, from before the rename, so every reply, hint, merge prompt
+and the link command the apps show named it. The default is `!lantern`, and
+a section left at the default answers to `!sbx` as well, so habits, pinned
+notes and older docs keep working. A section that sets its own prefix
+answers to that prefix only, as before.
+
+**A sign-in no longer fails with 500 while runs are recording.** Under load
+`POST /v1/auth/local/login` (and `/v1/auth/token` with client credentials)
+could answer 500 `internal_error`; server side it was
+`sqlite3.OperationalError: database is locked`. The state database is one
+WAL file with several connections onto it inside the daemon (its own store,
+the engine's, the console's). A transaction that read before it wrote opened
+with a deferred `BEGIN`, so its first SELECT pinned a read snapshot; when
+another connection committed before the write (a run's event, on the
+engine's connection), SQLite could not upgrade the stale snapshot and failed
+the write at once, without consulting the busy timeout. A sign-in was the
+widest such window: it read the client row, checked the password (scrypt,
+tens of milliseconds by design) and wrote `last_used_at` in one transaction,
+holding the daemon store's lock throughout. Two changes. Every committing
+session on the daemon's store, the engine's store and the CLI's standalone
+sessions now opens with `BEGIN IMMEDIATE` at its first statement
+(`lantern.db.write_engine`), so a read-then-write holds the write lock from
+its read and the other writer waits on the busy timeout instead; reads stay
+deferred, and a read-only store asks for no lock. And a credential check
+now reads the client, verifies the secret with no transaction open and
+outside the store's lock, then records the use in one UPDATE conditional on
+the client still being unrevoked with the secret it was checked against;
+registration hashes the password before its transaction opens. The busy
+timeout is unchanged at 5 s: it was never reached.
+
+**Grants no longer ship empty: every install starts with Lantern's defaults.**
+An owner had to write every grant before an `auto` plan or triage did
+anything, so an install delegated nothing until someone learned the grant
+vocabulary. The daemon now seeds seven default grants when it starts, on a
+fresh install and on upgrade alike, all enabled: the planner breaks down
+(`levels: [epic, task]`, 10 a day) and proposes (2 a day); the critic
+approves and publishes a reviewed level of at most 8 children (5 a day each)
+and starts an epic of at most 12 tasks (3 a day); and the operator retries an
+item that failed on `ci_timeout`, `forge_transient` or `provider_throttle`
+once (5 a day) and grants more rounds once to a run that spent its review or
+CI rounds (3 a day). **An upgraded install starts triage at once:** failures
+of the last day with those causes are retried once, within those limits, and
+one with any other cause is written once to the ledger as an escalation. The
+plan defaults still act only on a plan a person set to `auto`, proposing
+still needs `[delegation] propose_every` and a goal, and no default token
+budget is set. Each default is seeded once, ever, under a stable
+`default_key` recorded in `daemon_state`: a deleted default is not seeded
+again and an edited or paused one is never touched;
+`POST /v1/grants/defaults/restore` (`policy:manage`, operation
+`grant.restore_defaults`) writes back the deleted ones. Revision 0054 adds
+`daemon_grants.source` (`default` or `owner`; existing rows are `owner`) and
+a unique `default_key`. `Grant` gains `source` and `default_key`, and
+`GET /v1/grants` lists the defaults first, in their table's order, then the
+owners' grants oldest first. New notice kind `daemon.grants_restored` (a restore; seeding is logged) and
+feature string `delegation.defaults`.
+
+**The planner drafts plans from an owner's goals, and the chain of work it
+feeds on is bounded.** An `auto` plan moved itself, but someone still had
+to draft it. With `[delegation] propose_every` set (seconds; default `0`,
+off) and a `plan.propose` grant, the daemon now drafts one `auto` plan for
+each `active` goal that has no plan still open (not archived, not done),
+at most once per period per goal and one per tick in all, as
+`agent:planner` through a recorded `plan.propose` operation: `goal_id` the
+goal's, and a brief made of the goal's title and text and the repository's
+open follow-up issues (newest first, at most ten). The root is an epic, or
+an initiative for a goal text of 1200 characters or more, decided before
+anything is read so a grant's `levels` judges it. The period is counted
+from the ledger and the goal's plans, so a restart neither forgets nor
+restarts it. No grant, a grant that falls short, a disabled repository or
+a follow-up listing that cannot be read is one `escalate` row (facts
+naming the `goal_id`), written once and closed when the goal has a plan
+again or is no longer active. A goal is never marked done by the daemon.
+Loop guard: a proposed plan records a `chain_depth` (one more than its
+deepest follow-up), its epic runs' items carry `origin_agent` and that
+depth instead of resetting to `0` (a plan a person drafted still resets),
+the follow-ups those runs file carry an origin marker, and the proposer
+drops follow-ups at or beyond `[agent_team] max_chain_depth` — so
+propose → run → follow-up → propose stops after that many generations.
+Origin markers inside a reviewer's follow-up note are now stripped. New
+feature string `goals.proposing`; the knob is never changed from chat.
+
+**A plan step the forge keeps refusing backs off, and an escalation closes
+after the grants are gone.** The plan driver retried a failed act every
+`[daemon] poll_interval_s` with no end, so a publish the forge kept
+refusing left a failed operation a minute all day. It now waits the poll
+interval after the first failure and twice as long after each one in a row,
+never more than an hour, with the count kept in `daemon_state` so a restart
+neither forgets nor restarts it. And with every grant deleted or disabled,
+the driver returned before closing anything, so an escalation a person had
+since settled stayed open; it now still runs its resolution pass whenever
+escalations are open, and with none open still reads and writes nothing.
+
+**A plan whose `advance` is `auto` now moves itself, under the owner's
+grants.** The switch, the grants and the critic's review were all in
+place, but nothing acted on them: an `auto` plan still waited for a person
+at every step. The daemon's new plan driver takes the next step of each
+`auto` plan on every tick it is not held, as an agent and only when a grant
+allows it: it queues a node's breakdown (the planner, `plan.breakdown`),
+approves the proposed level (the critic, `plan.approve`), publishes it once
+`[delegation] publish_delay_s` has passed since the approval (the critic,
+`plan.publish`), and starts the epic run once its tasks are on the forge
+(the critic, `plan.run`) — one act per plan per tick and one forge write
+per tick in all. Each is judged on the host's facts (`repository`, the
+`level` it works on, `child_count`, the children's `proposer`, and the
+review's verdict only while it is current), written to `GET /v1/decisions`,
+and taken in the daemon as `agent:<slug>` — whose capabilities are not
+widened — through the same recorded operations a person's step leaves, so
+`approved_by`, `published_by` and the epic run's `started_by` read
+`agent:critic`. It fails closed: no covering grant, a missing or stale
+review where one is required, a reviewer's `escalate`, a breakdown that ran
+and left nothing (never queued again), an unusable repository or a refused
+forge write each become one `escalate` row, written once while the
+situation stands and resolved `acted` or `superseded` when it moves; a
+failed write is retried with a doubling wait (see above). The
+critic never approves a level it proposed. With no grant, or on a `manual`
+plan, nothing happens and nothing is written. New knob
+`[delegation] publish_delay_s` (default 900): the window a person has to
+hold an approved level, measured from the approval as the plan records it,
+so a restart neither shortens nor restarts it; readable on
+`/v1/configuration`, never changed from chat. New feature string
+`planning.driver`. A breakdown admission cut short by a restart is now
+settled from the queue (`item.admit` for a plan), not left `reconciling`.
+
+**The operator agent picks failures back up under an owner's grants.** A
+failed or blocked run waited for a person even when an owner would always
+have said "retry it": a CI timeout, a forge hiccup, a run one fix round
+short. A new triage pass (`daemon/triage.py`, ticked after the epic runs,
+never while the daemon is paused) looks at the work that stopped in the
+last day, derives a failure cause from the run's state, its exhausted
+budget and its tasks first and its reason only as a last resort (`ci_timeout`,
+`provider_throttle`, `sandbox_resource`, `forge_transient`, `verify_failed`,
+`review_rounds_exhausted`, `ci_rounds_exhausted`, `merge_conflict`,
+`needs_person`, `unknown`), and, under an enabled `operator` grant, takes one
+act per target: `run.grant_rounds` (two more rounds) for an exhausted run,
+`plan.run.retry` for an epic run's failed task, `item.retry` otherwise. Each
+is judged on `repository`, `failure_cause` and `retries` (counted from the
+ledger), recorded once per situation, and taken as `agent:operator` through
+a recorded operation; at most three acts a pass and three per target ever.
+`needs_person` and `unknown` always escalate, a dismissed or abandoned item is
+never touched, and a person's later retry, dismissal or abandon resolves the
+escalation. With no operator grant nothing is read past the grants and
+nothing is written. A grant's `causes` is now checked against that set when
+it is written (`needs_person` and any other name are refused with the field
+named; a stored grant still loads). New feature `delegation.triage`.
+
+**What an agent escalated, and what a plan waits for, is on the attention
+list and decided from it.** An escalation in the decisions ledger, a plan's
+unanswered questions and a level the planner proposed waited where no list
+showed them, so a person had to look in three places — or did not know. With
+feature `attention.decisions`, `GET /v1/attention` lists each unresolved
+escalation as an `escalation` entry (`escalation:<decision id>`, a plain
+title such as "planner asks to publish the level under …", the judge's
+reason, `agent`, `decision_id`, `decision_action`), offering `decline` and,
+where a person can take the step here, `approve`, each under the capability
+the step itself needs (`plans:create` for a breakdown or an approval,
+`plans:publish` for a publish, a run or a task retry, `runs:control` for an
+item retry, `budgets:grant` for rounds, `policy:manage` for a proposal of new
+work, which has no human path and offers `decline` only).
+`POST /v1/attention/{id}/act` with `approve` takes the step as the person
+through the step's own command and operation and resolves the decision
+`acted`; `decline` records a `decision.decline` operation resolving it
+`declined`; the answer carries `decision`. An escalation whose target is
+gone (its plan, node or item) leaves the list on read and is resolved
+`superseded` on the attention tracker's next pass; whether its step moved on
+is left to the plan driver and triage, which own their escalations, so the
+list never closes one of theirs while its target stands. A `manual` plan's
+proposed level is a `plan_proposal` entry (`approve` for a holder of
+`plans:create`), and its breakdown's questions a `plan_questions` entry only
+where no parked `plan` item already stands for them — that item's entry
+keeps its id. A plan that advances itself shows neither. Reminders carry
+`action_capabilities`, so an escalation's reminder (`time_sensitive`)
+reaches whoever could take its step — the owners alone for a proposal.
+
+**An owner can set goals for a repository.** There was nowhere to say what a
+repository's work is for: every plan began with a person drafting it. A
+goal is a standing objective for one repository — a title and the objective
+in the owner's words, `active`, `paused` or `done` — written by an owner or
+an admin through `POST /v1/goals` (`plans:publish`; a member reads goals
+with `runs:read` but is refused a write naming the capability), edited
+against its revision with `PATCH /v1/goals/{id}` and removed with
+`DELETE /v1/goals/{id}`. The repository must be configured, enabled and
+able to hold a plan (`422` with `"field": "repository"` otherwise). Each
+goal reads with the plans proposed from it (`plans`, each with its id,
+title, state and `advance`) and `open_plan_id`, the one currently serving
+it. Each write is a recorded operation (`goal.create`, `goal.update`,
+`goal.delete`) settled from the stored goal at recovery. `/v1/capabilities`
+lists `goals` beside `planning`. Migration 0053 adds `daemon_goals` and an
+index on `daemon_plans.goal_id`; nothing is written, and nothing proposes a
+plan from a goal yet. No chat tool, `ctl` verb or WebSocket command writes
+one.
+
+**A push says which decision it is about, and what you may do about it.** A
+device could only show a push's text: to approve a gate or retry a failed
+run a person had to open the app and find the thing again. The stored
+notification (`GET /v1/users/me/notifications/{ref}`) now carries
+`entry_id` — the attention entry it is about — `actions`, that entry's
+actions its recipient may take (only those their role holds, by the list's
+own names, taken through `POST /v1/attention/{id}/act`), and `level`
+(`passive`, `active` or `time_sensitive`). An opened gate offers
+`gate_approve` to who may approve it, a job's `action_required` or
+`failure` attention and a reminder offer the entry's actions each recipient
+may take, and plan notices name no entry (they are decided on the plan's
+page). `attention.reminder` now also carries the entry's `actions`.
+Migration 0052 adds the three nullable columns to `api_push_notifications`;
+a notification recorded before it reads about no entry, with no actions, at
+`active`. The relay's payload, its kinds and the relay itself are unchanged.
+
+**A plan that advances itself has its proposals reviewed.** A plan run's
+proposal went to the plan with nobody but the planner behind it: a person
+read it before anything moved. A plan whose `advance` is `auto` will be
+moved forward under an owner's grant, so something independent has to
+judge each level first. Its breakdown now asks no clarifying questions
+(nobody is there to answer, whatever `[planning] max_questions` says) and
+adds one turn after the proposal: the run's critic, on the `[agent.models] review` model, reads the node, the children that stay and the proposed
+children as their issues will read, and answers `approve` or `escalate`
+with short reasons (`plan_review.md`). The verdict is written onto the
+node's `review` in the same write as the proposal — its digest the level as
+delivered, so `current` is true until a person changes it — with a new
+`plan.generation.reviewed` event `{plan_id, node_id, run_id, verdict, reason_count}`. It fails closed: an answer unusable twice reads
+`escalate`, "the reviewer did not return a usable verdict", and the level
+waits for a person. The verdict is kept on the run's task before delivery,
+so a resume neither asks again nor loses it. The turn is a `plan_review`
+phase row with its spend and emits `phase.end` only. A `manual` plan's run
+is byte-identical, and a re-plan is not reviewed. The plan driver (above)
+is what acts on the verdict.
+
+**A plan that advances itself is broken down by agents with no memories.**
+Any workspace member may write a memory on any agent, and a run's agents
+carried those memories into their system messages — so a member who cannot
+publish a plan could tell the planner, or the critic, what to conclude about
+a level that an owner's grant would later act on without a person. The
+breakdown of a plan whose `advance` is `auto` now binds every agent with no
+memory block and offers no memory tools; the switch rides the item's stored
+agent assignment, so a daemon restart and a resume keep it. A breakdown of a
+`manual` plan, and every other run, renders memories exactly as before. The
+rule is one function, `binds_without_memories`, for every admission a
+delegated decision will depend on.
+
+**A daily digest arrives on its own.** A person who stopped watching heard
+nothing until something waited on them; the briefing answered only when
+asked. Set `[attention] digest_at` (`"HH:MM"`, 24-hour, in `[daemon] run_cap_timezone`; off by default, and anything that is not a time of day
+is refused at load, naming the key) and once a day, at or after that time,
+the attention tracker computes the briefing since the previous digest (a
+day, the first time) with the route's own code, as the summary anyone may
+read, and records `briefing.digest` — `landed`, `failed`, `waiting`,
+`decided_allow`, `decided_escalate`, `runway_days`, `since`, `until`, the
+`day` and the `timezone`; no titles, no reasons — with no run, item or
+channel, so every member sees it. The control channel gets one line
+(`daemon.digest`, `info`, nobody mentioned): `Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; 9 decided under grants; runway 2.5 days.` With push on, every member with a device gets one `work` push titled
+`Your Lantern briefing` with the same line, deduped by the day; the device's
+`work` switch applies. The day is kept in `daemon_state` in the event's own
+transaction: a restart repeats nothing, a daemon down at the time sends it
+once on return the same day, and a day missed entirely is skipped, never
+made up. With the digest off, the tracker's pass does no extra work.
+
+**What waits on a person is reminded about.** A merge gate, a publish hold,
+a plan's clarifying questions and a blocked run announced themselves once and
+then waited in silence, for as long as it took; the only repeated signal in
+the system was the review wait's single warning. An entry never expires to
+yes or to no, so the attention tracker now reminds: once an entry has been on
+the list `[attention] remind_after_s` (4 hours by default) the chronology
+records `attention.reminder` — the opening's data plus `waiting_s`,
+`reminders` and the `capabilities` its actions need — and again every
+`remind_every_s` (a day). The clock rides the same `daemon_state` value as
+the announcement, moved in the event's own transaction, so a restart repeats
+nothing and resets nothing, and a daemon down past several intervals sends
+one reminder on return rather than a burst; what the previous release kept
+is read as first seen now, never as overdue. A dismissed entry reminds
+nobody; one taken back, or work that fails again, starts over.
+`remind_after_s = 0` turns reminders off; both knobs are bounded (300
+seconds to 30 days) and named in the refusal. With push on, a reminder
+reaches the people who can act on the entry — who hold the capability of one
+of its actions and can see where it is; the owners for an entry nobody below
+owner can act on — as a `gate` push for a decision and a `failure` push for
+a failed or held one, each reminder its own notice and none sent twice. The
+new section is on `GET /v1/configuration`. Clients are now asked to show an
+attention entry of a `kind` they do not know as a plain row rather than hide
+it.
+
+**One answer to "what happened, what needs me, and is there work lined
+up?".** A person back from a day away had to read the analytics, the
+attention list, the decisions ledger, the usage pool and every plan, each
+behind its own route with its own shape, to find out — and a landing
+screen, a phone widget and a daily digest each needed the same small
+summary. `GET /v1/briefing` (`runs:read`; `since`, a day ago by default and
+at most 90 days back) now answers in one request: `outcomes` (the runs that
+*finished* in the window — landed, failed, cancelled, by kind, with the
+newest ten landed runs and their pull requests), `waiting` (the attention
+list's own counts and its oldest wait), `decided` (what agents decided under
+grants, by outcome, the escalations still unanswered, and — for a caller
+holding `audit:read` — the recent allowed acts), `supply` (plan nodes
+proposed and approved, the published tasks no epic run has started, the
+queue, the runs in flight, the work parked on a person), `runway` (those
+tasks over the trailing week's rate of landed code runs; `null` without a
+landing), `budget` (today against the daily cap and the token budget) and
+`grants` (enabled, and at today's limit). Computed on read in a bounded
+number of statements, so it can be polled; every part is an object a later
+release can add to, and a client ignores fields it does not know. Advertised
+as `briefing`.
+
+**An entry of the attention list can be acted on, and says when it comes and
+goes.** To act on what `GET /v1/attention` listed, a client had to know which
+of a dozen routes an action meant, with which ids, revision and idempotency
+rules — more than a notification's button can hold — and nothing told anyone
+an entry had appeared or left, so every client polled the list and compared.
+`POST /v1/attention/{id}/act` takes `{action, expected_revision, params}` and
+a required `Idempotency-Key`, finds the entry as it stands (a dismissed one
+included), and hands the request to the command the action's own route runs:
+the same operation, recorded once, and the same refusals. `expected_revision`
+is the entry's `revision` as the person read it — required to approve a gate,
+never defaulted — and `params` are the action's own arguments, validated by
+its route's body model. An id nothing waits under is `409 not_waiting`; an
+action the entry does not offer is `409 not_eligible` with `offered`; a
+replay answers the first act even after the entry is gone. The answer carries
+the command's own result, its `operation_id`, and `still_waiting`. Alongside
+it the chronology records `attention.opened` and `attention.resolved`, whose
+`entry_id` is the list's `id`, scoped as the work's own events are. What was
+announced is kept across a restart; an upgrade announces nothing that was
+already waiting; and the comparison runs only when the daemon recorded
+something that could change the list, or once a minute. Advertised as
+`attention.act`. One fix rode along: a keyed replay of
+`POST /v1/gates/{id}/approve` after the gate had merged was judged against
+the merged gate and refused (`409 not_eligible`); it now answers the first
+approval, as every other keyed command does.
+
+**Deleted work no longer takes a dismissal.** `POST /v1/items/{id}/dismiss`,
+its run twin and `POST /v1/attention/dismiss` accepted work a person had
+already deleted and wrote a dismissal on it, though deleted work is meant to
+take no further command. They now refuse it as every other control does
+(`409 not_eligible`, "work was deleted"; `skipped` in a bulk dismissal).
+
+**A plan records who proposed, approved and published each node, and whether
+it may advance on its own.** A node said only where it came from (a person,
+the planner, the forge); who approved or published it lived in an event, and
+the planner's proposals were attributed to a fixed system actor, so "the
+agent that proposed a level may not approve it" could not be checked. Every
+node now carries `proposed_by`, `approved_by` and `published_by` — a
+person's id or `agent:<slug>`, `null` where nobody is recorded: the planner's
+root and children carry the agent bound to the `plan` run that proposed them
+(none when the run names no agent, never a guess), an approval and a publish
+carry whoever made them, an edit that makes a child a draft again clears its
+approval, and an issue adopted from the forge has none. A node can also hold
+a `review` of its level — a verdict, its reasons and a digest of the children
+as they were reviewed — whose `current` flag turns false on any edit,
+addition, removal or reorder of those children; nothing writes one yet. A
+plan carries `advance` (`manual`, the default, or `auto`) and a read-only
+`goal_id`. Setting `advance` takes `plans:publish`, on `POST /v1/plans` and
+on `PATCH /v1/plans/{id}`: a member, who may edit a plan, is refused `403`
+naming the capability when they name a value the plan does not have, and
+their other edits work as before; the concierge's `draft_plan` cannot set it.
+A flip is a `plan.node.changed` event with `change: advance`. Nothing acts on
+`advance` in this release — every plan is drafted, approved, published and
+run by people exactly as before. Advertised as `planning.advance`; the
+columns arrive with revision 0051, and plans and nodes from before it read
+`manual` and `null`.
+
+**An owner can write the rules that will let agents take decisions.** Every
+plan level needs a person to approve it, publish it and start it, and there
+was no way to say once "this agent may do that, under these conditions". A
+**grant** now says it: an agent (`agent_slug`), one action from a closed list
+(`plan.propose`, `plan.breakdown`, `plan.approve`, `plan.publish`, `plan.run`,
+`plan.run.retry`, `item.retry`, `run.grant_rounds`), optional conditions
+(`repositories`, `levels`, `max_children`, `require_review`, `causes`,
+`max_retries` — each accepted only by the actions it means something for) and
+a `daily_limit`. `GET /v1/grants` and `GET /v1/decisions` (`audit:read`) read
+the grants and the ledger of what was decided; `POST`, `PATCH` and `DELETE /v1/grants` take `policy:manage`, which only an owner holds — an admin, and a
+plain client that counts as an owner because it holds `daemon:manage`, are
+refused by name. Each write is a recorded operation (`grant.create`,
+`grant.update`, `grant.delete`) that recovery settles from the stored grant,
+and is narrated as a daemon notice. The judge is one pure function with three
+answers — allow, deny, or escalate to a person — that fails closed on a fact
+it could not read and never lets an agent approve its own proposal. Grants
+ship empty, nothing in the daemon acts on one yet, and they are edited through
+the API only: no chat tool, `ctl` verb or WebSocket command. Advertised as
+`delegation`; the tables arrive with revision 0050.
+
+**What is waiting on a person is one list.** Every client assembled it
+itself — all items, all channels, the open gates, the queue, the plans, then
+each work-bearing channel's jobs — so two clients could disagree at the edges,
+none could badge a count cheaply, and nothing on the server could name "the
+thing waiting on you". `GET /v1/attention` (`runs:read`) answers it, computed
+on read: an open merge or publication gate (one entry with the item it parks),
+an item `awaiting_review`, `paused_review` or `awaiting_answers`, an item that
+ended `failed` or `blocked`, a failed task of a live epic run (one entry with
+its item), a provider hold nothing will retry by itself, and a repository
+whose polling is suspended. Each entry has a stable `id`, a `group`
+(`decision`, `failed`, `paused`), its `title`, `reason` and `since`, the ids
+it is about, the `revision` an act on it is checked against, and `actions` —
+what the server offers on it now, each with the capability it needs and
+whether the caller holds it. A dismissed alert is left out unless
+`include_dismissed`; deleted work never appears; a `cancelled` item is not an
+entry. `counts` (`total` and per group) rides every page, so `?limit=1` is
+enough to badge. Filters: `group`, `repository_id`. Advertised as `attention`.
+
+**A run only a person can move now says so to that person.** When a run
+ended `blocked`, was abandoned after its last attempt, or exhausted its fix
+rounds a second time and was handed over, the notice that says what to do —
+`🚧 … blocked: … — a human needs to look`,
+`❌ … abandoned after N attempt(s)`,
+`❌ … exhausted its review fix rounds again (…); handed over` — named
+nobody. The only ping was a chat bridge's generic `run … finished` line in
+the control channel, which for a failure reads the same whether the daemon
+retries it or gave up; the run's thread pinged nobody. Those three notices
+now @mention whoever asked for the work in chat and anyone watching the run
+— the people `run.awaiting_answers` already names — in the thread and on
+the control-channel line. Nothing else about them changed: the same notices,
+text and levels; an item with no chat requester (a labelled issue, an API
+admission, a schedule) pings nobody; a failure the daemon retries, the
+first exhaustion it resumes by itself, and an operator's own `abandon` or
+`cancel` ping nobody; the public `daemon.notice` event still carries no
+mentions. The watchers are read before the run's finish is handed to the
+frontends — for `run.awaiting_answers` too, which read them after — since a
+chat bridge clears a run's watches once it has posted its "run finished"
+line.
+
+**Approving a plan level is on the record.** `POST /v1/plans/{id}/nodes/{node_id}/approve`
+is now a `plan.approve` operation, as publishing already was: who approved
+a level, against which revision and for which children, is in
+`GET /v1/operations` with its `operation.accepted` and `operation.finished`
+events, where before it was only the actor on a `plan.node.changed` event.
+The answer on success is unchanged. A refused approve (a stale revision,
+nothing to approve) answers what it did plus `operation_id`, and is recorded
+`failed`; the `Idempotency-Key` header is optional, and with it a retry
+answers the plan as it is instead of `409 stale_revision`, and a different
+body under the same key is `409 idempotency_conflict`. A daemon with no
+operation record answers `503 daemon_not_ready` and approves nothing. An
+approve the daemon died during is settled from the plan at the next start
+(`succeeded` if it landed, `failed interrupted_before_effect` if not) rather
+than leaving nothing to reconcile.
+
+**The fleet analytics are served over the API.** How the runs of a window
+went — outcomes, time to land, time parked on a person, turns, rework,
+failures by cause — was computed inside the console and nowhere else, so no
+web or mobile client could show it. `GET /v1/analytics` (`runs:read`) answers
+with the same fold: `window_s` (a week when omitted, 60 seconds to 90 days),
+`buckets` (7 when omitted, at most 90) and `until` (RFC 3339 or epoch; now
+when omitted). Every derived value is a field — per-kind `lanes` and the
+`total`, `phases`, `buckets`, `rework`, review and CI rounds, `failures`,
+the `costliest` and `longest_parked` runs by public id, median and p90
+`spreads`, and the `previous` window with a `delta` for each value — with
+durations in seconds, `null` where there is nothing to measure, and never a
+currency. Advertised as `analytics`. The fold itself moved from
+`lantern.tui.analytics` to `lantern.analytics`; the console shows what it
+did.
+
+**An alert can be dismissed, and finished work deleted.** A failed item
+offered one control, retry, so work nobody meant to retry asked for attention
+for good. `POST /v1/items/{id}/dismiss` (and `/v1/runs/{id}/dismiss` for a run
+no item carries; `runs:control`) acknowledges the alert for everyone: the
+item, its run, its gate and its rows in a channel's `/work` and `/jobs` carry
+`dismissal`, the work keeps its state, its revision and its other controls,
+and the dismissal ends by itself when the work changes state — a retry that
+fails again is a new alert. `/undismiss` takes it back, and `POST /v1/attention/dismiss` dismisses up to 200 named alerts under one operation.
+A person's abandon — from the API, chat, `ctl`, the CLI or an epic run's stop
+— now leaves the item dismissed (`cause: "abandoned"`) as well as `failed`.
+`POST /v1/items/{id}/delete` (and `/v1/runs/{id}/delete`) puts work at rest
+away: it and its runs leave `GET /v1/items`, `GET /v1/runs` and a channel's
+lists (`?include_deleted=true` shows them), and their sandboxes and run
+directories are removed now instead of at the `gc` sweep; the rows and the
+event trail stay, and nothing on the forge is touched. Work still in play is
+refused (abandon or cancel it first), and a run whose workspace is the only
+copy of undelivered work is kept unless the request says
+`discard_undelivered`. An item's `available_actions` gains `dismiss`,
+`undismiss` and `delete`, so a client that checks action names against a
+closed list has to accept them; `GET /v1/capabilities` lists `work.dismiss`,
+`work.dismiss_all` and `work.delete`. Revision 0049 adds one table,
+`daemon_work_marks`, and three triggers; nothing an older release reads
+changes.
+
+**A new capability, `policy:manage`, belongs to the workspace owner alone.**
+It will guard editing the standing rules that let agents take decisions on
+their own; the routes follow, and nothing asks for it yet. An owner holds
+it. An admin, who held every capability except `credentials:manage`, now
+holds every one except that and `policy:manage`; a member does not hold it,
+and an agent acting for itself never does. An owner's client gains it when
+the API next starts and their next token refresh (or sign-in) carries it; an
+admin's client is left exactly as it was. A plain API client holds it only
+when it was registered with `--cap policy:manage` — one that counts as an
+owner because it holds `daemon:manage` does not. `GET /v1/capabilities`
+lists it, so a client that checks capability names against a closed list
+has to accept the new value.
+
+**A workload no longer fails at publishing when a file it listed is gone.**
+A task's file list is taken when the task ends; a later task that cleaned up
+the scratch an earlier one left (a `.src/` of fetched pages, a `.verify/`
+project) made the chat and artifact sinks raise `FileNotFoundError` at
+publishing, and twenty minutes of judged work ended as a failed run (#4522).
+A declared file that is gone by then is skipped and named — in the daemon
+log (`run.publish_files_missing`) and on the `run.published` event
+(`missing`) — and the result delivers what is there.
+
+**You can talk to Lantern while a run is live in its channel.** 2.1.48 made
+every plain message in a channel with a run in flight a steer of that run,
+and answered a turn that picked a runner with a refusal before the model was
+asked, so nothing could be said there until the run ended — not even "how is
+it going?". The channel is a conversation about its run again: a plain
+message goes to the model with the read tools, so a question is answered
+from the run's own record; a message that tells the run what to do
+differently is handed over through a new `steer_run` tool (the same recorded
+steer as a mention or `POST /v1/runs/{id}/steering`, with `steered_run_id`
+on the turn); and nothing new starts there until the run has ended — a turn
+that picks a runner is answered without the start tools, and the Workload
+runner's binding choice queues nothing while the channel is busy. An
+admission naming a busy channel is still `409 already_in_progress`.
+
+**The console no longer crashes a screen's load when you switch away
+mid-load.** A screen fills itself in from a worker; switching modes before it
+reported left the worker painting widgets the retired screen no longer had,
+which surfaced as a `NoMatches` crash in the log (and as a flaky console
+test). A late result is now dropped. `lantern init` sends `GH_TOKEN` (else
+`GITHUB_TOKEN`) with its GitHub API requests, so an install on a shared CI
+runner is not refused by the unauthenticated rate limit.
+
+**Picking the Workload runner is binding.** A chat turn sent with
+`intent=workload` — the app's Agentic Workload mode, the web app's Research
+report — used to depend on the model calling `start_workload`; when it chose
+to answer inline instead, the person got a reply where they had asked for a
+run. The daemon now queues the workload itself when such a turn ends without
+one, with the person's own words as the ask, and replies with the queue
+acknowledgement.
+
+**Work stays in the channel it was asked in.** 2.1.44 moved a job asked for
+in a chat to a new channel of its own and left a hand-off message behind, so
+one piece of work had two channels. A job is now bound to the channel that
+asked for it, as it was before, and everything asked there next — a retry, a
+resume, new work once the last has ended — runs there too. A channel works
+one run at a time: while one is queued or running a plain message steers it,
+and an explicit ask for new work (a turn that picks a runner, `POST /v1/items` naming the channel, an agent filing an issue to be run) is
+refused, `409 already_in_progress` over the API. A chat bridge's run thread
+is linked to that channel only while its run is live. Advertised as
+`collaboration.channel_runs`; `collaboration.work_channels` is no longer
+advertised, and the channels and `work_handoff` messages it made stay
+readable. Work nobody asked for in a channel keeps a channel of its own.
+
+**A restart no longer fails chat, schedule and API work on a multi-repo
+daemon.** The startup pass that settles work items written before multi-repo
+treated every item without a repository as such a leftover, so a daemon with
+several repositories configured failed any queued, running or parked chat,
+schedule or API item each time it started — including a run parked as
+`provider_held`, which was then closed as an orphan by the very restart a
+rotated key needs. Those items have no repository by design and are now left
+alone, so `resume <backend>` and `resume <item|run>` continue the parked run
+from its checkpoint as documented.
+
+**`lantern doctor` names a systemd drop-in that overrides a rendered unit.**
+The `units` row used to say "linked from …" while a hand-written
+`~/.config/systemd/user/<unit>.d/*.conf` replaced the unit's `ExecStart=`
+with a binary that no longer existed; it now fails naming the drop-in and
+says to remove it or fold it into the rendered unit, since `lantern init --systemd` never removes one.
+
+**Every job has a work channel, and a bridge's run thread is that
+channel's window.** Work asked for in a chat used to live in that chat as a
+run card, next to any other run the chat asked for, while Discord, Slack,
+Mattermost and the console showed the same run as a thread under the
+control channel and steered it through a path with no record. Now a job
+admitted from a chat turn gets the system-created, workspace-visible
+conversation a labelled issue always got (`collaboration.work_channels`):
+its attempts, the chronicle's posts and the imported milestones share it
+under one ledger, the chat that asked keeps a `work_handoff` message on its
+turn plus the result it was always delivered, and a plain message in the
+work channel while its run is in flight is direction for that run through
+the same control-service steer the API and a mention take. The thread a
+bridge opens is linked to the work channel as it opens — guests admitted —
+so the channel's traffic reaches the thread and a reply there is a turn in
+the channel; the bridge keeps its headline, status line, tool digest and
+narration and leaves the plan, verdicts and steering replies to the mirror.
+`409 link_run_thread` is gone: a run's thread links like any surface. A job
+bound before this release keeps its chat. (docs/spikes/work-channels.md)
+
 **sbxloop is now Lantern.** The package, CLI, module, environment prefix,
 config file, unit and home are renamed with no compatibility aliases:
 `lantern-backend` and `lantern-worker` (installed from GitHub Releases, no

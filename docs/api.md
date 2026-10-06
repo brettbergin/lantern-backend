@@ -40,13 +40,14 @@ extra's packages into the home's venv and switch it on:
 enabled = true
 bind = "127.0.0.1"        # loopback by default; your reverse proxy terminates TLS
 port = 8420
-trusted_proxies = []      # the proxy's address, so client addresses are read from it
+# trusted_proxies = ["10.0.0.2"]  # a proxy on another host; a local one is believed unset
 ```
 
 A daemon with `enabled = true` and the extra missing refuses to start and
 names the extra. The listener speaks plain HTTP and never terminates TLS:
-put a reverse proxy in front for anything beyond the host, and list it in
-`trusted_proxies` ([deploy.md](deploy.md#the-remote-api-behind-a-proxy)).
+put a reverse proxy in front for anything beyond the host. A proxy on the same
+host is believed while `trusted_proxies` is unset; list one elsewhere there
+([deploy.md](deploy.md#the-remote-api-behind-a-proxy)).
 Every `[api]` key is in the [user guide's knob table](user-guide.md#configuration).
 
 `GET /health/live` answers as soon as the process is up; `GET /health/ready`
@@ -69,6 +70,50 @@ ids in `GET /v1/users` read and no name may stand in for one; `/v1/auth/local/lo
 the same short-lived access and rotating refresh tokens as the existing client
 credential flow. Existing machine clients and all existing routes keep their
 original behavior.
+
+### Work in the channel that asked
+
+With `collaboration.channel_runs` work lives in the channel it was asked for
+in (`docs/spikes/work-channels.md`). A job admitted from a chat turn, or
+through the API naming a `channel_id`, is bound to that channel: its
+attempts, the plan, verdicts, delivery and notices its runs post
+(`collaboration.run_progress`) and the imported milestones all land there,
+under one ledger, so each moment is said once. Whatever is asked there next
+runs there too — a retry, a resume, or new work once the last has ended.
+Work nobody asked for in a channel (a labelled issue, a schedule's tick, an
+admission that names no channel) has no conversation to live in, so it keeps
+the system-created, workspace-visible channel `collaboration.external_work`
+describes below.
+
+A channel works one run at a time. While a run it asked for is queued or
+running:
+
+- a plain message there is a conversation about that run: the turn goes to
+  the model with the read tools (so "how is it going?" is answered from the
+  run's own record) and a `steer_run` tool for the live run. A message that
+  tells the run what to do differently is handed over through it, and the
+  turn comes back with `steered_run_id` as a mention steer does
+  (`collaboration.mention_steering`); the instruction is the same recorded
+  operation `POST /v1/runs/{id}/steering` makes. Whoever may post in the
+  channel may steer it;
+- a turn that picks a runner (`intent` `code` or `workload`) is answered,
+  but cannot start work: the start tools are withheld, the reply says the
+  run has to end first, and the Workload runner's binding choice queues
+  nothing while the channel is busy;
+- an admission naming the channel (`POST /v1/items` with `channel_id`) is
+  refused `409 already_in_progress`, with nothing queued. Replaying the
+  admission that made the live item is still a replay.
+
+`@agent` still addresses that agent's lane, and `/stop` stops the channel's
+work, after which the channel is free again.
+
+Releases 2.1.44 to 2.1.47 advertised `collaboration.work_channels` instead
+and moved a chat's job into a channel of its own, leaving a `work_handoff`
+message behind. Those channels and messages stay readable; nothing new is
+written that way, and a job bound to such a channel runs its next attempt
+in the channel that asks for it.
+
+A job bound before this release keeps the chat it was bound to.
 
 ### Sign-in through an OpenID Connect provider
 
@@ -215,7 +260,12 @@ lantern's managed runners explicitly. Lantern coordinates that turn without
 seeding agent mentions as parallel chat participants: the code runner owns its
 decompose/build/review/fix/CI/merge lifecycle, and the workload runner owns its
 plan/execute/judge/revise/publish lifecycle. Explicit runner intents cannot be
-combined with `target_slugs`.
+combined with `target_slugs`. `intent=workload` is binding: a turn the model
+answers inline without queueing a workload is queued by the daemon anyway,
+with the turn's content as the ask under the default profile, and the reply is
+the queue acknowledgement rather than the inline answer. (`intent=code` stays
+with the model, which may need an intake fact — the repository, say — before
+it can file the issue.)
 
 A mention is a request to reply. It records the agent as a target and joins it
 to the channel, but it no longer rewrites the turn's `intent`: a turn sent as a
@@ -579,7 +629,10 @@ when the run is planned and kept across a resume, and an agent whose `tools`
 names `memory` gets the same tools, writing with the run's id and channel; a
 read-only session, and a critic whatever its session, gets `recall` alone, as
 a read-only chat turn does. With `[memory] enabled = false` no memory reaches
-a prompt and no tool is offered.
+a prompt and no tool is offered. A run that a delegated decision depends on
+binds its agents with no memory at all — no block, no memory tools, resume
+included: today that is the breakdown of a plan whose `advance` is `auto`. A
+breakdown of a `manual` plan, and every other run, takes memories as above.
 
 A run started from a channel keeps what its agents remember for that channel.
 A run with no channel — one a labelled issue, a schedule or the CLI started —
@@ -711,38 +764,42 @@ the file still spells differently). The socket takes the same commands:
 Planning turns a larger effort into issues the loop can work (see the
 [spike](spikes/work-planning.md)). It is advertised as `planning` when a
 configured forge can hold a plan, together with `planning.clarify` (the
-planner's clarifying questions and the answers route), and epic runs as
-`planning.run`. A **plan** is a tree of **nodes**: an
+planner's clarifying questions and the answers route), epic runs as
+`planning.run`, the `advance` switch with each node's actors and review
+as `planning.advance`, the daemon moving an `auto` plan forward under
+an owner's grants as `planning.driver` (see "Plans that advance
+themselves" below), and the planner drafting plans from goals as
+`goals.proposing`. A **plan** is a tree of **nodes**: an
 initiative breaks into epics, an epic into tasks. A plan starts at an
 initiative (its home repository) or at a lone epic. Every plan, drafts
 included, is shared across the workspace: `runs:read` reads every one.
 `plans:create` (members hold it) drafts and edits; `plans:publish` (admins
 and owners) publishes to the forge and edits, attaches and detaches its issues.
 
-| Route                                                                 | Body                                                              | Result                                                                  |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `GET /v1/plans`                                                       | `?repository=&level=&state=`                                      | `200 {data: [plan summary]}`, most recent first                         |
-| `POST /v1/plans`                                                      | `{level, repository, title, goal?, acceptance_criteria?, …}`      | `201`, the plan with its root node                                      |
-| `GET /v1/plans/{id}`                                                  | none                                                              | `200`, the plan and every node                                          |
-| `PATCH /v1/plans/{id}`                                                | `{expected_revision, …sections}`                                  | `200`, the root node's sections edited                                  |
-| `DELETE /v1/plans/{id}`                                               | `?expected_revision=`                                             | `200 {id, outcome: deleted \| archived}`                                |
-| `POST /v1/plans/{id}/nodes`                                           | `{expected_revision, parent_id, title, repository?, …}`           | `201`, the plan; `Location` names the new node                          |
-| `PATCH /v1/plans/{id}/nodes/{node_id}`                                | `{expected_revision, position?, forge_version?, …sections}`       | `200`, the plan (a published node: its issue written)                   |
-| `DELETE /v1/plans/{id}/nodes/{node_id}`                               | `?expected_revision=`                                             | `200`, the plan without the node and its subtree                        |
-| `POST /v1/plans/{id}/nodes/{node_id}/breakdown`                       | `{expected_revision, note?, channel_id?}`                         | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued |
-| `POST /v1/plans/{id}/nodes/{node_id}/answers`                         | `{expected_revision?, answers: {id: {value?, text?}}, skip?}`     | `200 {plan, run_id, resumed}`, the waiting run back in the queue        |
-| `POST /v1/plans/{id}/nodes/{node_id}/approve`                         | `{expected_revision, node_ids?}`                                  | `200`, the plan with those children approved                            |
-| `POST /v1/plans/{id}/nodes/{node_id}/publish`                         | `{expected_revision}` and an `Idempotency-Key` header             | `200 {plan, results, operation_id, replayed}`                           |
-| `POST /v1/plans/{id}/nodes/{node_id}/attach`                          | `{expected_revision, repository?, number?, url?}`                 | `200 {plan, node_id, linked, reason}`                                   |
-| `POST /v1/plans/{id}/nodes/{node_id}/detach`                          | `{expected_revision}`                                             | `200`, the plan with the child detached                                 |
-| `POST /v1/plans/{id}/sync`                                            | none                                                              | `200`, the plan reconciled from the forge now                           |
-| `POST /v1/plans/{id}/drift/ack`                                       | `{expected_revision, node_ids?}`                                  | `200`, the plan with that drift marked seen                             |
-| `POST /v1/plans/{id}/nodes/{node_id}/replan/approve`                  | `{expected_revision, entry_ids?}` and an `Idempotency-Key` header | `200 {plan, results, operation_id, replayed}`                           |
-| `POST /v1/plans/{id}/nodes/{node_id}/replan/discard`                  | `{expected_revision, entry_ids?}`                                 | `200`, the plan without those re-plan entries                           |
-| `POST /v1/plans/{id}/nodes/{epic_id}/run`                             | `{expected_revision}` and an `Idempotency-Key` header             | `201`, the epic run; a replay is `200`                                  |
-| `GET /v1/plans/{id}/nodes/{epic_id}/run`                              | none                                                              | `200`, the epic's most recent run                                       |
-| `POST /v1/plans/{id}/nodes/{epic_id}/run/pause`, `/resume`, `/cancel` | none; an `Idempotency-Key` header                                 | `200`, the epic run                                                     |
-| `POST /v1/plans/{id}/nodes/{task_id}/run/retry`, `/skip`              | none; an `Idempotency-Key` header                                 | `200`, the epic run                                                     |
+| Route                                                                 | Body                                                              | Result                                                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `GET /v1/plans`                                                       | `?repository=&level=&state=&limit=&cursor=`                       | `200 {data: [plan summary], next_cursor, has_more}`, most recent first, at most 200 a page |
+| `POST /v1/plans`                                                      | `{level, repository, title, goal?, advance?, …}`                  | `201`, the plan with its root node                                                         |
+| `GET /v1/plans/{id}`                                                  | none                                                              | `200`, the plan and every node                                                             |
+| `PATCH /v1/plans/{id}`                                                | `{expected_revision, advance?, …sections}`                        | `200`, the root node's sections edited, the switch flipped                                 |
+| `DELETE /v1/plans/{id}`                                               | `?expected_revision=`                                             | `200 {id, outcome: deleted \| archived}`                                                   |
+| `POST /v1/plans/{id}/nodes`                                           | `{expected_revision, parent_id, title, repository?, …}`           | `201`, the plan; `Location` names the new node; `409 level_full` at the cap                |
+| `PATCH /v1/plans/{id}/nodes/{node_id}`                                | `{expected_revision, position?, forge_version?, …sections}`       | `200`, the plan (a published node: its issue written)                                      |
+| `DELETE /v1/plans/{id}/nodes/{node_id}`                               | `?expected_revision=`                                             | `200`, the plan without the node and its subtree                                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/breakdown`                       | `{expected_revision, note?, channel_id?}`                         | `202 {plan_id, node_id, item, operation, created}`, a `plan` run queued                    |
+| `POST /v1/plans/{id}/nodes/{node_id}/answers`                         | `{expected_revision?, answers: {id: {value?, text?}}, skip?}`     | `200 {plan, run_id, resumed}`, the waiting run back in the queue                           |
+| `POST /v1/plans/{id}/nodes/{node_id}/approve`                         | `{expected_revision, node_ids?}`, `Idempotency-Key` optional      | `200`, the plan with those children approved                                               |
+| `POST /v1/plans/{id}/nodes/{node_id}/publish`                         | `{expected_revision}` and an `Idempotency-Key` header             | `200 {plan, results, operation_id, replayed}`                                              |
+| `POST /v1/plans/{id}/nodes/{node_id}/attach`                          | `{expected_revision, repository?, number?, url?}`                 | `200 {plan, node_id, linked, reason}`                                                      |
+| `POST /v1/plans/{id}/nodes/{node_id}/detach`                          | `{expected_revision}`                                             | `200`, the plan with the child detached                                                    |
+| `POST /v1/plans/{id}/sync`                                            | none                                                              | `200`, the plan reconciled from the forge now                                              |
+| `POST /v1/plans/{id}/drift/ack`                                       | `{expected_revision, node_ids?}`                                  | `200`, the plan with that drift marked seen                                                |
+| `POST /v1/plans/{id}/nodes/{node_id}/replan/approve`                  | `{expected_revision, entry_ids?}` and an `Idempotency-Key` header | `200 {plan, results, operation_id, replayed}`                                              |
+| `POST /v1/plans/{id}/nodes/{node_id}/replan/discard`                  | `{expected_revision, entry_ids?}`                                 | `200`, the plan without those re-plan entries                                              |
+| `POST /v1/plans/{id}/nodes/{epic_id}/run`                             | `{expected_revision}` and an `Idempotency-Key` header             | `201`, the epic run; a replay is `200`                                                     |
+| `GET /v1/plans/{id}/nodes/{epic_id}/run`                              | none                                                              | `200`, the epic's most recent run                                                          |
+| `POST /v1/plans/{id}/nodes/{epic_id}/run/pause`, `/resume`, `/cancel` | none; an `Idempotency-Key` header                                 | `200`, the epic run                                                                        |
+| `POST /v1/plans/{id}/nodes/{task_id}/run/retry`, `/skip`              | none; an `Idempotency-Key` header                                 | `200`, the epic run                                                                        |
 
 A node's sections are `title`, `goal`, `context`, `acceptance_criteria` (a
 list), `non_goals` and `constraints`; a task also carries `kind` (`code` or
@@ -777,6 +834,120 @@ unpublished, person-authored roots move into `input`, retaining their trees
 and requiring generation before publishing; published and archived content
 is preserved.
 
+**Who a node is from, and whether a plan advances itself** (feature
+`planning.advance`). Every node carries three read-only fields, each a
+principal's id — the one the same act's event names as its actor — or
+`agent:<slug>`, or `null` where nobody is recorded:
+
+| Field          | Holds                                                                                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `proposed_by`  | Who the node's content is from: the person who drafted the plan or added the node; for a node a `plan` run proposed (the generated root, its children, a re-plan's addition), the planner agent bound to that run. `null` for an issue adopted from the forge and for a run that named no agent. An edit keeps it. |
+| `approved_by`  | Who approved the node for publishing (`approve`, or approving the re-plan entry that added it). Editing the node makes it a draft again and clears this.                                                                                                                                                           |
+| `published_by` | Who published the node to the forge. A root is published with its level, so it carries this and no `approved_by`.                                                                                                                                                                                                  |
+
+Nodes written before these were kept read `null` in all three. A node may
+also carry `review`, a reviewer's verdict on its **level** (its children):
+`{run_id, verdict: approve | escalate, reasons, digest, reviewed_by, at, current}`. `digest` names what was reviewed and `current` is whether the
+level still reads so: an edit of a child's title or sections, a child added,
+removed, moved or replaced, or a changed repository makes it `false`, and a
+review that is not current says nothing about the level as it is now.
+Approving and publishing the level do not move it. The daemon writes
+`review`; no route does. A breakdown of a plan whose `advance` is `auto`
+fills it: the run's critic reviews the proposed level before it is
+delivered, and the verdict lands on the node in the proposal's own write,
+`current: true` until the level changes (see the breakdown route below).
+`reviewed_by` is the critic, `agent:<slug>`; a review whose answer was
+unusable reads `escalate` with the reason `the reviewer did not return a usable verdict`. A `manual` plan's breakdown never writes one.
+
+A plan carries `advance`: `manual` (the default — a person takes every
+step) or `auto`, and `goal_id`, the goal it was proposed from (`null` for a
+plan a person drafted; read-only). `advance` is set on `POST /v1/plans` and
+flipped on `PATCH /v1/plans/{id}`, alone or with sections, on a published
+plan too. Setting it takes **`plans:publish`** on top of the route's
+`plans:create`: a caller without it who names a value the plan does not
+already have (anything but `manual` on create) is `403 forbidden` with
+`capability: plans:publish`, and nothing in the request is written; the
+same request without `advance`, or naming the value the plan has, works as
+before. A flip is `plan.node.changed` with `node_id: null`,
+`change: advance`, `advance` and `before`, under whoever flipped it.
+`goal_id`, `review` and the three actor fields are refused as unknown
+fields (`422`) in any request body. Where `/v1/capabilities` lists
+`planning.driver`, an `auto` plan is moved forward by the daemon under the
+grants (below); a `manual` plan is never touched by it, and neither is an
+`auto` one whose step no enabled grant covers. Lantern's default grants
+(see [Delegation](#delegation)) cover the plan steps, so on a daemon that
+still has them, setting a plan to `auto` is what lets it move.
+
+**Plans that advance themselves (`planning.driver`).** On every tick the
+daemon is not held, its plan driver takes the next step of each `auto` plan
+that is not archived, as an agent and only when a grant
+([Delegation](#delegation)) allows it: it queues a node's **breakdown**
+(the `planner`, `plan.breakdown`) when the node has no children yet; it
+**approves** the node's `draft` and `proposed` children (the `critic`,
+`plan.approve`); once `[delegation] publish_delay_s` (900 s by default) has
+passed since the level was approved, it **publishes** it (the `critic`,
+`plan.publish`); and it **starts the epic run** of a published epic whose
+tasks are all on the forge and that never ran (the `critic`, `plan.run`).
+A node below the root is broken down once it is on the forge. One act per
+plan per tick, one forge write per tick in all. What a client sees is the
+same record a person's step leaves, under the agent:
+
+- each step is an operation like a person's (`item.admit` for a breakdown,
+  `plan.approve`, `plan.publish`, `plan.run`) whose `actor` is
+  `{"kind": "agent", "id": "agent:critic", "display": "the critic agent", "via": "agent"}` (or the planner);
+- the nodes' `approved_by` and `published_by`, and the epic run's
+  `started_by`, read `agent:critic` (`started_by_display`: "the critic
+  agent"); a breakdown's children read `proposed_by: "agent:planner"` as
+  they always did;
+- every step considered — allowed, denied or escalated — is a row of
+  `GET /v1/decisions` naming the plan, the node, the item or epic run, the
+  operation when it was taken, and the facts it was judged on.
+
+Anything the grants do not cover waits for a person and is one `escalate`
+row, written once while the situation stands: no grant, a condition not
+met, a `require_review` grant with no current review (an edit of a child
+makes it stale), the critic's verdict `escalate`, a breakdown that already
+ran for the node and left nothing (the daemon never queues another), a
+repository that cannot hold the plan, or a step the forge refused (tried
+again after `[daemon] poll_interval_s`, then twice as long after each failure
+in a row, at most an hour apart). It is resolved `acted`
+when the step happens — taken by the daemon or by a person through any
+route — or `superseded` when the level changes under it. A person can step
+in at any point: flip `advance` to `manual` (the next step is not taken),
+or take the step themselves through the usual routes.
+
+**Plans proposed from goals (`goals.proposing`).** Where
+`/v1/capabilities` lists `goals.proposing` and `[delegation] propose_every`
+is set (seconds; `0`, the default, is off), the daemon drafts a plan for
+each `active` goal that has no plan still open (not archived, and not done:
+every epic closed on the forge), at most once per `propose_every` per goal
+and one per tick across all goals, as the `planner` under a `plan.propose`
+grant. What a client sees:
+
+- a new draft plan with `created_by: "agent:planner"`, `advance: "auto"`,
+  `goal_id` the goal's, and a root to be generated from a brief: the goal's
+  title and text, and in its context the repository's open follow-up
+  issues (`[landing] followup_label`, newest first, at most ten, each as
+  `- title (url)`). It then advances like any `auto` plan;
+- a `plan.propose` operation whose `target_kind` is `plan`, `target_key`
+  the plan's id and `actor` the planner;
+- a `GET /v1/decisions` row with `action: "plan.propose"`: `allow` naming
+  the plan, its root node and the operation, with facts `repository`,
+  `level` (the root's: `initiative` when the goal's text is 1200 characters
+  or more, `epic` otherwise), `goal_id`, `chain_depth` and `followups` (the
+  issue numbers in the brief); or an `escalate` with no plan, the facts
+  naming the `goal_id` — no grant, a grant that falls short, a repository
+  that is not configured, is disabled or cannot hold a plan, a follow-up
+  listing that could not be read. It is written once while the situation
+  stands, closed `acted` when the goal has an open plan again and
+  `superseded` when the goal is deleted or no longer `active`.
+
+A follow-up filed by a run of an agent-proposed plan carries an origin
+marker (`<!-- lantern:origin item=none agent=planner depth=N -->`) after its
+`lantern-followup` marker, and the proposer never reads one at or beyond
+`[agent_team] max_chain_depth` into a brief. A goal is never set `done` by
+the daemon: it stays `active` until an owner changes it.
+
 Every mutation names the plan's `revision` it read as `expected_revision`;
 any write to the plan or any node bumps it, and a stale one is `409 stale_revision` with `current_revision`. An unknown repository is `422 unknown_repository`; one whose forge cannot hold a plan is `409 planning_unsupported` with the reason. Each entry of `GET /v1/repositories`
 says that before anyone types: `planning: {hierarchy, reason}`, where
@@ -785,7 +956,8 @@ labels and a managed checklist in the parent) or `unsupported` (Gitea: "this
 repository's forge can't hold plans: Gitea is not supported"; or `[planning] enabled = false` for it: "planning is off for this repository"). Changes emit
 `plan.created` `{plan_id, level, repository}` and `plan.node.changed`
 `{plan_id, node_id, change}` (`added`, `updated`, `removed`, `archived`,
-`deleted`, `approved` with `node_ids`, `published` with `number`,
+`deleted`, `advance` with `advance` and `before`, `approved` with
+`node_ids`, `published` with `number`,
 `issue_edited`, `attached` and `detached` — see below; a re-plan's `closed`
 with `number` and `replan_discarded` with `entry_ids`; and `closed`,
 `reopened` or `completed` with `number` — see "Closing what is finished").
@@ -793,7 +965,22 @@ with `number` and `replan_discarded` with `entry_ids`; and `closed`,
 **Approving and publishing a level (#2341).** `approve` (`plans:create`) is
 a person's "this is right": the node's `draft` and `proposed` children —
 every one, or those `node_ids` names (a name that is not a child is `422`) —
-become `approved`; with none left to approve it is `422`. `publish`
+become `approved`; with none left to approve it is `422`. Approving is an
+operation, as publishing is: each call is recorded as `plan.approve` under
+whoever made it (`GET /v1/operations?target_kind=plan&target_id=<plan id>`,
+with the plan, the node, the revision and the `node_ids` asked for), and
+its `operation.accepted` and `operation.finished` ride the chronology. The
+answer on success is the plan, as it always was. A refusal — a stale
+revision, a name that is not a child, nothing to approve — finishes the
+operation `failed` and answers the status, `code` and fields it always did,
+plus `operation_id`; with no operation record to write to it is `503 daemon_not_ready` and nothing is approved. The `Idempotency-Key` header is
+optional: with one, a replay answers the plan as it is now (or the refusal
+the first call recorded) and approves nothing again, and a different body
+under the same key is `409 idempotency_conflict`; without one each call is
+its own operation. An approve the daemon died during is settled at the next
+start from the plan itself: `succeeded` when the plan was written to since
+and the children it named are no longer `draft` or `proposed`, `failed`
+(`interrupted_before_effect`) otherwise — approving again is safe. `publish`
 (`plans:publish`) writes one level to the forge: the node's `approved`
 children, and the node itself first when it is not on the forge yet (the
 root of a fresh plan). Children that are not approved are not published.
@@ -805,7 +992,7 @@ criteria as a checkbox list, Kind, Verify commands as a code block, Depends
 on as issue references, Non-goals, Constraints) and the marker at the foot,
 with its level label (`sbx:initiative`, `sbx:epic`, `sbx:task`) on the
 create itself — never the trigger or the workload label, so a published
-task is inert until a person starts it. It is linked under its parent: a
+task is inert until an epic run admits it or a person labels it. It is linked under its parent: a
 native sub-issue on GitHub (one already linked is not linked twice), a line
 in the parent's managed checklist on GitLab. A cross-repository sub-issue
 GitHub refuses falls back to the checklist, and the node's result names why
@@ -925,6 +1112,19 @@ repository planning is off for or no longer configured (`409 planning_unsupporte
 `plan.generation.proposed` `{plan_id, node_id, run_id, kind: "breakdown", count}` when the plan holds the proposal, or `plan.generation.failed`
 `{plan_id, node_id, run_id, reason}` when the run ends without one; each is
 scoped to the run, its item and its channel.
+
+**A reviewed breakdown.** On a plan whose `advance` is `auto` the planner
+asks no clarifying questions, whatever `[planning] max_questions` says, and
+the run's critic reviews the proposal before it is delivered: it reads the
+node (or the root the planner generated), the children that stay and the
+proposed children as their issues will read, and answers `approve` or
+`escalate` with short reasons. The verdict is written to the node's
+`review` in the same write as the proposal, and
+`plan.generation.reviewed` `{plan_id, node_id, run_id, verdict, reason_count}` follows `plan.generation.proposed` in that write, scoped
+the same way (the reasons themselves are on the node, not in the event).
+A reviewer whose answer is unusable twice stands for `escalate`; the
+proposal is still delivered and waits for a person. A re-plan is not
+reviewed: its diff already waits for a person.
 
 **Clarifying questions** (feature `planning.clarify`, advertised with
 `planning`). Before it proposes, the planner reads the checkout and either
@@ -1411,7 +1611,8 @@ A person has the last word over all of it:
 | `PUT /v1/channels/{id}/silence` | delegate | Body `{until}` (a timestamp, or null to lift it); the channel        |
 | `PUT /v1/channels/{id}/read`    | write    | Body `{sequence}`; the caller's channel member entry                 |
 
-Stop cancels the channel's queued and running turns, cancels the runs its
+Stop cancels the channel's queued and running turns (a turn still accepted
+that nothing is running included), cancels the runs its
 work items are executing, abandons the work items it queued that have not
 started, and silences the channel for an hour; resume lifts the silence but
 restarts nothing. The runs and items are cancelled through the daemon's
@@ -1441,27 +1642,38 @@ A channel can have a window onto a chat service: a Slack, Discord or
 Mattermost surface where the same conversation happens. When
 `/v1/capabilities` lists `collaboration.bridges`:
 
-| Route                                  | Needs                   | Result                                                                                                                                                        |
-| -------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /v1/bridges`                      | read                    | `{data: [{backend, configured, label}]}` — the services this release can bridge, and whether one is set up here                                               |
-| `GET /v1/channels/{id}/links`          | manage                  | `{data: [{id, channel_id, backend, surface_id, thread_id, allow_guests, created_by, created_at, active}]}`                                                    |
-| `POST /v1/channels/{id}/links`         | manage, workspace admin | Body `{backend, surface_id, thread_id?, allow_guests?}`; `201` with the link; `409 link_exists` for a taken surface, `409 link_run_thread` for a run's thread |
-| `DELETE /v1/channels/{id}/links/{lid}` | manage                  | `204`; `404 link_not_found`                                                                                                                                   |
+| Route                                  | Needs                   | Result                                                                                                              |
+| -------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /v1/bridges`                      | read                    | `{data: [{backend, configured, label}]}` — the services this release can bridge, and whether one is set up here     |
+| `GET /v1/channels/{id}/links`          | manage                  | `{data: [{id, channel_id, backend, surface_id, thread_id, allow_guests, created_by, created_at, active}]}`          |
+| `POST /v1/channels/{id}/links`         | manage, workspace admin | Body `{backend, surface_id, thread_id?, allow_guests?}`; `201` with the link; `409 link_exists` for a taken surface |
+| `DELETE /v1/channels/{id}/links/{lid}` | manage                  | `204`; `404 link_not_found`                                                                                         |
 
 Creating a link takes managing the channel and being a workspace owner or
 admin (`403 channel_forbidden` otherwise): a link makes the channel hear
 everyone on that surface and post its own traffic there, which reaches
-past the channel itself. A thread a run opened is refused. A Discord thread
-is a channel of its own, so a Discord link given a `thread_id` is stored
-with that thread as its `surface_id` and no `thread_id`; Slack and
-Mattermost keep both. Deleting a link and linking the same surface or
-thread again works.
+past the channel itself. A Discord thread (and the operator console's) is a
+channel of its own, so a link given a `thread_id` there is stored with that
+thread as its `surface_id` and no `thread_id`; Slack and Mattermost keep
+both. Deleting a link and linking the same surface or thread again works.
+
+The thread a bridge opens for a run is such a link for as long as the run is
+live, made by the daemon as the run's headline is posted: the link of the
+channel the run lives in, admitting guests, so the channel's messages reach
+the thread and a reply typed in the thread is a turn in that channel,
+steering the run through the same path a reply in the app takes. The daemon
+retires the link when the run ends — a channel hosts one run after another,
+each with a thread of its own — and makes it again if the run resumes. The bridge keeps rendering what the channel
+has no message for — the headline card, the status line and tool digest it
+edits in place, the agent's narration — and leaves the plan, the verdicts
+and the steering replies to the mirror. With `thread_per_run = false` there
+is no thread to link and steering from the bridge stays as it was.
 
 While a surface is linked, what people type there becomes a turn in the
 channel it mirrors, instead of reaching the daemon's concierge. A link is a
 window on a channel, not a grant of operator powers: it never widens where
-`!sbx` runs, so on a linked surface that is not the control channel the one
-command is `!sbx link`, and every other is refused with a note saying where
+`!lantern` runs, so on a linked surface that is not the control channel the one
+command is `!lantern link`, and every other is refused with a note saying where
 it does run. Commands on the control channel, run-thread steering and an
 unlinked surface behave exactly as they did. Every message appended to the
 channel — a person's, an agent's, a run's delivery, a failed turn's error,
@@ -1490,14 +1702,16 @@ Lantern shows it as a "via" badge; it is `null` for everything typed here.
 
 Who somebody is on a bridge is theirs to prove, once:
 
-| Route                                      | Needs | Result                                                                     |
-| ------------------------------------------ | ----- | -------------------------------------------------------------------------- |
-| `POST /v1/users/me/identities/link-code`   | write | `{code, expires_at}` — shown here and nowhere else, single use, 10 minutes |
-| `GET /v1/users/me/identities`              | read  | `{data: [{backend, external_user_id, display_name, verified_at}]}`         |
-| `DELETE /v1/users/me/identities/{backend}` | write | `204`; `404 identity_not_found`                                            |
+| Route                                      | Needs | Result                                                                              |
+| ------------------------------------------ | ----- | ----------------------------------------------------------------------------------- |
+| `POST /v1/users/me/identities/link-code`   | write | `{code, expires_at, command}` — shown here and nowhere else, single use, 10 minutes |
+| `GET /v1/users/me/identities`              | read  | `{data: [{backend, external_user_id, display_name, verified_at}]}`                  |
+| `DELETE /v1/users/me/identities/{backend}` | write | `204`; `404 identity_not_found`                                                     |
 
-The person types `!sbx link <code>` on the bridge, from the account they
-want mapped. A message from an author nobody has mapped is refused with a
+The person sends `command` on the bridge — `<prefix> link <code>`, the
+prefix the bridge's `[chat] command_prefix` sets (`!lantern` by default), so a
+client shows it rather than building it — from the account they want
+mapped. A message from an author nobody has mapped is refused with a
 short reply pointing at that command — unless the link was created with
 `allow_guests`, in which case it is stored as a person with no account,
 under the name they use on that service. A map is only as good as the
@@ -1585,9 +1799,48 @@ extension fetches the real text with the person's own token:
   "turn_id": "trn_…",
   "title": "Ada Lovelace mentioned you",
   "body": "@grace can you take a look at this?",
-  "created_at": "2026-09-25T12:00:00Z"
+  "created_at": "2026-09-25T12:00:00Z",
+  "entry_id": null,
+  "actions": [],
+  "level": "active"
 }
 ```
+
+The record also says what the person can do about it, so a device can offer
+it on the notification itself without opening the app:
+
+- `entry_id` — the id of the [attention](#what-is-waiting-on-a-person)
+  entry it is about (`gate:gate_…`, `item:itm_…:blocked:run_…`), or `null`
+  when it is about none.
+- `actions` — that entry's actions **its recipient may take**, by the
+  attention list's own names (`gate_approve`, `retry`, `dismiss`, …), in the
+  list's order: only those whose capability the recipient's role held when
+  the notification was recorded, never one the server would refuse them.
+  Each is taken through `POST /v1/attention/{entry_id}/act`, which checks the
+  entry and the capability again as it stands then. Empty without an entry.
+- `level` — how urgent it is: `passive` (news to read when convenient: work
+  or a reply that arrived, the daily digest, a test push), `active` (worth a look now: a
+  mention, something that could not finish, a plan waiting on you, a
+  reminder about work that failed or is held) or `time_sensitive` (a
+  decision is waiting on you: an opened gate, a job's `action_required`, a
+  reminder about a decision).
+
+| Source                                                   | `entry_id`                                                   | `actions`                                                      | `level`                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `gate.opened`                                            | `gate:<gate_id>` of the run's gate                           | `["gate_approve"]` (it goes only to who holds `gates:approve`) | `time_sensitive`                                       |
+| A job's `action_required` attention                      | The entry about the job's run, else its item, when one waits | The entry's actions the recipient's role may take              | `time_sensitive`                                       |
+| A job's `failure` attention                              | The same                                                     | The same (`retry`, `dismiss`, … where offered)                 | `active`                                               |
+| `attention.reminder`                                     | The event's `entry_id`                                       | The event's `actions` the recipient's role may take            | `time_sensitive` for a `decision` entry, else `active` |
+| Plan questions, a plan proposal, an epic run paused      | `null` (decided on the plan's own page)                      | `[]`                                                           | `active`                                               |
+| A mention                                                | `null`                                                       | `[]`                                                           | `active`                                               |
+| Work or a reply that could not finish                    | `null`                                                       | `[]`                                                           | `active`                                               |
+| Work delivered, a reply finished, a job's `work`, a test | `null`                                                       | `[]`                                                           | `passive`                                              |
+| The daily digest (`briefing.digest`)                     | `null`                                                       | `[]`                                                           | `passive`                                              |
+
+A notification recorded before these fields existed reads `entry_id: null`,
+`actions: []`, `level: "active"`. None of it rides the push itself: the
+relay's payload is still exactly `{srv, k, ref, thread}` with the same five
+kinds, and a device reads the rest from this record.
 
 What is pushed, and to whom (never to the person whose message or action it
 was):
@@ -1616,6 +1869,39 @@ A breakdown or epic run whose asker is not an active member of the
 workspace (a host-trusted operator, say) pushes nothing. The breakdown
 notices carry the channel the breakdown was asked in when the asker can
 open it (so per-channel preferences apply); the epic-run notice has none.
+
+A thing that keeps waiting on a person is reminded about, on the existing
+kinds again:
+
+| Notice        | Event                | `kind`                                                                  | Who                                                                                                                                                                                                                                                                                                                                                                                            | Title                    |
+| ------------- | -------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Still waiting | `attention.reminder` | `gate` for a `decision` entry; `failure` for a `failed` or `paused` one | Among the people who can see where it is (a channel's readers for work it asked for; owners and admins for work nobody did; every member for a block on the daemon itself), those who hold the capability of at least one of the entry's actions (`capabilities` in the event) — or the owners, for an entry nobody below owner can act on. Never the whole workspace regardless of capability | `Still waiting: <title>` |
+
+The body says how long it has waited and which reminder this is (`A decision has been waiting 4 hours. First reminder.`; `It ended blocked 2 days ago and still needs someone. Reminder 2.`). Each reminder is its own notice — the
+second is not swallowed by the one-hour dedupe of the first — and the same
+one is never pushed twice. The notice carries the entry's channel when it has
+one, so per-channel preferences apply, and a device's `gates` or `failures`
+switch governs it as it governs the kind.
+
+An [escalation](#decisions-on-the-list) is a `decision` entry, so its
+reminder is a `gate` at `time_sensitive`. Its `approve` and `decline` need
+the escalated step's capability, which the event names per action
+(`action_capabilities`, `{action: capability}`, beside `actions`): the
+reminder reaches whoever holds it — a member for a plan approval or a
+breakdown, owners and admins for a publish, a run or a retry, the owners
+alone for a proposal of new work (`policy:manage`) — and each is offered
+the actions their role may take.
+
+The daily digest, when `[attention] digest_at` is set, is one more:
+
+| Notice         | Event             | `kind` | Who                                                                          | Title                   |
+| -------------- | ----------------- | ------ | ---------------------------------------------------------------------------- | ----------------------- |
+| Daily briefing | `briefing.digest` | `work` | Every active member of the workspace with a device; never a plain API client | `Your Lantern briefing` |
+
+The body is the digest's summary line (`Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; 9 decided under grants; runway 2.5 days.`),
+cut to the notification body's length. It carries no channel, so the
+device's `work` switch alone governs it, and its dedupe key is the day: one
+digest is one push.
 
 Only live events are pushed: the dispatcher reads the chronology from where
 it stood when the daemon started, so historical events and a restart's replay
@@ -1662,7 +1948,10 @@ Rules a client can rely on:
   holds**: a grant narrowed later narrows the live token at once; a revoked
   client is refused on its next request and dropped from its streams.
 - A refresh token is used once. Presenting it twice revokes its whole family
-  (`401 refresh_reuse_detected`); the client re-authenticates with its secret.
+  (`401 refresh_reuse_detected`): its refresh tokens and every access token
+  minted beside them, which are refused at once (`401 token_revoked`) and
+  dropped from their streams. The client re-authenticates with its secret.
+  Revoking a refresh token through `POST /v1/auth/revoke` does the same.
 - Authentication failures are rate-limited per client id and per source
   address (`429`, with `Retry-After`).
 
@@ -1672,19 +1961,20 @@ Rules a client can rely on:
 | ------------------------ | ------------------------------------------------------------------------------------------- |
 | `runs:read`              | Every read: status, items, queue, runs, tasks, events, streams, gates, holds, schedules     |
 | `items:create`           | `POST /v1/items`                                                                            |
-| `runs:control`           | Cancel, resume, retry, requeue, abandon, re-arm the review wait                             |
+| `runs:control`           | Cancel, resume, retry, requeue, abandon, re-arm the review wait, dismiss an alert           |
 | `runs:steer`             | `POST /v1/runs/{id}/steering`                                                               |
 | `budgets:grant`          | `POST /v1/runs/{id}/round-grants`                                                           |
 | `gates:approve`          | `POST /v1/gates/{id}/approve`                                                               |
 | `daemon:manage`          | Holds, stop, restart, repository resume, schedules                                          |
 | `artifacts:read`         | Artifact catalogs and downloads                                                             |
-| `audit:read`             | `GET /v1/operations`                                                                        |
+| `audit:read`             | `GET /v1/operations`, `GET /v1/grants`, `GET /v1/decisions`                                 |
 | `diagnostics:read`       | `GET /v1/logs`, `GET /v1/configuration`                                                     |
 | `collaboration:read`     | Local profile, agent/team catalogs, channels, messages, preferences, workflows, connections |
 | `collaboration:write`    | Local profile, teams, channels, preferences, and workflow mutations                         |
 | `collaboration:delegate` | Accept a conversational or delegated channel turn                                           |
 | `plans:create`           | Draft plans and edit their unpublished nodes                                                |
 | `plans:publish`          | Publish a plan level to the forge, edit published nodes, run an epic                        |
+| `policy:manage`          | Write, edit and delete grants (`/v1/grants`); only an owner holds it                        |
 
 A refusal names the capability it needed (`403 forbidden` with
 `"capability"`), before the target is looked at.
@@ -1693,6 +1983,15 @@ A workspace member's client holds exactly what their role grants. When a
 release adds a capability to a role, the API grants it to every active
 member's client as it starts; the member's next token refresh (or sign-in)
 carries it.
+
+`policy:manage` is the owner's alone. An owner holds every capability; an
+admin holds every one except `credentials:manage` and `policy:manage`; a
+member holds neither. An agent acting for itself never holds it, whoever it
+is working for. A plain API client holds it only when the host operator
+registered it with `--cap policy:manage`: counting as an owner where a route
+asks for a role (a client holding `daemon:manage` does) is not holding the
+capability. The routes that write a grant (see Delegation below) ask for the
+capability, never for a role.
 
 ## Capability discovery
 
@@ -1721,7 +2020,8 @@ Every id is opaque and stable; none is an issue number, a host path or an
 `owner/name`. `itm_…` a work item, `run_…` a run, `repo_…` a configured
 repository, `gate_…` a merge or publication gate, `op_…` an operation,
 `str_…` a steering record, `art_…` an artifact, `plan_…` a plan,
-`node_…` one of its nodes and `erun_…` an epic run, `evt_<n>` an event (and the
+`node_…` one of its nodes and `erun_…` an epic run, `grant_…` a grant and
+`dec_…` a decision, `evt_<n>` an event (and the
 cursor into the chronology), `cli_…` a client. An unknown id of any kind is
 a plain `404 not_found`. Each resource carries `workspace_id` (`"local"` on
 a single installation), RFC 3339 UTC timestamps, `available_actions` (what
@@ -1763,7 +2063,13 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/items[/{id}]`, `/v1/queue`                                  | `runs:read`            | Work items; the queue in dispatch order                                     |
 | `POST`   | `/v1/items`                                                      | `items:create`         | Admit an issue, a workload ask or a tool recipe                             |
 | `POST`   | \`/v1/items/{id}/retry                                           | requeue                | abandon\`                                                                   |
+| `POST`   | `/v1/items/{id}/dismiss`, `…/undismiss`                          | `runs:control`         | Acknowledge the item's alert for everyone; take that back                   |
 | `GET`    | `/v1/runs[/{id}]`, `…/tasks`                                     | `runs:read`            | Runs and their tasks                                                        |
+| `POST`   | `/v1/runs/{id}/dismiss`, `…/undismiss`                           | `runs:control`         | The same for a run no work item carries                                     |
+| `GET`    | `/v1/attention`                                                  | `runs:read`            | Everything waiting on a person, with counts and the actions offered         |
+| `POST`   | `/v1/attention/dismiss`                                          | `runs:control`         | Dismiss several named alerts under one operation                            |
+| `POST`   | `/v1/attention/{id}/act`                                         | `runs:read`            | Take an action an entry offers (it needs that action's capability too)      |
+| `POST`   | `/v1/items/{id}/delete`, `/v1/runs/{id}/delete`                  | `runs:control`         | Put finished work away: hidden from listings, run directories removed       |
 | `POST`   | \`/v1/runs/{id}/cancel                                           | resume\`               | `runs:control`                                                              |
 | `POST`   | `/v1/runs/{id}/steering`                                         | `runs:steer`           | Direction for the run in flight                                             |
 | `GET`    | `/v1/runs/{id}/steering`                                         | `runs:read`            | Every instruction and its fate                                              |
@@ -1778,7 +2084,14 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/artifacts/{id}[/content]`                                   | `artifacts:read`       | One entry; its bytes as an attachment                                       |
 | `GET`    | `/v1/runs/{id}/usage`, `/v1/usage`                               | `runs:read`            | Reported tokens and turns; never a bill                                     |
 | `GET`    | `/v1/usage/pool`                                                 | `runs:read`            | Today's runs and tokens against the daily cap and budget                    |
+| `GET`    | `/v1/analytics`                                                  | `runs:read`            | A window of runs folded: outcomes, time to land and parked, turns, causes   |
+| `GET`    | `/v1/briefing`                                                   | `runs:read`            | What finished since, what waits on a person, what is lined up, the budget   |
 | `GET`    | `/v1/operations[/{id}]`                                          | `audit:read`           | Every command any surface recorded                                          |
+| `GET`    | `/v1/grants[/{id}]`                                              | `audit:read`           | The standing rules that let agents take decisions, with today's use         |
+| `POST`   | `/v1/grants`                                                     | `policy:manage`        | Let an agent take a delegable action, under conditions                      |
+| `PATCH`  | `/v1/grants/{id}`                                                | `policy:manage`        | Edit a grant's conditions, limit, note or switch at the revision read       |
+| `DELETE` | `/v1/grants/{id}`                                                | `policy:manage`        | Delete a grant; the decisions it allowed stay in the ledger                 |
+| `GET`    | `/v1/decisions`                                                  | `audit:read`           | What was decided for agents: allowed, denied or escalated to a person       |
 | `GET`    | `/v1/repositories`, `/profiles`, `/recipes`                      | `runs:read`            | What work may be admitted against                                           |
 | `POST`   | `/v1/repositories/{id}/resume`                                   | `daemon:manage`        | Poll a suspended repository again                                           |
 | `POST`   | `/v1/repositories/{id}/labels/sync`                              | `daemon:manage`        | Create the labels the loop applies that the repository is missing           |
@@ -1797,7 +2110,7 @@ rechecked when it arrives) and a `revision` a command may pin.
 | `GET`    | `/v1/logs`, `/v1/configuration`                                  | `diagnostics:read`     | The log ring, redacted; the allowlisted configuration with provenance       |
 | `GET`    | `/v1/plans[/{id}]`                                               | `runs:read`            | Plans and their nodes, drafts included                                      |
 | CRUD     | `/v1/plans[/{id}[/nodes[/{node_id}]]]`                           | `plans:create`         | Draft a plan, edit it, add, edit, move and remove nodes                     |
-| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`                         | `plans:create`         | Approve a node's draft and proposed children                                |
+| `POST`   | `/v1/plans/{id}/nodes/{node_id}/approve`                         | `plans:create`         | Approve a node's draft and proposed children; recorded as an operation      |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/publish`                         | `plans:publish`        | Publish one level to the forge; `Idempotency-Key` required                  |
 | `PATCH`  | `/v1/plans/{id}/nodes/{node_id}` (published)                     | `plans:publish`        | Edit a published node's sections: writes its issue                          |
 | `POST`   | `/v1/plans/{id}/nodes/{node_id}/attach`                          | `plans:publish`        | Attach an existing open issue as a child                                    |
@@ -1845,12 +2158,130 @@ operation's transitions ride the chronology.
   operation in state `failed` with its `error_code`; retrying it is a new
   operation, not a fix loop.
 
+### Dismissing an alert
+
+Work that finished without success, or is parked on a person, asks for
+attention until someone acts on it — and sometimes the right act is none: the
+failure is understood, nobody wants a retry. `POST /v1/items/{id}/dismiss`
+(feature `work.dismiss`; `runs:control`; body
+`{"reason": …, "expected_revision": …}`, both optional) records that
+acknowledgement **for everyone**: the item, its run, its gate and its rows in
+`/v1/channels/{id}/work` and `/jobs` carry
+`dismissal: {at, by, cause, reason, operation_id}`, and a client leaves a
+dismissed row out of whatever it shows as needing attention.
+
+- **Nothing about the work changes.** Its state, its `revision` and its other
+  `available_actions` stay as they were — a dismissed failure can still be
+  retried, a dismissed gate still approved. A command sent with the revision
+  read before the dismissal is not stale.
+- **Where it applies.** `dismiss` is in an item's `available_actions` when the
+  item is `failed`, `blocked`, `cancelled`, `gated`, `awaiting_review`,
+  `paused_review` or `awaiting_answers`, or is `queued` behind a run parked
+  `provider_held`. Anything else is `409 not_eligible` with the state named.
+  Dismissing twice answers `200` with the first dismissal.
+- **It ends by itself.** The moment the item changes state the dismissal is
+  gone: a retry that fails again is a new alert. `POST …/undismiss` takes it
+  back by hand; `undismiss` replaces `dismiss` in `available_actions` while a
+  dismissal stands.
+- **Giving work up dismisses it.** A person's abandon — the item's
+  `abandon` route, the chat and `ctl` verbs, the CLI, stopping an epic run
+  that withdraws its queued items — leaves the item `failed` *and*
+  dismissed, with `cause: "abandoned"`: the person has seen what they gave up.
+  The daemon's own abandon (a pull request closed unmerged) dismisses nothing;
+  nobody has looked at that yet. A cancelled run needs no dismissal: it rests
+  in `cancelled`, which is not a failure.
+- **Too late to give up.** A run at its `publishing` stage is handing its
+  result to the sinks, and nothing can take that back: abandoning its item
+  then is `409 not_eligible` ("run is publishing its result"), and `abandon`
+  leaves `available_actions`. An abandon that arrived just before, whose
+  cancel the run never honoured, does not outrank what the run did: a run
+  that ended delivered (`completed` with nothing to land, or `merged`)
+  settles its item `done`, not `failed`.
+- **A run without an item.** Work an item carries is dismissed through the
+  item; `POST /v1/runs/{id}/dismiss` on such a run leaves the same mark. A run
+  nothing pins — its item row is gone, or has moved on to a later attempt —
+  advertises `dismiss` itself when it is `failed`, `blocked`, `cancelled`,
+  `gated`, `awaiting_review`, `held`, `provider_held` or `awaiting_answers`,
+  and its dismissal ends when the run changes state.
+
+The operation (`item.dismiss`, `item.undismiss`, `run.dismiss`,
+`run.undismiss`) is the record of who and when; the same four are command
+actions on `/v1/ws`.
+
+**Several at once.** `POST /v1/attention/dismiss` (feature
+`work.dismiss_all`; `runs:control`) dismisses up to 200 alerts under one
+`attention.dismiss_all` operation:
+
+```json
+{
+  "reason": "cleared the board",
+  "targets": [
+    {"item_id": "itm_…", "expected_revision": 7},
+    {"run_id": "run_…"}
+  ]
+}
+```
+
+The request names each alert — the ones the person was looking at; there is no
+"everything", because what they were shown may have changed since it was
+drawn. With `attention`, those are the entries of
+[`GET /v1/attention`](#what-is-waiting-on-a-person) that offer `dismiss`: send
+each one's `item_id` — with `expected_revision` only for an `item` entry,
+whose `revision` is the item's — and the entry leaves the list for everyone.
+The answer is `{operation, results}` with one
+result per target in the request's order: `dismissed`, `already_dismissed`, or
+`skipped` with the `code` and `detail` the single route would have refused
+with (`not_found`, `not_eligible`, `stale_revision`). A skipped target does not
+fail the others.
+
+### Deleting finished work
+
+Dismissing takes an alert off the list of things to look at; the work stays in
+every other listing. `POST /v1/items/{id}/delete` (feature `work.delete`;
+`runs:control`; body
+`{"reason": …, "expected_revision": …, "discard_undelivered": false}`, all
+optional) puts the work away:
+
+- **Hidden, not erased.** The item and every run it had leave `GET /v1/items`,
+  `GET /v1/runs` and a channel's `/work` and `/jobs`. The rows, the event trail
+  and the operation stay — they are the audit record — and a read of the
+  item or the run by its id still answers, with `deleted_at` set and no
+  `available_actions`. `?include_deleted=true` on either listing shows
+  them again.
+- **The disk is reclaimed.** Each run's sandboxes and run directory are removed
+  now instead of at the retention sweep, recorded with the same `daemon.gc`
+  event; a deleted run cannot be resumed.
+- **The forge is not touched.** The pull request, the branch and the issue stay
+  as they are: they belong to the target repository.
+- **Only work at rest.** `delete` is in `available_actions` for an item that is
+  `done`, `failed`, `blocked` or `cancelled` and has no run in flight. Anything
+  queued, running or parked on a decision is `409 not_eligible` — abandon or
+  cancel it first; a delete never doubles as a way to stop something.
+- **Undelivered work is kept.** When a run's delivery failed, or its sandboxes
+  were kept, its workspace is the only copy of what the run produced: the
+  delete is refused — `409 not_eligible` with `"undelivered": true` in the
+  problem body — unless `discard_undelivered` is `true`.
+- **No further command.** Deleted work refuses every control with
+  `409 not_eligible` "work was deleted". The source asking for the work again
+  is not a command: an issue re-admitted comes back as a fresh item, visible
+  again, while its deleted runs stay hidden.
+
+`POST /v1/runs/{id}/delete` deletes the item when one pins the run, and the run
+alone when nothing does. Deleting twice answers `200`. `item.delete` and
+`run.delete` are command actions on `/v1/ws`.
+
 ## Following the work: events, SSE and the WebSocket
 
 The **chronology** is one durable, ordered stream: the daemon's notices, a
-run's start and finish, its engine events (every persisted one, `worker.stdout`
-included — filter with `type_prefix`), gate transitions, steering receipts,
-and every operation any surface recorded. Each event's `id` (`evt_<n>`) is
+run's start and finish (`run.started` and `run.finished`, once each), its
+engine events (every persisted one, `worker.stdout` included — filter with
+`type_prefix` — except the engine's own `run.start` and `run.end`, which the
+daemon's pair stands for), gate transitions, steering receipts,
+every operation any surface recorded, and — with `attention.act` —
+[`attention.opened`, `attention.resolved` and `attention.reminder`](#hearing-that-an-entry-appeared-or-left)
+when something starts and stops waiting on a person, and while it still
+does, and — with `[attention] digest_at` set — the day's
+[`briefing.digest`](#the-daily-digest). Each event's `id` (`evt_<n>`) is
 also the cursor.
 
 1. Read a snapshot: `GET /v1/status` reports `watermark`.
@@ -1956,26 +2387,917 @@ still verifies; it never widens to the unfiltered view a plain API client
 gets. `GET /v1/events` and `GET /v1/events/stream` accept
 `channel_id=<chn_...>` to follow one channel.
 
+## What is waiting on a person
+
+When `/v1/capabilities` lists `attention`, `GET /v1/attention` (`runs:read`)
+answers "what needs someone" as one list, so a client no longer joins items,
+gates, the queue, plans and every channel's work to find out — and two clients
+no longer disagree about it. It is computed on read from what the daemon
+already keeps; nothing is stored, and reading it changes nothing.
+
+One entry per thing a person has to act on:
+
+| `kind`          | What waits                                                                                 | `id`                                           | `group`    |
+| --------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------- | ---------- |
+| `gate`          | An open merge or publication gate. The item it parks is the same entry, never a second one | `gate:<gate id>`                               | `decision` |
+| `item`          | An item `awaiting_review`, `paused_review` or `awaiting_answers`                           | `item:<item id>:<state>[:<run id>]`            | `decision` |
+| `item`          | An item that ended `failed` or `blocked`                                                   | `item:<item id>:<state>[:<run id>]`            | `failed`   |
+| `epic_task`     | A `failed` task of an epic run that is `running` or `paused`                               | `epic_task:<epic run id>:<node id>[:<run id>]` | `failed`   |
+| `provider_hold` | A provider hold with no retry scheduled ("explicit operator recovery required")            | `provider_hold:<backend>:<generation>`         | `paused`   |
+| `repository`    | A repository whose polling is suspended                                                    | `repository:<repository id>`                   | `paused`   |
+
+With `attention.decisions` three more — see
+[Decisions on the list](#decisions-on-the-list):
+
+| `kind`           | What waits                                                                                  | `id`                                    | `group`    |
+| ---------------- | ------------------------------------------------------------------------------------------- | --------------------------------------- | ---------- |
+| `escalation`     | A step an agent asked to take that no grant covered, unresolved in the decisions ledger     | `escalation:<decision id>`              | `decision` |
+| `plan_questions` | A `manual` plan's breakdown questions awaiting answers that no parked item stands for       | `plan_questions:<plan>:<node>:<run id>` | `decision` |
+| `plan_proposal`  | A `manual` plan's level the planner proposed (one or more `proposed` children) not approved | `plan_proposal:<plan id>:<node id>`     | `decision` |
+
+- **`kind` is open.** A later release adds kinds. A client still shows an entry whose
+  `kind` it does not know — as a plain row with its `title` and `reason` and
+  no controls — rather than hiding it or failing the page: something that
+  waits on a person is worse hidden than plain. `counts` includes it.
+- **`id` is opaque and stable.** The same thing waiting keeps its id from one
+  read to the next. When it stops waiting the entry is gone, and when it waits
+  again in a new way — a review wait that paused, a retry that failed on a new
+  run — it is a new entry under a new id. Read the reference fields, not the
+  id.
+- **What is not an entry.** Work that is queued, running or done. A gate being
+  approved (the landing is the daemon's to finish; a failed approval reopens
+  the gate and the entry). A `cancelled` item: stopping work is a person's own
+  act, the item rests there asking nothing, and although `dismiss` is accepted
+  on it none is needed. A task `blocked` behind a failed one (it waits on the
+  same decision). A failed task of a stopped epic run (it takes no retry and
+  no skip; its failed item is still an `item` entry). A provider hold with a
+  time to try again, a repository merely backing off, and a named pause hold
+  — the first two end by themselves and the third is someone's own act.
+- **Dismissed and deleted.** An entry whose item carries a `dismissal` is left
+  out — that includes work a person abandoned, which rests `failed` and
+  dismissed — unless `include_dismissed=true`, which lists it with
+  `dismissal` set (its `cause` tells an acknowledged failure from work given
+  up). Deleted work never appears. An `epic_task` entry is not dismissed with
+  its item: the run still cannot finish until the task is retried or skipped.
+
+Each entry carries:
+
+- `id`, `kind`, `group` (`decision`, `failed` or `paused`) and `state` — the
+  state word of what waits, in its own vocabulary (`gated`, an item state,
+  `failed` for a task, `provider_held`, `suspended`).
+- `title`, `reason` (the gate's detail, the item's last error or its run's
+  reason, the task's reason, the hold's summary, why polling stopped; `null`
+  when nothing was recorded) and `since`, when it started waiting (the gate's
+  creation, the item's or the task's last change, the hold's last failure, the
+  repository's first failed poll).
+- `repository` (`owner/name`) and `repository_id`, `null` for work no
+  repository asked for.
+- References, each `null` when it does not apply: `item_id`, `run_id`,
+  `gate_id`, `plan_id`, `node_id`, `epic_run_id` and `channel_id`. An `item`
+  entry for work an epic run admitted names the run in `epic_run_id`; an
+  `epic_task` entry names its item and that item's run when it has them.
+- `revision`: the gate's for a `gate` entry, the item's for an `item` entry,
+  `null` otherwise — what an [act on the entry](#acting-on-an-entry) sends as
+  `expected_revision`.
+- `actions`: `{action, capability, allowed}` for every action the server
+  offers on the entry right now, the act that settles the wait first and the
+  ones that give the work up or put the alert away last. They are what the
+  item, its run and its gate advertise in `available_actions` (`gate_approve`,
+  `review_wait_resume`, `grant_rounds`, `resume`, `retry`, `requeue`, `steer`,
+  `cancel`, `abandon`, `dismiss`, `undismiss`, `delete`), plus `task_retry`
+  and `task_skip` on an `epic_task` (the epic run's `…/run/retry` and
+  `…/run/skip`) and `repository_resume` on a `repository`. `capability` is the
+  one the action's route requires and `allowed` whether the caller holds it,
+  so a client shows a member the decision without offering a button that
+  would be refused. A provider hold lists none: it is recovered from the host
+  or a chat (`resume <backend>`), not over the API.
+- `dismissal`, set only on an entry listed with `include_dismissed`.
+
+| Query               | Default | Meaning                                                      |
+| ------------------- | ------- | ------------------------------------------------------------ |
+| `group`             | all     | Repeatable: only these groups. Anything else is `422`        |
+| `repository_id`     | all     | Only what belongs to this repository; an unknown id is `404` |
+| `include_dismissed` | `false` | Also list entries whose alert was dismissed                  |
+| `limit`, `cursor`   | 50      | As every collection; a cursor is bound to the filters it had |
+
+The response is `{data, next_cursor, has_more, counts, observed_at}`. Entries
+come `decision` first, then `failed`, then `paused`, the longest wait first
+within each. `counts` is `{total, decision, failed, paused}` over everything
+that matches `repository_id` and `include_dismissed` — whatever `group` and
+`limit` the page had — so `GET /v1/attention?limit=1` is enough to badge, and
+one page badges every tab.
+
+**Who sees what.** The list is workspace-wide: exactly the items and gates
+`GET /v1/items` and `GET /v1/gates` already show a `runs:read` holder, with no
+per-channel filter. `channel_id` alone is withheld — it is set only when the
+caller can read that conversation, as on `GET /v1/items`.
+
+### Decisions on the list
+
+When `/v1/capabilities` lists `attention.decisions`, what agents and plans
+wait on a person for is on the same list.
+
+**Escalations.** Every `escalate` row of the decisions ledger
+([`GET /v1/decisions`](#delegation)) not yet resolved is an `escalation`
+entry: `state` `escalated`, `title` naming in plain words what the agent
+wanted to do (`planner asks to publish the level under “Reports”`), `reason`
+the judge's reason, `since` when it was decided, the row's references
+(`plan_id`, `node_id`, `item_id`, `run_id`, `epic_run_id`, `repository`) and
+three fields of its own: `agent` (the slug), `decision_id` and
+`decision_action` (the delegable action). `revision` is the plan's for a plan
+step and the item's for an item or run step.
+
+It offers `decline` and, where a person can take the step here, `approve`.
+Both need the capability a person needs to take that step themselves:
+
+| `decision_action`  | `approve` runs, as the caller                                       | `capability`    |
+| ------------------ | ------------------------------------------------------------------- | --------------- |
+| `plan.breakdown`   | `POST /v1/plans/{id}/nodes/{node}/breakdown` (`202`)                | `plans:create`  |
+| `plan.approve`     | `POST …/nodes/{node}/approve`, every draft and proposed child       | `plans:create`  |
+| `plan.publish`     | `POST …/nodes/{node}/publish`                                       | `plans:publish` |
+| `plan.run`         | `POST …/nodes/{node}/run` (`201`)                                   | `plans:publish` |
+| `plan.run.retry`   | `POST …/nodes/{task}/run/retry`                                     | `plans:publish` |
+| `item.retry`       | `POST /v1/items/{id}/retry`                                         | `runs:control`  |
+| `run.grant_rounds` | `POST /v1/runs/{id}/round-grants`, `params.rounds` (else the row's) | `budgets:grant` |
+| `plan.propose`     | — no human path: `decline` only                                     | `policy:manage` |
+
+An action this release does not know offers `decline` only, under
+`policy:manage`. `approve` records the step's own operation under the person
+(its refusals are that route's, and a refused step leaves the escalation
+waiting), then resolves the decision `acted` with the person as
+`resolved_by`. `decline` records a `decision.decline` operation that resolves
+it `declined` by the person and changes nothing else. Either way the act's
+answer carries `decision`, the ledger row as it then stands.
+
+The list resolves an escalation in two ways only: a person's `approve` or
+`decline` on it, and its target being gone — its plan deleted or archived,
+its node removed, its item gone or deleted. Such an escalation leaves the
+list the next time the list is read, and the attention tracker resolves it
+`superseded` (no `resolved_by`) on its next pass; the read itself never
+writes. Whether the step already happened, or the situation that asked for
+it moved on, is judged by the pass that escalated it — the plan driver for
+the plan steps, triage for the retries and round grants — which resolves its
+own escalations `acted` or `superseded`; until it does, the entry stays.
+
+**A manual plan's questions and proposals.** Only on a plan whose `advance`
+is `manual`; a plan that advances itself shows neither — it reaches a person
+only through its escalations.
+
+- A breakdown that asked questions parks its `plan` item `awaiting_answers`,
+  and that `item` entry *is* the questions' entry: it keeps the id clients
+  already key on, and dismissing it puts the questions away. A
+  `plan_questions` entry stands only for questions no such item stands for.
+  It offers no action: questions are answered on the plan's page.
+- A `plan_proposal` is one node whose children include `proposed` ones,
+  `title` counting them, `reason` naming who proposed them. It offers
+  `approve` (`plans:create`) — to a caller holding `plans:create` only; others
+  see no action — which runs the plan's approve route on every draft and
+  proposed child and answers `{plan, operation_id, replayed}`.
+
+### Acting on an entry
+
+When `/v1/capabilities` lists `attention.act`,
+`POST /v1/attention/{id}/act` takes one of the actions an entry offers, naming
+nothing but the entry and the action — what a notification's button holds. It
+is routing and nothing else: the entry is looked up as it stands now (a
+dismissed one included, so `undismiss` works), and the request is handed to
+the command the action's own route runs. The operation recorded, its
+refusals and its effect are that command's; nothing is recorded for the act
+itself, so `GET /v1/operations` shows each act once.
+
+```json
+{"action": "gate_approve", "expected_revision": 3, "params": {}}
+```
+
+- **`action`** is one of the entry's `actions`. The caller needs `runs:read`
+  for the route and the action's own `capability` for the act
+  (`403 forbidden` naming the capability otherwise).
+- **`params`** are the action's own arguments — the fields its own route
+  takes in its body, validated by the same model, so an unknown or
+  ill-typed one is `422 invalid_request` with `errors` (`loc` begins
+  `params`).
+
+| `action`                          | The route it runs                                         | `params`                                                  |
+| --------------------------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| `gate_approve`                    | `POST /v1/gates/{id}/approve`                             | none                                                      |
+| `review_wait_resume`              | `POST /v1/runs/{id}/review-wait/resume`                   | none                                                      |
+| `grant_rounds`                    | `POST /v1/runs/{id}/round-grants`                         | `rounds` (required)                                       |
+| `resume`                          | `POST /v1/runs/{id}/resume`                               | none                                                      |
+| `cancel`                          | `POST /v1/runs/{id}/cancel`                               | `retry`                                                   |
+| `steer`                           | `POST /v1/runs/{id}/steering`                             | `text` (required), `source_refs`, `task_id`, `agent_slug` |
+| `retry`, `requeue`                | `POST /v1/items/{id}/retry`, `…/requeue`                  | none                                                      |
+| `abandon`, `dismiss`, `undismiss` | `POST /v1/items/{id}/abandon`, `…/dismiss`, `…/undismiss` | `reason`                                                  |
+| `delete`                          | `POST /v1/items/{id}/delete`                              | `reason`, `discard_undelivered`                           |
+| `task_retry`, `task_skip`         | `POST /v1/plans/{id}/nodes/{task_id}/run/retry`, `…/skip` | none                                                      |
+| `repository_resume`               | `POST /v1/repositories/{id}/resume`                       | none                                                      |
+| `approve`, `decline`              | See [Decisions on the list](#decisions-on-the-list)       | `rounds` on an escalated round grant; otherwise none      |
+
+- **`expected_revision`** is the entry's `revision` as the person read it. It
+  is never defaulted from the entry as it stands: the point of it is that the
+  person acted on what they saw. How each kind supplies it:
+
+  - A `gate` entry carries its gate's revision. `gate_approve` **requires**
+    it (`422 invalid_request`, `errors[].loc` `["expected_revision"]`,
+    without) and the approval binds to it exactly as on the gate's own route.
+  - An `item` entry carries its item's revision. The item actions (`retry`,
+    `requeue`, `abandon`, `dismiss`, `undismiss`, `delete`) hand it to their
+    command, which checks it inside its own operation.
+  - Every other pairing — a run's action (`cancel`, `resume`, `grant_rounds`,
+    `steer`, `review_wait_resume`) on an `item` entry, any action but the
+    approval on a `gate` entry — runs a command that checks some other
+    record's revision or none. There the entry's revision is compared before
+    the command runs and the command is sent none.
+  - An `epic_task`, a `repository` and a `provider_hold` entry have
+    `revision: null`: the epic run's retry and skip, and a repository's
+    resume, take no revision. Sending one is `422 invalid_request`.
+  - An `escalation` or a `plan_proposal` carries the plan's revision (an
+    item's, for an item or run step). One sent is compared with the entry
+    before anything runs. A plan step is then sent the revision the entry
+    has as it is acted on (on a replay, the one the first act sent), so
+    the step's own route still refuses a plan that moved in between.
+
+  Wherever it is checked, a moved entry is `409 stale_revision` with the
+  current `revision`. Optional everywhere but on `gate_approve`.
+
+- **`Idempotency-Key`** is required (`422 idempotency_key_required`). The key
+  is scoped to the workspace, the caller and this entry, and it is the key
+  the action's operation is recorded under. A replay answers the first act
+  (`replayed: true`, the same `operation_id`) — also once the entry is gone,
+  which after a successful act it usually is; a refusal the command recorded
+  replays as that refusal. Another action, or other `params`, under the same
+  key is `409 idempotency_conflict`. A refusal made here, before any command
+  ran (`not_waiting`, `not_eligible`, `forbidden`, a `422`), records nothing
+  and consumes no key.
+
+The answer is `200` — or `202` where the action's own route answers `202`: a
+gate approval, a steer, a cancel honoured at the run's next boundary — with
+`Location: /v1/operations/{id}`:
+
+```json
+{
+  "entry_id": "gate:gate_x1",
+  "action": "gate_approve",
+  "operation_id": "op_…",
+  "replayed": false,
+  "still_waiting": false,
+  "result": {"gate": {"…": "…"}, "operation": {"…": "…"}, "message": "…"}
+}
+```
+
+`result` is the body the action's own route answers (an item, a run, a
+steering record, a gate or a repository with its `operation`; the epic run
+with its `operation_id`). `still_waiting` says whether an entry under this id
+is on the list — dismissed alerts left out — as the answer is written:
+`false` after a retry, an approval or a dismissal, `true` after an
+`undismiss` or a re-armed review wait. It is a reading, not a promise: a
+gate whose landing fails is reopened and waits again.
+
+| Problem                         | When                                                                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `409 not_waiting`               | Nothing is waiting under the id (with `entry_id`): it was settled, or it waits again as a new entry. Read the list again       |
+| `409 not_eligible`              | The entry does not offer the action now; `action` and `offered` say which it does                                              |
+| `422 unknown_action`            | The name is no action at all; `actions` lists the ones there are                                                               |
+| `403 forbidden`                 | The caller lacks the action's `capability` (or `runs:read`)                                                                    |
+| `422 idempotency_key_required`  | No `Idempotency-Key`                                                                                                           |
+| `422 invalid_request`           | `params` the action does not take, a missing `expected_revision` on `gate_approve`, a revision sent for an entry that has none |
+| `409 stale_revision`            | The entry moved since it was read (with `revision`)                                                                            |
+| `409 idempotency_conflict`      | The key already names another act on this entry (with `operation_id`)                                                          |
+| anything the action's route has | `capability_unknown`, `already_in_progress`, `task_not_failed`, `run_ended`, … as that route                                   |
+
+There is no WebSocket command for an act: the socket's `command` frame takes
+the actions' own names (`gate.approve`, `item.retry`, …) as before.
+
+### Hearing that an entry appeared or left
+
+With `attention.act`, the chronology carries three durable events, so a
+client — or a notification rule — no longer polls the list and compares:
+
+- `attention.opened` when an entry appears on the default list (dismissed
+  alerts left out);
+- `attention.resolved` when it leaves: it was approved, retried, skipped,
+  resumed, dismissed, deleted, or its work moved by itself;
+- `attention.reminder` while it is still there: once it has been open
+  `[attention] remind_after_s` (4 hours by default), and again every
+  `remind_every_s` (a day) — see [Still waiting](#still-waiting) below.
+
+An `undismiss` opens the entry again under the same id; work that fails
+again is a new entry and a new `attention.opened`. `data` is the same in
+the first two:
+
+```json
+{
+  "entry_id": "item:itm_x1:blocked:run_r1",
+  "kind": "item", "group": "failed", "state": "blocked",
+  "title": "…", "since": "…",
+  "repository": "owner/name", "repository_id": "repo_…",
+  "item_id": "itm_x1", "run_id": "run_r1", "gate_id": null,
+  "plan_id": null, "node_id": null, "epic_run_id": null,
+  "revision": 4
+}
+```
+
+`entry_id` is exactly the list's `id`, and the other fields are the entry's
+as the list had them when it opened (a `resolved` event repeats them: the
+entry is no longer there to read). `channel_id` and `actions` are not in the
+event — they depend on who is reading; read the entry for them. The event's
+own `run_id` and `item_id` are set where the entry has them.
+
+- **Who sees them.** They are scoped
+  [as a run's events are](#who-sees-which-events): an entry about work a
+  channel asked for reaches that channel's readers; work no channel asked for
+  reaches workspace owners and admins; a plain API client sees all of them.
+  An entry with no run and no item — a suspended repository, a provider hold,
+  a task that was never admitted — is recorded with neither, and such an
+  event reaches every workspace member, as the daemon's own notices about the
+  same thing do. The list itself stays workspace-wide.
+- **When.** The daemon compares the list with what it last announced when it
+  records something that could have changed it (a command, a run starting or
+  ending, a gate, a notice, a plan or an epic run moving) — within about a
+  second — and otherwise once a minute, which is how a change that records
+  nothing (polling that stopped, a provider hold) is found. Treat the events
+  as prompt, not instantaneous; the list is always the truth.
+- **Across a restart.** What was announced is kept, so a restart announces
+  nothing twice and still reports what settled while the daemon was down.
+- **On upgrade.** The first comparison records what is already waiting
+  without announcing it: there is no burst of `attention.opened` for old
+  entries. Their `attention.resolved` is still recorded when they leave.
+
+#### Still waiting
+
+An entry never expires to yes or to no: a merge gate, a publish hold, a
+plan's questions or a blocked run waits until someone acts. So that it does
+not wait in silence, the daemon records `attention.reminder` for an entry
+that has been on the default list at least `[attention] remind_after_s` and
+has not been reminded about within `remind_every_s`. Its `data` is the
+opening's, plus:
+
+```json
+{
+  "…": "the fields of attention.opened, as the list has them now",
+  "waiting_s": 14400,
+  "reminders": 1,
+  "capabilities": ["gates:approve", "runs:control"],
+  "actions": ["gate_approve", "cancel"]
+}
+```
+
+- `waiting_s` is how long the entry has been announced (whole seconds);
+  `since` still says when the thing itself started waiting.
+- `reminders` counts the reminders sent for this entry, this one included.
+- `capabilities` are the ones the entry's actions need, as
+  [`GET /v1/attention`](#what-is-waiting-on-a-person) lists them, without
+  the per-reader `allowed`: who could act. An entry with no action (a
+  provider hold) has `[]`.
+- `actions` are the entry's actions by name, in the list's order, without
+  `allowed`; a push of the reminder offers each recipient the ones their
+  role may take. A reminder recorded before this field reads as offering
+  none.
+
+It is scoped as the opening was (the same `run_id` and `item_id`, so the
+same people see it). An entry that leaves the list and comes back — a
+dismissal taken back, work that fails again under a new id — starts its
+clock over. A restart repeats nothing and resets nothing: a daemon that was
+down past several intervals records one reminder on return, not one per
+interval missed. `remind_after_s = 0` records none. Reminders are judged on
+the same passes that compare the list (within a minute), so a reminder is
+due on the minute, not the second. A dismissed entry is off the default
+list and gets none.
+
+## Delegation
+
+When `/v1/capabilities` lists `delegation`, an owner can state once that an
+agent may take an action under conditions — a **grant** — and read the ledger
+of what was decided under the grants. Grants do not ship empty: where
+`/v1/capabilities` lists `delegation.defaults`, every installation, fresh or
+upgraded, starts with Lantern's default grants, enabled (see "Default grants"
+below). Where `planning.driver` is listed too, the daemon judges each step of a plan
+whose `advance` is `auto` against them (see "Plans that advance themselves"
+under [Plans](#plans)), and where `goals.proposing` is listed and
+`[delegation] propose_every` is set, whether the planner may draft a plan
+from a goal (`plan.propose`; "Plans proposed from goals" there).
+
+A grant never widens what an agent's principal holds. An agent acting for
+itself still carries `items:create` and nothing else; a grant is a rule the
+daemon consults when *it* is about to act for that agent, with the resource in
+hand.
+
+**What can be delegated** is a closed list. A grant names exactly one of:
+
+| Action             | The act                                               |
+| ------------------ | ----------------------------------------------------- |
+| `plan.propose`     | Draft a plan and queue the run that proposes its root |
+| `plan.breakdown`   | Queue the run that proposes a node's next level       |
+| `plan.approve`     | Approve a node's proposed children                    |
+| `plan.publish`     | Publish an approved level to the forge                |
+| `plan.run`         | Start an epic run                                     |
+| `plan.run.retry`   | Retry a failed task of an epic run                    |
+| `item.retry`       | Retry a failed work item                              |
+| `run.grant_rounds` | Give an exhausted run more review rounds              |
+
+Nothing else can be granted, and that is what keeps the rest with people:
+writing or editing grants, credentials, daemon management (holds, stop,
+restart, schedules, repositories) and configuration are not on the list, so no
+grant can hand them to an agent.
+
+**Conditions** are six optional keys, never an expression. One left out (or
+`null`; `false` for `require_review`) constrains nothing. Each action accepts
+only the keys that mean something for it; one that does not apply is refused
+when the grant is written.
+
+| Action             | `repositories` | `levels` | `max_children` | `require_review` | `causes` | `max_retries` |
+| ------------------ | -------------- | -------- | -------------- | ---------------- | -------- | ------------- |
+| `plan.propose`     | yes            | yes      |                |                  |          |               |
+| `plan.breakdown`   | yes            | yes      |                |                  |          |               |
+| `plan.approve`     | yes            | yes      | yes            | yes              |          |               |
+| `plan.publish`     | yes            | yes      | yes            | yes              |          |               |
+| `plan.run`         | yes            |          | yes            |                  |          |               |
+| `plan.run.retry`   | yes            |          |                |                  | yes      | yes           |
+| `item.retry`       | yes            |          |                |                  | yes      | yes           |
+| `run.grant_rounds` | yes            |          |                |                  | yes      | yes           |
+
+| Key              | Value                                  | Holds when                                                 |
+| ---------------- | -------------------------------------- | ---------------------------------------------------------- |
+| `repositories`   | a list of `owner/name`                 | the act's repository is one of them (case is ignored)      |
+| `levels`         | a list of `initiative`, `epic`, `task` | the plan level the act is about is one of them (see below) |
+| `max_children`   | a whole number, 1 or more              | the level has at most that many children                   |
+| `require_review` | `true`                                 | the level's stored review verdict is `approve`             |
+| `causes`         | a list of failure-cause names          | the failure's cause is one of them (see below)             |
+| `max_retries`    | a whole number, 1 or more              | fewer retries than that were already made                  |
+
+**Failure causes.** When `/v1/capabilities` lists `delegation.triage`, the
+daemon's `operator` agent picks failures back up under its grants
+(`item.retry`, `run.grant_rounds`, `plan.run.retry`), and `failure_cause` is
+one of a closed set the daemon derives from the run's state, the budget it
+exhausted and its tasks first, and from the recorded reason only as a last
+resort:
+
+| Cause                     | What it means                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------ |
+| `ci_timeout`              | CI or the landing did not settle within `[landing] ci_timeout_s`                     |
+| `provider_throttle`       | the model provider held the run, or answered with a rate or usage limit              |
+| `sandbox_resource`        | the sandbox ran out of disk or memory                                                |
+| `forge_transient`         | the forge answered a 5xx, or the network to it failed                                |
+| `verify_failed`           | a task's verify commands failed                                                      |
+| `review_rounds_exhausted` | the run spent every review fix round it had                                          |
+| `ci_rounds_exhausted`     | the run spent every CI fix round it had                                              |
+| `merge_conflict`          | the pull request conflicts with its base                                             |
+| `needs_person`            | the run stopped at something only a person can settle (an approval, a permission, …) |
+| `unknown`                 | nothing recognisable                                                                 |
+
+A grant's `causes` may list any of the first eight; `needs_person` and
+`unknown` always go to a person and are refused in a grant, as is any other
+name. `run.grant_rounds` is the act for the two exhausted causes (it grants two
+more rounds on the same pull request); `plan.run.retry` for an epic run's
+task; `item.retry` for any other failed or blocked item. `retries` is how many
+times the ledger says that act was already allowed on that target, and triage
+never takes it more than three times on one target whatever `max_retries`
+says. Each act is an operation whose actor is the agent (`"kind": "agent"`,
+`"id": "agent:operator"`), and its decision names the `item_id`, `run_id` or
+`epic_run_id` and task `node_id` it was about. An escalation is written once
+per situation and is resolved `acted` when the work is under way again,
+`declined` when a person dismissed or abandoned it, and `superseded` when it
+moved on otherwise.
+
+For the plan steps, the level an act is about is the level it proposes,
+approves, publishes or runs: an epic's breakdown, the approval and the
+publishing of its tasks and its epic run are all `task`; an initiative's
+are `epic`. `child_count` is how many children the level has (an epic
+run's: its tasks on the forge), and `proposer` the agent or person every
+child being approved was proposed by — left out when they differ or one is
+not recorded, which escalates.
+
+**Three outcomes.** Every act the daemon considers taking for an agent is
+judged against the grants from facts the host established (never from what the
+agent says about itself), and the answer is one of:
+
+- `allow` — an enabled grant for that agent and action covers it: every
+  condition holds and its `daily_limit` is not spent. When several do, the
+  oldest (by `created_at`, then id) is the one named.
+- `deny` — the action is not on the closed list; or it is `plan.approve` and
+  the agent is the one that proposed the level. An agent never approves its
+  own proposal, whatever the grants say.
+- `escalate` — a person decides. No enabled grant names the agent and action;
+  or a condition is not met (the reason names it and the value); or a fact a
+  condition needs is missing or unreadable (the reason names what was needed —
+  "could not tell" is never treated as met); or the grant's `daily_limit` is
+  spent. An escalation waits: it never turns into a yes or a no by itself.
+
+The cap day a `daily_limit` counts in is the one `[daemon] run_cap_timezone`
+defines, the same day the run cap uses. `used_today` on a grant is counted from
+the ledger's `allow` rows, not kept on the grant.
+
+`GET /v1/grants` and `GET /v1/grants/{id}` (`audit:read`) return grants. The
+list has Lantern's defaults first, in the order of the table below, then the
+grants owners wrote, oldest first (the judge does not read this order; it
+picks the oldest grant that allows an act):
+
+```json
+{
+  "id": "grant_…",
+  "workspace_id": "local",
+  "agent_slug": "critic",
+  "action": "plan.approve",
+  "conditions": {
+    "repositories": ["acme/shop"],
+    "levels": null,
+    "max_children": 8,
+    "require_review": true,
+    "causes": null,
+    "max_retries": null
+  },
+  "daily_limit": 5,
+  "used_today": 0,
+  "enabled": true,
+  "note": "small reviewed levels",
+  "created_by": "cli_…",
+  "created_by_display": "olive",
+  "created_at": "…",
+  "updated_at": "…",
+  "revision": 1,
+  "source": "owner",
+  "default_key": null
+}
+```
+
+`source` is `default` for one of Lantern's default grants and `owner` for one
+a person wrote; `default_key` names which default it is (`null` on an owner's
+grant). A default is edited, paused and deleted like any other grant, and
+keeps its `source` and `default_key` through every edit.
+
+`POST /v1/grants` (`policy:manage`) takes `agent_slug`, `action`, and
+optionally `conditions`, `daily_limit` (`null` or absent is unlimited),
+`enabled` (true when absent) and `note` (at most 500 characters), and answers
+`201` with `{"grant": …, "message": "…", "operation": …}`.
+`PATCH /v1/grants/{id}` takes `expected_revision` and any of `conditions` (the
+whole set is replaced), `daily_limit`, `enabled` and `note`; only the fields
+sent change, `409 stale_revision` (with `current_revision`) when the grant was
+edited since it was read. A grant's agent and action are its identity and are
+not edited — the ledger's rows name the grant — so changing either is a delete
+and a new grant. `DELETE /v1/grants/{id}` removes one (`"grant": null` in the
+reply); the decisions it allowed stay in the ledger. Each takes an optional
+`Idempotency-Key`.
+
+A write is refused with `422` naming the field:
+
+- `invalid_argument` with `"field"` — `action` is not on the closed list;
+  `conditions.<key>` does not apply to the action or holds a value that makes
+  no sense; `agent_slug` names no agent the registry knows, names one by an
+  alias, or names one that is disabled or archived (checked when a grant is
+  created and again when a disabled grant is switched on); `daily_limit` is
+  not a positive whole number.
+- `invalid_request` with `"errors"` (each with its `loc`) — the body itself
+  is malformed: an unknown key, a wrong type, a number below 1.
+
+The write routes ask for `policy:manage` as a capability and never for a
+role, so an admin is refused (`403 forbidden`, `"capability": "policy:manage"`), and so is a plain API client that counts as an owner
+elsewhere because it holds `daemon:manage`. Each write is one operation
+(`grant.create`, `grant.update`, `grant.delete`, target kind `grant`) with its
+`operation.*` events, and the daemon narrates it as a `daemon.notice`
+(`daemon.grant_added`, `daemon.grant_updated`, `daemon.grant_removed`), the
+same two records a schedule write leaves. A write a restart interrupted is
+settled from the stored grant at recovery — it is there, it holds the change,
+or it is gone — and is never left `reconciling`.
+
+**Default grants (`delegation.defaults`).** When the daemon starts it seeds
+each default below that was never seeded on this installation, enabled, as
+`created_by: "lantern"`, `created_by_display: "Lantern default"`, with a `note`
+saying what it is for. Seeding writes no event of its own (the daemon logs
+it); the grants say what they are wherever they are listed. A default is seeded once, ever: one an owner
+deleted is not seeded again at the next start, and one an owner edited or
+paused is never touched. There is no default token budget —
+`[daemon] daily_token_budget` stays unset — and each default's `daily_limit`
+is its spend guard.
+
+| `default_key`                  | Agent      | Action             | Conditions                                                                   | `daily_limit` |
+| ------------------------------ | ---------- | ------------------ | ---------------------------------------------------------------------------- | ------------- |
+| `plan.breakdown:planner:v1`    | `planner`  | `plan.breakdown`   | `levels: [epic, task]`                                                       | 10            |
+| `plan.approve:critic:v1`       | `critic`   | `plan.approve`     | `require_review: true`, `max_children: 8`                                    | 5             |
+| `plan.publish:critic:v1`       | `critic`   | `plan.publish`     | `require_review: true`, `max_children: 8`                                    | 5             |
+| `plan.run:critic:v1`           | `critic`   | `plan.run`         | `max_children: 12`                                                           | 3             |
+| `plan.propose:planner:v1`      | `planner`  | `plan.propose`     | none                                                                         | 2             |
+| `item.retry:operator:v1`       | `operator` | `item.retry`       | `causes: [ci_timeout, forge_transient, provider_throttle]`, `max_retries: 1` | 5             |
+| `run.grant_rounds:operator:v1` | `operator` | `run.grant_rounds` | `causes: [review_rounds_exhausted, ci_rounds_exhausted]`, `max_retries: 1`   | 3             |
+
+What they let happen: the plan defaults act only on a plan a person set to
+`advance: auto`, and `plan.propose` also needs `[delegation] propose_every`
+and an active goal — a `manual` plan, and every `code`, `workload` and `tool`
+run, is untouched by them. The two `operator` defaults act as soon as the
+daemon runs: triage retries an item that failed in the last day with one of
+the three transient causes once (at most five a day), and gives a run that
+spent its review or CI rounds two more rounds once (at most three a day); a
+recent failure they do not cover is one `escalate` row. A
+default whose agent is disabled or archived waits, unseeded, for a start where
+its agent can act.
+
+`POST /v1/grants/defaults/restore` (`policy:manage`, optional
+`Idempotency-Key`, no body) writes again each default whose grant no longer
+exists, as seeded; a default still there — edited, paused or as seeded — is
+left alone. It answers `200` with the grants it wrote, in the table's order
+(an empty list when every default is in place):
+
+```json
+{"grants": [{"id": "grant_…", "source": "default", "default_key": "item.retry:operator:v1", …}], "message": "1 default grant(s) restored: …", "operation": {"action": "grant.restore_defaults", "target": {"kind": "grant", "id": "defaults"}, …}}
+```
+
+It is one operation, `grant.restore_defaults` (target `grant` `defaults`),
+narrated as a `daemon.notice` of kind `daemon.grants_restored`; one a restart
+interrupted is settled at recovery from whether every default is in place.
+An admin, a member and a plain client holding `daemon:manage` are refused
+`403` naming `policy:manage`.
+
+Grants are edited here and nowhere else: there is no `command` for them on the
+WebSocket, no chat tool and no `ctl` verb. An owner's chat turn carries
+`policy:manage`, and editing policy from a conversation is deliberately not
+offered.
+
+`GET /v1/decisions` (`audit:read`) is the ledger, newest first, paged by
+`limit` and `cursor`. Filters: `outcome` (`allow`, `deny`, `escalate`),
+`unresolved=true` (escalations still waiting for a person), `agent` (a slug)
+and `since` (RFC 3339 or epoch seconds).
+
+```json
+{
+  "id": "dec_…",
+  "workspace_id": "local",
+  "grant_id": "grant_…",
+  "agent_slug": "critic",
+  "action": "plan.approve",
+  "outcome": "allow",
+  "reason": "grant grant_… lets critic take plan.approve",
+  "plan_id": "plan_…",
+  "node_id": "node_…",
+  "item_id": null,
+  "run_id": null,
+  "epic_run_id": null,
+  "repository": "acme/shop",
+  "operation_id": "op_…",
+  "attrs": {"repository": "acme/shop", "level": "epic", "child_count": 4, "proposer": "agent:planner", "review_verdict": "approve", "level_digest": "r1-…"},
+  "at": "…",
+  "resolved_at": null,
+  "resolved_by": null,
+  "resolution": null
+}
+```
+
+`grant_id` is set only on an `allow`. `attrs` are the facts the act was judged
+on, kept for audit; the plan driver adds `level_digest` (the level as it
+read when judged — a new digest is a new situation) and, when the children
+disagree on who proposed them, `proposers`. An `escalate` row carries `resolved_at`, `resolved_by` and
+`resolution` once it ends: `acted` (the step happened, whoever took it),
+`declined` (a person said no) or `superseded` (what it was about changed).
+
+## Goals
+
+When `/v1/capabilities` lists `goals`, an owner or an admin can set a
+**goal** for a repository: a standing objective, in their own words, that
+plans are proposed from. `goals` is served with `planning`: a goal is for a
+repository that can hold a plan. Goals ship empty, and the planner proposes
+plans from them only where `[delegation] propose_every` is set ("Plans
+proposed from goals" under [Plans](#plans)); each goal's `proposing` says
+which.
+
+`GET /v1/goals` (`runs:read`) lists every goal, oldest first, narrowed by
+`repository` (case is ignored) and `state` (`active`, `paused`, `done`).
+`GET /v1/goals/{id}` (`runs:read`) returns one:
+
+```json
+{
+  "id": "goal_…",
+  "workspace_id": "local",
+  "repository": "acme/shop",
+  "title": "Faster builds",
+  "text": "Cut the build time in half without dropping a check.",
+  "state": "active",
+  "created_by": "usr_…",
+  "created_by_display": "olive",
+  "created_at": "…",
+  "updated_at": "…",
+  "revision": 1,
+  "plans": [
+    {"plan_id": "plan_…", "title": "Build pipeline", "state": "published", "advance": "auto"}
+  ],
+  "open_plan_id": "plan_…",
+  "proposing": {"enabled": false, "every_s": 0, "reason": "proposing is off on this server: …"}
+}
+```
+
+`plans` are the plans proposed from the goal (those whose `goal_id` names
+it), most recently changed first, each with its root's `title`, the `state` a
+plan reads as (`draft`, `published`, `archived`) and its `advance`.
+`open_plan_id` is the plan currently serving the goal — the most recently
+changed one that is not archived — or `null`. `proposing` says whether the
+planner drafts plans toward the goal on its own here: `enabled` only while
+`[delegation] propose_every` is set (`every_s`, `0` when off) and the goal is
+`active`, and otherwise a `reason` a client can show ("proposing is off on
+this server", "the goal is paused") rather than leave the goal waiting for
+a plan that never comes. `goals.proposing` in `/v1/capabilities` says the
+server can propose; `proposing.enabled` says whether it will. A missing or
+short `plan.propose` grant is judged per proposal and shows as an escalation.
+
+`POST /v1/goals` (`plans:publish`) takes `repository`, `title` (1–200
+characters), `text` (1–4000 characters, the objective) and optionally `state`
+(`active` when absent), and answers `201` with
+`{"goal": …, "message": "…", "operation": …}`. `PATCH /v1/goals/{id}` takes
+`expected_revision` and any of `title`, `text` and `state`; only the fields
+sent change, `409 stale_revision` (with `current_revision`) when the goal was
+edited since it was read. A goal's repository is not edited. `DELETE /v1/goals/{id}` removes one (`"goal": null` in the reply); the plans
+proposed from it keep their `goal_id`. Each takes an optional
+`Idempotency-Key`.
+
+A write is refused with `422` naming the field: `invalid_argument` with
+`"field": "repository"` when the repository is not configured on this server,
+is disabled, or cannot hold a plan (the detail says which); with
+`"field": "title"` or `"text"` when one is blank; `invalid_request` with
+`"errors"` when the body is malformed (an unknown key, an overlong title, a
+state outside the three).
+
+The write routes ask for `plans:publish`: an owner or an admin sets direction,
+a member is refused (`403 forbidden`, `"capability": "plans:publish"`). Each
+write is one operation (`goal.create`, `goal.update`, `goal.delete`, target
+kind `goal`) with its `operation.*` events; a write a restart interrupted is
+settled from the stored goal at recovery. A plan's `goal_id` is set by the
+daemon and is not accepted on the plan routes. There is no `command` for goals
+on the WebSocket, no chat tool and no `ctl` verb.
+
+## Fleet analytics
+
+When `/v1/capabilities` lists `analytics`, `GET /v1/analytics` (`runs:read`)
+answers "is this performing well" for a window of runs: the same fold the
+console's Overview draws, with every derived value as a field so a client
+never recomputes one. A run belongs whole to the window it **began** in.
+
+| Query      | Default | Bounds                                                                               |
+| ---------- | ------- | ------------------------------------------------------------------------------------ |
+| `window_s` | 604800  | 60 to 7776000 (90 days)                                                              |
+| `buckets`  | 7       | 1 to 90 equal slices of the window                                                   |
+| `until`    | now     | RFC 3339 or epoch seconds: where the window ends; the window begins in 1970 or later |
+
+A value outside these is `422 invalid_request`. The response:
+
+- `since`, `until`, `observed_at`, `window_s`, and `empty` (no run began in
+  the window).
+- `total` and `lanes` (one per run kind, by name): `runs`, `landed` (merged
+  or completed), `failed`, `cancelled`, `turns`, `tokens` (input plus
+  output), `cache_read_tokens`, `active_s` (the time phase attempts were
+  running), `elapsed_s` (creation to last update), `parked_s` (elapsed the
+  loop did not spend working — waiting on a person), `ok_rate` and
+  `parked_share`. A cancelled run is a decision, not a failure: `ok_rate` is
+  landed over landed plus failed, and `null` when no run was judged.
+- `phases`: per phase, `attempts`, `retries` (attempts past the first),
+  `turns`, `tokens`, `cache_read_tokens` and `active_s`, longest first.
+- `buckets`: each with its own `since` and `until`, the `runs` that began in
+  it, how many of them `landed`, `failed` or were `cancelled`, and their
+  `turns`.
+- `rework` (`tasks`, `revisions`, `replans`, `suspect`, `retried_share`),
+  `review_rounds` and `ci_rounds`.
+- `failures`: `reason` and `count`, most common first. The reason is the head
+  of the failed runs' own reason — the class, not one run's detail.
+- `costliest` (most turns) and `longest_parked`: up to eight runs each, by
+  `run_…` id, with `kind`, `state`, `turns`, `tokens`, `active_s` and
+  `parked_s`.
+- `spreads`: `median` and `p90` for `turns`, `cycle_s` (creation to last
+  update over the runs that landed — time to land) and `active_s`; `null`
+  where no run gives one.
+- `previous` (the window before this one, every kind together; `null` when no
+  run began in it) and `delta`: each of the lane's values as a share of the
+  previous window's (`0.25` is a quarter more), `null` when there is nothing
+  to compare with — a change from nothing is not a percentage.
+
+Durations are seconds. Nothing here is a currency: turns and tokens are what
+a backend reported, not a bill.
+
+## The briefing
+
+When `/v1/capabilities` lists `briefing`, `GET /v1/briefing` (`runs:read`)
+answers, in one request, what a person who has been away asks first: what
+happened, what needs me, and is there work lined up. Everything in it is on
+its own route already — the analytics, the attention list, the decisions
+ledger, the usage pool, the plans, the queue — and the briefing is the small
+summary a landing screen, a phone widget and a daily digest share, computed
+on read in a bounded number of statements so it can be polled. Nothing is
+stored, and reading it changes nothing.
+
+| Query   | Default   | Meaning                                                                              |
+| ------- | --------- | ------------------------------------------------------------------------------------ |
+| `since` | a day ago | RFC 3339 or epoch seconds: where the window begins. At most 90 days back, before now |
+
+A value outside those bounds, or that is not a time, is `422 invalid_request`.
+The window ends now. The response:
+
+- `since`, `until`, `observed_at`.
+- `outcomes`: the runs that **finished** inside the window — `landed` (merged
+  or completed), `failed` and `cancelled`, in total and `by_kind` (one entry
+  per run kind, by name), and `recent_landed`: the newest ten landed runs,
+  each with `run_id`, `kind`, `title` (the work item's; the run's own ask
+  when no item carries it), `repository`, `pull_request_number` and
+  `pull_request_url` where there is one, and `landed_at`. A run is in the
+  window when it *finished* in it, whenever it began — this is not the
+  analytics' window, which holds the runs that *began* in it. A `blocked`
+  run is not an outcome: it waits, and is counted under `waiting`. A deleted
+  run is counted and never listed.
+- `waiting`: the attention list's own `counts` (`total`, `decision`,
+  `failed`, `paused`) and `oldest_since`, when its longest wait began
+  (`null` when nothing waits). Exactly what
+  [`GET /v1/attention`](#what-is-waiting-on-a-person) would answer.
+- `decided`: what agents decided under grants inside the window, by outcome
+  (`allow`, `deny`, `escalate`), and `unresolved_escalations` — every
+  escalation still waiting for a person, however old. `recent` is the
+  allowed acts, newest first and at most ten, each with `id`, `grant_id`,
+  `agent_slug`, `action`, `reason`, `at` and the references
+  [`GET /v1/decisions`](#delegation) carries (`plan_id`, `node_id`,
+  `item_id`, `run_id`, `epic_run_id`, `repository`, `operation_id`). It is
+  filled only for a caller holding `audit:read` and is `null` for anyone
+  else: the counts are for everyone, the detail is not.
+- `supply`: how much work is lined up, as it stands now. `proposed` and
+  `approved` are plan nodes at any level in those states across the plans
+  that are not archived (awaiting a person's approval; approved and not yet
+  published). `ready_tasks` are the published tasks ready to start: on the
+  forge and still following their issue, the issue open as last reconciled,
+  and not started — no epic run has admitted the task (`queued`, `running`),
+  seen its item end (`landed`, `failed`), found its issue `closed` or had a
+  person `skipped` it; a task `waiting`, `ready`, `blocked` or withdrawn
+  (`cancelled`) before admission is still lined up. A task whose issue a
+  person labelled by hand, outside any epic run, is counted until its issue
+  closes. `queued` is the daemon queue's depth, `running` the runs in
+  flight, and `parked` the work parked on a person (the attention list's
+  `decision` plus `paused`).
+- `runway`: `ready_tasks` again, `landed_per_day` — the mean number of `code`
+  runs that landed per day over the trailing seven days, whatever `since`
+  was — and `days`, `ready_tasks` divided by that rate. Both are `null` when
+  no `code` run landed in those seven days: no rate is invented, and nothing
+  is divided by zero.
+- `budget`: `runs_today` against `max_runs_per_day` and `tokens_today`
+  against `daily_token_budget` (`null` when no budget is configured), with
+  `resets_at` — the figures of
+  `GET /v1/usage/pool`, for the pool's calendar day.
+- `grants`: how many grants are `enabled`, and how many of those are
+  `at_limit`, having allowed as many acts today as their `daily_limit`.
+
+Every field is always present; what cannot be said is `null`. Durations are
+seconds, timestamps RFC 3339, and nothing is a currency. Each part is its own
+object so a later release can add a field inside it: **a client ignores
+fields it does not know** rather than failing the page.
+
+### The daily digest
+
+With `[attention] digest_at` set (a local time of day, `"HH:MM"`, in
+`[daemon] run_cap_timezone`; off by default), the daemon computes this
+briefing once a day by itself, at or after that time, for the window since
+the previous digest (a day, the first time) — with the same code, as the
+summary anyone may read (no `decided.recent`) — and records one
+`briefing.digest` event:
+
+```json
+{
+  "type": "briefing.digest",
+  "run_id": null,
+  "item_id": null,
+  "data": {
+    "day": "2026-10-02",
+    "since": "2026-10-01T07:00:00Z",
+    "until": "2026-10-02T07:00:00Z",
+    "landed": 11,
+    "failed": 1,
+    "waiting": 2,
+    "decided_allow": 9,
+    "decided_escalate": 0,
+    "runway_days": 2.5,
+    "timezone": "UTC"
+  }
+}
+```
+
+`landed` and `failed` are `outcomes`, `waiting` is `waiting.total`,
+`decided_allow` and `decided_escalate` are `decided.allow` and
+`decided.escalate`, and `runway_days` is `runway.days` (`null` without a
+rate). The numbers only: no title, no reason, nothing of what was decided.
+It names no run, item or channel, so **every member** sees it, whatever
+their role. The same summary goes to the control channel as one
+`daemon.notice` (`kind: "daemon.digest"`, `level: "info"`) and, with push
+on, to every member as [one `work` push](#push-notifications). One a day:
+a restart repeats nothing, a daemon that was down at the time sends it once
+when it is back the same day, and a day missed entirely is skipped.
+
 ## Errors
 
 Every refusal is `application/problem+json` with a stable `code`, the
 request's `X-Request-Id`, and the fields a client needs to act:
 
-| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 400    | `invalid_request`, `invalid_cursor`, `oidc_invalid_request`                                                                                                                                                                                                                                                                                                                                                |
-| 401    | `unauthenticated`, `invalid_token`, `token_expired`, `token_revoked`, `client_revoked`, `refresh_reuse_detected`, `oidc_exchange_failed`                                                                                                                                                                                                                                                                   |
-| 403    | `forbidden` (with `capability`), `agent_forbidden`, `oidc_not_allowed`, `oidc_account_disabled`, `oidc_not_provisioned`                                                                                                                                                                                                                                                                                    |
-| 404    | `not_found`, `unknown_target`, `agent_not_found`, `device_not_found`, `notification_not_found`                                                                                                                                                                                                                                                                                                             |
-| 409    | `not_eligible`, `already_terminal`, `already_in_progress`, `stale_revision`, `unsupported_for_kind`, `capability_unknown`, `capability_unsupported`, `idempotency_conflict`, `hold_owned`, `unsupervised`, `agent_read_only`, `agent_revision_conflict` (with `current_revision`), `agent_exists`, `agent_archived`, `oidc_account_conflict`, `device_limit_reached` (with `limit`), `device_not_enrolled` |
-| 410    | `cursor_expired` (with `snapshot`), `artifact_gone`                                                                                                                                                                                                                                                                                                                                                        |
-| 411    | `length_required`                                                                                                                                                                                                                                                                                                                                                                                          |
-| 413    | `body_too_large` (with `limit`)                                                                                                                                                                                                                                                                                                                                                                            |
-| 422    | `invalid_request` (with `errors`), `invalid_argument`, `idempotency_key_required`, `unknown_action`, `invalid_agent` (with `problems`)                                                                                                                                                                                                                                                                     |
-| 429    | `too_many_attempts`, `too_many_streams`                                                                                                                                                                                                                                                                                                                                                                    |
-| 500    | `internal_error` (never the exception's text)                                                                                                                                                                                                                                                                                                                                                              |
-| 502    | `push_relay_refused`, `push_relay_unavailable`                                                                                                                                                                                                                                                                                                                                                             |
-| 503    | `daemon_not_ready` (with `Retry-After`), `daemon_stopping`, `source_unavailable`, `oidc_unavailable`, `push_disabled`                                                                                                                                                                                                                                                                                      |
+| Status | Codes                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 400    | `invalid_request`, `invalid_cursor`, `oidc_invalid_request`                                                                                                                                                                                                                                                                                                                                                               |
+| 401    | `unauthenticated`, `invalid_token`, `token_expired`, `token_revoked`, `client_revoked`, `refresh_reuse_detected`, `oidc_exchange_failed`                                                                                                                                                                                                                                                                                  |
+| 403    | `forbidden` (with `capability`), `agent_forbidden`, `oidc_not_allowed`, `oidc_account_disabled`, `oidc_not_provisioned`                                                                                                                                                                                                                                                                                                   |
+| 404    | `not_found`, `unknown_target`, `agent_not_found`, `device_not_found`, `notification_not_found`                                                                                                                                                                                                                                                                                                                            |
+| 409    | `not_eligible`, `not_waiting`, `already_terminal`, `already_in_progress`, `stale_revision`, `unsupported_for_kind`, `capability_unknown`, `capability_unsupported`, `idempotency_conflict`, `hold_owned`, `unsupervised`, `agent_read_only`, `agent_revision_conflict` (with `current_revision`), `agent_exists`, `agent_archived`, `oidc_account_conflict`, `device_limit_reached` (with `limit`), `device_not_enrolled` |
+| 410    | `cursor_expired` (with `snapshot`), `artifact_gone`                                                                                                                                                                                                                                                                                                                                                                       |
+| 411    | `length_required`                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 413    | `body_too_large` (with `limit`)                                                                                                                                                                                                                                                                                                                                                                                           |
+| 422    | `invalid_request` (with `errors`), `invalid_argument`, `idempotency_key_required`, `unknown_action`, `invalid_agent` (with `problems`)                                                                                                                                                                                                                                                                                    |
+| 429    | `too_many_attempts`, `too_many_streams`                                                                                                                                                                                                                                                                                                                                                                                   |
+| 500    | `internal_error` (never the exception's text)                                                                                                                                                                                                                                                                                                                                                                             |
+| 502    | `push_relay_refused`, `push_relay_unavailable`                                                                                                                                                                                                                                                                                                                                                                            |
+| 503    | `daemon_not_ready` (with `Retry-After`), `daemon_stopping`, `source_unavailable`, `oidc_unavailable`, `push_disabled`                                                                                                                                                                                                                                                                                                     |
 
 `unknown_target` and `not_eligible` carry the daemon's own sentence in
 `detail` — the same one `ctl` prints.
@@ -1991,6 +3313,7 @@ request's `X-Request-Id`, and the fields a client needs to act:
 | Artifact catalog per run       | 2000 files                                         |
 | Log tail                       | 500 records                                        |
 | Usage window                   | 90 days                                            |
+| Analytics window               | 1 minute to 90 days, in at most 90 buckets         |
 | Access token                   | `[api] access_token_ttl_s` (15 minutes)            |
 | Refresh token                  | `[api] refresh_token_ttl_s` (7 days)               |
 | Auth failures                  | 10 per minute per client and address, 60 s lockout |
@@ -2038,8 +3361,8 @@ from a developer machine.
   On `410 cursor_expired`, read a fresh snapshot and subscribe from its
   watermark; what you missed is in the resources themselves.
 - **A token stopped working.** `401 token_expired`: refresh. `401 client_revoked`: the operator revoked the client; work already admitted
-  stands. `401 refresh_reuse_detected`: the family was revoked; mint from
-  the secret and treat the reuse as a leak.
+  stands. `401 refresh_reuse_detected`: the family was revoked, its live access
+  tokens with it; mint from the secret and treat the reuse as a leak.
 - **A hold you did not take blocks the queue.** `GET /v1/daemon/holds`
   names its owner; release it with `?force=true` only as an override, which
   the record shows as yours.
@@ -2056,9 +3379,14 @@ from a developer machine.
 By design, on this API: general configuration writes, backup and restore,
 garbage collection, sandbox deletion, and starting a daemon that is not
 running. Each stays on the host's own CLI until it has its own attribution,
-conflict and active-run story. Repository registration has one (see
+conflict and active-run story. Deleting one finished piece of work has one
+(see Deleting finished work above) and removes that work's own run
+directories and sandboxes; the retention sweep and every other sandbox are
+still the host's. Repository registration has one (see
 Repositories above); a repository's other settings are still the file's. A tool run takes no
 steering, no round grants and no gate: a fixed recipe has nothing to steer.
+Grants are written through `/v1/grants` only (see Delegation above): not from
+the WebSocket's commands and not from a conversation.
 
 ## Readiness criteria for a hosted service
 

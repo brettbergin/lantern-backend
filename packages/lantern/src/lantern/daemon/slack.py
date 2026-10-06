@@ -1,7 +1,7 @@
 """SlackBridge: the daemon's human channel on Slack.
 
 The service-agnostic bridge — event pump, chronology rendering, steering,
-run watches, concierge turns, ``!sbx`` commands — is
+run watches, concierge turns, ``!lantern`` commands — is
 :class:`lantern.daemon.chat.ChatBridge`; this module is the Slack fifth of
 it: a Socket Mode connection (no public URL, no request signing — the app
 dials out, which is what a daemon on a home server needs), the Web API
@@ -168,6 +168,7 @@ class SlackBridge(ChatBridge):
     backend: ClassVar[ChatBackend] = "slack"
     label: ClassVar[str] = "Slack"
     mention_re = SLACK_MENTION_RE
+    thread_is_surface = False
 
     def __init__(
         self,

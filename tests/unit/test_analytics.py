@@ -1,4 +1,4 @@
-"""The Overview's fold: a window of runs turned into the few numbers that
+"""The analytics fold: a window of runs turned into the few numbers that
 answer "is this performing well". Three things it must get right, each of
 which was a wrong answer first: active is not elapsed, turns are the cost,
 and a cancelled run is not a failure."""
@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from lantern.analytics import Cache, Lane, compute, fold
 from lantern.engine.store import StateStore
-from lantern.tui.analytics import Cache, Lane, compute, fold
 from lantern_worker.protocol import Usage
 from tests.fakes.rawdb import exec_raw
 

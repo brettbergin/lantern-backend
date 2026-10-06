@@ -227,6 +227,13 @@ def _ensure_job(
     item_id: str | None = None,
     admitted: str | None = None,
 ) -> ExternalJobRow:
+    """The job for ``key``, in the channel its work happens in.
+
+    Work a channel asked for (``admitted``) lives in that channel
+    (docs/spikes/work-channels.md). Work nobody asked for in a channel — an
+    issue, a schedule's tick, a bare API admission — has no conversation
+    to live in, so it gets a system-created, workspace-visible one.
+    """
     work_id = "job_" + _digest(key)
     job: ExternalJobRow | None = session.get(ExternalJobRow, work_id)
     if job is not None:
@@ -298,8 +305,16 @@ def _ensure_job(
 
 
 def _bind_item(ctx: Any, session: Any, item: WorkItemRow, historical: bool) -> ExternalJobRow:
+    """Bind an item to its job and the job to the channel it lives in.
+
+    The channel that asked for the work is the job's channel
+    (docs/spikes/work-channels.md): its runs, their chronology, steering
+    and delivery all happen where the ask was made, and so does whatever
+    is asked there next. Attempts already bound keep the channel they were
+    bound to, including the separate one a short-lived release gave them.
+    """
     key, source = _item_identity(ctx, item)
-    admitted = admission_channel_for_item(session, item.item_id)
+    asked = admission_channel_for_item(session, item.item_id)
     old = session.get(ExternalJobRow, "job_" + _digest(key))
     previous = old.state if old is not None else None
     job = _ensure_job(
@@ -312,15 +327,16 @@ def _bind_item(ctx: Any, session: Any, item: WorkItemRow, historical: bool) -> E
         updated_at=item.updated_at,
         item_id=item.item_id,
         historical=historical,
-        admitted=admitted,
+        admitted=asked,
     )
     alias = session.get(ExternalItemRow, item.item_id)
     if alias is None:
         session.add(
             ExternalItemRow(item_id=item.item_id, work_id=job.work_id, channel_id=job.channel_id)
         )
-    elif admitted:
-        alias.channel_id = admitted
+    elif asked:
+        # Asked for again from another channel: what runs next runs there.
+        alias.channel_id = asked
     session.flush()
     channel = session.get(ChannelRow, job.channel_id)
     if channel is not None and job.system_created:
@@ -476,9 +492,15 @@ def _bind_run(ctx: Any, session: Any, run: Run, historical: bool) -> ExternalJob
             else 0,
         )
         session.add(bound)
+        # A run's events belong to the channel it is bound to: the ones
+        # recorded before the binding existed, or stamped with another
+        # channel, move there with it.
         session.execute(
             update(ApiEventRow)
-            .where(ApiEventRow.run_id == run.run_id, ApiEventRow.channel_id.is_(None))
+            .where(
+                ApiEventRow.run_id == run.run_id,
+                or_(ApiEventRow.channel_id.is_(None), ApiEventRow.channel_id != bound.channel_id),
+            )
             .values(channel_id=bound.channel_id)
         )
     # Old attempts never make the sidebar look older than its newest activity.
@@ -646,6 +668,11 @@ def reconcile(ctx: Any, *, limit: int = BATCH) -> int:
     return len(pending)
 
 
+#: What kind of post a replayed moment is, as the live chronicle kinds it,
+#: since the two share one ledger and a reader tells them apart by kind.
+_REPLAY_POST_KIND = {"run.tasks": "plan", "review.verdict": "review", "chat.reply": "reply"}
+
+
 def _progress(type_: str, data: dict[str, Any]) -> str | None:
     if type_ == "run.tasks":
         return f"Planned {len(data.get('tasks') or [])} tasks."
@@ -751,9 +778,10 @@ def _project_run(ctx: Any, run_id: str, *, historical: bool) -> bool:
                     event.ts,
                     run_id=run_id,
                     historical=event.seq <= binding.historical_through,
-                    chronicle_key=_live_post_key(run_id, event.type, data, binding.resumes)
-                    if not job.system_created
-                    else None,
+                    post_kind=_REPLAY_POST_KIND.get(event.type, "progress"),
+                    # The live chronicle posts the same moments under the
+                    # same keys; whichever lands first is the one message.
+                    chronicle_key=_live_post_key(run_id, event.type, data, binding.resumes),
                 )
             binding.event_cursor = max(binding.event_cursor, event.seq)
         complete = len(events) < EVENT_BATCH
@@ -778,11 +806,22 @@ def _project_run(ctx: Any, run_id: str, *, historical: bool) -> bool:
                         if record.state in {"merged", "completed"}
                         else f"{run_id}:notice:{record.state}"
                         + (f":resume{binding.resumes}" if binding.resumes else "")
-                    )
-                    if not job.system_created
-                    else None,
+                    ),
                 )
     return complete
+
+
+def bind_item_now(ctx: Any, item_id: str) -> str | None:
+    """The channel ``item_id``'s work lives in, binding the item to its job
+    now rather than at the reconciler's next pass: a run's first post must
+    not land before its channel is known. Binding is idempotent. None for an
+    item nobody knows."""
+    with ctx.loop.dstore.immediate_transaction() as session:
+        item = session.get(WorkItemRow, item_id)
+        if item is None:
+            alias = session.get(ExternalItemRow, item_id)
+            return None if alias is None else str(alias.channel_id)
+        return str(_bind_item(ctx, session, item, False).channel_id)
 
 
 def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
@@ -816,6 +855,10 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
             attempts = [*attempts, None]
         for binding in attempts:
             item = latest_item
+            # Work a person deleted is gone from the channel's list too: the
+            # attempt by its run's mark, the item-only row by the item's.
+            if views.deleted_at(None if binding is not None else item, binding and binding.run_id):
+                continue
             public_item = views.item(item) if item is not None else None
             record = views.run_record(binding.run_id) if binding is not None else None
             run = views.run(record) if record is not None else None
@@ -877,6 +920,13 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
                     ),
                     "historical": bool(binding.historical) if binding else bool(job.historical),
                     "unavailable": unavailable,
+                    # The attempt's own alert: the item's while the item
+                    # still carries this attempt, the run's once it moved on.
+                    "dismissal": run.dismissal
+                    if run
+                    else public_item.dismissal
+                    if public_item and binding is None
+                    else None,
                 }
             )
     represented = {(row["item_id"], row["run_id"]) for row in output}
@@ -892,12 +942,16 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
         ):
             continue
         pending = legacy["item_id"].startswith("pending_code:")
+        # The row names the channel its job is bound to: this one, unless
+        # the job is one a short-lived release moved to a channel of its
+        # own, where a client sends the reader rather than drawing it here.
+        work_id, work_channel = _job_of(ctx, views, None if pending else legacy["item_id"])
         output.append(
             {
                 **legacy,
                 "item_id": None if pending else legacy["item_id"],
-                "work_id": "job_" + _digest(f"{channel_id}:{legacy['item_id']}"),
-                "channel_id": channel_id,
+                "work_id": work_id or "job_" + _digest(f"{channel_id}:{legacy['item_id']}"),
+                "channel_id": work_channel or channel_id,
                 "source": {"kind": "chat", "repository": None, "url": None},
                 "created_at": rfc3339(ctx.clock()),
                 "updated_at": rfc3339(ctx.clock()),
@@ -905,3 +959,18 @@ def jobs(ctx: Any, channel_id: str) -> list[dict[str, Any]]:
             }
         )
     return output
+
+
+def _job_of(ctx: Any, views: Views, public_item_id: str | None) -> tuple[str | None, str | None]:
+    """The job and channel an item is bound to, by its public id."""
+    if public_item_id is None:
+        return None, None
+    try:
+        item = views.item_by_public_id(public_item_id)
+    except Exception:
+        return None, None
+    with ctx.loop.dstore.read() as session:
+        alias = session.get(ExternalItemRow, item.item_id)
+        if alias is None:
+            return None, None
+        return str(alias.work_id), str(alias.channel_id)

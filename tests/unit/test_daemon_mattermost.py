@@ -320,11 +320,29 @@ class TestInboundFiltering:
         bridge.close()
 
     def test_a_command_runs_and_the_author_handle_is_resolved(self, tmp_path: Path) -> None:
+        # The legacy prefix, under the default configuration: still a command.
         bridge, client, floop = make_bridge(tmp_path)
         client.deliver(posted("!sbx pause"))
         assert wait_for(lambda: bool(floop.hold_calls))
         assert floop.hold_calls[0] == ("pause", "operator", "Mattermost user `ana`")
         assert client.lookups == [USER_ID]
+        bridge.close()
+
+    def test_the_default_prefix_runs_a_command(self, tmp_path: Path) -> None:
+        bridge, client, floop = make_bridge(tmp_path)
+        client.deliver(posted("!lantern pause"))
+        assert wait_for(lambda: bool(floop.hold_calls))
+        assert floop.hold_calls[0][0] == "pause"
+        bridge.close()
+
+    def test_a_custom_prefix_is_the_only_command_prefix(self, tmp_path: Path) -> None:
+        bridge, client, floop = make_bridge(tmp_path, command_prefix="!bot")
+        client.deliver(posted("!sbx pause"))
+        client.deliver(posted("!lantern pause"))
+        assert not wait_for(lambda: bool(floop.hold_calls), timeout=0.3)
+        client.deliver(posted("!bot pause"))
+        assert wait_for(lambda: bool(floop.hold_calls))
+        assert len(floop.hold_calls) == 1
         bridge.close()
 
     def test_mentioning_the_bot_reaches_the_concierge(self, tmp_path: Path) -> None:

@@ -24,12 +24,28 @@ from typing import Any, Literal, TypeVar, cast
 
 from lantern.agents.registry import AgentRegistry, default_registry
 from lantern.config import ScheduleConfig
+from lantern.daemon.controls.delegation import (
+    Conditions,
+    GrantInvalid,
+    check_action,
+    check_daily_limit,
+    parse_conditions,
+)
+from lantern.daemon.controls.delegation_store import (
+    EDITABLE,
+    DelegationStore,
+    GrantGone,
+    StaleGrant,
+    new_grant_id,
+)
 from lantern.daemon.controls.intake import (
     AdmitRequest,
     IssueAdmission,
     PlanAdmission,
+    WorkloadAdmission,
     admit_issue,
     build_item,
+    channel_refusal,
     plan_item,
     resolve_assignment_request,
     target_key,
@@ -44,8 +60,15 @@ from lantern.daemon.controls.results import (
     BreakerResetOutcome,
     CancelOutcome,
     ControlError,
+    DeleteOutcome,
+    DismissAllOutcome,
+    DismissedTarget,
+    DismissOutcome,
     GateOutcome,
+    GoalOutcome,
+    GrantOutcome,
     GrantRoundsOutcome,
+    GrantsRestoredOutcome,
     ItemOutcome,
     ItemsOutcome,
     LogRecordsOutcome,
@@ -67,6 +90,18 @@ from lantern.daemon.controls.results import (
     StopOutcome,
 )
 from lantern.daemon.controls.steering import SteeringStore
+from lantern.daemon.goals import (
+    EDITABLE as GOAL_EDITABLE,
+    GoalGone,
+    GoalInvalid,
+    GoalState,
+    GoalStore,
+    StaleGoal,
+    check_state,
+    check_text,
+    check_title,
+    new_goal_id,
+)
 from lantern.daemon.holds import OPERATOR_HOLD, hold_name
 from lantern.errors import GithubOpsError, ProvisionError, SbxError, WorkerError
 from lantern.ghids import normalize_item_id
@@ -96,6 +131,9 @@ def require(principal: Principal, capability: Capability) -> None:
 
 
 OutcomeT = TypeVar("OutcomeT", bound=Outcome)
+
+#: The longest note a grant carries: a line saying why it was written.
+GRANT_NOTE_MAX = 500
 
 
 class ControlService:
@@ -524,6 +562,7 @@ class ControlService:
         require(principal, "runs:control")
 
         def apply(_: str | None) -> ResumeOutcome:
+            self._refuse_deleted(run_id=run_id)
             return self.loop.resume_run(
                 run_id, by=principal.attribution(), expected_revision=expected_revision
             )
@@ -553,6 +592,7 @@ class ControlService:
             raise ControlError("invalid_argument", f"rounds must be at least 1, not {rounds}")
 
         def apply(_: str | None) -> GrantRoundsOutcome:
+            self._refuse_deleted(run_id=run_id)
             self._check_run_revision(run_id, expected_revision)
             try:
                 item = self.loop.grant_rounds(run_id, rounds, principal.attribution())
@@ -651,6 +691,12 @@ class ControlService:
             # Checked before the source is touched: a refused agent must
             # not leave a labelled issue behind.
             lead, roles = resolve_assignment_request(self._agents(), request)
+            if isinstance(request, IssueAdmission | WorkloadAdmission):
+                # Also before the source is touched: a channel works one
+                # run at a time, and a refused ask must leave nothing queued.
+                busy = channel_refusal(loop, request.channel_id, item_id=key)
+                if busy is not None:
+                    raise ControlError("already_in_progress", busy, channel_id=request.channel_id)
             if isinstance(request, IssueAdmission):
                 item = admit_issue(loop, request)
             elif isinstance(request, PlanAdmission):
@@ -670,6 +716,21 @@ class ControlService:
             **_request_fields(request),
         )
         return self._record(spec, apply)
+
+    def _refuse_deleted(self, *, item_id: str | None = None, run_id: str | None = None) -> None:
+        """Deleted work takes no further command: it is hidden, and its run
+        directories are gone. Checked here because a store transition knows
+        nothing of marks — a retry would otherwise quietly bring back work
+        nobody can see. (The source asking for the work again is not a
+        command: admission re-queues it, and that un-hides it.)"""
+        dstore = self.loop.dstore
+        if item_id is not None:
+            item = dstore.get(item_id)
+            gone = item is not None and dstore.work_mark("item", item.item_id, "deleted")
+        else:
+            gone = dstore.work_mark("run", str(run_id), "deleted")
+        if gone:
+            raise ControlError("not_eligible", "work was deleted")
 
     def _check_item_revision(self, item_id: str, expected: int | None) -> None:
         """``stale_revision`` when the item has moved past what the caller
@@ -701,12 +762,23 @@ class ControlService:
         require(principal, "runs:control")
         item_id = normalize_item_id(item_id)
 
-        def apply(_: str | None) -> ItemOutcome:
+        def apply(op_id: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.abandon_item(item_id, reason)
             except (KeyError, ValueError) as exc:
                 raise ControlError(_code_for(exc), _message(exc)) from exc
+            if principal.kind != "system":
+                # A person gave the item up: that is the acknowledgement, so
+                # the `failed` it rests in does not ask for attention again.
+                self.loop.dstore.dismiss_abandoned(
+                    item.item_id,
+                    item.updated_at,
+                    actor=principal.audit(),
+                    reason=reason,
+                    operation_id=op_id,
+                )
             return ItemOutcome(verb="abandon", item=item)
 
         spec = self._spec(
@@ -732,6 +804,7 @@ class ControlService:
         item_id = normalize_item_id(item_id)
 
         def apply(_: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.retry_item(item_id, principal.attribution())
@@ -761,6 +834,7 @@ class ControlService:
         item_id = normalize_item_id(item_id)
 
         def apply(_: str | None) -> ItemOutcome:
+            self._refuse_deleted(item_id=item_id)
             self._check_item_revision(item_id, expected_revision)
             try:
                 item = self.loop.requeue_item(item_id)
@@ -775,6 +849,157 @@ class ControlService:
             item_id,
             idempotency=idempotency,
             expected_revision=expected_revision,
+        )
+        return self._record(spec, apply)
+
+    # -- alerts ---------------------------------------------------------------------
+
+    def dismiss(
+        self,
+        principal: Principal,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        reason: str | None = None,
+        undo: bool = False,
+        expected_revision: int | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DismissOutcome:
+        """Dismiss the alert a piece of work raises — for everyone, not for
+        the caller alone — or, with ``undo``, take the dismissal back. Name
+        the work by its item, or by a run when no item carries it. Needs
+        ``runs:control``: it changes what every other person is shown."""
+        require(principal, "runs:control")
+        if (item_id is None) == (run_id is None):
+            raise ControlError("invalid_argument", "name an item or a run, not both")
+        kind = "item" if item_id is not None else "run"
+        target = normalize_item_id(item_id) if item_id is not None else str(run_id)
+        named: dict[str, Any] = {"item_id": target} if kind == "item" else {"run_id": target}
+
+        def apply(op_id: str | None) -> DismissOutcome:
+            self._refuse_deleted(**named)
+            if undo:
+                return self.loop.undismiss_work(
+                    **named, actor=principal.audit(), expected_revision=expected_revision
+                )
+            return self.loop.dismiss_work(
+                **named,
+                actor=principal.audit(),
+                reason=reason,
+                expected_revision=expected_revision,
+                operation_id=op_id,
+            )
+
+        spec = self._spec(
+            f"{kind}.{'undismiss' if undo else 'dismiss'}",
+            principal,
+            kind,
+            target,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            reason=reason,
+        )
+        return self._record(spec, apply)
+
+    def delete(
+        self,
+        principal: Principal,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        reason: str | None = None,
+        discard_undelivered: bool = False,
+        expected_revision: int | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DeleteOutcome:
+        """Put finished work away: hidden from every listing, its run
+        directories and sandboxes removed, its rows kept. Name the work by
+        its item, or by a run when no item carries it. Needs
+        ``runs:control``; refused for work that is not at rest."""
+        require(principal, "runs:control")
+        if (item_id is None) == (run_id is None):
+            raise ControlError("invalid_argument", "name an item or a run, not both")
+        kind = "item" if item_id is not None else "run"
+        target = normalize_item_id(item_id) if item_id is not None else str(run_id)
+        named: dict[str, Any] = {"item_id": target} if kind == "item" else {"run_id": target}
+
+        def apply(op_id: str | None) -> DeleteOutcome:
+            return self.loop.delete_work(
+                **named,
+                actor=principal.audit(),
+                reason=reason,
+                expected_revision=expected_revision,
+                operation_id=op_id,
+                discard_undelivered=discard_undelivered,
+            )
+
+        spec = self._spec(
+            f"{kind}.delete",
+            principal,
+            kind,
+            target,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            reason=reason,
+            discard_undelivered=discard_undelivered,
+        )
+        return self._record(spec, apply)
+
+    def dismiss_all(
+        self,
+        principal: Principal,
+        targets: Sequence[tuple[Literal["item", "run"], str, int | None]],
+        *,
+        reason: str | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> DismissAllOutcome:
+        """Dismiss several alerts under one operation: each target is
+        ``(kind, id, expected_revision)``, the ones a person was looking at
+        when they asked. A target that cannot be dismissed — it moved on,
+        it raises no alert, its revision is stale — is skipped with the
+        refusal it would have had alone; the rest are dismissed."""
+        require(principal, "runs:control")
+        named = [
+            (kind, normalize_item_id(key) if kind == "item" else key, revision)
+            for kind, key, revision in targets
+        ]
+
+        def apply(op_id: str | None) -> DismissAllOutcome:
+            results: list[DismissedTarget] = []
+            for index, (kind, key, revision) in enumerate(named):
+                where: dict[str, Any] = {"item_id": key} if kind == "item" else {"run_id": key}
+                try:
+                    self._refuse_deleted(**where)
+                    outcome = self.loop.dismiss_work(
+                        **where,
+                        actor=principal.audit(),
+                        reason=reason,
+                        expected_revision=revision,
+                        operation_id=op_id,
+                    )
+                except ControlError as exc:
+                    results.append(
+                        DismissedTarget(
+                            index=index, outcome="skipped", code=exc.code, detail=exc.message
+                        )
+                    )
+                    continue
+                results.append(
+                    DismissedTarget(
+                        index=index,
+                        outcome="dismissed" if outcome.fresh else "already_dismissed",
+                    )
+                )
+            return DismissAllOutcome(results=results)
+
+        spec = self._spec(
+            "attention.dismiss_all",
+            principal,
+            "workspace",
+            principal.workspace_id,
+            idempotency=idempotency,
+            targets=[[kind, key, revision] for kind, key, revision in named],
+            reason=reason,
         )
         return self._record(spec, apply)
 
@@ -1018,6 +1243,426 @@ class ControlService:
             return ScheduleOutcome(verb=verb, name=name, message=message)
 
         spec = self._spec(f"schedule.{verb}", principal, "schedule", name, idempotency=idempotency)
+        return self._record(spec, apply)
+
+    # -- grants: the standing rules that let agents take decisions ------------------
+    #
+    # ``policy:manage`` and nothing else: an owner's, never an admin's, never
+    # an agent's. Each write is validated before it is recorded, so a grant
+    # that cannot be written leaves no operation behind it.
+
+    def _grant_subject(self, agent_slug: object) -> str:
+        """The agent a grant names, by its own slug: one the registry
+        knows and that can act (enabled, not archived)."""
+        slug = agent_slug.strip().casefold() if isinstance(agent_slug, str) else ""
+        if not slug:
+            raise GrantInvalid("agent_slug", "agent_slug must name an agent")
+        agent = self._agents().get(slug)
+        if agent is None:
+            raise GrantInvalid("agent_slug", f"no agent is called {slug!r}")
+        if agent.slug != slug:
+            raise GrantInvalid(
+                "agent_slug",
+                f"{slug!r} is another name for {agent.slug!r}; a grant names an agent by its slug",
+            )
+        if not agent.active:
+            raise GrantInvalid(
+                "agent_slug", f"agent {slug!r} is disabled; a grant names an agent that can act"
+            )
+        return agent.slug
+
+    @staticmethod
+    def _grant_note(note: object) -> str | None:
+        if note is None:
+            return None
+        if not isinstance(note, str) or len(note) > GRANT_NOTE_MAX:
+            raise GrantInvalid("note", f"note is text of at most {GRANT_NOTE_MAX} characters")
+        return note.strip() or None
+
+    def add_grant(
+        self,
+        principal: Principal,
+        *,
+        agent_slug: str,
+        action: str,
+        conditions: Mapping[str, Any] | Conditions | None = None,
+        daily_limit: int | None = None,
+        enabled: bool = True,
+        note: str | None = None,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Write a grant: ``agent_slug`` may take ``action`` under
+        ``conditions``. ``invalid_argument`` names the field that is wrong
+        (``detail["field"]``): an action outside the closed list, a
+        condition that does not apply to it, an agent the registry does
+        not know or that is disabled, a daily limit that is not positive."""
+        require(principal, "policy:manage")
+        try:
+            check_action(action)
+            parsed = parse_conditions(action, conditions)
+            check_daily_limit(daily_limit)
+            slug = self._grant_subject(agent_slug)
+            text = self._grant_note(note)
+        except GrantInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        grant_id = new_grant_id()
+
+        def apply(_: str | None) -> GrantOutcome:
+            grant, message = self.loop.add_grant(
+                grant_id=grant_id,
+                agent_slug=slug,
+                action=action,
+                conditions=parsed,
+                daily_limit=daily_limit,
+                enabled=bool(enabled),
+                note=text,
+                created_by=principal.id,
+                by=principal.attribution(),
+            )
+            return GrantOutcome(
+                verb="add", grant_id=grant.id, revision=grant.revision, message=message
+            )
+
+        # Built by hand: the request names the grant's `action`, which is
+        # also the name of `_spec`'s own first argument.
+        spec = OperationSpec(
+            action="grant.create",
+            target_kind="grant",
+            target_key=grant_id,
+            principal=principal,
+            request={
+                "agent_slug": slug,
+                "action": action,
+                "conditions": parsed.as_dict(),
+                "daily_limit": daily_limit,
+                "enabled": bool(enabled),
+                "note": text,
+            },
+            idempotency=idempotency,
+        )
+        return self._record(spec, apply)
+
+    def update_grant(
+        self,
+        principal: Principal,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Edit a grant's ``conditions``, ``daily_limit``, ``enabled`` or
+        ``note`` against the revision the caller read (``stale_revision``
+        when it moved on). Its agent and action are its identity and are
+        not edited: the ledger's rows name the grant. Switching a grant on
+        checks again that its agent can act."""
+        require(principal, "policy:manage")
+        existing = DelegationStore(self.loop.dstore).grant(grant_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no grant {grant_id}")
+        try:
+            unknown = sorted(set(changes) - EDITABLE)
+            if unknown:
+                raise GrantInvalid(
+                    unknown[0],
+                    f"{unknown[0]} cannot be edited; an edit may change "
+                    f"{', '.join(sorted(EDITABLE))}",
+                )
+            clean: dict[str, Any] = dict(changes)
+            if "conditions" in clean:
+                clean["conditions"] = parse_conditions(existing.action, clean["conditions"])
+            if "daily_limit" in clean:
+                check_daily_limit(clean["daily_limit"])
+            if "enabled" in clean:
+                if not isinstance(clean["enabled"], bool):
+                    raise GrantInvalid("enabled", "enabled is true or false")
+                if clean["enabled"] and not existing.enabled:
+                    self._grant_subject(existing.agent_slug)
+            if "note" in clean:
+                clean["note"] = self._grant_note(clean["note"])
+        except GrantInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        if not clean:
+            raise ControlError(
+                "invalid_argument",
+                f"the edit changes nothing; name one of {', '.join(sorted(EDITABLE))}",
+            )
+
+        def apply(_: str | None) -> GrantOutcome:
+            try:
+                grant, message = self.loop.update_grant(
+                    grant_id,
+                    clean,
+                    expected_revision=expected_revision,
+                    by=principal.attribution(),
+                )
+            except GrantGone as exc:
+                raise ControlError("unknown_target", f"no grant {grant_id}") from exc
+            except StaleGrant as exc:
+                raise ControlError(
+                    "stale_revision",
+                    f"the grant changed since it was read; it is at revision {exc.current}",
+                    current_revision=exc.current,
+                ) from exc
+            return GrantOutcome(
+                verb="update", grant_id=grant.id, revision=grant.revision, message=message
+            )
+
+        recorded = {
+            key: (value.as_dict() if isinstance(value, Conditions) else value)
+            for key, value in clean.items()
+        }
+        spec = self._spec(
+            "grant.update",
+            principal,
+            "grant",
+            grant_id,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            changes=recorded,
+        )
+        return self._record(spec, apply)
+
+    def remove_grant(
+        self,
+        principal: Principal,
+        grant_id: str,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantOutcome:
+        """Delete a grant. Nothing more is allowed under it; the decisions
+        it already allowed stay in the ledger."""
+        require(principal, "policy:manage")
+        existing = DelegationStore(self.loop.dstore).grant(grant_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no grant {grant_id}")
+
+        def apply(_: str | None) -> GrantOutcome:
+            try:
+                grant, message = self.loop.remove_grant(grant_id, by=principal.attribution())
+            except GrantGone as exc:
+                raise ControlError("unknown_target", f"no grant {grant_id}") from exc
+            return GrantOutcome(verb="remove", grant_id=grant.id, message=message)
+
+        spec = OperationSpec(
+            action="grant.delete",
+            target_kind="grant",
+            target_key=grant_id,
+            principal=principal,
+            request={"agent_slug": existing.agent_slug, "action": existing.action},
+            idempotency=idempotency,
+        )
+        return self._record(spec, apply)
+
+    def restore_default_grants(
+        self,
+        principal: Principal,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GrantsRestoredOutcome:
+        """Write again each of Lantern's default grants whose grant is
+        gone. One still there — edited, paused or as seeded — is left
+        alone; the outcome names the grants written."""
+        require(principal, "policy:manage")
+
+        def apply(_: str | None) -> GrantsRestoredOutcome:
+            written, message = self.loop.restore_default_grants(by=principal.attribution())
+            return GrantsRestoredOutcome(grant_ids=[grant.id for grant in written], message=message)
+
+        spec = self._spec(
+            "grant.restore_defaults", principal, "grant", "defaults", idempotency=idempotency
+        )
+        return self._record(spec, apply)
+
+    # -- goals: the direction an owner sets -----------------------------------------
+
+    def _goal_repository(self, repository: object) -> str:
+        """The configured spelling of a repository a goal may be set for:
+        configured, enabled, and able to hold a plan."""
+        from lantern.plans.hierarchy import repository_planning_for
+
+        name = repository.strip() if isinstance(repository, str) else ""
+        if not name:
+            raise GoalInvalid("repository", "repository must name a configured repository")
+        config: Any = getattr(self.loop, "config", None)
+        entry = None if config is None else config.find_repo(name)
+        if entry is None:
+            raise GoalInvalid("repository", f"{name} is not a repository configured on this server")
+        if not entry.enabled:
+            raise GoalInvalid("repository", f"{entry.repo} is disabled on this server")
+        planning = repository_planning_for(config, entry.repo)
+        if not planning.supported:
+            raise GoalInvalid(
+                "repository",
+                f"{entry.repo} cannot hold a plan: "
+                f"{planning.reason or 'its forge cannot hold plans'}",
+            )
+        return str(entry.repo)
+
+    def _goals(self) -> GoalStore:
+        store: GoalStore | None = getattr(self.loop, "goals", None)
+        return store if store is not None else GoalStore(self.loop.dstore)
+
+    def _now(self) -> float:
+        clock: Callable[[], float] = getattr(self.loop, "clock", time.time)
+        return float(clock())
+
+    def add_goal(
+        self,
+        principal: Principal,
+        *,
+        repository: str,
+        title: str,
+        text: str,
+        state: str = "active",
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Write a goal for ``repository``. ``invalid_argument`` names the
+        field that is wrong (``detail["field"]``): a repository that is not
+        configured, is disabled or cannot hold a plan, an empty or overlong
+        title or text, a state outside ``active``, ``paused``, ``done``.
+        Setting direction takes ``plans:publish``: an admin or an owner
+        sets it, a member does not."""
+        require(principal, "plans:publish")
+        try:
+            repo = self._goal_repository(repository)
+            clean_title = check_title(title)
+            clean_text = check_text(text)
+            clean_state: GoalState = check_state(state)
+        except GoalInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        goal_id = new_goal_id()
+
+        def apply(_: str | None) -> GoalOutcome:
+            goal = self._goals().create(
+                goal_id=goal_id,
+                repository=repo,
+                title=clean_title,
+                text=clean_text,
+                state=clean_state,
+                created_by=principal.id,
+                created_by_display=principal.attribution(),
+                now=self._now(),
+            )
+            return GoalOutcome(
+                verb="add",
+                goal_id=goal.id,
+                revision=goal.revision,
+                message=f"goal {goal.id} set for {goal.repository}: {goal.title}.",
+            )
+
+        spec = self._spec(
+            "goal.create",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            repository=repo,
+            title=clean_title,
+            state=clean_state,
+        )
+        return self._record(spec, apply)
+
+    def update_goal(
+        self,
+        principal: Principal,
+        goal_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Edit a goal's ``title``, ``text`` or ``state`` against the
+        revision the caller read (``stale_revision`` when it moved on). Its
+        repository is not edited: the plans proposed from it are there."""
+        require(principal, "plans:publish")
+        if self._goals().goal(goal_id) is None:
+            raise ControlError("unknown_target", f"no goal {goal_id}")
+        try:
+            unknown = sorted(set(changes) - GOAL_EDITABLE)
+            if unknown:
+                raise GoalInvalid(
+                    unknown[0],
+                    f"{unknown[0]} cannot be edited; an edit may change "
+                    f"{', '.join(sorted(GOAL_EDITABLE))}",
+                )
+            clean: dict[str, Any] = {}
+            if "title" in changes:
+                clean["title"] = check_title(changes["title"])
+            if "text" in changes:
+                clean["text"] = check_text(changes["text"])
+            if "state" in changes:
+                clean["state"] = check_state(changes["state"])
+        except GoalInvalid as exc:
+            raise ControlError("invalid_argument", exc.message, field=exc.field) from exc
+        if not clean:
+            raise ControlError(
+                "invalid_argument",
+                f"the edit changes nothing; name one of {', '.join(sorted(GOAL_EDITABLE))}",
+            )
+
+        def apply(_: str | None) -> GoalOutcome:
+            try:
+                goal = self._goals().update(
+                    goal_id, clean, expected_revision=expected_revision, now=self._now()
+                )
+            except GoalGone as exc:
+                raise ControlError("unknown_target", f"no goal {goal_id}") from exc
+            except StaleGoal as exc:
+                raise ControlError(
+                    "stale_revision",
+                    f"the goal changed since it was read; it is at revision {exc.current}",
+                    current_revision=exc.current,
+                ) from exc
+            return GoalOutcome(
+                verb="update",
+                goal_id=goal.id,
+                revision=goal.revision,
+                message=f"goal {goal.id} edited: {goal.title} ({goal.state}).",
+            )
+
+        spec = self._spec(
+            "goal.update",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            expected_revision=expected_revision,
+            changes=clean,
+        )
+        return self._record(spec, apply)
+
+    def remove_goal(
+        self,
+        principal: Principal,
+        goal_id: str,
+        *,
+        idempotency: tuple[str, str] | None = None,
+    ) -> GoalOutcome:
+        """Delete a goal. The plans proposed from it are left as they are
+        and keep naming it."""
+        require(principal, "plans:publish")
+        existing = self._goals().goal(goal_id)
+        if existing is None:
+            raise ControlError("unknown_target", f"no goal {goal_id}")
+
+        def apply(_: str | None) -> GoalOutcome:
+            gone = self._goals().delete(goal_id)
+            if gone is None:
+                raise ControlError("unknown_target", f"no goal {goal_id}")
+            return GoalOutcome(
+                verb="remove", goal_id=gone.id, message=f"goal {gone.id} removed: {gone.title}."
+            )
+
+        spec = self._spec(
+            "goal.delete",
+            principal,
+            "goal",
+            goal_id,
+            idempotency=idempotency,
+            repository=existing.repository,
+            title=existing.title,
+        )
         return self._record(spec, apply)
 
     def stop(

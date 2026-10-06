@@ -25,11 +25,13 @@ strings.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import string
 import tomllib
 from collections.abc import Mapping, Sequence
+from datetime import time as dtime
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, cast, get_args
 from urllib.parse import urlsplit
@@ -1031,8 +1033,11 @@ class PlanningConfig(_ConfigModel):
     """Planning work into the forge: initiatives, epics and tasks (#2343).
 
     On by default wherever the forge can hold a plan. The caps bound what
-    one breakdown may propose and what one parent may hold; a person still
-    publishes every level and starts every epic run. ``close_completed``
+    one breakdown may propose and what one parent may hold. On a ``manual``
+    plan (the default) a person takes every step — approving and publishing
+    each level, starting each epic run; on a plan an owner set to
+    ``advance = "auto"`` an agent may take a step an owner's grant allows,
+    and any step no grant covers waits for a person. ``close_completed``
     comments a summary on an epic whose tasks are all closed and closes it,
     and does the same for an initiative whose epics are all closed.
     ``reconcile_interval_s`` is how stale a published plan may be before
@@ -1049,6 +1054,109 @@ class PlanningConfig(_ConfigModel):
     max_questions: int = Field(default=5, ge=0, le=10)
     close_completed: bool = True
     reconcile_interval_s: int = Field(default=120, ge=0, le=86400)
+
+
+#: The least either reminder interval may be: well above the attention
+#: tracker's own once-a-minute sweep, so a reminder is never due on every
+#: pass. And the most, so a typo does not silence reminders for a year.
+ATTENTION_REMIND_FLOOR_S = 300
+ATTENTION_REMIND_CEILING_S = 30 * 86400
+_TIME_OF_DAY = re.compile(r"(\d{1,2}):(\d{2})")
+
+
+def _time_of_day(value: str) -> dtime | None:
+    """``HH:MM`` (24-hour) as a time of day; ``None`` when it is not one."""
+    match = _TIME_OF_DAY.fullmatch(value)
+    if match is None:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return dtime(hour, minute)
+
+
+class AttentionConfig(_ConfigModel):
+    """When something that waits on a person is reminded about.
+
+    An entry of the attention list — a merge gate, a publish hold, a plan's
+    questions, a blocked run — never expires to yes or to no: it waits
+    until someone acts. ``remind_after_s`` is how long it may wait before
+    the chronology records an ``attention.reminder`` for it (and the push
+    rules remind the people who can act on it), and ``remind_every_s`` how
+    long until the next one. ``remind_after_s = 0`` sends none. A daemon
+    that was down past several intervals sends one reminder on return.
+    Workspace-wide, not per repository: an entry need not have one.
+
+    ``digest_at`` is the local time of day (``HH:MM``, 24-hour, read in
+    ``[daemon] run_cap_timezone``) of the daily digest — a
+    ``briefing.digest`` event, one control-channel line and a ``work`` push
+    to every member saying what happened since the last one. Empty (the
+    default) sends none.
+    """
+
+    remind_after_s: int = 14400
+    remind_every_s: int = 86400
+    digest_at: str = ""
+
+    @field_validator("digest_at")
+    @classmethod
+    def _a_time_of_day(cls, value: str) -> str:
+        if value == "" or _time_of_day(value) is not None:
+            return value
+        raise ValueError(
+            "attention.digest_at must be a time of day as HH:MM (24-hour, 00:00 to 23:59) "
+            f"or empty for no digest, got {value!r}"
+        )
+
+    @property
+    def digest_time(self) -> dtime | None:
+        """``digest_at`` as a time of day; ``None`` when there is no digest."""
+        return _time_of_day(self.digest_at) if self.digest_at else None
+
+    @field_validator("remind_after_s", "remind_every_s")
+    @classmethod
+    def _an_interval_the_tracker_can_honour(cls, value: int, info: ValidationInfo) -> int:
+        floor, ceiling = ATTENTION_REMIND_FLOOR_S, ATTENTION_REMIND_CEILING_S
+        if info.field_name == "remind_after_s" and value == 0:
+            return value
+        if not floor <= value <= ceiling:
+            none = " (or 0 for no reminders)" if info.field_name == "remind_after_s" else ""
+            raise ValueError(
+                f"attention.{info.field_name} must be between {floor} and {ceiling} "
+                f"seconds{none}, got {value}"
+            )
+        return value
+
+    @property
+    def enabled(self) -> bool:
+        return self.remind_after_s > 0
+
+
+class DelegationConfig(_ConfigModel):
+    """How the daemon acts on the grants an owner wrote.
+
+    ``publish_delay_s`` is the window a person has to hold a level an agent
+    approved under a grant before the daemon publishes it to the forge: a
+    plan whose ``advance`` is ``auto`` waits this long after its level was
+    approved (whoever approved it), measured from the approval as the plan
+    records it, so a restart neither shortens nor restarts the wait.
+    Flipping the plan's ``advance`` back to ``manual`` in that window — or
+    editing a child, which makes it a draft again — holds it. ``0``
+    publishes on the next tick. Workspace-wide: a grant's ``repositories``
+    condition is where a repository is narrowed. The grants themselves
+    live in the daemon's database, never here.
+
+    ``propose_every`` (seconds; ``0``, the default, is off) is how often
+    the planner may propose a plan for one ``active`` goal, under a
+    ``plan.propose`` grant: at most once per period per goal, counted from
+    the last proposal the ledger records for it or the last change to a
+    plan that served it (archived or done), whichever is later — so a
+    restart neither forgets nor restarts it. Never while the goal has a
+    plan still open and not done.
+    """
+
+    publish_delay_s: int = Field(default=900, ge=0)
+    propose_every: int = Field(default=0, ge=0)
 
 
 class PlanningOverride(_ConfigModel):
@@ -1816,7 +1924,7 @@ class LandingConfig(_ConfigModel):
     ``"chat"`` makes a run that cleared every bar — review, CI,
     reconciliation — park ``gated`` instead of merging, with an approval
     prompt in the run's chat thread (the platform comes from ``[chat]
-    backend``). A click on the prompt, ``!sbx merge <item>`` in chat, or
+    backend``). A click on the prompt, ``!lantern merge <item>`` in chat, or
     ``lantern daemon ctl merge <item>`` on the host completes the landing:
     update-branch if behind, re-checked CI, the same reconciliation gate,
     then the merge — gh-ops only, no sandbox. There is no deadline; the
@@ -1920,9 +2028,14 @@ class DaemonConfig(_ConfigModel):
     ``[landing]``) and reports the outcome back on the issue: closed with
     ``completed_label`` when the PR merged, ``failed_label`` when the run
     gave up, ``blocked_label`` when GitHub would not let the loop finish
-    and a human has to look. The daemon never files work of its own; only
-    a human labelling an issue (directly, or through the Discord concierge)
-    starts a run.
+    and a human has to look. Nothing starts a run without a person's act or
+    an owner's standing word: a person labelling an issue (directly, or
+    through the chat concierge), a schedule a person created, or a step an
+    owner's grant allows an agent on a plan the owner set to advance on its
+    own. Every install starts with Lantern's default grants, but no plan
+    advances until a person sets it to Auto, and an unlabeled issue is never
+    picked up; the defaults do let triage retry a recent transient failure
+    once (see ``docs/user-guide.md``, "Default grants").
 
     It is fully autonomous — a label alone starts a run — so the spend
     guardrails here are the only thing standing between a mislabeled issue
@@ -2037,7 +2150,7 @@ class DaemonConfig(_ConfigModel):
     # no run executing, any non-terminal run whose last activity (engine
     # chronology, falling back to the run row's updated timestamp) is older
     # than this is reconciled to a terminal state, so list_runs and
-    # `!sbx status` agree on what is active. The in-flight run is never
+    # `!lantern status` agree on what is active. The in-flight run is never
     # considered stale. 0 disables the sweep.
     run_stale_after_s: float = Field(default=21600.0, ge=0)
     # The daemon's own log stream (stderr → journald under systemd). INFO is
@@ -2126,6 +2239,15 @@ CHAT_BACKENDS: tuple[ChatBackend, ...] = tuple(
 BridgeBackend = Literal["discord", "slack", "mattermost", "local"]
 #: The local bridge's control channel id (its threads are ``thread:<id>``).
 TUI_CONTROL_CHANNEL = "control"
+#: What a chat message starts with to be an operator command, unless a
+#: section sets ``command_prefix``.
+DEFAULT_COMMAND_PREFIX = "!lantern"
+#: The prefix the project shipped with before its rename. A section left at
+#: the default still answers to it, so muscle memory and older docs keep
+#: working; a section with a prefix of its own answers to that one only.
+LEGACY_COMMAND_PREFIX = "!sbx"
+#: Every prefix a section left at the default answers to, the default first.
+DEFAULT_COMMAND_PREFIXES = (DEFAULT_COMMAND_PREFIX, LEGACY_COMMAND_PREFIX)
 
 
 class ChatBridgeConfig(_ConfigModel):
@@ -2135,7 +2257,7 @@ class ChatBridgeConfig(_ConfigModel):
     serves them (``lantern.daemon.chat.ChatBridge``) reads only these fields
     plus ``channel_id`` and ``enabled``."""
 
-    command_prefix: str = "!sbx"
+    command_prefix: str = DEFAULT_COMMAND_PREFIX
     thread_per_run: bool = True
     # quiet: lifecycle + links + chat; normal: plus agent messages, with each
     # burst of tool calls digested into one line edited in place (#235:
@@ -2145,7 +2267,7 @@ class ChatBridgeConfig(_ConfigModel):
     # renderer never exceeds 2000 either way, so one ceiling serves both.
     max_message_chars: int = Field(default=1900, ge=200, le=2000)
     # Rich output: embed cards (Discord) / coloured attachments (Slack) for
-    # the run headline, finished report and `!sbx status`; a per-run status
+    # the run headline, finished report and `!lantern status`; a per-run status
     # message edited in place as tasks progress; at the verbose level,
     # consecutive tool calls batched into one code block of at most
     # tool_batch_lines.
@@ -2164,6 +2286,16 @@ class ChatBridgeConfig(_ConfigModel):
     # named by its host path instead (Discord's cap for an unboosted server
     # is 10 MB). 0 attaches nothing and names every file.
     max_attachment_bytes: int = Field(default=10_000_000, ge=0, le=100_000_000)
+
+    @property
+    def command_prefixes(self) -> tuple[str, ...]:
+        """Every prefix that makes a message a command, the configured one
+        first (it is the one replies and hints name). The default prefix
+        also answers to :data:`LEGACY_COMMAND_PREFIX`; a custom one is the
+        only one."""
+        if self.command_prefix == DEFAULT_COMMAND_PREFIX:
+            return DEFAULT_COMMAND_PREFIXES
+        return (self.command_prefix,)
 
     @property
     def enabled(self) -> bool:  # pragma: no cover - overridden
@@ -2374,13 +2506,13 @@ DEFAULT_CONFIG_LOCKED: tuple[str, ...] = (
 
 class ConciergeConfig(_ConfigModel):
     """The control channel's agent: an LLM session that answers @mentions
-    in the chat control channel, operates the daemon (every ``!sbx``
+    in the chat control channel, operates the daemon (every ``!lantern``
     verb), enqueues new work and explains runs, PRs and diffs. It runs in
     a long-lived agent-role sandbox and reaches the daemon only through
     host tools. Effective only when a chat backend (``[discord]`` or
     ``[slack]``) is enabled; needs
     ``COPILOT_GITHUB_TOKEN`` on the daemon host like any agent session.
-    It acts with the same authority as ``!sbx`` — anyone who can mention
+    It acts with the same authority as ``!lantern`` — anyone who can mention
     the bot can drive the daemon; restrict the channel accordingly."""
 
     enabled: bool = True
@@ -2652,7 +2784,7 @@ class WorkloadProfile(_ConfigModel):
     ``publish = "hold"`` parks a finished run at its publishing stage —
     judged, persisted, nothing delivered — until a person releases it
     (#760): the daemon posts a release prompt in the run's thread (a button
-    where the backend has one) and `!sbx release <item>` or
+    where the backend has one) and `!lantern release <item>` or
     `lantern daemon ctl release <item>` work everywhere; a CLI run resumes
     with `lantern resume <run>`. ``auto`` (the default) publishes as soon
     as the judge passes.
@@ -3048,6 +3180,20 @@ class ApiOidcConfig(_ConfigModel):
         return self
 
 
+#: What an unset ``[api] trusted_proxies`` believes on a loopback bind.
+LOOPBACK_PROXIES = ("127.0.0.1", "::1")
+
+
+def is_loopback_bind(bind: str) -> bool:
+    """Whether a listener bound here is reachable only from this host."""
+    if bind.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(bind.strip()).is_loopback
+    except ValueError:
+        return False
+
+
 class ApiConfig(_ConfigModel):
     """The remote operations API, served by ``lantern daemon`` in-process.
 
@@ -3070,7 +3216,8 @@ class ApiConfig(_ConfigModel):
     bind: str = "127.0.0.1"
     port: int = Field(default=8420, ge=1, le=65535)
     # Proxies (addresses or CIDRs) whose X-Forwarded-* headers are believed;
-    # empty means none are.
+    # empty means none are. Left unset on a loopback bind, the loopback
+    # proxy is believed: see ``forwarding_proxies``.
     trusted_proxies: list[str] = Field(default_factory=list)
     # A minted access token lives this long; a refresh token this long.
     access_token_ttl_s: int = Field(default=900, ge=60, le=3600)
@@ -3105,6 +3252,20 @@ class ApiConfig(_ConfigModel):
         if "*" in value:
             raise ValueError("api.cors_origins must list origins; '*' is refused")
         return value
+
+    @property
+    def forwarding_proxies(self) -> list[str]:
+        """Whose ``X-Forwarded-*`` headers the listener believes.
+
+        ``trusted_proxies`` as written when it is set, even to ``[]``. Unset
+        on a loopback bind, the loopback proxy: nothing but a process on
+        this host can reach that listener, so a request that names another
+        client came through a local proxy — and believing nobody would make
+        every client one address to the sign-in limiter.
+        """
+        if "trusted_proxies" in self.model_fields_set:
+            return list(self.trusted_proxies)
+        return list(LOOPBACK_PROXIES) if is_loopback_bind(self.bind) else []
 
 
 class PushConfig(_ConfigModel):
@@ -3321,6 +3482,11 @@ class Config(_ConfigModel):
     push: PushConfig = Field(default_factory=PushConfig)
     # Planning initiatives, epics and tasks into the forge (#2343).
     planning: PlanningConfig = Field(default_factory=PlanningConfig)
+    # When what waits on a person is reminded about.
+    attention: AttentionConfig = Field(default_factory=AttentionConfig)
+    # How the daemon acts on an owner's grants: the hold window before an
+    # agent-approved plan level is published.
+    delegation: DelegationConfig = Field(default_factory=DelegationConfig)
     entrygraph: EntrygraphConfig = Field(default_factory=EntrygraphConfig)
     # Named bounds for workload runs (#758) and the one a run gets by
     # default; a code run ignores both.

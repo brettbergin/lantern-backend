@@ -57,6 +57,7 @@ from lantern.engine.planning import (
     PlanClarification,
     PlanProposal,
     PlanReplan,
+    PlanVerdict,
     clarification_problems,
     proposal_problems,
     replan_problems,
@@ -71,6 +72,8 @@ from lantern.errors import InvalidOutputTwice, WorkerError
 from lantern.events import EventBus
 from lantern.ids import new_job_id
 from lantern.log import get_logger
+from lantern.plans.model import PlanNode
+from lantern.plans.render import section_blocks
 from lantern.provider import ProviderHeldError, ProviderHold
 from lantern.verifylint import (
     UV_LOCKFILE,
@@ -263,7 +266,8 @@ AGENT_NAMES = {
     # The one actor allowed to change the exam rather than the work.
     "reauthor_verify": "verify editor",
     # Breaking an initiative or an epic into its next level (#2343), from a
-    # read-only checkout: it proposes, a person publishes.
+    # read-only checkout: it proposes, and publishing is a separate step — a
+    # person's, or one an owner's grant allows on a plan set to advance itself.
     "plan": "planner",
 }
 # The phases whose session gets the run's host tools: the one doing the
@@ -625,12 +629,19 @@ class PhaseRunner:
         """``binding`` when it changes anything about a session, else None."""
         return binding if binding is not None and not binding.is_default() else None
 
+    @property
+    def _memoryless(self) -> bool:
+        """Whether the run binds its agents without memories."""
+        return self.assignment is not None and self.assignment.memoryless
+
     def _system_message(self, phase: str, extra: str | None, binding: AgentBinding | None) -> str:
-        """The phase's briefing, then a custom agent's persona and memory."""
+        """The phase's briefing, then a custom agent's persona and memory —
+        no memory in a run that binds its agents without it, whatever its
+        bindings carry."""
         text = brief_for_phase(self.config, phase, extra)
         custom = self._custom(binding)
         if custom is not None:
-            text += custom.persona + custom.memory_block
+            text += custom.persona + ("" if self._memoryless else custom.memory_block)
         return text
 
     def _selection(self, phase: str, binding: AgentBinding | None) -> ModelSelection:
@@ -688,9 +699,11 @@ class PhaseRunner:
         A session that may change nothing gets ``recall`` alone — a critic,
         whatever it was asked to do, and any read-only session — exactly as
         a read-only chat turn does: judging the work is not an occasion to
-        rewrite what the agent remembers of it."""
+        rewrite what the agent remembers of it. A run that binds its agents
+        without memories offers none: recalling would read them back."""
         if (
             self.memory is None
+            or self._memoryless
             or custom is None
             or custom.tools is None
             or MEMORY_TOOL_GROUP not in custom.tools
@@ -1858,6 +1871,30 @@ class PhaseRunner:
         )
         return replan
 
+    def review_plan(self, brief: PlanBrief, proposal: PlanProposal) -> PlanVerdict:
+        """The critic's verdict on one proposed level, before it is
+        delivered: the node as the plan holds it (or the root the planner
+        generated), the children that stay, and the proposed children
+        rendered as they will be published. Read-only and given no
+        checkout: it judges the decomposition, not the repository. Runs as
+        the ``review`` phase — the run's critic, the ``review`` model — with
+        the one validation retry every JSON phase has;
+        :class:`InvalidOutputTwice` when both answers are unusable."""
+        verdict, _ = self._agent_json(
+            PlanVerdict,
+            "plan_review",
+            {
+                "level": brief.level,
+                "children": brief.child_noun,
+                "node": _plan_review_node(brief, proposal),
+                "kept": bullet_list(brief.kept),
+                "proposed": _plan_review_children(brief, proposal),
+            },
+            permission_mode="read_only",
+            phase="review",
+        )
+        return verdict
+
     def _plan_lint(self, home: Path | None) -> Callable[[Sequence[str]], list[str]]:
         """The verify-command lint for the repository being planned: its
         own toolchains and project shape, not this read-only sandbox's."""
@@ -2023,6 +2060,85 @@ def _plan_node_section(brief: PlanBrief) -> str:
     return "\n\n".join(lines)
 
 
+def _as_published(node: PlanNode) -> str:
+    """``node``'s sections as its issue body renders them, each heading
+    set below the prompt's own so the level reads as one document."""
+    return "\n\n".join(
+        "####" + block[2:] if block.startswith("## ") else block
+        for block in section_blocks(node).values()
+    )
+
+
+def _plan_review_node(brief: PlanBrief, proposal: PlanProposal) -> str:
+    """The node a reviewed level hangs under: as the plan holds it, or —
+    when the planner generated it from the person's brief — the root it
+    generated, after the brief it was generated from."""
+    root = proposal.root
+    if not brief.generate_root or root is None:
+        return _plan_node_section(brief)
+    lines = [f"**{brief.level.capitalize()}:** {root.title}"]
+    if brief.parent:
+        lines.append(f"**Part of:** {brief.parent}")
+    lines.append(f"**Repository:** {brief.repository}")
+    if brief.input:
+        lines.append(
+            "**The person's planning brief (the requirements the planner generated this "
+            "from):**\n\n" + json.dumps(brief.input, ensure_ascii=False)
+        )
+    generated = PlanNode(
+        id=brief.node_id,
+        plan_id=brief.plan_id,
+        parent_id=None,
+        position=0,
+        level=brief.level,
+        repository=brief.repository,
+        state="proposed",
+        origin="planner",
+        title=root.title,
+        goal=root.goal,
+        context=root.context,
+        acceptance_criteria=tuple(root.acceptance_criteria),
+        non_goals=root.non_goals,
+        constraints=root.constraints,
+    )
+    lines.append("The planner generated this " + brief.level + ":\n\n" + _as_published(generated))
+    return "\n\n".join(lines)
+
+
+def _plan_review_children(brief: PlanBrief, proposal: PlanProposal) -> str:
+    """The proposed children as their issues will read once published,
+    each numbered — a dependency names its sibling by that number."""
+    if not proposal.children:
+        return "(none: the planner proposed no children)"
+    order = proposal.dependencies()
+    blocks: list[str] = []
+    for index, child in enumerate(proposal.children):
+        task = brief.child_level == "task"
+        node = PlanNode(
+            id=str(index + 1),
+            plan_id=brief.plan_id,
+            parent_id=brief.node_id,
+            position=index,
+            level=brief.child_level,
+            repository=brief.repository,
+            state="proposed",
+            origin="planner",
+            title=child.title,
+            goal=child.goal,
+            context=child.context,
+            acceptance_criteria=tuple(child.acceptance_criteria),
+            kind=child.kind if task else None,
+            workload_profile=child.workload_profile if task else None,
+            verify_commands=tuple(child.verify_commands) if task else (),
+            depends_on=tuple(str(dep + 1) for dep in order[index]) if task else (),
+            non_goals=child.non_goals,
+            constraints=child.constraints,
+        )
+        body = _as_published(node)
+        blocks.append(f"### {index + 1}. {child.title}" + (f"\n\n{body}" if body else ""))
+    return "\n\n".join(blocks)
+
+
 def plan_answers_section(brief: PlanBrief) -> str:
     """The node's clarifying questions and what a person answered, as the
     planner reads them: each question, then the choice picked (its label
@@ -2101,12 +2217,15 @@ def _plan_profiles(brief: PlanBrief) -> str:
 
 
 def _plan_checkouts(
-    checkouts: Sequence[tuple[str, str]], home: str, others: Sequence[str] = ()
+    checkouts: Sequence[tuple[str, str]], own: str, others: Sequence[str] = ()
 ) -> str:
+    """The checkouts as the planner's prompt lists them: the level's own
+    repository where it was cut, and the repositories kept children target
+    that are not checked out here."""
     lines = [
         f"- `{where}` — {repo}, the repository this level lives in"
         for repo, where in checkouts
-        if repo == home
+        if repo == own
     ]
     if not lines:
         lines.append("(no checkout could be cut; plan from the node alone and say so in `context`)")

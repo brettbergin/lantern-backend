@@ -11,17 +11,19 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from lantern.daemon.store import DaemonStore
 from lantern.db.api_models import ApiEventRow
-from lantern.db.daemon_models import PlanNodeRow, PlanRow
+from lantern.db.daemon_models import PlanEpicRunTaskRow, PlanNodeRow, PlanRow
 from lantern.engine.planning import Clarification
 from lantern.plans.model import (
+    ADVANCES,
+    Advance,
     Drift,
     DriftChange,
     ForgeRef,
@@ -31,6 +33,7 @@ from lantern.plans.model import (
     Origin,
     Plan,
     PlanNode,
+    PlanReview,
     Replan,
     ReplanAction,
     ReplanEntry,
@@ -52,8 +55,64 @@ class StaleRevision(Exception):
         self.current = current
 
 
+#: How many times a write against the plan as it is now is tried before
+#: the caller is told the plan kept changing.
+TRIES = 3
+
+
+def retry_stale[T](attempt: Callable[[], T], *, tries: int = TRIES) -> T:
+    """Run ``attempt`` — one read of a plan and one :meth:`PlanStore.apply`
+    against the revision it read — again when another write won in
+    between, up to ``tries`` times. The last :class:`StaleRevision`
+    propagates when every try lost: the caller says what that means for
+    it (a ``409``, a failed node, a reconcile marked busy). One shape for
+    every write that is not a person's edit of a revision they named."""
+    last: StaleRevision | None = None
+    for _ in range(tries):
+        try:
+            return attempt()
+        except StaleRevision as exc:
+            last = exc
+    assert last is not None  # nosec B101 - tries is positive
+    raise last
+
+
 class PlanGone(Exception):
     """The plan does not exist (or was deleted under the caller)."""
+
+
+#: An epic-run task state that says the task was started: its issue was
+#: admitted as an item (``queued``, ``running``), that item ended
+#: (``landed``, ``failed``), or a person settled it (``skipped``) — and
+#: ``closed``, found closed when the run reached it. ``waiting``, ``ready``,
+#: ``blocked`` and ``cancelled`` (withdrawn before it was admitted) are not
+#: starts: the task is still lined up.
+ADMITTED_TASK_STATES: tuple[str, ...] = (
+    "queued",
+    "running",
+    "landed",
+    "closed",
+    "failed",
+    "skipped",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Supply:
+    """How much work the plans hold, as :meth:`PlanStore.supply` counts it
+    over the plans that are not archived.
+
+    ``proposed`` and ``approved`` are nodes at any level in those states
+    (awaiting a person's approval; approved and not yet published).
+    ``ready_tasks`` are the published tasks lined up: on the forge and
+    still following their issue, the issue open as last reconciled, and
+    not started — no epic run has a task row for the node in one of
+    :data:`ADMITTED_TASK_STATES`. A task whose issue a person labelled by
+    hand, outside any epic run, is still counted until its issue closes."""
+
+    proposed: int = 0
+    approved: int = 0
+    ready_tasks: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +184,26 @@ def _replan(raw: str | None) -> Replan | None:
         run_id=data.get("run_id"),
         proposed_at=float(data.get("proposed_at") or 0.0),
         entries=entries,
+        proposed_by=data.get("proposed_by"),
     )
+
+
+def _review(raw: str | None) -> PlanReview | None:
+    """A level's review as stored; one a later build wrote in a shape this
+    one cannot read is treated as none — the level then reads as not
+    reviewed, the safe reading — never as a crash of the plan."""
+    if not raw:
+        return None
+    try:
+        return PlanReview.from_dict(json.loads(raw))
+    except ValueError:
+        return None
+
+
+def _advance(raw: str | None) -> Advance:
+    """The plan's switch as stored; a value this build does not know is
+    never read as leave to advance."""
+    return raw if raw in ADVANCES else "manual"
 
 
 def _node(row: PlanNodeRow) -> PlanNode:
@@ -165,6 +243,10 @@ def _node(row: PlanNodeRow) -> PlanNode:
         drift=_drift(row.drift_json),
         generation=_generation(row.generation_json),
         replan=_replan(row.replan_json),
+        proposed_by=row.proposed_by,
+        approved_by=row.approved_by,
+        published_by=row.published_by,
+        review=_review(row.review_json),
     )
 
 
@@ -213,6 +295,12 @@ def _columns(node: PlanNode) -> dict[str, Any]:
         "created_at": node.created_at,
         "updated_at": node.updated_at,
         "generation_json": (None if node.generation is None else node.generation.model_dump_json()),
+        "proposed_by": node.proposed_by,
+        "approved_by": node.approved_by,
+        "published_by": node.published_by,
+        "review_json": (
+            None if node.review is None else json.dumps(node.review.as_dict(), default=str)
+        ),
     }
 
 
@@ -251,6 +339,8 @@ def _plan(row: PlanRow, nodes: Iterable[PlanNodeRow]) -> Plan:
         input=json.loads(row.input_json),
         reconciled_at=None if row.reconciled_at is None else float(row.reconciled_at),
         reconcile_error=row.reconcile_error,
+        advance=_advance(row.advance),
+        goal_id=row.goal_id,
     )
 
 
@@ -270,6 +360,15 @@ def _event(session: Any, event: PlanEvent, now: float, actor: dict[str, Any] | N
             audience_user_id=None,
         )
     )
+
+
+def actor_id(actor: Mapping[str, Any] | None) -> str | None:
+    """Who a node records as having proposed, approved or published it:
+    the actor's ``id`` — the one the same act's event carries — or ``None``
+    for an act with no actor, or an actor with no id."""
+    if actor is None:
+        return None
+    return str(actor.get("id") or "") or None
 
 
 class PlanStore:
@@ -297,6 +396,106 @@ class PlanStore:
                 nodes.setdefault(str(node.plan_id), []).append(node)
             return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
 
+    def advancing(self) -> list[Plan]:
+        """Every plan that may move itself forward — ``advance`` is
+        ``auto`` and it is not archived — oldest first: the plan driver's
+        round. A ``manual`` plan is never read here."""
+        with self.dstore.read() as session:
+            rows = list(
+                session.scalars(
+                    select(PlanRow)
+                    .where(PlanRow.advance == "auto", PlanRow.state != "archived")
+                    .order_by(PlanRow.created_at.asc(), PlanRow.plan_id)
+                )
+            )
+            if not rows:
+                return []
+            ids = [str(row.plan_id) for row in rows]
+            nodes: dict[str, list[PlanNodeRow]] = {}
+            for node in session.scalars(select(PlanNodeRow).where(PlanNodeRow.plan_id.in_(ids))):
+                nodes.setdefault(str(node.plan_id), []).append(node)
+            return [_plan(row, nodes.get(str(row.plan_id), [])) for row in rows]
+
+    def many(self, plan_ids: Iterable[str]) -> dict[str, Plan]:
+        """The plans ``plan_ids`` names that exist, in two statements
+        however many there are."""
+        wanted = sorted(set(plan_ids))
+        if not wanted:
+            return {}
+        with self.dstore.read() as session:
+            return self._loaded(
+                session, list(session.scalars(select(PlanRow).where(PlanRow.plan_id.in_(wanted))))
+            )
+
+    def waiting_on_people(self) -> list[Plan]:
+        """Every live ``manual`` plan with a node a person has to look at:
+        a ``proposed`` node (a level waiting to be approved) or a node
+        whose breakdown asked questions not yet answered. A plan that
+        advances itself is not here: what it needs from a person reaches
+        them as an escalation. Two statements, however many plans."""
+        asking = (
+            select(PlanNodeRow.plan_id)
+            .where(
+                (PlanNodeRow.state == "proposed")
+                # Narrowed in SQL, decided on the parsed record.
+                | PlanNodeRow.generation_json.like('%"awaiting_answers"%')
+            )
+            .distinct()
+        )
+        stmt = select(PlanRow).where(
+            PlanRow.plan_id.in_(asking),
+            PlanRow.state != "archived",
+            PlanRow.advance == "manual",
+        )
+        with self.dstore.read() as session:
+            return list(self._loaded(session, list(session.scalars(stmt))).values())
+
+    @staticmethod
+    def _loaded(session: Any, rows: list[PlanRow]) -> dict[str, Plan]:
+        if not rows:
+            return {}
+        ids = [str(row.plan_id) for row in rows]
+        nodes: dict[str, list[PlanNodeRow]] = {}
+        for node in session.scalars(select(PlanNodeRow).where(PlanNodeRow.plan_id.in_(ids))):
+            nodes.setdefault(str(node.plan_id), []).append(node)
+        return {str(row.plan_id): _plan(row, nodes.get(str(row.plan_id), [])) for row in rows}
+
+    def supply(self) -> Supply:
+        """How much work the plans that are not archived hold, counted in
+        the store (never by loading every plan): the nodes ``proposed``
+        and ``approved`` at any level, and the published tasks that are
+        lined up — see :class:`Supply` for what that means."""
+        live = select(PlanRow.plan_id).where(PlanRow.state != "archived")
+        by_state = (
+            select(PlanNodeRow.state, func.count())
+            .where(PlanNodeRow.plan_id.in_(live), PlanNodeRow.state.in_(("proposed", "approved")))
+            .group_by(PlanNodeRow.state)
+        )
+        admitted = select(PlanEpicRunTaskRow.node_id).where(
+            PlanEpicRunTaskRow.node_id == PlanNodeRow.node_id,
+            PlanEpicRunTaskRow.state.in_(ADMITTED_TASK_STATES),
+        )
+        ready = (
+            select(func.count())
+            .select_from(PlanNodeRow)
+            .where(
+                PlanNodeRow.plan_id.in_(live),
+                PlanNodeRow.level == "task",
+                PlanNodeRow.state == "published",
+                PlanNodeRow.forge_state == "open",
+                PlanNodeRow.forge_detached.is_(None),
+                ~admitted.exists(),
+            )
+        )
+        with self.dstore.read() as session:
+            counts = {str(state): int(count) for state, count in session.execute(by_state)}
+            ready_tasks = int(session.scalar(ready) or 0)
+        return Supply(
+            proposed=counts.get("proposed", 0),
+            approved=counts.get("approved", 0),
+            ready_tasks=ready_tasks,
+        )
+
     def published_at(self, repo: str, number: int) -> list[tuple[str, PlanNode]]:
         """Every ``(plan_id, node)`` whose issue is ``number`` of ``repo``
         (matched without case, as the forge does)."""
@@ -323,6 +522,8 @@ class PlanStore:
                     workspace_id=plan.workspace_id,
                     root_node_id=plan.root_id,
                     input_json=json.dumps(plan.input),
+                    advance=plan.advance,
+                    goal_id=plan.goal_id,
                     state="archived" if plan.archived else "active",
                     created_by=plan.created_by,
                     created_by_display=plan.created_by_display,
@@ -352,10 +553,12 @@ class PlanStore:
         actor: dict[str, Any] | None = None,
         reconciled: Reconciled | None = None,
         input: dict[str, Any] | None = None,
+        advance: Advance | None = None,
     ) -> Plan:
         """Write one change to a plan, against the revision the caller
         read; the plan as it now is. ``reconciled`` records the forge read
-        the change came from, in the same transaction."""
+        the change came from, in the same transaction. ``advance`` sets the
+        plan's switch; left out, it stays as it is."""
         with self.dstore.transaction() as session:
             row = session.get(PlanRow, plan_id)
             if row is None:
@@ -380,6 +583,8 @@ class PlanStore:
                 row.state = "archived" if archived else "active"
             if input is not None:
                 row.input_json = json.dumps(input)
+            if advance is not None:
+                row.advance = advance
             if reconciled is not None:
                 _stamp(row, reconciled)
             row.revision = int(row.revision) + 1

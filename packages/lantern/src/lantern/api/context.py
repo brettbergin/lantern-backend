@@ -25,7 +25,7 @@ from concurrent.futures import (
     TimeoutError as FutureTimeoutError,
     wait as wait_for_futures,
 )
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, TypeVar
 
 from lantern.agents.assignment import RUN_ROLES, agent_memory_block
 from lantern.agents.builtin import concierge_handle, concierge_name, product_persona
@@ -79,10 +79,12 @@ from lantern.daemon.controls.steering import stop_command
 from lantern.errors import ToolRejectedError
 from lantern.log import get_logger
 from lantern.plans import PlanService
-from lantern.plans.store import PlanStore
+from lantern_worker.protocol import HostToolSpec
 
 if TYPE_CHECKING:
+    from lantern.api.attention_events import AttentionTracker
     from lantern.api.auth.oidc import OidcProvider
+    from lantern.api.models import AttentionEntry
 
 T = TypeVar("T")
 
@@ -99,6 +101,12 @@ PAGE_MAX = 200
 #: How long a channel stop keeps the channel quiet before it lifts on its
 #: own; a person who wants it quiet for longer says so with `silence`.
 STOP_SILENCE_S = 3600.0
+#: The waits before a turn's start is tried again after the store refused
+#: it (a write lock held past the busy timeout); one more refusal after the
+#: last settles the turn failed rather than leave it accepted for nobody.
+TURN_START_BACKOFF_S = (0.5, 2.0)
+#: What the channel is told when a turn could not start.
+TURN_START_FAILED = "This message could not start (the daemon was busy). Send it again."
 #: The session prefix the history compaction job runs under. One session
 #: per channel, reset before every call: an SDK session is resumed message
 #: after message, so a shared one would carry a private channel's
@@ -142,14 +150,14 @@ _CONVERSATION_ANSWER = (
 )
 _RUNNER_INTENT = {
     "code": (
-        "\n\nThe person explicitly selected lantern's Code runner for this turn. "
+        "\n\nThe person explicitly selected Lantern's Code runner for this turn. "
         "Coordinate the request into one managed repository run through the existing issue "
         "intake tools. Do not simulate its planner, builder, reviewer, fix rounds, CI, or merge "
         "stages with chat handoffs. If the configured repository or observed symptom is genuinely "
         "ambiguous, ask only for the missing intake fact required by the existing code-run policy."
     ),
     "workload": (
-        "\n\nThe person explicitly selected lantern's Workload runner for this turn. "
+        "\n\nThe person explicitly selected Lantern's Workload runner for this turn. "
         "Call start_workload once with their request and let the existing plan, execute, judge, "
         "revision, and publish stages carry it to completion. Do not simulate those stages with "
         "chat handoffs."
@@ -165,6 +173,71 @@ _RUNNER_INTENT = {
         "no confirmation. Never queue work in place of an answer you could write."
     ),
 }
+#: What a turn in a channel with a run in flight is told
+#: (docs/spikes/work-channels.md): the channel stays a conversation about
+#: that run, direction for it goes through ``steer_run``, and nothing new
+#: starts there until it has ended.
+_LIVE_RUN_CONVERSATION = (
+    "\n\nRun `{run}` is live in this channel, and a channel works one run at a time. "
+    "This turn is a conversation about that run and cannot start new work. A question "
+    "about it (how it is going, what it has done, what it found, what is left) is "
+    "answered here, from run_detail and run_events for `{run}`, in plain words rather "
+    "than raw events. A message that tells the run what to do differently (change "
+    "course, use something else, focus on one part, leave something out) is direction "
+    "for it: hand it over once with steer_run, in the person's own words, and say in "
+    "one line that the run has it. A message that asks for new work cannot start a run "
+    "here until `{run}` has ended: say so in one line, and that `/stop` ends the run "
+    "if they would rather not wait, instead of doing the work in this reply."
+)
+#: The same, when more than one run is live (one at a time is the rule,
+#: so this is a daemon that holds runs bound before it): nothing to steer
+#: by name from here.
+_LIVE_RUNS_CONVERSATION = (
+    "\n\nRuns {runs} are live in this channel. This turn is a conversation about them "
+    "and cannot start new work: a question about them is answered here, from "
+    "run_detail and run_events; direction for one of them goes through its run card; "
+    "a message that asks for new work cannot start a run here until they have ended, "
+    "which you say in one line instead of doing the work in this reply."
+)
+_QUEUED_WORK_CONVERSATION = (
+    "\n\n`{item}` is queued in this channel and has not started, and a channel works "
+    "one run at a time. This turn is a conversation and cannot start new work; there "
+    "is no run to steer yet. A question about the queued work is answered here "
+    "(item_detail for `{item}`); a message that asks for new work cannot start it here "
+    "until that work has ended, which you say in one line instead of doing the work "
+    "in this reply."
+)
+_PICKED_RUNNER_WHILE_BUSY = (
+    "\n\nThe person selected Lantern's {runner} runner for this turn. That run cannot "
+    "start here now, for the reason above: say so rather than answering the ask "
+    "inline, unless the message is a question about the work in flight or direction "
+    "for it."
+)
+_RUNNER_NAMES = {"code": "Code", "workload": "Workload"}
+
+
+class _ChannelBusy(NamedTuple):
+    """What keeps a channel from taking new work: the runs in flight there
+    and the items queued there that have not started."""
+
+    runs: list[str]
+    queued: list[str]
+
+
+def _busy_channel_block(busy: _ChannelBusy, intent: str) -> str:
+    """What a turn in a channel with work in flight is told, for the
+    runner the person picked."""
+    if busy.runs:
+        if len(busy.runs) == 1:
+            block = _LIVE_RUN_CONVERSATION.format(run=busy.runs[0])
+        else:
+            block = _LIVE_RUNS_CONVERSATION.format(runs=_names(busy.runs))
+    else:
+        block = _QUEUED_WORK_CONVERSATION.format(item=busy.queued[0])
+    runner = _RUNNER_NAMES.get(intent)
+    if runner is not None:
+        block += _PICKED_RUNNER_WHILE_BUSY.format(runner=runner)
+    return block
 
 
 def _work_product_is_visible(artifact: str, reply: str) -> bool:
@@ -386,7 +459,7 @@ class ApiContext:
         self._oidc: tuple[Any, Any] | None = None
         self._guardrails: Guardrails | None = None
         self._push: PushService | None = None
-        self._plans: PlanService | None = None
+        self._attention: AttentionTracker | None = None
         #: The HTTP transport the push relay is reached through; ``None``
         #: is the network. A test mounts its fake relay here.
         self.relay_transport: Any = None
@@ -643,10 +716,10 @@ class ApiContext:
 
     @property
     def plans(self) -> PlanService:
-        """Plans and their nodes (#2340), over the daemon's store."""
-        if self._plans is None:
-            self._plans = PlanService(PlanStore(self.loop.dstore), lambda: self.config)
-        return self._plans
+        """Plans and their nodes (#2340): the daemon's one service, so a
+        publish the API holds and a reconcile the loop runs see each other."""
+        service: PlanService = self.loop.plans
+        return service
 
     @property
     def push(self) -> PushService:
@@ -658,8 +731,28 @@ class ApiContext:
                 clock=self.clock,
                 agent_name=self._agent_name,
                 transport=lambda: self.relay_transport,
+                gate_id=lambda run_id: self.public_ids.gate_id(run_id, self.clock()),
+                attention=self._attention_about,
             )
         return self._push
+
+    def _attention_about(self, run_id: str | None, item_id: str | None) -> AttentionEntry | None:
+        """The attention entry about a run or an item, for a notification
+        to name: the list's own read, with no caller in mind."""
+        from lantern.api.attention import about
+        from lantern.api.projections import Views
+
+        return about(Views(self), run_id=run_id, item_id=item_id)
+
+    @property
+    def attention(self) -> AttentionTracker:
+        """What announces an entry of ``/v1/attention`` appearing and
+        leaving (``attention.opened``, ``attention.resolved``)."""
+        if self._attention is None:
+            from lantern.api.attention_events import AttentionTracker
+
+            self._attention = AttentionTracker(self)
+        return self._attention
 
     def _agent_name(self, slug: str | None) -> str:
         """An agent as a notification names it: its display name, and the
@@ -827,7 +920,7 @@ class ApiContext:
                     return
             if self.stopping.is_set():
                 return
-            if not store.start_turn(turn.id, self.clock()):
+            if not self._start_turn(turn):
                 self.hub.notify()
                 return
             try:
@@ -848,6 +941,38 @@ class ApiContext:
             return changed
 
         self.turns.submit(turn, run, cancel=cancel)
+
+    def _start_turn(self, turn: Turn) -> bool:
+        """Move an accepted turn to running; whether it is now this
+        thread's to run. A store that refuses the write is tried again
+        after :data:`TURN_START_BACKOFF_S`; one that still refuses settles
+        the turn failed, with an error the channel shows, so the person
+        can send it again — it never stays accepted with nobody on it."""
+        store = self.collaboration
+        for wait in (*TURN_START_BACKOFF_S, None):
+            try:
+                return bool(store.start_turn(turn.id, self.clock()))
+            except Exception:
+                log.warning(
+                    "collaboration.turn_start_failed",
+                    turn_id=turn.id,
+                    channel_id=turn.channel_id,
+                    retrying=wait is not None,
+                    exc_info=True,
+                )
+            if wait is None or self.stopping.wait(wait):
+                break
+        if self.stopping.is_set():
+            # Left accepted on purpose: the next daemon's recovery runs it.
+            return False
+        try:
+            store.finish_turn(turn.id, error=TURN_START_FAILED, now=self.clock())
+        except Exception:
+            # Still accepted: a channel stop or the next recovery settles it.
+            log.exception(
+                "collaboration.turn_settle_failed", turn_id=turn.id, channel_id=turn.channel_id
+            )
+        return False
 
     def _execute_collaboration_turn(
         self,
@@ -957,6 +1082,12 @@ class ApiContext:
                 self.hub.notify()
                 index += 1
                 continue
+            # Work lives in the channel that asked for it, one run at a
+            # time (docs/spikes/work-channels.md): while one is queued or
+            # running here a plain turn is a conversation about it — the
+            # model says how it is going, hands direction to it through
+            # `steer_run`, and starts nothing new until it has ended.
+            busy = self._channel_busy(turn.channel_id) if direct and target is None else None
             # A turn a person started passes the same admission a turn one
             # agent starts for another does (the guardrails asked the pool
             # for that one before it was queued): once the day's token
@@ -1004,9 +1135,15 @@ class ApiContext:
             # whether it may start work with them is the intent's business,
             # not the mention's. A turn another agent started never starts
             # work, whatever intent it carries.
-            start_work = intent in START_WORK_INTENTS and source_agent is None
-            allow_actions = start_work or definition is not None
-            if intent in _RUNNER_INTENT:
+            start_work = intent in START_WORK_INTENTS and source_agent is None and busy is None
+            # A conversation about the channel's live run keeps the read
+            # tools, so "how is it going?" has an answer.
+            allow_actions = start_work or definition is not None or busy is not None
+            if busy is not None:
+                persona += _busy_channel_block(busy, intent)
+                if len(busy.runs) == 1 and not busy.queued:
+                    agent_tools += self._steer_tool(turn, busy.runs[0], principal)
+            elif intent in _RUNNER_INTENT:
                 persona += _RUNNER_INTENT[intent]
             elif start_work:
                 persona += _INLINE_ANSWER
@@ -1151,6 +1288,15 @@ class ApiContext:
                     channel_tools=channel_tools,
                     work_lead=work_lead,
                     work_roles=turn_roles,
+                    # Picking the Workload runner is binding: a turn the
+                    # model answers inline is still queued, in the
+                    # person's words.
+                    must_start_workload=(
+                        intent == "workload"
+                        and source_agent is None
+                        and target is None
+                        and busy is None
+                    ),
                 )
                 reply = future.result()
                 if reply.ok and (reply.text or reply.work_products):
@@ -1524,6 +1670,16 @@ class ApiContext:
         ``keep_turn`` is left running (see :meth:`stop_channel`).
         """
         turns = self.turns.cancel_channel(channel_id, keep=keep_turn)
+        # A turn still accepted that no lane holds — its start failed, or
+        # it was dropped — is the channel's too, and nothing else settles it.
+        for turn_id in self.collaboration.accepted_turn_ids(channel_id):
+            if turn_id == keep_turn or turn_id in turns:
+                continue
+            try:
+                if self.collaboration.request_turn_cancel(turn_id, self.clock()):
+                    turns.append(turn_id)
+            except Exception:
+                log.warning("collaboration.turn_cancel_failed", turn_id=turn_id, exc_info=True)
         scoped = _channel_stop_principal(principal)
         running, queued = self._channel_work(channel_id)
         # The store names the runs the channel's items are executing; the
@@ -1838,6 +1994,91 @@ class ApiContext:
         return (
             f"Taken as direction for run `{outcome.run_id}`, which I am working on now. "
             "I will answer it at my next step and say what I changed."
+        )
+
+    def _channel_busy(self, channel_id: str) -> _ChannelBusy | None:
+        """What keeps ``channel_id`` from taking new work right now
+        (docs/spikes/work-channels.md), or None when it is free: the runs
+        in flight there, found through their items and through the loop's
+        conversations alike, and the items queued there that have not
+        started."""
+        if self.loop is None:
+            return None
+        running, queued = self._channel_work(channel_id)
+        for run_id in self._live_runs(channel_id):
+            if run_id not in running:
+                running.append(run_id)
+        if not running and not queued:
+            return None
+        return _ChannelBusy(runs=running, queued=queued)
+
+    def _steer_tool(self, turn: Turn, run_id: str, principal: Principal) -> tuple[AgentTool, ...]:
+        """The tool a conversation about ``run_id``, the run live in its
+        channel, hands direction over with: the same control-service steer
+        a mention or ``POST /v1/runs/{id}/steering`` makes (one record, one
+        ``run.steer`` event), with the turn marked as having steered the
+        run, as a mention steer is. Whoever may post there may steer — a
+        bridge thread admits guests — so the principal is widened to
+        ``runs:steer`` for this one call, keeping the person's identity
+        for the record."""
+        if self.loop is None:
+            return ()
+        steering = dataclasses.replace(
+            principal, capabilities=principal.capabilities | frozenset({"runs:steer"})
+        )
+
+        def steer(args: Mapping[str, Any]) -> str:
+            text = str(args.get("instruction", "")).strip()
+            if not text:
+                raise ToolRejectedError("An instruction is required.")
+            try:
+                outcome = ControlService(self.loop).steer(steering, run_id, text)
+            except ControlError as exc:
+                log.info(
+                    "collaboration.channel_steer_refused",
+                    channel=turn.channel_id,
+                    run=run_id,
+                    reason=exc.message,
+                )
+                raise ToolRejectedError(
+                    f"Run `{run_id}` did not take the direction: {exc.message}"
+                ) from exc
+            try:
+                self.collaboration.record_steered_run(turn.id, outcome.run_id, self.clock())
+            except Exception:
+                log.warning("collaboration.steered_run_unrecorded", turn=turn.id, exc_info=True)
+            self.hub.notify()
+            return (
+                f"Run `{outcome.run_id}` has the direction; it is answered at the run's "
+                "next step, and the run says what it changed."
+            )
+
+        return (
+            AgentTool(
+                HostToolSpec(
+                    name="steer_run",
+                    description=(
+                        f"Hand direction to run `{run_id}`, the work live in this channel: "
+                        "an instruction the run applies at its next step, in the person's "
+                        "own words. For a message that tells the run what to do differently; "
+                        "a question about the run is answered here instead."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "instruction": {
+                                "type": "string",
+                                "description": "The direction, as the person gave it.",
+                                "minLength": 1,
+                                "maxLength": 4000,
+                            }
+                        },
+                        "additionalProperties": False,
+                        "required": ["instruction"],
+                    },
+                ),
+                steer,
+            ),
         )
 
     def service(self) -> ControlService:

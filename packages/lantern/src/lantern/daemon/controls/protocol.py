@@ -12,7 +12,13 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from lantern.config import ScheduleConfig
-from lantern.daemon.controls.results import CancelOutcome, ResumeOutcome
+from lantern.daemon.controls.delegation import Conditions, Grant
+from lantern.daemon.controls.results import (
+    CancelOutcome,
+    DeleteOutcome,
+    DismissOutcome,
+    ResumeOutcome,
+)
 from lantern.daemon.model import WorkItem
 
 
@@ -75,6 +81,29 @@ class ControlLoop(Protocol):
     def remove_schedule(self, name: str, by: str | None) -> str: ...
     def pause_schedule(self, name: str, by: str | None) -> str: ...
     def resume_schedule(self, name: str, by: str | None) -> str: ...
+    def add_grant(
+        self,
+        *,
+        grant_id: str,
+        agent_slug: str,
+        action: str,
+        conditions: Conditions,
+        daily_limit: int | None,
+        enabled: bool,
+        note: str | None,
+        created_by: str | None,
+        by: str | None,
+    ) -> tuple[Grant, str]: ...
+    def update_grant(
+        self,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        by: str | None,
+    ) -> tuple[Grant, str]: ...
+    def remove_grant(self, grant_id: str, *, by: str | None) -> tuple[Grant, str]: ...
+    def restore_default_grants(self, *, by: str | None) -> tuple[list[Grant], str]: ...
     def request_stop(self) -> None: ...
     def supervisor(self) -> str | None: ...
     def request_restart(
@@ -86,4 +115,33 @@ class ControlLoop(Protocol):
     def abandon_item(self, item_id: str, reason: str | None = None) -> WorkItem: ...
     def retry_item(self, item_id: str, by: str | None = None) -> WorkItem: ...
     def requeue_item(self, item_id: str) -> WorkItem: ...
+    def dismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+    ) -> DismissOutcome: ...
+    def delete_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+        discard_undelivered: bool = False,
+    ) -> DeleteOutcome: ...
+    def undismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        expected_revision: int | None = None,
+    ) -> DismissOutcome: ...
     def clock(self) -> float: ...

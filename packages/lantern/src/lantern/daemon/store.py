@@ -62,7 +62,7 @@ import lantern.db.collaboration_models  # noqa: F401 - registers collaboration t
 from lantern.config import ScheduleConfig
 from lantern.daemon.model import ItemState, PendingReport, WorkItem, requested_roles_json
 from lantern.daemon.schedule import ScheduleRow
-from lantern.db import begin_immediate, ensure_schema, open_engine
+from lantern.db import begin_immediate, ensure_schema, open_engine, write_engine
 from lantern.db.daemon_models import (
     ChatThreadRow,
     DaemonRunRow,
@@ -80,6 +80,7 @@ from lantern.db.daemon_models import (
     RunWatchRow,
     ScheduleRowModel,
     WorkItemRow,
+    WorkMarkRow,
     WorkspaceUsageRow,
 )
 from lantern.engine.model import RunKind
@@ -528,6 +529,39 @@ class HoldRecord(NamedTuple):
     reason: str
     created_at: float
     operation_id: str | None
+
+
+class WorkMark(NamedTuple):
+    """A mark a person left on work (revision 0049): ``dismissed`` — the
+    alert is acknowledged — or ``deleted`` — the work is hidden from every
+    listing. ``subject_kind`` is ``item`` or ``run`` and ``subject_key`` the
+    id as stored; ``actor`` is the principal's audit fields."""
+
+    subject_kind: str
+    subject_key: str
+    mark: str
+    cause: str
+    at: float
+    actor: dict[str, Any]
+    reason: str | None
+    operation_id: str | None
+
+
+def _row_to_mark(row: WorkMarkRow) -> WorkMark:
+    try:
+        actor = json.loads(row.actor_json or "{}")
+    except ValueError:
+        actor = {}
+    return WorkMark(
+        subject_kind=str(row.subject_kind),
+        subject_key=str(row.subject_key),
+        mark=str(row.mark),
+        cause=str(row.cause),
+        at=float(row.at),
+        actor=actor if isinstance(actor, dict) else {},
+        reason=None if row.reason is None else str(row.reason),
+        operation_id=None if row.operation_id is None else str(row.operation_id),
+    )
 
 
 def _row_to_pause_hold(row: HoldRow) -> HoldRecord:
@@ -1436,6 +1470,9 @@ class DaemonStore:
                     f"{path} does not exist; start `lantern daemon` once to create it"
                 )
             self._engine = open_engine(path, readonly=True)
+            # A read-only handle cannot take the write lock, and a block of
+            # the console's that only reads must not ask for it.
+            self._writer = self._engine
             tables = set(inspect(self._engine).get_table_names())
             if "daemon_local_messages" not in tables or "daemon_state" not in tables:
                 self._engine.dispose()
@@ -1455,6 +1492,7 @@ class DaemonStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         _refuse_pre_1_0(path)
         self._engine = open_engine(path)
+        self._writer = write_engine(self._engine)
         ensure_schema(self._engine)
         # Not part of the schema, and so not behind its version: a stamped
         # database still has to carry a prompt an older daemon wrote back
@@ -1481,8 +1519,16 @@ class DaemonStore:
         Every statement in the block is one transaction, so the pairs that
         have to move together — an item's state and its ledger row — either
         both land or neither does.
+
+        The transaction opens with ``BEGIN IMMEDIATE``, at its first
+        statement. The engine's store, the console and a CLI command write
+        this file through connections of their own, and a block that read
+        before it wrote under a deferred ``BEGIN`` failed with ``database
+        is locked`` whenever one of them committed in between (see
+        :mod:`lantern.db.session`). Field failure: a sign-in answered 500
+        while runs were recording events.
         """
-        with self._lock, Session(self._engine) as session:
+        with self._lock, Session(self._writer) as session:
             yield session
             session.commit()
 
@@ -1502,12 +1548,14 @@ class DaemonStore:
 
     @contextmanager
     def immediate_transaction(self) -> Iterator[Session]:
-        """One transaction that reserves SQLite's write lock before reading.
+        """One transaction that reserves SQLite's write lock on entry.
 
         This is for a read-then-write decision against tables another store
         can change through its own connection. A deferred WAL transaction
         cannot upgrade a stale read snapshot after that other writer commits;
         taking the write lock first makes the decision and its write atomic.
+        :meth:`transaction` takes the same lock, at its first statement
+        rather than on entry.
         """
         with self._lock, begin_immediate(self._engine) as conn, Session(bind=conn) as session:
             yield session
@@ -1658,6 +1706,11 @@ class DaemonStore:
         back instead and must raise an operator notice naming each id and
         issue URL, because their issue is left carrying
         ``lantern:in-progress`` for a human to clear.
+
+        Chat, schedule and API items are left alone like the two passes
+        before this one (#4508): failing one fails live work on every start
+        of a multi-repo daemon, and a run parked on the provider is then
+        closed as an orphan by the restart its recovery asks for.
         """
         with self._write() as session:
             rows = list(
@@ -1665,6 +1718,7 @@ class DaemonStore:
                     select(WorkItemRow).where(
                         WorkItemRow.repo == "",
                         WorkItemRow.state.not_in(sorted(TERMINAL_ITEM_STATES)),
+                        _not_local(),
                     )
                 )
             )
@@ -1712,7 +1766,7 @@ class DaemonStore:
         * finished and the content is unchanged — **re-queued in place**:
           state back to ``queued``, unclaimed, no pinned run, no stale
           error, attempts reset. Re-adding the label used to be silently
-          inert here, which left an operator ``!sbx retry`` as the only way
+          inert here, which left an operator ``!lantern retry`` as the only way
           back in (issue #596). What the finished attempt pushed to origin
           is not lost: its run id, branch and PR are carried onto the
           re-queued row (``prior_*``, read back with :meth:`prior_attempt`)
@@ -2409,7 +2463,7 @@ class DaemonStore:
 
     def items(self, states: Sequence[ItemState] | None = None) -> list[WorkItem]:
         """Every known item (optionally filtered by state), oldest first —
-        the operator's view for ``lantern daemon items`` / ``!sbx items``."""
+        the operator's view for ``lantern daemon items`` / ``!lantern items``."""
         stmt = select(WorkItemRow).order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
         if states:
             stmt = stmt.where(WorkItemRow.state.in_(list(states)))
@@ -2432,6 +2486,19 @@ class DaemonStore:
         with self._read() as session:
             return [_row_to_item(row) for row in session.scalars(stmt)]
 
+    def plan_breakdowns(self, plan_node_id: str) -> list[WorkItem]:
+        """Every ``plan`` item ever admitted to propose ``plan_node_id``'s
+        next level, whatever its state, oldest first: what tells the plan
+        driver a breakdown already ran (and how it ended), so a failed one
+        goes to a person instead of being queued again."""
+        stmt = (
+            select(WorkItemRow)
+            .where(WorkItemRow.plan_node_id == plan_node_id)
+            .order_by(WorkItemRow.created_at.asc(), text("rowid ASC"))
+        )
+        with self._read() as session:
+            return [_row_to_item(row) for row in session.scalars(stmt)]
+
     def page_items(
         self,
         *,
@@ -2440,13 +2507,26 @@ class DaemonStore:
         repo: str | None = None,
         after: tuple[float, str] | None = None,
         limit: int = 50,
+        include_deleted: bool = True,
     ) -> list[WorkItem]:
         """A page of items, newest first, keyed on ``(created_at, item_id)``
         so a reader paging while discovery inserts sees no gap and no
-        repeat (#1036). ``after`` is the key of the last item read."""
+        repeat (#1036). ``after`` is the key of the last item read.
+        ``include_deleted=False`` leaves out items a person deleted — in
+        the query, so a page is still full."""
         stmt = select(WorkItemRow).order_by(
             WorkItemRow.created_at.desc(), WorkItemRow.item_id.desc()
         )
+        if not include_deleted:
+            stmt = stmt.where(
+                ~select(WorkMarkRow.subject_key)
+                .where(
+                    WorkMarkRow.subject_kind == "item",
+                    WorkMarkRow.subject_key == WorkItemRow.item_id,
+                    WorkMarkRow.mark == "deleted",
+                )
+                .exists()
+            )
         if states:
             stmt = stmt.where(WorkItemRow.state.in_(list(states)))
         if kinds:
@@ -2463,6 +2543,32 @@ class DaemonStore:
             )
         with self._read() as session:
             return [_row_to_item(row) for row in session.scalars(stmt.limit(limit))]
+
+    def attention_items(
+        self, states: Sequence[str], *, include_dismissed: bool = False
+    ) -> list[WorkItem]:
+        """Every item in ``states`` a person has not put away, oldest change
+        first: never one they deleted, and — unless ``include_dismissed`` —
+        not one whose alert they dismissed. The marks are judged in the
+        query, so the list of what is waiting on someone costs one
+        statement however many alerts were already acknowledged."""
+        hidden = ("deleted",) if include_dismissed else ("deleted", "dismissed")
+        stmt = (
+            select(WorkItemRow)
+            .where(
+                WorkItemRow.state.in_(list(states)),
+                ~select(WorkMarkRow.subject_key)
+                .where(
+                    WorkMarkRow.subject_kind == "item",
+                    WorkMarkRow.subject_key == WorkItemRow.item_id,
+                    WorkMarkRow.mark.in_(hidden),
+                )
+                .exists(),
+            )
+            .order_by(WorkItemRow.updated_at.asc(), WorkItemRow.item_id.asc())
+        )
+        with self._read() as session:
+            return [_row_to_item(row) for row in session.scalars(stmt)]
 
     # -- operator controls (#229) ------------------------------------------------
 
@@ -2590,6 +2696,166 @@ class DaemonStore:
                 wanted=_loggable(fields),
             )
             raise ValueError(refuse(current))
+
+    # -- marks on work (revision 0049) --------------------------------------------
+
+    def work_marks(
+        self, *, item_ids: Sequence[str] = (), run_ids: Sequence[str] = ()
+    ) -> dict[tuple[str, str, str], WorkMark]:
+        """The marks standing on these items and runs, keyed
+        ``(subject_kind, subject_key, mark)``, in one query. Ids are matched
+        exactly, as stored: a mark is written under the id its row carries,
+        which is the id a reader that selected the row already holds."""
+        wanted = [
+            and_(WorkMarkRow.subject_kind == kind, WorkMarkRow.subject_key.in_(keys))
+            for kind, keys in (("item", sorted(set(item_ids))), ("run", sorted(set(run_ids))))
+            if keys
+        ]
+        if not wanted:
+            return {}
+        with self._read() as session:
+            rows = session.scalars(select(WorkMarkRow).where(or_(*wanted))).all()
+            return {
+                (str(row.subject_kind), str(row.subject_key), str(row.mark)): _row_to_mark(row)
+                for row in rows
+            }
+
+    def work_mark(self, subject_kind: str, subject_key: str, mark: str) -> WorkMark | None:
+        with self._read() as session:
+            row = session.get(WorkMarkRow, (subject_kind, subject_key, mark))
+            return _row_to_mark(row) if row is not None else None
+
+    def set_work_mark(
+        self,
+        subject_kind: str,
+        subject_key: str,
+        mark: str,
+        *,
+        cause: str,
+        at: float,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Leave ``mark`` on the work; False when it already stood (the
+        standing mark is kept as it is — who dismissed first stays who
+        dismissed). ``subject_key`` is the id as stored: the triggers that
+        drop a mark match the row's own key."""
+        stmt = (
+            sqlite_insert(WorkMarkRow)
+            .values(
+                subject_kind=subject_kind,
+                subject_key=subject_key,
+                mark=mark,
+                cause=cause,
+                at=at,
+                actor_json=json.dumps(dict(actor or {}), sort_keys=True),
+                reason=reason[:2000] if reason else None,
+                operation_id=operation_id,
+            )
+            .on_conflict_do_nothing()
+        )
+        with self._write() as session:
+            fresh = _rowcount(session.execute(stmt)) == 1
+        log.debug("store.work_mark_set", kind=subject_kind, key=subject_key, mark=mark, fresh=fresh)
+        return fresh
+
+    def dismiss_abandoned(
+        self,
+        item_id: str,
+        at: float,
+        *,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """A person's abandon is its own acknowledgement. The item rests in
+        ``failed`` — the state an unattended failure rests in too — so
+        without this the work someone just gave up on would go on asking
+        for attention. Called after the abandon, by the surfaces a person
+        abandons through; never by the daemon's own abandons (a pull
+        request closed unmerged), which nobody has looked at yet.
+        ``item_id`` as stored."""
+        return self.set_work_mark(
+            "item",
+            item_id,
+            "dismissed",
+            cause="abandoned",
+            at=at,
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+
+    def mark_deleted(
+        self,
+        item_id: str | None,
+        run_ids: Sequence[str],
+        at: float,
+        *,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        operation_id: str | None = None,
+    ) -> bool:
+        """Hide a piece of work from every listing: the item (when it has
+        one, by its id as stored) and each of its runs, in one transaction
+        so a reader never sees the item gone and its runs still listed.
+        False when the work was already hidden. The item's mark goes if the
+        item is ever admitted again; the runs' stay — a hidden attempt
+        stays hidden."""
+        subjects = [("run", run_id) for run_id in dict.fromkeys(run_ids)]
+        if item_id is not None:
+            subjects.insert(0, ("item", item_id))
+        if not subjects:
+            return False
+        values = [
+            {
+                "subject_kind": kind,
+                "subject_key": key,
+                "mark": "deleted",
+                "cause": "deleted",
+                "at": at,
+                "actor_json": json.dumps(dict(actor or {}), sort_keys=True),
+                "reason": reason[:2000] if reason else None,
+                "operation_id": operation_id,
+            }
+            for kind, key in subjects
+        ]
+        with self._write() as session:
+            result = session.execute(
+                sqlite_insert(WorkMarkRow).values(values).on_conflict_do_nothing()
+            )
+            fresh = _rowcount(result) > 0
+        log.debug("store.work_deleted", item=item_id, runs=len(run_ids), fresh=fresh)
+        return fresh
+
+    def deleted_run_ids(self) -> set[str]:
+        """Every run a person deleted: what a run listing leaves out."""
+        with self._read() as session:
+            return {
+                str(key)
+                for key in session.scalars(
+                    select(WorkMarkRow.subject_key).where(
+                        WorkMarkRow.subject_kind == "run", WorkMarkRow.mark == "deleted"
+                    )
+                )
+            }
+
+    def clear_work_mark(self, subject_kind: str, subject_key: str, mark: str) -> bool:
+        """Take ``mark`` off the work; False when none stood."""
+        with self._write() as session:
+            result = session.execute(
+                delete(WorkMarkRow).where(
+                    WorkMarkRow.subject_kind == subject_kind,
+                    WorkMarkRow.subject_key == subject_key,
+                    WorkMarkRow.mark == mark,
+                )
+            )
+            cleared = _rowcount(result) == 1
+        log.debug(
+            "store.work_mark_cleared", kind=subject_kind, key=subject_key, mark=mark, was=cleared
+        )
+        return cleared
 
     def pending_reports(self) -> list[WorkItem]:
         """Items whose decision the source has not been told about yet
@@ -3578,6 +3844,21 @@ class DaemonStore:
             ).first()
             return None if item_id is None else normalize_item_id(str(item_id))
 
+    def items_for_runs(self, run_ids: Sequence[str]) -> dict[str, str]:
+        """``run_id -> item_id`` for each of ``run_ids`` the ledger holds, in
+        one query: for a projection naming the work behind a list of runs.
+        A run the daemon never dispatched is absent."""
+        wanted = list(dict.fromkeys(run_ids))
+        if not wanted:
+            return {}
+        with self._read() as session:
+            rows = session.execute(
+                select(DaemonRunRow.run_id, DaemonRunRow.item_id).where(
+                    DaemonRunRow.run_id.in_(wanted)
+                )
+            )
+            return {str(run_id): normalize_item_id(str(item_id)) for run_id, item_id in rows}
+
     # -- merge gates ([landing] merge_gate) --------------------------------------
 
     def create_merge_gate(
@@ -4497,6 +4778,12 @@ def _int_or_none(value: str | None) -> int | None:
     return None if value is None else int(value)
 
 
+def _row_only_actor(by: str) -> dict[str, object]:
+    """Who a row-only verb names: the operator at the command line or the
+    console, with no daemon up to authenticate anyone."""
+    return {"kind": "operator", "id": by, "display": by, "via": "cli"}
+
+
 def apply_item_verb(
     dstore: DaemonStore, verb: str, item_id: str, *, now: float, by: str
 ) -> WorkItem:
@@ -4506,7 +4793,9 @@ def apply_item_verb(
     with the store's reason for a refused transition."""
     item_id = normalize_item_id(item_id)
     if verb == "abandon":
-        return dstore.abandon(item_id, f"abandoned by {by}", now)
+        abandoned = dstore.abandon(item_id, f"abandoned by {by}", now)
+        dstore.dismiss_abandoned(abandoned.item_id, now, actor=_row_only_actor(by))
+        return abandoned
     if verb == "retry":
         return dstore.retry(item_id, now, f"re-queued by {by}")
     if verb == "requeue":

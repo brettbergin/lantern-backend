@@ -2,8 +2,13 @@
 
 ``POST /v1/auth/token`` takes client credentials or a refresh token and
 answers with a short-lived access token and a rotated refresh token.
-Failures are rate-limited per client id and per source address, apart
-from every other limit. ``POST /v1/auth/revoke`` ends the access token it
+Client-credential failures are rate-limited per client id and per source
+address, apart from every other limit. A refresh token is not: it is a
+256-bit bearer secret nobody guesses, single-use with reuse detection, and
+the address a proxy hands every client must never stand between a signed-in
+person and their next access token. A sign-in code redeemed with the
+identity provider is limited on its own address bucket, so failed password
+sign-ins never block single sign-on. ``POST /v1/auth/revoke`` ends the access token it
 was made with, and a refresh token family when one is named.
 
 ``GET /v1/auth/providers`` tells a signed-out client which sign-ins it may
@@ -19,7 +24,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from lantern.api.auth.deps import Authenticated, current, get_ctx
 from lantern.api.auth.oidc import OidcError, OidcProvider, role_for_groups
-from lantern.api.auth.store import AuthError, Client, OidcSession
+from lantern.api.auth.store import AuthError, Client, OidcSession, new_family_id
 from lantern.api.auth.tokens import mint_access, scope_from
 from lantern.api.collaboration import CollaborationError
 from lantern.api.context import ApiContext
@@ -77,6 +82,7 @@ def grant_tokens(
         access_ttl = min(access_ttl, remaining)
         refresh_ttl = min(refresh_ttl, remaining)
         family_id = session.id
+    family_id = family_id or new_family_id()
     access, claims = mint_access(
         ctx.keys,
         client_id=client.id,
@@ -84,6 +90,7 @@ def grant_tokens(
         ttl_s=access_ttl,
         now=now,
         session_id=None if session is None else session.id,
+        family_id=family_id,
     )
     refresh = ctx.auth.issue_refresh(client.id, family_id=family_id, now=now, ttl_s=refresh_ttl)
     return TokenResponse(
@@ -117,14 +124,12 @@ def _client_credentials(ctx: ApiContext, body: TokenRequest, address: str) -> To
     return grant_tokens(ctx, client, family_id=None)
 
 
-def _refresh(ctx: ApiContext, body: TokenRequest, address: str) -> TokenResponse:
+def _refresh(ctx: ApiContext, body: TokenRequest) -> TokenResponse:
     if not body.refresh_token:
         raise Problem(422, "invalid_request", "refresh_token is required")
-    keys = [f"addr:{address}"]
-    _limited(ctx, keys)
     api = ctx.api
     try:
-        client, fresh = ctx.auth.rotate_refresh(
+        client, fresh, family_id = ctx.auth.rotate_refresh(
             body.refresh_token,
             now=ctx.clock(),
             ttl_s=api.refresh_token_ttl_s,
@@ -137,7 +142,6 @@ def _refresh(ctx: ApiContext, body: TokenRequest, address: str) -> TokenResponse
             oidc_issuer=api.oidc.issuer if api.oidc.enabled else "",
         )
     except AuthError as exc:
-        _failed(ctx, keys)
         log.warning("api.refresh_failed", reason=exc.code)
         raise Problem(401, exc.code, exc.message) from exc
     now = ctx.clock()
@@ -152,6 +156,7 @@ def _refresh(ctx: ApiContext, body: TokenRequest, address: str) -> TokenResponse
         ttl_s=access_ttl,
         now=now,
         session_id=None if session is None else session.id,
+        family_id=family_id,
     )
     return TokenResponse(
         access_token=access,
@@ -175,7 +180,7 @@ async def token(
     address = _address(request)
     if body.grant_type == "client_credentials":
         return await ctx.call(_client_credentials, ctx, body, address)
-    return await ctx.call(_refresh, ctx, body, address)
+    return await ctx.call(_refresh, ctx, body)
 
 
 def _providers(ctx: ApiContext) -> AuthProviders:
@@ -285,7 +290,10 @@ async def oidc_token(
     PKCE, run by the browser) for a token pair. The daemon authenticates to
     the provider as the confidential client, validates the ID token, and
     creates the account on a first sign-in. Needs no token."""
-    keys = [f"addr:{_address(request)}"]
+    # Its own bucket: failed password sign-ins from the same address —
+    # every client, behind a proxy nobody told the listener about — never
+    # lock out single sign-on.
+    keys = [f"oidc-addr:{_address(request)}"]
     _limited(ctx, keys)
     provider = ctx.oidc
     if (

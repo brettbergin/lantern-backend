@@ -1683,6 +1683,41 @@ class TestSinks:
         assert resumed.state == "completed", resumed.reason
         assert len(fake.issues_created) == 1
 
+    @pytest.mark.parametrize("mounted", [True, False])
+    def test_a_declared_file_gone_by_publishing_is_skipped_not_fatal(
+        self, harness: Harness, monkeypatch: pytest.MonkeyPatch, mounted: bool
+    ) -> None:
+        """A task's file list is taken when the task ends; a later task
+        cleaned up the scratch it left (#4522). By publishing the scratch
+        is gone: the delivery carries what is there, names what is not,
+        and the run completes — mounted (a host copy) or not (a tar)."""
+        if not mounted:
+            monkeypatch.setenv("SBX_FAKE_NO_MOUNT", "1")
+        harness.script(
+            [
+                plan(task("t1"), task("t2", deps=["t1"], verify=["rm -rf .src"])),
+                {
+                    "text": "## Result\nwrote the report",
+                    "files": {".src/doc.html": "<p/>\n", "report.md": "# r\n"},
+                },
+                PASS,
+                {"text": "## Result\ncleaned up"},
+                PASS,
+            ]
+        )
+        engine = harness.engine()
+        result = engine.start("report", kind="workload")
+        assert result.state == "completed", result.reason
+        (t1, _) = engine.store.get_tasks(result.run_id)
+        assert t1.output is not None and ".src/doc.html" in t1.output.files
+        (posted,) = self.published(harness)
+        target = harness.home.runs / result.run_id / "artifacts"
+        assert posted["paths"] == [str(target / "report.md")]
+        assert posted["files"] == 1
+        assert posted["missing"] == [".src/doc.html"]
+        assert (target / "report.md").read_text() == "# r\n"
+        assert not (target / ".src").exists()
+
     def test_an_unsafe_declared_path_fails_the_artifact_sink(
         self, harness: Harness, profiled: dict[str, Any]
     ) -> None:

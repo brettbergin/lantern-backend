@@ -175,7 +175,7 @@ class MailboxClient:
     def post(
         self, channel_id: str, text: str, *, now: float, reply_to_id: int | None = None
     ) -> int:
-        """What the operator typed, verbatim (``@sbx`` and ``!sbx`` included)."""
+        """What the operator typed, verbatim (``@sbx`` and ``!lantern`` included)."""
         return self._insert(channel_id, "message", text, reply_to_id=reply_to_id, now=now)
 
     def click_choice(self, question_id: int, value: str, *, now: float) -> int:

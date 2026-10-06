@@ -28,16 +28,17 @@ from lantern.engine.planning import (
     PlanProposal,
     PlanQuestion,
     PlanReplan,
+    PlanVerdict,
     ProfileRef,
     proposal_problems,
     replan_problems,
 )
-from lantern.errors import ConfigError, PlanDeliveryError
+from lantern.errors import ConfigError, PlanDeliveryError, WorkerError
 from lantern.events import HostEventTypes
 from lantern.sbx.naming import run_name
 from tests.conftest import FakeSbx
 from tests.fakes.fake_github import FakeGithub
-from tests.fakes.gitrepo import make_repo
+from tests.fakes.gitrepo import commit_files, make_repo, open_repo
 from tests.unit.test_engine import Harness
 
 PLAN_STATES = ["provisioning", "proposing", "completed"]
@@ -79,6 +80,8 @@ def workload_task(id: str, profile: str = "research") -> dict[str, Any]:
     return {
         "id": id,
         "title": f"Survey {id}",
+        "goal": f"what {id} finds out",
+        "context": "docs/formats.md lists the formats people asked for",
         "acceptance_criteria": ["a summary lists three formats"],
         "kind": "workload",
         "workload_profile": profile,
@@ -121,6 +124,8 @@ class RecordingDesk:
     #: Each brief asked for, and whether it was the fresh one the planner
     #: is about to be given.
     briefs: list[bool] = field(default_factory=list)
+    #: The verdict delivered with each proposal (None: not reviewed).
+    reviews: list[PlanVerdict | None] = field(default_factory=list)
 
     def brief(self, *, fresh: bool = False) -> PlanBrief:
         self.briefs.append(fresh)
@@ -142,10 +147,13 @@ class RecordingDesk:
             update={"answers": answers, "status": "skipped" if skip else "answered"}
         )
 
-    def deliver(self, run_id: str, proposal: PlanProposal) -> PlanDelivery:
+    def deliver(
+        self, run_id: str, proposal: PlanProposal, *, review: PlanVerdict | None = None
+    ) -> PlanDelivery:
         if self.refuse is not None:
             raise PlanDeliveryError(self.refuse)
         self.delivered.append((run_id, proposal))
+        self.reviews.append(review)
         return PlanDelivery(len(proposal.children), f"plan plan_1/{self.plan_brief.node_id}")
 
     def deliver_replan(self, run_id: str, replan: PlanReplan) -> PlanDelivery:
@@ -266,7 +274,7 @@ class TestPlanRun:
         second = [j for j in harness.agent_jobs(result.run_id) if j["kind"] == "agent.session"]
         retried = max(second, key=lambda j: len(j["prompt"]))["prompt"]
         assert "Previous attempt was invalid" in retried
-        assert "a task needs at least one acceptance criterion" in retried
+        assert "every child needs at least one acceptance criterion" in retried
         assert "depends on 'c9', which is not a sibling" in retried
         assert len(desk.delivered) == 1
 
@@ -421,7 +429,7 @@ class TestClarify:
         assert len(upstream) == 1
 
     def test_questions_park_the_run_and_the_answers_reach_the_proposal(
-        self, harness: Harness, upstream: list[tuple[str, str]]
+        self, harness: Harness, upstream: list[tuple[str, str]], tmp_path: Path
     ) -> None:
         desk = RecordingDesk(plan_brief=epic_brief(max_questions=3))
         harness.script(
@@ -453,8 +461,11 @@ class TestClarify:
         record = harness.engine().store.get_run(parked.run_id)
         assert record.state == "awaiting_answers" and record.stage == "clarifying"
 
-        # A person answers: a choice, and their own words.
+        # A person answers: a choice, and their own words. The repository
+        # moved on meanwhile.
         desk.answer(fmt=PlanAnswer(value="pdf"), who=PlanAnswer(text="the finance team"))
+        with open_repo(tmp_path / "upstream") as origin:
+            commit_files(origin, {"README.md": "# app, with exports\n"}, "exports")
         harness.script([answer(code_task("c1"))])
         harness.events.clear()
         resumed = engine(harness, desk, keep_sandboxes=True).resume(parked.run_id)
@@ -470,7 +481,7 @@ class TestClarify:
         assert "- **Which formats?**\n  Answer: PDF (`pdf`)" in prompt
         assert "- **Who downloads them?**\n  Answer: in their words: the finance team" in prompt
         assert len(desk.delivered) == 1 and len(desk.asked) == 1
-        assert upstream and len(upstream) == 1, "the parked run's checkout is reused"
+        assert len(upstream) == 2, "a resume re-cuts the checkout: the planner reads today's tree"
 
     def test_a_skip_proposes_with_no_answers(
         self, harness: Harness, upstream: list[tuple[str, str]]
@@ -611,7 +622,19 @@ class TestThePrompt:
             kept=["Mobile app"],
             repositories=["o/mobile"],
         )
-        harness.script([answer({"id": "e1", "title": "Reports API"})])
+        harness.script(
+            [
+                answer(
+                    {
+                        "id": "e1",
+                        "title": "Reports API",
+                        "goal": "reports download",
+                        "context": "src/reports.py",
+                        "acceptance_criteria": ["a report downloads"],
+                    }
+                )
+            ]
+        )
         built = engine(harness, RecordingDesk(plan_brief=brief), keep_sandboxes=True)
         result = built.start("plan", repo=REPO, kind="plan")
         assert result.state == "completed", result.reason
@@ -641,11 +664,213 @@ class TestTheModel:
         assert job["model"] == "planner-model"
 
 
+def verdict(decision: str, *reasons: str) -> dict[str, Any]:
+    return {"json": {"verdict": decision, "reasons": list(reasons)}}
+
+
+def reviewed_brief(**over: Any) -> PlanBrief:
+    """A breakdown of a plan that advances itself, as the service briefs it."""
+    return epic_brief(review=True, **over)
+
+
+def _sessions(harness: Harness, run_id: str) -> list[dict[str, Any]]:
+    """The run's agent sessions, the planner's before the reviewer's."""
+    jobs = [j for j in harness.agent_jobs(run_id) if j["kind"] == "agent.session"]
+    return sorted(jobs, key=lambda j: j["prompt"].startswith("# Review"))
+
+
+class TestPlanReview:
+    """The critic's turn between the proposal and its delivery, for a plan
+    that advances itself: its verdict is delivered with the proposal, it
+    fails closed, and it is never taken twice."""
+
+    @pytest.mark.parametrize(
+        ("decision", "reasons"),
+        [("approve", ()), ("escalate", ("The second task repeats the first.",))],
+    )
+    def test_the_verdict_is_delivered_with_the_proposal(
+        self,
+        harness: Harness,
+        upstream: list[tuple[str, str]],
+        decision: str,
+        reasons: tuple[str, ...],
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        harness.script(
+            [answer(code_task("c1"), code_task("c2", deps=["c1"])), verdict(decision, *reasons)]
+        )
+        built = engine(harness, desk, keep_sandboxes=True)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 2
+        assert len(desk.delivered) == 1
+        assert desk.reviews == [PlanVerdict(verdict=decision, reasons=list(reasons))]  # type: ignore[arg-type]
+        # One row per turn, each charged, and the verdict on the task.
+        rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
+        assert rows == [("propose", "ok"), ("plan_review", "ok")]
+        (task,) = result.tasks
+        assert task.output is not None
+        assert task.output.data["review"] == {"verdict": decision, "reasons": list(reasons)}
+        assert "proposal" in task.output.data
+        # phase.end for the review; nothing of a code run's review.
+        ends = [e for e in harness.events if e.type == HostEventTypes.PHASE_END]
+        assert [e.data["phase"] for e in ends] == ["propose", "plan_review"]
+        assert not [e for e in harness.events if e.type.startswith("review.")]
+        # The reviewer read the level as it will be published, read-only.
+        propose, review = _sessions(harness, result.run_id)
+        assert propose["prompt"].startswith("# Propose the tasks of one epic")
+        assert review["permission_mode"] == "read_only"
+        prompt = review["prompt"]
+        assert prompt.startswith("# Review the proposed tasks of one epic")
+        assert "People can download their reports as CSV" in prompt, "the node's goal"
+        assert "### 1. Task c1" in prompt and "### 2. Task c2" in prompt
+        assert "#### Acceptance criteria\n\n- [ ] c1 works" in prompt, "the publish render"
+        assert "#### Depends on\n\n- `1`" in prompt
+
+    def test_an_unusable_verdict_twice_escalates_and_still_delivers(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        bad = verdict("maybe")
+        harness.script([answer(code_task("c1")), bad, verdict("escalate")])
+        built = engine(harness, desk)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 3, "one retry, as every structured answer gets"
+        (review,) = desk.reviews
+        assert review == PlanVerdict(
+            verdict="escalate", reasons=["the reviewer did not return a usable verdict"]
+        )
+        rows = [(r.phase, r.status) for r in built.store.phase_attempts(result.run_id)]
+        assert rows == [("propose", "ok"), ("plan_review", "failed")]
+        (end,) = [
+            e
+            for e in harness.events
+            if e.type == HostEventTypes.PHASE_END and e.data["phase"] == "plan_review"
+        ]
+        assert end.data["status"] == "failed"
+        assert end.data["message"].startswith("the reviewer did not return a usable verdict")
+
+    def test_a_resume_after_the_review_delivers_without_another_turn(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief(), refuse="the plan is busy")
+        harness.script([answer(code_task("c1")), verdict("approve")])
+        first = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert first.state == "failed"
+        desk.refuse = None
+        harness.script([])
+        harness.events.clear()
+        resumed = engine(harness, desk).resume(first.run_id)
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 0, "neither the proposal nor the review is asked again"
+        assert desk.reviews == [PlanVerdict(verdict="approve")]
+        assert not [e for e in harness.events if e.type == HostEventTypes.PHASE_END]
+
+    def test_a_resume_between_the_proposal_and_the_review_asks_only_the_reviewer(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk(plan_brief=reviewed_brief())
+        # The reviewer's job dies (the script runs out): the proposal is kept.
+        harness.script([answer(code_task("c1"))])
+        built = engine(harness, desk)
+        with pytest.raises(WorkerError, match="echo script exhausted"):
+            built.start("plan", repo=REPO, kind="plan")
+        run_id = built.store.list_runs()[0].run_id
+        assert desk.delivered == [], "a proposal never lands without its review"
+        harness.script([verdict("escalate", "Too coarse to deliver in one run.")])
+        resumed = engine(harness, desk, keep_sandboxes=True).resume(run_id)
+        assert resumed.state == "completed", resumed.reason
+        assert harness.consumed() == 1
+        (session,) = _sessions(harness, run_id)
+        assert session["prompt"].startswith("# Review the proposed")
+        assert desk.reviews == [
+            PlanVerdict(verdict="escalate", reasons=["Too coarse to deliver in one run."])
+        ]
+
+    def test_the_reviewer_is_the_critic_on_the_review_model(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        harness.script([answer(code_task("c1")), verdict("approve")])
+        built = engine(
+            harness,
+            RecordingDesk(plan_brief=reviewed_brief()),
+            keep_sandboxes=True,
+            agent={"models": {"plan": "planner-model", "review": "review-model"}},
+        )
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        propose, review = _sessions(harness, result.run_id)
+        assert propose["model"] == "planner-model"
+        assert review["model"] == "review-model"
+        # The critic's briefing: a read-only session that judges.
+        assert "You are a critic" in (review["system_message"] or "")
+
+    def test_a_brief_without_review_never_reviews(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        desk = RecordingDesk()
+        harness.script([answer(code_task("c1"))])
+        built = engine(harness, desk)
+        result = built.start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 1
+        assert desk.reviews == [None]
+        rows = [r.phase for r in built.store.phase_attempts(result.run_id)]
+        assert rows == ["propose"]
+
+    def test_a_replan_is_not_reviewed(
+        self, harness: Harness, upstream: list[tuple[str, str]]
+    ) -> None:
+        """The brief never asks it (a re-plan's diff waits for a person),
+        and the engine would not review a diff if it did."""
+        brief = reviewed_brief(
+            mode="replan",
+            current=[
+                CurrentChild(
+                    id="node_a", title="Export as CSV", state="published", origin="planner"
+                )
+            ],
+        )
+        desk = RecordingDesk(plan_brief=brief)
+        harness.script([{"json": {"add": [], "modify": [], "suggest_close": []}}])
+        result = engine(harness, desk).start("plan", repo=REPO, kind="plan")
+        assert result.state == "completed", result.reason
+        assert harness.consumed() == 1 and len(desk.replans) == 1
+
+
+class TestVerdictShape:
+    def test_escalate_says_why(self) -> None:
+        with pytest.raises(ValueError, match="needs at least one reason"):
+            PlanVerdict.model_validate({"verdict": "escalate", "reasons": []})
+
+    def test_only_two_verdicts(self) -> None:
+        with pytest.raises(ValueError):
+            PlanVerdict.model_validate({"verdict": "approve with changes", "reasons": ["x"]})
+
+    def test_reasons_are_folded_and_short(self) -> None:
+        folded = PlanVerdict.model_validate({"verdict": "approve", "reasons": ["  a\n b ", " "]})
+        assert folded.reasons == ["a b"]
+        with pytest.raises(ValueError, match="under 500 characters"):
+            PlanVerdict.model_validate({"verdict": "approve", "reasons": ["x" * 501]})
+        with pytest.raises(ValueError):
+            PlanVerdict.model_validate({"verdict": "approve", "reasons": ["x"] * 11})
+
+    def test_an_unusable_review_stands_for_escalate(self) -> None:
+        assert PlanVerdict.unusable().verdict == "escalate"
+
+
 class TestProposalRules:
     def test_epics_carry_no_task_sections(self) -> None:
         brief = epic_brief(level="initiative", child_level="epic")
+        whole = {"goal": "g", "context": "c", "acceptance_criteria": ["done"]}
         proposal = PlanProposal.model_validate(
-            {"children": [{"title": "API", "kind": "code", "depends_on": [2]}, {"title": "UI"}]}
+            {
+                "children": [
+                    {"title": "API", "kind": "code", "depends_on": [2], **whole},
+                    {"title": "UI", **whole},
+                ]
+            }
         )
         (problem,) = proposal_problems(proposal, brief)
         assert problem == "epic 1 (API): only a task carries kind, depends_on"
@@ -674,6 +899,50 @@ class TestProposalRules:
             proposal, epic_brief(), lint=lambda commands: [f"`{c}` is bare" for c in commands]
         )
         assert problems == ["task a (Task a): `make test` is bare"]
+
+
+class TestEveryChildIsWhole:
+    """What the prompt asks of every child — a title, a goal, context and
+    acceptance criteria — the validator holds it to, for epics as much as
+    tasks, so a thin child is sent back once rather than delivered."""
+
+    def test_an_epic_needs_its_sections(self) -> None:
+        brief = epic_brief(level="initiative", child_level="epic")
+        proposal = PlanProposal.model_validate({"children": [{"title": "Reports API"}]})
+        problems = proposal_problems(proposal, brief)
+        assert "epic 1 (Reports API): every child needs a goal" in problems
+        assert "epic 1 (Reports API): every child needs context" in problems
+        assert any("at least one acceptance criterion" in p for p in problems)
+
+    def test_a_task_needs_a_goal_and_context_too(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", goal="", context="  ")]}
+        )
+        problems = proposal_problems(proposal, epic_brief())
+        assert "task a (Task a): every child needs a goal" in problems
+        assert "task a (Task a): every child needs context" in problems
+
+    def test_a_child_that_stays_is_not_proposed_again(self) -> None:
+        brief = epic_brief(kept=["Export as CSV"])
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", title="  export  as csv"), code_task("b", title="Task b")]}
+        )
+        (problem,) = proposal_problems(proposal, brief)
+        assert "repeats a child that stays" in problem and "Export as CSV" in problem
+
+    def test_two_children_with_one_title_are_sent_back(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a", title="Same"), code_task("b", title="same ")]}
+        )
+        (problem,) = proposal_problems(proposal, epic_brief())
+        assert "task b (same): repeats task a" in problem
+
+    def test_the_hosts_stamp_is_not_the_planners_to_set(self) -> None:
+        proposal = PlanProposal.model_validate(
+            {"children": [code_task("a")], "source_input": {"title": "x"}}
+        )
+        (problem,) = proposal_problems(proposal, epic_brief())
+        assert "source_input" in problem and "leave it out" in problem
 
 
 # -- a re-plan (#2346) -----------------------------------------------------------
@@ -831,7 +1100,7 @@ class TestReplanRules:
     def test_a_good_diff_has_none(self) -> None:
         assert (
             self._problems(
-                add=[code_task("a1", deps=["node_1"])],
+                add=[code_task("a1", deps=["node_1"], rationale="nothing exports yet")],
                 modify=[{"target": "node_1", "title": "Sharper", "rationale": "r"}],
                 suggest_close=[{"target": "node_4", "rationale": "covered by node_1"}],
             )
@@ -839,13 +1108,15 @@ class TestReplanRules:
         )
 
     def test_an_addition_is_never_a_child_that_exists(self) -> None:
-        (problem,) = self._problems(add=[code_task("node_2", title="Brand new")])
+        (problem,) = self._problems(add=[code_task("node_2", title="Brand new", rationale="r")])
         assert "`node_2` is a current child's id; `modify` it rather than add it" in problem
-        (problem,) = self._problems(add=[code_task("a1", title="  current   node_2 ")])
+        (problem,) = self._problems(
+            add=[code_task("a1", title="  current   node_2 ", rationale="r")]
+        )
         assert "repeats the current child node_2" in problem
 
     def test_the_room_left_by_the_cap(self) -> None:
-        problems = self._problems(add=[code_task("a1"), code_task("a2"), code_task("a3")])
+        problems = self._problems(add=[code_task(i, rationale="r") for i in ("a1", "a2", "a3")])
         assert "add at most 2 tasks (the level's cap is 4); this answer adds 3" in problems
 
     def test_an_entry_names_a_changeable_current_child_once(self) -> None:
@@ -886,3 +1157,42 @@ class TestReplanRules:
     def test_a_close_says_why(self) -> None:
         with pytest.raises(ValueError, match="say why"):
             PlanReplan.model_validate({"suggest_close": [{"target": "node_1", "rationale": " "}]})
+
+    def test_every_entry_says_why(self) -> None:
+        problems = self._problems(
+            add=[code_task("a1", rationale=" ")],
+            modify=[{"target": "node_1", "title": "Sharper"}],
+        )
+        assert "addition a1 (Task a1): say why in `rationale`" in problems
+        assert "modify node_1: say why in `rationale`" in problems
+
+    def test_changes_cannot_make_a_dependency_cycle(self) -> None:
+        # node_2 already depends on node_1; making node_1 depend on node_2 loops.
+        replan = PlanReplan.model_validate(
+            {"modify": [{"target": "node_1", "depends_on": ["node_2"], "rationale": "r"}]}
+        )
+        brief = epic_brief(
+            mode="replan",
+            room=2,
+            cap=4,
+            current=[
+                current_child("node_1"),
+                current_child("node_2", depends_on=["node_1"]),
+            ],
+        )
+        problems = replan_problems(replan, brief)
+        assert any("make a cycle" in p for p in problems), problems
+
+    def test_an_addition_does_not_depend_on_a_child_this_diff_closes(self) -> None:
+        problems = self._problems(
+            add=[code_task("a1", deps=["node_2"], rationale="r")],
+            suggest_close=[{"target": "node_2", "rationale": "gone"}],
+        )
+        assert any("depends on node_2, which this diff closes" in p for p in problems), problems
+
+    def test_a_change_may_not_empty_a_required_section(self) -> None:
+        problems = self._problems(
+            modify=[{"target": "node_1", "goal": "", "acceptance_criteria": [], "rationale": "r"}]
+        )
+        assert "modify node_1: a child cannot be left without a goal" in problems
+        assert any("without acceptance criteria" in p for p in problems)

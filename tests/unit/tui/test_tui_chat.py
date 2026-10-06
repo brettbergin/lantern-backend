@@ -27,6 +27,15 @@ def test_compose_outbound_mirrors_the_routing_rules() -> None:
     assert compose_outbound("talking to a colleague", addressed=False) == "talking to a colleague"
     assert compose_outbound("   ", addressed=True) == ""
     assert is_addressed("@sbx hi") and is_addressed("!sbx queue") and not is_addressed("hi")
+
+
+def test_the_default_prefix_and_its_legacy_alias_are_both_commands() -> None:
+    assert compose_outbound("!lantern status", addressed=True) == "!lantern status"
+    assert is_addressed("!lantern queue")
+    # A prefix of the operator's own is the only command prefix.
+    assert compose_outbound("!sbx status", addressed=True, prefix=("!bot",)) == "@sbx !sbx status"
+    assert compose_outbound("!bot status", addressed=True, prefix=("!bot",)) == "!bot status"
+    assert not is_addressed("!lantern queue", prefix=("!bot",))
     button = ChoiceButton(12, 2, "timing", "Timing")
     assert button.row_id == 12 and button.value == "timing" and button.id == "choice-12-2"
 

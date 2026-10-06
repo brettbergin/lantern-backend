@@ -475,7 +475,7 @@ The daemon's `_settle_held` is the merge gate's shape with no PR: a
 `daemon_merge_gates` row of `kind = 'publish'` (`pr_number` 0), the item in
 `gated` owing a `held` report (the issue gets a how-to-release comment, no
 label), the same prompt in the run's thread — the Discord button reads
-*Release result*. `!sbx release <item>` (or `merge`/`approve`, one
+*Release result*. `!lantern release <item>` (or `merge`/`approve`, one
 `approve_merge` either way, the gate's kind deciding) wins the store CAS
 and `resume_for_release` re-queues the item with its run pinned; the next
 tick's `_resume` sees the `approving` publish gate and dispatches
@@ -483,7 +483,7 @@ tick's `_resume` sees the `approving` publish gate and dispatches
 gate `released` (or `dismissed` when the resumed run ended some other way —
 the retry that follows is a fresh run). `_reconcile_gates` leaves publish
 gates alone at boot: a released hold is a queued item, and the tick resumes
-it. `!sbx abandon <item>` drops the held result unpublished.
+it. `!lantern abandon <item>` drops the held result unpublished.
 
 The service sandbox (`sbxl-<instance>-<run>-run-credential-service`, #765) is the github sandbox's
 pattern generalized to the operator's own credentials. `[[credentials]]`
@@ -996,8 +996,9 @@ outcome ─▶ DECOMPOSE (task DAG) ─▶ per task, dependency order:
   `followup` phase row before the next is filed (a resume between filing
   and recording finds it on the repository by marker), the count is capped
   by `[landing] max_followups_per_run`, and the label is
-  `followup_label`, **never** the trigger label — the 1.0 rule that the
-  loop files no work of its own stands; a human promotes a follow-up.
+  `followup_label`, **never** the trigger label — the loop never promotes a
+  follow-up to work: a person labels it, and outside a plan an owner set to
+  advance on its own nothing else does.
   `FollowupFiler` does the filing for the engine and the daemon alike: a
   parked run the daemon lands with gh ops alone (an approved merge gate or
   review wait) files its follow-ups once the merge succeeds, and the phase
@@ -1173,7 +1174,11 @@ change what you propose"; then one level of a plan node, read-only
 ("changes nothing", "writes nothing to the forge"), a person's answers
 followed as decisions, each task sized to "one run" and its verify commands
 authored under decompose.md's rules ("workspace root", "no shell
-variables"). The one ecosystem-specific example — the config-override that decompose.md warns
+variables"). A breakdown of a plan that advances itself then renders
+plan_review.md as the `review` phase (the critic's briefing and
+`[agent.models] review`): the proposed level judged against the node, read
+only ("changes nothing"), `escalate` whenever a rule fails "or you cannot
+tell", reasons in sentences a person reads. The one ecosystem-specific example — the config-override that decompose.md warns
 against and review.md's wrong-check section describes — is rendered per run:
 `verifylint.config_override_example` picks the story for the first resolved
 language that has one (mypy `files`; `tsc` ignoring `tsconfig.json` when
@@ -1521,7 +1526,12 @@ ask ─▶ PLAN (task DAG, needs declared) ─▶ grant needs against the profil
   through its `start_workload` tool, `[[schedules]]` ticks
   (`sched:<name>:<due minute>`) the daemon fires by itself on an `every`
   or `cron` cadence, and an ask a remote client admits through the API
-  as an `api:<key>` item (#1036). `lantern run --kind workload` is the same run from the
+  as an `api:<key>` item (#1036). A chat ask's attachments are the
+  asking message's, which only that turn's own tools read: before the run
+  starts, the daemon copies them into the run's data directory under
+  `inputs/` (`daemon/inputs.py`), names each there in the ask, and requires
+  the mount, so the run reads what the person attached rather than
+  searching for tools it does not have. `lantern run --kind workload` is the same run from the
   CLI; `lantern init --preset workload` writes a config with one of each
   section, and `lantern doctor` lists the profiles, schedules and where
   the daemon would get its work. See [The daemon](#the-daemon) for the
@@ -1633,7 +1643,10 @@ provision (agent box only, data dir mounted, no toolchains)
        └─ questions ─▶ desk.ask (on the plan node) ─▶ AWAITING_ANSWERS (parked)
                          … a person answers or skips ─▶ resume ┤
   ─▶ PROPOSING: brief (answers in it) ─▶ plan_propose (read-only, validated,
-       one retry) ─▶ persist on the task ─▶ deliver to the plan record ─▶ completed
+       one retry) ─▶ persist on the task
+       ─▶ [advance = auto] plan_review (critic, read-only, one retry;
+            unusable twice = escalate) ─▶ persist on the task
+       ─▶ deliver to the plan record (with the verdict) ─▶ completed
 ```
 
 - **Read-only, no credential.** Provisioning treats it like a workload or
@@ -1644,33 +1657,90 @@ provision (agent box only, data dir mounted, no toolchains)
   directory by `Provisioner.clone_repo_into_data_dir` on the host, under the
   host's credential, which lives only in the clone's environment; the
   sandbox is handed the tree, never a token, and the planner's session runs
-  `read_only`. Nothing is delivered from the checkout. The run's config is
+  `read_only`. Nothing is delivered from the checkout. A resume — the
+  answer to a park, or a crash — cuts the checkout again, so a run parked
+  for days proposes from the repository as it is now. The run's config is
   narrowed to that one repository, as every run's is, so the other
   repositories an initiative's kept epics target are named to the planner
   rather than checked out.
 
+- **No memories when the plan advances itself.** Any workspace member
+  may write a memory on any agent, and a binding carries its agent's
+  memories into each session's system message — so a member who cannot
+  publish could tell the planner or the critic what to conclude, and a
+  decision an owner's grant takes unattended would rest on it. A run such a
+  decision depends on is therefore admitted with its agents bound without
+  memories. The rule is one function, `binds_without_memories` in
+  `daemon/model.py` — today, a `plan` run whose plan has `advance = "auto"`
+  — and `plan_item` asks it, writing `"memoryless": true` into the item's
+  assignment request. Dispatch (`_assign`) reads the switch, binds every
+  agent with an empty memory block, and stores the planned assignment with
+  the switch on it; the engine persists that assignment with the run, so a
+  daemon restart and a resume plan nothing again and render nothing again.
+  `PhaseRunner` also drops any memory block a memoryless assignment carries
+  and offers no memory tools (a `recall` would read the same text back). A
+  person's breakdown of a `manual` plan keeps its agents' memories, and the
+  switch is written only when on, so every other assignment encodes as
+  before.
+
 - **Validated like decompose.** `PlanProposal` is checked by
-  `proposal_problems` inside `_agent_json`'s retry: the level's room, a
-  task's acceptance criteria and kind, a workload task's configured profile,
-  a code task's verify commands (no shell variables, and the verify lint
-  under the target repository's own toolchains, read from the checkout on
-  the host), and `depends_on` among siblings without a cycle. Invalid twice
-  fails the run named.
+  `proposal_problems` inside `_agent_json`'s retry, to what the prompt
+  asks: the level's room, every child whole (a goal, context and
+  acceptance criteria, epics as much as tasks) and proposed once (no title
+  a sibling or a kept child already has), a task's kind, a workload
+  task's configured profile, a code task's verify commands (no shell
+  variables, and the verify lint under the target repository's own
+  toolchains, read from the checkout on the host), `depends_on` among
+  siblings without a cycle, and no `source_input` — that is the host's
+  stamp. A re-plan's `replan_problems` holds every entry to a `rationale`,
+  refuses a change that empties a required section or an addition that
+  leans on a child the same diff closes, and checks the level's
+  dependencies as the diff leaves them for a cycle. Invalid twice fails
+  the run named.
 
 - **Delivered once.** The validated proposal is persisted on the task's
   output before delivery, and the delivery is recorded as a `plan`
   `Published` row, so a resume delivers without a second turn and never
   twice. The plan service writes it in one revision: the node's previous
-  `proposed` children go, a person's `draft` and `approved` children stay,
-  each proposed child is `proposed` with `origin = planner` and its
-  dependencies mapped to the new ids, under the same section rules a
-  person's edit meets.
+  `proposed` children go with everything under them, a person's `draft`
+  and `approved` children stay, and so does a `proposed` child a person
+  has since built under (a drafted or approved task under a proposed epic
+  makes the epic theirs — the brief names it as kept and it takes one of
+  the cap's places); each proposed child is `proposed` with
+  `origin = planner` and its dependencies mapped to the new ids, under the
+  same section rules a person's edit meets.
 
 - **Events.** `plan.generation.started` when the run starts,
   `plan.generation.proposed` in the delivery's transaction, and
   `plan.generation.failed` when the run ends any other way (a provider hold
   is a pause, not an end), each scoped to the run, its item and its
   channel.
+
+- **The review turn.** A breakdown of a plan whose `advance` is `auto`
+  is briefed differently by `PlanService.brief`: `max_questions = 0` (no
+  clarifying turn, whatever `[planning] max_questions` says — nobody is
+  there to answer) and `review = True` (a re-plan never: its diff waits
+  for a person). After the proposal is validated and persisted,
+  `_stage_plan_review` runs one more agent turn, `plan_review.md`, as the
+  `review` phase — the run's critic binding (without memories, as every
+  agent of that run is) on the `[agent.models] review` key — recorded as
+  a `plan_review` phase row with its spend, like the planner's turns. It
+  reads the node (or the root the planner generated, with the brief),
+  the children that stay, and the proposed children rendered through
+  `plans.render.section_blocks`, the publish path's own render; no
+  checkout. The answer is a `PlanVerdict` (`approve` | `escalate`,
+  reasons), held to its shape with the one retry; unusable twice, it
+  stands for `escalate` with "the reviewer did not return a usable
+  verdict" — a failed review never approves, and the proposal is still
+  delivered for a person. The verdict is kept on the proposal task's
+  output (`review`, beside `proposal`) before delivery, so a resume
+  neither asks again nor loses it, and is delivered with the proposal:
+  `PlanDesk.deliver(..., review=)` → `deliver_proposal` writes it onto
+  the node as a `PlanReview` — its digest the level's as that write
+  leaves it (the root covered when it was generated), `reviewed_by` the
+  critic — with `plan.generation.reviewed` in the same transaction. The
+  record never holds the proposal without its review or the reverse. The
+  turn emits `phase.end` only: a plan trail carries no `review.*` event.
 
 - **Clarifying, and the park.** With `[planning] max_questions` above 0
   (the repository's own under `[vcs.repos.planning]`, carried on the
@@ -1713,10 +1783,15 @@ provision (agent box only, data dir mounted, no toolchains)
   number, a choice's name, the person's own words, or `skip`; `_steer`
   finds no live engine and hands it to `_plan_reply`) answers through the
   same loop path, one question at a time, and the run resumes once every
-  question has an answer. A reply is matched against the plan record, so
-  it still answers after a restart has emptied the bridge's memory of what
-  it posted; a click on a pre-restart button is refused like any expired
-  choice. In a collaboration channel the run's chronicle posts the
+  question has an answer. A reply is matched against the plan record, and
+  the bridge records where it posted each question there too
+  (`Clarification.posts`, `<backend>:<message id>` → question id, through
+  `DaemonLoop.record_plan_question_posts`), so after a restart has emptied
+  the bridge's memory a reply to a question's post and a click on its
+  buttons both still find their question (`plan_question_for_post`); a
+  reply to nothing in particular answers the one open question, or the
+  one whose choices it names, and is asked which otherwise. In a
+  collaboration channel the run's chronicle posts the
   questions as a notice, and the channel-scoped `plan.generation.questions`
   event carries them for the client's questions card.
 
@@ -1843,8 +1918,15 @@ and `status --json` all compose the run's closing line from those rows
 run produced. It runs
 `synchronous=NORMAL`, which is the safe setting under WAL: commits no longer
 fsync one-by-one, and a crash can only lose the tail of the WAL, never
-corrupt the database. Streaming `agent.message_delta` events are *not*
-persisted — they are per-chunk UI telemetry that live surfaces (TUI,
+corrupt the database. Every transaction that will write opens with
+`BEGIN IMMEDIATE` (`lantern.db.write_engine`), at its first statement:
+several connections share the file inside the daemon alone, and a deferred
+transaction that read first loses its write — `database is locked`, at
+once, whatever the busy timeout — to any other connection's commit in
+between. Taking the write lock first makes the other writer wait instead;
+reads stay deferred. Slow work (a password hash) is done before the
+transaction opens, never under that lock. Streaming `agent.message_delta`
+events are *not* persisted — they are per-chunk UI telemetry that live surfaces (TUI,
 Discord) read off the bus, while the full `agent.message` carries the same
 text and is committed like every other event; resume never reads deltas, so
 `lantern logs` differs only by those chunk lines. A row is committed
@@ -1953,7 +2035,7 @@ be picked, and a configured alias absent from the catalog remains visible.
 
 Because the run row is only ever written by the in-process run loop, a dead
 process (or a cancelled work item) used to leave runs stuck in `running` or
-`decomposing` forever, so `list_runs` and `!sbx status` disagreed about what
+`decomposing` forever, so `list_runs` and `!lantern status` disagreed about what
 was active (#374). Two sweeps keep them honest, and both only ever *append*
 chronology (a `run.reconciled` event) — historical events are never mutated:
 
@@ -2139,13 +2221,13 @@ CI, then mergeability, and only then the merge:
    daemon persists the gate (`daemon_merge_gates`), frees the sandboxes,
    resets the breaker, labels the issue `lantern:awaiting-merge`, posts the
    approval prompt into the run's chat thread (@mentioning whoever asked
-   for the work) and moves on. One approval — `!sbx merge <item>` on any
+   for the work) and moves on. One approval — `!lantern merge <item>` on any
    backend, `lantern daemon ctl merge <item>` headless — re-runs this same
    `land()` with gh ops alone (no sandbox, no engine): update if behind,
    re-checked CI, the same reconciliation gate, so a review left during
    the park is honoured, never merged over. A failed approval puts the
    gate back up; an approval interrupted by a restart re-opens at boot; a
-   double-approve loses a store CAS instead of double-merging; `!sbx abandon <item>` declines and dismisses the gate. `"off"` (the default)
+   double-approve loses a store CAS instead of double-merging; `!lantern abandon <item>` declines and dismisses the gate. `"off"` (the default)
    skips straight to the merge.
 6. **Merge**, sending the head sha the loop actually judged. A push that
    landed since loses the race with a 409 rather than being merged over.
@@ -2243,12 +2325,35 @@ issue/PR URL the body and kept comments mention, read for its title,
 state and the head of its body. The block is what `[budgets] outcome_max_chars` cuts, with a note naming the budget; the title, body
 and provenance are always whole. A comment read that fails becomes one
 explicit line in the outcome — the run goes on with the ask itself.
-It never files work of its own: only a human labelling an issue — directly,
-or by asking the Discord concierge, which files the issue *with* the label —
-starts a run. Everything else the daemon does is a guardrail or a
+It starts nothing on its own account. An issue becomes work only when a
+person labels it — directly, or by asking the chat concierge, which files
+the issue *with* the label; an unlabeled issue is never picked up. Work also
+reaches the queue from a schedule someone created, an epic run someone
+started, and a step an owner's grant allows an agent on a plan the owner set
+to advance on its own (see [Delegation](#delegation)). Everything else the daemon does is a guardrail or a
 recovery: the calendar-day run cap, the circuit breaker, the resume cap,
 pause and cancel, startup and staleness reconciliation, run-directory
 retention.
+
+**Delegation, in one place.** A person is never a required step, and can
+always take one. An owner writes **grants** — standing rules for what an
+agent may decide, and how often ([Delegation](#delegation),
+`daemon/controls/delegation.py`); the daemon asks the pure `decide` before
+it acts for an agent and gets `allow`, `deny` or `escalate`, each written to
+the **decisions ledger** (`GET /v1/decisions`). The steps it takes for a
+plan an owner set to `advance = "auto"` are
+[the plan driver's](#the-plan-driver) (`daemon/plandriver.py`), and a level is
+approved only after the run's **critic review** (`plan_review`, see
+[Plan runs](#plan-runs)) has passed it. Whatever no grant covers is an
+escalation, and lands on the one list of **what is waiting on a person**
+(`GET /v1/attention`, under [Typed controls](#typed-controls)), with
+reminders, until someone takes or declines it. Agents' capability sets are
+never widened. Every install starts with Lantern's **default grants**
+(`daemon/controls/delegation_defaults.py`), enabled, but no plan moves until a
+person sets it to `auto`, and proposing also needs `[delegation] propose_every` and a goal; what does act from the first tick is triage, which
+retries a recent transient failure once and gives an exhausted run more rounds
+once, within each default's daily limit. An owner pauses, edits, deletes or
+restores any default.
 
 **Workload intake (#760)** rides the same machinery with a second label and
 a second source. `GitHubIssueSource.poll` runs two searches, the trigger
@@ -2311,7 +2416,7 @@ repository: chat intake or schedules alone are a valid daemon). The store's
 repo-attribution passes skip `sched:` rows as they skip `chat:` rows;
 `_item_config` and `outcome_text` treat both as *local* ids
 (`ghids.is_local_id`) — no issue behind them, provenance names the schedule
-and its due. `schedules` (ctl, `!sbx`, the concierge's `sbx_control`) lists
+and its due. `schedules` (ctl, `!lantern`, the concierge's `sbx_control`) lists
 each schedule's cadence, last fire and next due.
 
 **Configuration from chat (#967).** The concierge's `config_keys` and
@@ -2339,7 +2444,7 @@ advice after it.
 
 ### Typed controls
 
-Every operator verb — `!sbx` in chat, `lantern daemon ctl`, the console,
+Every operator verb — `!lantern` in chat, `lantern daemon ctl`, the console,
 the concierge's `sbx_control` tool — used to land in one prose dispatcher
 (`daemon/control.py::_dispatch`) that called the loop and composed a
 sentence, taking a free-form `by` string for the source-facing attribution.
@@ -2400,6 +2505,131 @@ fix rounds, no gate); an action that acts on the forge is refused with
 "could not tell" is a refusal, never a guess. The loop keeps its own
 refusals (it holds the locks); the two agree by test.
 
+`dismiss` and `undismiss` are the two controls that act on an alert rather
+than on the work. A dismissal is a row in `daemon_work_marks` (revision 0049),
+keyed to the work item when one carries the work and to the run when nothing
+pins it — a side table, because a column on the item or the run would bump the
+row's `revision` and refuse the next command of everyone who had read it. The
+mark is current state only; the operation it names is the record of who and
+when. It is dropped by trigger (`db/work_marks.py`) the moment the item's — or
+the unpinned run's — `state` changes, so the rule holds for a write from the
+CLI's process or a rolled-back release, and a retry that fails again is a new
+alert without any code remembering to say so. `Subject.dismissed` is how
+eligibility swaps `dismiss` for `undismiss`; no other control reads it.
+
+A person's abandon writes the same mark with `cause = "abandoned"`
+(`DaemonStore.dismiss_abandoned`), because an abandoned item rests in
+`failed` — the state an unattended failure rests in. It is written by the
+surfaces a person abandons through (`ControlService.abandon`, the row-only
+CLI and console verb, an epic run's stop), after the transition so the
+trigger has already run, and never inside `DaemonStore.abandon`: the daemon
+calls that itself for a pull request closed unmerged, which nobody has seen.
+
+`delete` is the third mark-writing control and the only one with effects
+outside the table. `DaemonLoop.delete_work` refuses work that is not at rest,
+refuses a run whose workspace is the only copy of undelivered work unless told
+to discard it, then removes each run's sandboxes and — through
+`gc.remove_run_dir`, the sweep's own marker-then-rename step for one run — its
+run directory, and writes the `deleted` marks last (`DaemonStore.mark_deleted`,
+the item and its runs in one transaction). An interruption before the marks
+leaves the work visible and every earlier step safe to repeat. The rows are
+never deleted: they are the audit trail `gc` already keeps. Listings filter on
+the marks (`page_items(include_deleted=False)` in the query,
+`page_runs(exclude=…)` in the same read, so a page stays full), and
+`ControlService._refuse_deleted` keeps the item and run verbs off deleted work,
+because a store transition knows nothing of marks. The item's mark is dropped
+by the same trigger when the item leaves its resting states — work the source
+admits again is visible again — while a run's `deleted` mark is permanent.
+
+`ControlService.dismiss_all` is the same dismissal over a list of named
+targets under one `attention.dismiss_all` operation. It takes targets, never
+a filter: what a person was shown may have changed since it was drawn, and
+they should clear only that. Each target goes through
+`DaemonLoop.dismiss_work` as it would alone, and a refusal becomes that
+target's `skipped` result instead of failing the rest.
+
+What is waiting on a person is a read, not a table. `GET /v1/attention`
+(`api/attention.py`) computes it from the records above: the open gates, the
+items parked on a review or on answers, the items that ended `failed` or
+`blocked` and carry neither mark, the failed tasks of live epic runs, a
+provider hold with no retry scheduled and a repository whose polling is
+suspended. A gate and the item it parks, and a failed task and its failed
+item, are one entry each. The read has two halves so a badge poll costs the
+same however much is waiting: `waiting` finds everything in a fixed number of
+statements (`DaemonStore.attention_items` judges the marks in the query) and
+keeps only what counting and ordering need; `entries` projects the one page
+asked for, reading its public ids, runs, marks and conversations once each.
+An entry's actions are not derived there: they are `eligibility`'s answer for
+the work as it stands (`Views.work_actions`, `Views.gate_actions` — the same
+subject the item, run and gate listings judge), each paired with the
+capability its command requires (`api/commands.py:ACTIONS`) and whether the
+caller's principal holds it. Entry kinds are open, so a later one is an
+addition and not a new contract: an agent's `escalation`, a `manual` plan's
+`plan_questions` and `plan_proposal` (see Delegation) were added that way.
+Their actions (`approve`, `decline`) are decided per entry — an escalation's
+capability is the escalated step's — so the act routes those kinds to its
+own path, and a reminder carries `action_capabilities` so the push rules ask
+the entry, not the action's name, who may take each.
+
+Acting on an entry is routing, not a second set of commands.
+`POST /v1/attention/{id}/act` (`api/attention_act.py`) finds the entry as it
+stands, checks the action is one it offers and the caller holds its
+capability, and calls the function the action's own route calls
+(`api/commands.py`, `api/admin.py`, `control_epic_run` in
+`api/routes/plan_runs.py`) with the caller's idempotency pair scoped to the
+act route and the entry. The command records the one operation there is; the
+act records none, so a replay is recognised by asking the operation store
+what the pair already names (`OperationStore.for_idempotency`) before the
+entry is looked up — after a successful act the entry is gone, and the replay
+is aimed from that operation's own target. The revision a caller sends is the
+entry's: a command that checks that same record (the gate's approval, an item
+action on an item entry) is handed it, and for any other the entry is
+compared in the route.
+
+The list has no table, so its changes are found by comparison.
+`AttentionTracker` (`api/attention_events.py`) records `attention.opened` and
+`attention.resolved` as an entry appears on and leaves the default list. The
+set last announced lives in `daemon_state` (`attention.open:<entry id>`), each
+value written or removed in the transaction of the event that announces it
+(`Chronology.record(state=…)`), so a restart replays nothing and loses no
+resolution; with no `attention.seeded` value — an upgrade — the first pass
+records the set and announces nothing. It runs on the projector's pass and
+reads the list only when the daemon itself recorded something that can change
+it since the last pass (`Chronology.recorded_after`: operations, run
+lifecycle, gates, notices, plans — never a run's projected output or a chat's
+traffic), or once a minute for the changes that record nothing; an idle pass
+runs no statement. Each event is recorded against the entry's run and item,
+so `visibility` scopes it as it scopes that work's own events.
+
+An entry never expires to yes or to no, so the same tracker reminds. Each
+`attention.open:<id>` value also keeps when the entry was first announced,
+when it was last reminded about and how many times; on the passes that read
+the list anyway, an entry open at least `[attention] remind_after_s` and not
+reminded within `remind_every_s` gets one `attention.reminder` — the
+opening's data plus `waiting_s`, `reminders`, its `actions` and the
+`capabilities` they need — with the clock moved in the event's own transaction, so a
+restart repeats nothing and a long stop yields one reminder, not a burst. A
+value the previous release wrote has no clock and is stamped as first seen
+now. The push rules (`api/push/rules.py:_reminder`) turn the event into a
+`gate` or `failure` notice for the members who can see where the entry is
+and hold one of those capabilities (the owners when it has none), under a
+dedupe key that counts the reminders. The tracker lives in the API's
+projector, so a chat-only installation has no reminders.
+
+The daily digest rides the same passes (`api/digest.py`, `Digest`, held by
+the tracker). With `[attention] digest_at` unset a pass reads one attribute;
+set, the first pass at or after that local time (in `[daemon] run_cap_timezone`) whose day differs from the one kept under
+`briefing.digest.last` in `daemon_state` computes `api/briefing.py:briefing`
+with no principal (the counts anyone may read) since the previous digest's
+time, records `briefing.digest` — numbers only, no run, item or channel, so
+`visibility` shows it to every member — with the day kept in the event's own
+transaction, and hands one `daemon.digest` notice to `loop.frontend` from
+the projector thread (the fan-out list is fixed at start and bridges only
+queue). The day is then held in memory, so later passes run no statement. A
+restart repeats nothing; a daemon down at the time sends one on return the
+same day; a missed day is skipped. `api/push/rules.py:_digest` turns the
+event into one `work` notice per active member, deduped by the day.
+
 ### Operations: one record for every surface
 
 A reply that got lost and a command that never ran look the same to whoever
@@ -2442,6 +2672,345 @@ cancel, the gate's state for an approval, the item's state for an item verb,
 the fact that a new generation is answering for a stop or restart. What the
 evidence cannot decide is `reconciling` with the reason, for an operator; it is
 never guessed `succeeded`, and a timeout is never evidence.
+
+A write to a plan is not a `ControlService` verb, and its refusal is a
+`PlanRefusal` (a status, a code and fields a route renders), not a
+`ControlError`. `record_plan_operation`, beside the runner, is the same
+accept, claim, call, finish for those: it takes the store, the spec and the
+call, finishes the row `succeeded` with the result, `failed` with the
+refusal (its status and fields kept, so a replay answers the same refusal)
+or `failed crashed`, and raises what the store and the plan service raise —
+`OperationReplay`, `IdempotencyConflict`, the `PlanRefusal` naming its
+operation — never an HTTP answer. So it needs no request: the plan routes'
+`recorded` (`api/routes/plans.py`) is the wrapper that turns those into
+problem bodies, and daemon code acting for an agent calls it with the
+agent's principal and gets the same row.
+
+### Delegation
+
+A **grant** is a standing rule an owner writes once: this agent may take this
+action, under these conditions, at most this many times a day
+(`daemon/controls/delegation.py`). When the daemon is about to act for an
+agent it asks one pure function, `decide(grants, agent_slug, action, attrs, used_today)`, and gets one of three answers: `allow` (naming the grant),
+`deny`, or `escalate` to a person. `attrs` are facts the host established about
+the act — the repository, the plan level, how many children, who proposed it,
+the stored review verdict, the failure's cause, the retries already made —
+never anything the agent reported about itself, and a fact a condition needs
+that is missing or unreadable escalates rather than passing: "could not tell"
+is a refusal here as everywhere else. An agent never approves a level it
+proposed, whatever the grants say.
+
+Agents' capability sets are **not** widened to make any of this work.
+`Principal.for_agent` still carries `items:create` and nothing else, and no
+route's capability check changes. A capability says what a caller may ask the
+daemon to do; a grant says what the daemon may do on its own for an agent
+while it holds the resource in hand and can read its attributes. Giving the
+agent principal `plans:publish` would let it publish anything, from any
+surface, with no conditions and no ledger; the grant is consulted where the
+facts are, and every answer is written down.
+
+What can be granted is a **closed list** — `plan.propose`, `plan.breakdown`,
+`plan.approve`, `plan.publish`, `plan.run`, `plan.run.retry`, `item.retry`,
+`run.grant_rounds` — and `decide` denies anything else even if a row names it.
+That list is the whole mechanism by which editing grants, credentials, daemon
+management and configuration stay with people: they are not on it. Conditions
+are data (six optional keys, each accepted only by the actions it means
+something for), never an expression language.
+
+Grants and the **decisions ledger** live in the daemon's database
+(`daemon_grants`, `daemon_decisions`, revision 0050), behind
+`DelegationStore` (`daemon/controls/delegation_store.py`), which the loop
+holds as `loop.delegation`. A grant's daily use is counted from the ledger's
+`allow` rows in the cap day (`[daemon] run_cap_timezone`), so the count and
+the audit trail cannot disagree. Writing a grant takes `policy:manage` — the
+owner's alone, checked as a capability, never inferred from a role — and goes
+through `ControlService` as a recorded operation (`grant.create`,
+`grant.update`, `grant.delete`) that recovery settles from the stored grant.
+The only surface that writes one is the API's `/v1/grants`; chat, `ctl` and
+the WebSocket's commands deliberately do not. The callers of `decide` in the
+loop are the plan driver, triage and the proposer, below.
+
+**Default grants.** Grants do not ship empty. `DEFAULT_GRANTS`
+(`daemon/controls/delegation_defaults.py`) is the table every install starts
+with, each row under a stable `default_key` (`plan.approve:critic:v1`).
+`DaemonLoop.recover` seeds them through `DelegationStore.seed_defaults`, in one
+`BEGIN IMMEDIATE` transaction that writes each due grant
+(`source = "default"`, `created_by = "lantern"`) and records its key in
+`daemon_state` (`delegation.defaults.seeded:<key>`). A key recorded there is
+never seeded again, so a default an owner deleted stays deleted (the record is
+the tombstone) and one an owner edited or paused is never touched; the unique
+index on `daemon_grants.default_key` (revision 0054) is the second guard
+against two processes seeding the same row. A default whose agent is disabled
+or archived waits, unseeded, for a start where it can act. `POST /v1/grants/defaults/restore` (`grant.restore_defaults`, `policy:manage`)
+writes again each default whose grant is gone and leaves the rest alone. Every
+grant row carries `source` (`default` or `owner`); the judge reads neither it
+nor `default_key`, so an owner's older grant still wins over a default when
+both allow an act. There is no default token budget: each default's
+`daily_limit` is the spend guard.
+
+### The plan driver
+
+A plan whose `advance` is `auto` is moved forward by `PlanDriver`
+(`daemon/plandriver.py`), which the loop holds as `loop.plan_driver` and
+ticks right after the epic runs — and only while the daemon holds no pause:
+a hold stops what is new, and an agent's step is new. Modelled on
+`EpicRunDriver`: a non-blocking lock per pass, each plan in its own
+`try`, the daemon's forge reached through `github.ops()` with
+`note_failure`.
+
+**What it does, in order.** For each plan that may move itself (not
+archived), the plan read again before every step, it walks the initiative
+and epic nodes root first, each parent before its children, and finds the
+one step each is at:
+
+1. **break down** a node with no children (or a root still to be generated
+   from its brief) — `planner`, `plan.breakdown`; a node below the root
+   waits until it is on the forge. Admitted through `plan_item` + `upsert`
+   (so its agents bind without memories) and recorded as an `item.admit`
+   operation;
+2. **approve** a node's `draft` and `proposed` children — `critic`,
+   `plan.approve`, through `PlanService.approve`;
+3. **publish** an approved level once `[delegation] publish_delay_s` has
+   passed — `critic`, `plan.publish`, through `PlanService.publish`;
+4. **start the epic run** of a published epic whose tasks are all on the
+   forge and that was never run — `critic`, `plan.run`, through
+   `EpicRunDriver.start`.
+
+The facts each is judged on: `repository` and `level` — the level the step
+proposes, approves, publishes or runs (an epic's breakdown is `task`) —
+always; `child_count` (the level's children; the epic's tasks for a run)
+from approval on; `proposer`, the approved children's `proposed_by` when
+they all name the same one (left out otherwise, which the judge escalates);
+`review_verdict`, only while the node's review is current for the level as
+it reads now (`review_is_current`), so a `require_review` grant escalates on
+a stale or missing review. The ledger row also keeps `level_digest` (the
+level's `review_digest`) and, when they disagree, `proposers`.
+
+**At most one act per plan per tick, and one forge write per tick across
+every plan** (a publish and an epic start are the forge writes); the plan
+the last forge write went to goes last on the next pass, so one plan's
+steps never starve another's. No forge step is tried while the daemon's
+forge is absent or not provisioned (the `_maybe_check_labels` rule: a
+reading is never what boots the sandbox).
+
+**Agents act in-process, under grants, never with widened capabilities.**
+An allowed step runs as `Principal.for_agent(slug)` — `items:create` and
+nothing else; `Principal.system` is never used — calling the plan service
+and the epic-run driver directly, through `record_plan_operation`, so the
+operation's actor is the agent and the node's `approved_by` /
+`published_by` and the run's `started_by` read `agent:critic`. No route is
+involved and no route's dependency changes. `item.admit` gained a
+`_judge` branch for a breakdown (the queued row is the effect), so a driver
+admission cut short by a restart is settled, not left `reconciling`;
+`plan.approve`, `plan.publish` and `plan.run` were already judged from the
+plan and the run, whoever the actor.
+
+**Fail closed.** Each of these is one `escalate` row and the plan stays
+where it is: no enabled grant covers the step, or one falls short (over
+`max_children`, the day's `daily_limit` spent, a `require_review` grant
+with no current review); the critic's current review says `escalate`; a
+breakdown already ran for the node and left no level — the driver never
+queues another; the node's repository is unknown, disabled or cannot hold
+a plan; the act was refused or failed (a stale revision, a forge error, a
+level the forge took only part of). A `deny` (the critic proposed the level
+itself) is recorded the same way. A failed act is retried `[daemon] poll_interval_s` after
+its first failure, then twice as long after each failure in a row, never
+more than an hour apart; the run of failures is kept per plan, node and
+action in `daemon_state` (`plan_driver.failing:…`), so a restart neither
+forgets nor restarts it, and it is cleared when the act succeeds or its
+escalation resolves. A plan flipped back to `manual`, or archived, is not touched from
+the next read on.
+
+**Written once.** Every judgement goes to the ledger with the facts it was
+judged on and the plan, node, item or epic run it was about (and the
+operation, when allowed). An `escalate` or `deny` is not written again
+while the newest decision on that node and action says the same: same
+outcome, same reason (which names the grants, so a grant change that
+matters is a new situation), same facts (the level's digest among them).
+The ledger is that memory, so it survives a restart and needs no
+`daemon_state` key. Before a plan's steps the driver closes each open
+escalation whose node has moved to another step: `acted` when what it
+asked for happened — by the driver, or by a person on any surface, who is
+named from the node or the run — and `superseded` when the level changed
+under it; one still at the same step is superseded only when a new
+judgement differs.
+
+**The publish window.** An approved level waits `[delegation] publish_delay_s` (900 s by default) before it is published. The clock is
+the plan's: the newest `updated_at` of the level's approved children, which
+the approve stamps in the same write as its `plan.node.changed` event — so
+a restart neither shortens nor restarts the wait, and a person's approval
+counts the same as the critic's. In the window a person holds the level by
+flipping `advance` to `manual`, or edits a child, which makes it a draft
+again and the review stale. The publish itself names the revision it was
+judged on, so an edit between the judgement and the write is a stale
+revision, never a publish of what was not judged.
+
+With no enabled grant the driver takes no step. When nothing is
+escalated either it returns before reading a plan, so an installation whose
+owner paused or deleted the plan grants behaves as one with no driver; and
+with grants it never touches a `manual` plan. When escalations are still
+open (an owner removed or disabled the grants) it runs the resolution pass
+alone, so one whose step a person has since taken is closed `acted`. Retrying
+failed epic tasks and items is triage's (below); proposing plans from goals
+(`plan.propose`) is the proposer's (below).
+
+### Triage
+
+`daemon/triage.py`'s `Triage`, held as `loop.triage`, judges the failures the
+`operator` agent may pick back up. It is ticked right after the epic runs, and
+only while the daemon holds no pause; each pass takes a non-blocking lock, and
+one target that raises is logged and skipped. It weighs only the actions the
+operator holds an enabled grant for: with none on `item.retry`,
+`run.grant_rounds` or `plan.run.retry` the pass reads nothing past the grants
+and writes nothing.
+
+A pass looks at the work that stopped in the last day and matches each piece to
+one act: an item whose run exhausted its fix rounds (`runs.exhausted`) to
+`run.grant_rounds` (two more rounds on the same pull request, through
+`DaemonLoop.grant_rounds`); a failed task of an active epic run to
+`plan.run.retry` (`EpicRunDriver.retry`); any other `failed` (attempts spent)
+or `blocked` item to `item.retry` (`DaemonLoop.retry_item`). A `plan` item, a
+`cancelled` one, one a person dismissed or abandoned and deleted work are never
+touched.
+
+The **failure cause** a grant's `causes` names is derived by a pure
+`classify(FailureFacts)`: the run held by its provider is `provider_throttle`;
+an exhausted review or CI budget is `review_rounds_exhausted` /
+`ci_rounds_exhausted`; a task whose verify commands failed is `verify_failed`;
+then, from the recorded reason only as a last resort, `needs_person` (a
+maintainer must approve a workflow, a human's changes-requested review stands,
+a permission is missing, nothing to deliver, a protection rule, …),
+`ci_timeout`, `merge_conflict`, `sandbox_resource`, `provider_throttle` and
+`forge_transient` (a 5xx or network error naming the forge). Anything else is
+`unknown`. `needs_person` and `unknown` always go to a person — triage writes
+the escalation without asking the judge — and a grant cannot list either.
+
+Each act is judged on `repository`, `failure_cause` and `retries` — the
+ledger's earlier `allow` rows for that act on that target, never the item's
+attempt count, which a retry resets — and is never taken on one target more
+than three times whatever the grant says. An allowed act runs as
+`Principal.for_agent("operator")` through `record_plan_operation`, so the
+operations log names the agent; at most one act per target and three per pass.
+An escalation is written once per situation (the newest row on the target and
+action is the reference, and the target's state and when it last moved are
+among the facts), so a restart repeats nothing, and it is resolved by what
+happens next: `acted` when the work is under way again, `declined` when a
+person dismissed or abandoned it, `superseded` when it failed again
+differently, was deleted or is gone.
+
+**Escalations reach a person through the attention list.** Each unresolved
+`escalate` row is an `escalation` entry of `GET /v1/attention`
+(`api/escalations.py` holds the one action→words map, the capability a
+person needs for each step and whether a human path exists). `approve` on it
+is the person taking the step through the step's own command — the plan
+routes' `approve_level`, `publish_level_as`, `start_epic_run`,
+`control_epic_run`, the breakdown's `admit_plan`, the item retry, the round
+grant — recorded as that route's operation under the person, then the row is
+resolved `acted`; `decline` is a `decision.decline` operation resolving it
+`declined`. `plan.propose` has no human path and offers `decline` only. An
+escalation whose target is gone (plan, node or item) is dropped from the
+list on read and resolved `superseded` on the attention tracker's next pass
+(`escalations.settle`), so the list read stays a read. Whether its step
+moved on is never judged there: that is `PlanDriver._resolve`'s for the plan
+steps and triage's for the retries and round grants, each of which knows
+its own situation — two passes judging one row would close the other's
+escalations while their target still stands. A `manual`
+plan's waiting questions and proposed levels are entries too
+(`plan_questions`, `plan_proposal`, read by `PlanStore.waiting_on_people` in
+two statements); a plan that advances itself shows neither.
+
+**Goals** are the direction an owner sets for a repository: a title, the
+objective in the owner's words, and `active`, `paused` or `done`. They live in
+`daemon_goals` (revision 0053) behind `GoalStore` (`daemon/goals.py`), held
+as `loop.goals`. A plan proposed from a goal names it in `daemon_plans.goal_id`
+(revision 0051, indexed by 0053); `GoalStore.plans_by_goal` reads the plans
+serving any number of goals in one query over those rows, never by loading
+every plan, and the one that is not archived and changed last is the goal's
+open plan. Writing a goal takes `plans:publish` and goes through
+`ControlService` as a recorded operation (`goal.create`, `goal.update`,
+`goal.delete`) that recovery settles from the stored goal. The API's
+`/v1/goals` is the only surface for writing one; the planner proposes plans
+from the active ones ("Proposing", below).
+
+### Proposing
+
+`daemon/planproposer.py` is the planner drafting a plan from an owner's
+goal (`daemon_goals`, `daemon/goals.py`). It sits beside the driver rather
+than inside it — the driver walks plans that exist, this makes them — and is
+ticked first in every driver pass, under the driver's lock and against the
+same snapshot of the enabled grants, borrowing its repository check, its
+backoff and its escalation closing. It is off unless `[delegation] propose_every` is set (seconds; `0`, the default, is off): then it proposes nothing and
+never reads the forge — it only closes a proposal escalation left open
+from when it was on, as below.
+
+Each pass, over the `active` goals oldest first, **at most one proposal
+overall**. A goal is considered only when no plan serving it (`goal_id`) is
+still open — not archived and not done, done being every epic of it
+published and closed on the forge — and when `propose_every` has passed
+since the later of its last allowed `plan.propose` on the ledger and the
+last change to a plan that served it. Both are in the database, so a
+restart neither forgets nor restarts the period, and a plan archived,
+deleted or finished is followed by the next only a period later.
+
+It is judged before anything is read from the forge:
+`decide(planner, plan.propose, {repository, level, goal_id})`. A repository
+that is not configured, is disabled or cannot hold a plan escalates from
+the host, before any grant. `escalate` and `deny` are written once per
+situation, the newest decision about the goal (its `goal_id` fact; a
+proposal is about a goal, not yet a plan) being the reference, as the
+driver's are. Allowed, it reads the repository's open follow-up issues
+(`[landing] followup_label`, filtered by label and state again on our side),
+newest first, at most ten, dropping any whose origin marker is at or beyond
+`[agent_team] max_chain_depth`, and creates the draft through
+`PlanService.create` as a recorded `plan.propose` operation by
+`Principal.for_agent("planner")`: `advance = auto`, the goal's `goal_id`,
+`created_by = agent:planner`, and a brief — the goal's title as the title,
+its text as the goal, the follow-ups as `title (url)` lines in the context —
+that the root is generated from. The operation names the plan id before the
+plan exists (`create(plan_id=)`), so its `_judge` branch settles a create
+cut short by a restart from the plan's presence. A follow-up listing that
+cannot be read, or a create that is refused, escalates and backs off
+exactly as a failed driver act does (`plan_driver.failing:goal:<id>:plan.propose`). From there the driver's own steps carry the plan, each
+under its own grant. An open `plan.propose` escalation closes `acted` when
+the goal has an open plan again (the planner's, or one a person drafted for
+it) and `superseded` when the goal is gone or no longer `active`.
+
+**The root's level** is decided from the goal alone, so a grant's `levels`
+condition judges what will be drafted: an `initiative` when the goal's text
+is 1200 characters or more, an `epic` otherwise.
+
+**A goal is never marked done by the daemon.** A goal whose plan finishes
+stays `active` — and is proposed from again a period later — until an owner
+marks it `done` or `paused`.
+
+**The loop guard.** Follow-ups are how work an agent ran comes back as
+work to propose, and before proposing they were safe because a person
+promoted each one. Now an agent reads them, so the chain is counted:
+
+- the allowed `plan.propose` records the plan's `chain_depth` on the
+  ledger — one more than the deepest follow-up its brief was built from (a
+  follow-up with no origin marker, filed by a run a person asked for, is
+  depth 0), so at least 1;
+- an epic run of a plan whose `created_by` starts with `agent:` admits its
+  tasks with `origin_agent` the slug and `chain_depth` that recorded depth
+  (`EpicRunDriver._chain`; a depth the ledger lacks is taken as
+  `max_chain_depth`, fail closed). A plan a person drafted keeps the reset
+  to `None`/`0` it always had;
+- a follow-up a run files carries an origin marker (`agents/origin.py`)
+  with the run's `origin_agent` and `chain_depth` when its assignment has
+  either (`engine/followups.py` `origin_for_run`); a run a person asked for
+  files exactly the body it always did. Origin markers in the reviewer's
+  note are stripped, and the daemon's marker is last, so the note cannot
+  claim a shallower chain;
+- the proposer drops follow-ups at or beyond `max_chain_depth`.
+
+So no proposed plan is deeper than `max_chain_depth`, and a follow-up a
+plan at that depth's runs file is never read into a brief: propose → run →
+follow-up → propose stops after `max_chain_depth` generations of follow-ups
+(two by default). The goal itself is still proposed from at the cadence,
+without them, and the grant's `daily_limit` bounds that.
+`tests/unit/test_plan_proposer.py` drives five generations through the
+driver on the fake forge and holds the bound.
 
 ### The remote API listener
 
@@ -2530,7 +3099,10 @@ Ed25519-signed access token (`iss=lantern`, `aud=lantern-api`, `scope`, a
 `jti`; the algorithm list is exactly `EdDSA`) and a refresh token stored by
 digest in a *family* — one grant and every rotation descended from it, so a
 refresh token presented twice revokes the family and the client
-re-authenticates with its secret. Expiry is judged by the daemon's clock. A
+re-authenticates with its secret. Each access token carries its family
+(`family`), and a revoked family's entry in the revocation list refuses
+every access token minted beside it until the longest of them would have
+expired. Expiry is judged by the daemon's clock. A
 token's scope is what its client still holds: a grant narrowed after minting
 narrows the live token at once, and a revoked client is refused on its next
 request. The signing key lives at `config/api-signing.key` (0600); a rotation
@@ -2640,7 +3212,29 @@ attachments, and never served as a type a browser would run. Usage
 client: `null` stays `null`, `recorded` says whether anything was
 reported, and `spend` is `null` by construction with the basis stated —
 telemetry, not an invoice. A window folds every run touched in it from the
-samples' own timestamps and is at most 90 days wide.
+samples' own timestamps and is at most 90 days wide. Analytics
+(`api/analytics.py`) is the console's fold (`lantern.analytics`, which
+knows no surface) with its derived values written out as fields: runs
+attributed whole to the window they began in, durations in seconds,
+`null` where there is nothing to measure, and no currency.
+
+**The briefing.** `GET /v1/briefing` (`api/briefing.py`) is the one summary
+a landing screen, a widget and a digest share: what finished in a window,
+what waits on a person, what agents decided, what is lined up, today's
+budget and the grants in force. It is a summary and never a second opinion:
+each part is the same computation its own route runs — `attention.waiting`
+for the counts, the delegation ledger, the usage pool's snapshot — or a
+count the store does (`StateStore.ended_between`, `PlanStore.supply`), so
+no client and no digest recomputes a figure and gets a different one. Two
+definitions are its own. A run is in the window when it *finished* there
+(it rests in an end state and its last change falls in the window), where
+the analytics key a run on when it began — a briefing is about what ended
+while the person was away. A published task is *ready* when its issue is
+open and followed and no epic run has started it; `PlanStore.supply`
+spells out which task states count as started. It is polled, so it reads
+in a bounded number of statements, never one per plan, run or decision
+(`tests/api/test_read_path_cost.py` holds the bound), and its parts are
+objects so a later release adds a field without a new contract.
 
 **Push notifications.** `api/push/` pings people's devices through a push
 relay that holds the provider's key and nothing else. `api_push_devices`
@@ -2669,13 +3263,89 @@ without a cycle, published nodes left to the forge. A write is one
 transaction that checks the plan's single `revision`, applies the node
 upserts and deletes, bumps the revision and records its `plan.*` events in
 `api_events`, so a client that sees the event reads the change. The API
-routes (`api/routes/plans.py`) only translate; the planner, publishing and
-epic runs call the same service. The planner's breakdown is a `plan` run
+routes (`api/routes/plans.py`; the epic runs' in `api/routes/plan_runs.py`)
+only translate, and every write that is a recorded operation — publish, a
+re-plan's approval, an epic run's start and its controls — goes through
+one `recorded` helper, so a daemon that dies mid-call leaves the same
+record whichever route was running; the planner, publishing and epic runs
+call the same service. The planner's breakdown is a `plan` run
 ([Plan runs](#plan-runs)) whose desk (`plans/generation.py`) reads the node
 through `PlanService.brief`, puts the planner's clarifying questions on the
 node through `PlanService.ask_questions`, and writes the level through
 `PlanService.deliver_proposal`, which applies the same section rules in one
 revision.
+
+Approving a level is one store write (`PlanService.approve`: the node's
+draft and proposed children become `approved` in one revision) and the
+route records it as a `plan.approve` operation, so who approved a level is
+in the operation log beside who published it. `reconcile_operations`
+settles one the daemon died during from the plan: `succeeded` when the plan
+moved past the revision the approve read and the children it named are no
+longer draft or proposed, `failed` otherwise — safe, since nothing is ever
+half-approved and approving again is the whole write.
+
+The plan model also says who each node is from and who let it through
+(revision 0051). An event names an actor once; a rule such as "the agent
+that proposed a level is not the one that approves it" needs the fact on
+the node. `proposed_by`, `approved_by` and `published_by` each hold a
+principal's id — the id the same act's event carries — or `agent:<slug>`,
+and `NULL` where nobody is recorded:
+
+- `proposed_by` is written where a node is made. A person's plan and nodes
+  carry the person (`PlanService.create`, `add_node`). A `plan` run's
+  proposal carries the planner agent bound to the run: dispatch stores the
+  assignment on the item before the desk is built, `plans/generation.py`'s
+  `planner_of` reads the agent bound to the `plan` phase from it once, and
+  the desk hands it to `deliver_proposal` (the children and the generated
+  root, whose content stops being the person's) and to `deliver_replan`
+  (kept on the diff; an addition approved from it is the planner's). A run
+  whose item names no planned assignment records `NULL`, never a guess, and
+  the events stay attributed to the system actor `planner` as before. A
+  node adopted from the forge has none. An edit does not move it, as it
+  does not move `origin`.
+- `approved_by` is written by `PlanService.approve` on each child it
+  approves, and on a re-plan's addition by whoever approved its entry. An
+  edit that makes a proposed or approved child a draft again clears it:
+  what was approved is not what the node now says.
+- `published_by` is written by the publish walk as each node lands
+  (`plans/publish.py`'s `record`), so a re-plan's additions, which publish
+  through the same walk, carry it too. A node already on the forge is never
+  walked again, so a later level does not rewrite it.
+
+Regenerating a level replaces the planner's untouched `proposed` children
+with new nodes (the new run's `proposed_by`) and leaves the kept ones as
+they were; a re-plan's `modify` and `suggest_close` write the issue and
+leave all three fields alone.
+
+A node may carry a `review` (`PlanReview`, `review_json`): a reviewer's
+verdict on its level — `approve` or `escalate`, the reasons, the run, the
+reviewer — with a digest of what was reviewed. It lives beside the node's
+`generation` rather than in it: a clarification is written only when a run
+asks questions, and a record there parks a resume. `review_digest` hashes
+every child of the node, in order, as what publishing sends to the forge
+(its id, level, repository, position, title and sections) and nothing a
+review is meant to allow (state, forge reference, actors, timestamps), so
+approving and publishing a level leave it standing while an edit, an
+addition, a removal or a reorder makes it stale; `include_node` covers the
+node too, for a generated root, which is published with its level and never
+approved. `review_is_current` is the one question callers ask. A stored
+review this build cannot read is no review. The breakdown of an `auto`
+plan writes one, in the proposal's own write (see the review turn under
+[Plan runs](#plan-runs)); nothing else does.
+
+A plan carries `advance` (`manual` or `auto`) and `goal_id`. `advance` is
+whether the plan may move itself forward; today only the breakdown reads
+it — its admission, to bind an `auto` plan's agents without memories, and
+its brief, to ask no questions and review the proposal
+([Plan runs](#plan-runs)). What is
+settled is who may set it: plan edits take `plans:create`, which members
+hold, and the switch says a plan may be moved forward — published included
+— without a person taking the step, so the routes ask `plans:publish` of
+whoever names a value
+the plan does not have — in the handler, as the edit of a published node
+does. `PlanService.create` and `update` take `advance` from a caller that
+has checked; the concierge's `draft_plan` passes none, and a value in the
+store this build does not know reads `manual`.
 
 Publishing a level (#2341) is split three ways. `render.py` turns a node
 into its issue body — the sections as markdown headings, then the
@@ -2778,7 +3448,12 @@ dispatch picks up what the pass queued. A pass reads each admitted task's
 item — `done` is landed (the source's merge or completed report closed the
 issue), `failed`, `blocked` or `cancelled` is failed — then admits, in the
 plan's order, every task whose `depends_on` are all landed or closed, and
-marks the dependents of a failed task blocked. Admission is
+marks the dependents of a failed task blocked. The run drives the epic,
+not a snapshot of it: a task that joins the epic on the forge while the
+run is live (an approved re-plan's addition, an issue attached or
+adopted) gets a row on the next pass and is admitted when it is ready,
+and one that leaves is followed to its end; the run does not complete
+without a task that joined. Admission is
 `controls/intake.py`'s `admit_issue` with `label=False` — the source's own
 rules, minus the queueing label — then `upsert` with `parent_item_id`
 naming the run (`erun_…`, `daemon/model.py::is_epic_run_id`) and, for a
@@ -2830,7 +3505,12 @@ is closed and `[planning] close_completed` is on for the node's repository —
 comments the summary (found again by its `sbx-plan-summary` marker, so it
 is written once) and closes the issue, then looks at the parent. "Closed"
 is the forge's word, not the run's: a skipped task whose issue is open
-holds its epic. The driver decides when to look, under a lock of its own
+holds its epic. Only children that still follow their issue count: one a
+reconcile detached (it left its parent on the forge, or the forge) is left
+as reconcile left it — it neither holds the parent open nor is ticked,
+recorded or summarised — and recording a state moves nothing else on the
+node's forge reference (its version, a missing marker, a checklist error
+stay). The driver decides when to look, under a lock of its own
 (`_completing`) so the tick and a report cannot both comment: after a pass
 in which a task landed or closed or the run completed; in a sweep every
 `SWEEP_S` over runs completed within `SWEEP_WINDOW_S` whose epic is still
@@ -2937,6 +3617,30 @@ the loop behaves as it always has; above 1 the tick launches until the cap
 is reached and returns. Controls address a run by id (`cancel_run`,
 `steer_run`); a bare `cancel` means the oldest run, which is also what
 `status()["current"]` reports beside the full `runs` list.
+
+A notice about a run only a person can move names the people. `_run_notify`
+is the one list for it — the item's requester, then the run's watchers
+(`daemon_run_watches`, every backend's), each once, empty ids skipped. It
+rides `DaemonNotice.mention_ids` on `run.blocked`, `run.abandoned` and the
+handed-over `run.exhausted`, as it does on `run.awaiting_answers`; the
+merge and publish gates persist it as their notify list, and the review
+hold persists it with `review_notify` appended. A bridge puts the
+mentions in front of the line where it lands — the run's thread and, for a
+terminal kind, its control-channel mirror — and renders only the ids that
+are its own (`_owns_user_id`), so a requester from another service is left
+out rather than written as a mention that resolves to nobody. `requested_by`
+is the chat user a concierge turn was asked by and nothing else, so a
+labelled issue, an API admission or a schedule names nobody and the line
+goes out as it always did. What the loop will move by itself names nobody
+either: a failed attempt it retries (`run.failed`), the first exhaustion it
+resumes with `retry_rounds`; nor does the record of a person's own decision
+(`item.abandoned`, `run.cancelled`). The list is read before
+`_frontend_finished`, because a bridge's finish path drains the run's watch
+registry for its own watch notice — the control-channel
+`run … finished: **<state>**` line that already pings the same people, and
+that reads the same for an attempt the loop retries as for one it gave up
+on; these mentions come on top of it, on the line that says what to do. The
+public `daemon.notice` event carries no mentions.
 
 Discovery polls each enabled repository in turn, and every work item
 carries the `owner/name` it came from, so a run's clone, branch, draft PR,
@@ -3052,7 +3756,7 @@ A workload the concierge queued is `chat:<message id>` (`ghids.chat_item_id`
 / `is_chat_id`) — the Discord or Slack message that asked for it, so the
 id is stable across a re-ask and the thread can be found from the item.
 Operator commands that take an `<item>` argument — `items`, `queue`,
-`abandon`, `retry`, `requeue`, on both `lantern daemon` and `!sbx` — accept
+`abandon`, `retry`, `requeue`, on both `lantern daemon` and `!lantern` — accept
 either form and always *print* the typed one.
 
 The **run cap** is a wall-clock calendar-day gate: it counts the runs whose
@@ -3112,7 +3816,7 @@ transports. `lantern.daemon.chat.ChatBridge` owns everything a reader of a
 run thread sees and everything an operator types — the non-blocking bus
 subscription and its pump, coalescing, the tool digest and status line edited
 in place, steer notes, run watches (persisted in `daemon_run_watches`),
-concierge turns and `!sbx` commands — against a small set of abstract seams:
+concierge turns and `!lantern` commands — against a small set of abstract seams:
 build/run/close a client, normalise an inbound message into `chat.Inbound`
 (content, surface id, author, mentions), send / edit / react / open a thread,
 and spell a user mention or a thread pointer. `daemon/discord.py`
@@ -3195,6 +3899,46 @@ hanging, and the timeout greys the buttons out with the same note.
 `test_daemon_end_to_end.py`) drives the whole chain — real concierge, real
 bridge, stubbed `discord.ui` — and asserts the click-answered and
 typed-answered exchanges reach the model with identical prompts.
+
+### Work in the channel that asked, and a run's thread as a link
+
+Work lives in the channel it was asked for in
+(`docs/spikes/work-channels.md`). `lantern.api.external_work` binds a job's
+item and attempts (`ExternalJobRow`, `ExternalItemRow`, `ExternalRunRow`) to
+the admission's channel when there is one (`_bind_item`,
+`admission_channel_for_item`), and makes a system-created, workspace-visible
+channel only for work nobody asked for in a channel: a label, a schedule, a
+bare API admission. `db/event_scope.channel_for_item` and `channel_for_run`
+answer the admission first and that binding otherwise, so a run's events are
+scoped to its channel and `RunChronicle` posts there; the poster binds an
+item on first sight (`bind_item_now`), so no post lands before its channel
+is known.
+
+A channel works one run at a time. `controls.intake.channel_refusal` is the
+rule for admissions: `ControlService.admit` refuses an issue or workload
+naming a channel with work queued or running (`already_in_progress`), and
+`AgentWorkService.file_issue` refuses to file an issue to be run. A chat
+turn in such a channel stays a conversation (`ApiContext._channel_busy`):
+it goes to the model with `start_work` off and the read tools kept, a
+persona block naming the run or the queued item, and — while exactly one
+run is in flight — a `steer_run` tool (`ApiContext._steer_tool`) that hands
+direction to it through `ControlService.steer` like every other steer and
+marks the turn `steered_run_id`. The model answers a question about the
+run, steers it when told what to change, and says that new work waits;
+the Workload runner's binding choice (`must_start_workload`) is off while
+the channel is busy.
+
+The thread a `ChatBridge` opens for a run (`_ensure_thread`) is registered
+as a `ChannelLink` of that channel (`_link_run_thread`, admitting guests):
+`ChannelMirror` posts the channel into the thread, and a reply in the
+thread takes the linked path (`_handle_linked`, a turn in the channel)
+ahead of the direct `_steer`, which stays for a thread with no link — a
+daemon with no API, or a thread opened before the job was bound. A linked
+thread leaves the moments the channel posts (`_CHANNEL_SAYS`: the roster,
+verdicts, steering replies) to the mirror and renders the rest. The link is
+retired when the run ends (`_retire_run_thread`): the channel goes on to
+host other runs, each with its own thread, and one left linked would keep
+receiving them.
 
 ### Tool calls in a run thread
 

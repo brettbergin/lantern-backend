@@ -17,7 +17,9 @@ from pydantic import BaseModel
 from lantern.chatservices import CHAT_SERVICES
 from lantern.config import (
     RESERVED_ENV_KEYS,
+    AttentionConfig,
     Config,
+    DelegationConfig,
     PlanningConfig,
     load_config,
     load_secrets_env,
@@ -166,6 +168,14 @@ def test_local_auth_policy_is_documented_with_its_compatible_default() -> None:
     assert "# local_auth_enabled = true" in DEFAULT_CONFIG_TOML
     guide = (REPO_ROOT / "docs" / "user-guide.md").read_text(encoding="utf-8")
     assert "`[api] local_auth_enabled`" in guide
+
+
+def test_the_trusted_proxy_default_is_documented_in_the_shipped_example() -> None:
+    """Unset on a loopback bind, the local proxy is believed; ``[]`` is nobody —
+    so the commented line must not read as if ``[]`` were the default."""
+    text = EXAMPLE.read_text()
+    assert "# trusted_proxies = []" not in text
+    assert "unset on a loopback bind, the local proxy is; [] is nobody" in text
 
 
 def test_every_chat_backend_credential_is_in_the_secrets_example() -> None:
@@ -905,6 +915,49 @@ def test_example_push_section_documents_the_defaults() -> None:
         "max_devices_per_user",
     }
     assert Config.model_validate({"push": block}).push == Config().push
+
+
+def test_example_attention_section_documents_the_defaults() -> None:
+    """The commented `[attention]` block, uncommented whole, loads and
+    equals the model's defaults, and carries every key the model has."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[attention]":
+            in_block = True
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+        elif in_block and not line.strip():
+            break
+    block = tomllib.loads(text)
+    assert (
+        set(block)
+        == set(AttentionConfig.model_fields)
+        == {"remind_after_s", "remind_every_s", "digest_at"}
+    )
+    assert Config.model_validate({"attention": block}).attention == Config().attention
+
+
+def test_example_delegation_section_documents_the_defaults() -> None:
+    """The commented `[delegation]` block, uncommented whole, loads and
+    equals the model's defaults, and carries every key the model has."""
+    text = ""
+    in_block = False
+    for line in DEFAULT_CONFIG_TOML.splitlines():
+        stripped = re.sub(r"^#\s?", "", line)
+        if stripped == "[delegation]":
+            in_block = True
+        elif in_block and re.match(r"^[a-z_]+ = ", stripped):
+            text += re.sub(r"\s{2,}#.*$", "", stripped) + "\n"
+        elif in_block and not line.strip():
+            break
+    block = tomllib.loads(text)
+    assert set(block) == set(DelegationConfig.model_fields) == {"publish_delay_s", "propose_every"}
+    assert Config.model_validate({"delegation": block}).delegation == Config().delegation
+    assert Config().delegation.publish_delay_s == 900
+    # Proposing is off until an owner sets a period.
+    assert Config().delegation.propose_every == 0
 
 
 def test_example_planning_section_documents_the_defaults() -> None:

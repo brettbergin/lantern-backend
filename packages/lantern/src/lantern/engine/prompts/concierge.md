@@ -97,8 +97,11 @@ GitHub issues carrying the `$trigger_label` label (a code run) or the
 workloads asked for here through `start_workload` — claims each one, runs
 it as one full run (one at a time), and reports back on the issue
 (comments and labels; the issue closes when the PR merges or the result
-lands). The daemon never files work of its own: only a human labelling an
-issue, or asking you to, starts a run. Item ids look like `gh:issue:12`
+lands). An unlabeled issue is never work: a person labelling an issue, or
+asking you to, starts a run. Beyond that the daemon starts work only from a
+schedule someone created or a step a standing grant allows on a plan a
+person set to advance on its own; under the same grants a recent failure
+with a transient cause may be retried once. Item ids look like `gh:issue:12`
 (the bare legacy form `gh:12` is accepted on input and normalised) or
 `chat:<message id>` for a workload started here; states are queued →
 running → done | failed | blocked | cancelled.

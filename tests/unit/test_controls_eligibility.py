@@ -164,6 +164,137 @@ class TestItemVerbs:
         assert refused("retry", Subject(item_state=None)).message == "no work item"
 
 
+class TestDismiss:
+    """An alert can be dismissed where one is raised — work that finished
+    without success or is parked on a person — and nowhere else."""
+
+    ALERTS = (
+        "failed",
+        "blocked",
+        "cancelled",
+        "gated",
+        "awaiting_review",
+        "paused_review",
+        "awaiting_answers",
+    )
+
+    @pytest.mark.parametrize("state", ALERTS)
+    def test_an_item_that_asks_for_attention(self, state: str) -> None:
+        with_run = Subject(run_state="failed", item_state=state)
+        without = Subject(item_state=state, pinned=False)
+        assert "dismiss" in available_actions(with_run)
+        assert "dismiss" in available_actions(without)
+        assert refused("undismiss", with_run).message == "not dismissed"
+
+    @pytest.mark.parametrize("state", ["queued", "running", "done"])
+    def test_work_that_raises_no_alert_is_refused_by_name(self, state: str) -> None:
+        err = refused("dismiss", Subject(run_state="building", item_state=state))
+        assert err.code == "not_eligible"
+        assert err.message == f"nothing needs attention: work item is {state}"
+
+    def test_a_run_parked_on_a_provider_outage(self) -> None:
+        """The item waits in the queue; the run is what asks for attention."""
+        parked = Subject(run_state="provider_held", item_state="queued")
+        assert "dismiss" in available_actions(parked)
+        resuming = Subject(run_state="building", item_state="queued")
+        assert "dismiss" not in available_actions(resuming)
+
+    def test_the_run_in_flight_is_never_an_alert(self) -> None:
+        live = Subject(run_state="building", item_state="running", is_current=True)
+        assert refused("dismiss", live).message == "run is in flight"
+
+    def test_a_dismissed_alert_can_only_be_taken_back(self) -> None:
+        subject = Subject(run_state="failed", item_state="failed", dismissed=True)
+        assert refused("dismiss", subject).message == "already dismissed"
+        actions = available_actions(subject)
+        assert "undismiss" in actions and "dismiss" not in actions
+        # Dismissing takes no control away from the work itself.
+        assert "retry" in actions
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            "failed",
+            "blocked",
+            "cancelled",
+            "gated",
+            "awaiting_review",
+            "held",
+            "provider_held",
+            "awaiting_answers",
+        ],
+    )
+    def test_a_run_nothing_pins_is_judged_on_its_own_state(self, state: str) -> None:
+        """Its item row is gone, or has moved on to a later attempt: the
+        item's state says nothing about this attempt."""
+        orphan = Subject(run_state=state, item_state=None, pinned=False)
+        moved_on = Subject(run_state=state, item_state="queued", pinned=False)
+        assert "dismiss" in available_actions(orphan)
+        assert "dismiss" in available_actions(moved_on)
+
+    @pytest.mark.parametrize("state", ["merged", "completed", "building"])
+    def test_a_run_that_raises_no_alert(self, state: str) -> None:
+        err = refused("dismiss", Subject(run_state=state, item_state=None, pinned=False))
+        assert err.message == f"nothing needs attention: run is {state}"
+
+    def test_nothing_at_all(self) -> None:
+        assert refused("dismiss", Subject(pinned=False)).message == "no work to dismiss"
+
+
+class TestDelete:
+    """Only work at rest is deleted: a delete never doubles as a way to
+    stop something."""
+
+    @pytest.mark.parametrize("state", ["done", "failed", "blocked", "cancelled"])
+    def test_an_item_at_rest(self, state: str) -> None:
+        assert "delete" in available_actions(Subject(run_state="failed", item_state=state))
+        assert "delete" in available_actions(Subject(item_state=state, pinned=False))
+
+    @pytest.mark.parametrize(
+        "state",
+        ["queued", "running", "gated", "awaiting_review", "paused_review", "awaiting_answers"],
+    )
+    def test_an_item_still_in_play_is_abandoned_first(self, state: str) -> None:
+        err = refused("delete", Subject(run_state="building", item_state=state))
+        assert err.code == "not_eligible"
+        assert err.message == f"work item is {state}; abandon it first"
+
+    def test_the_run_in_flight(self) -> None:
+        live = Subject(run_state="building", item_state="running", is_current=True)
+        assert refused("delete", live).message == "run is in flight"
+
+    @pytest.mark.parametrize("state", ["merged", "completed", "failed", "blocked", "cancelled"])
+    def test_a_run_nothing_pins_at_rest(self, state: str) -> None:
+        assert "delete" in available_actions(Subject(run_state=state, pinned=False))
+
+    @pytest.mark.parametrize("state", ["building", "gated", "held", "provider_held"])
+    def test_a_run_nothing_pins_still_in_play(self, state: str) -> None:
+        err = refused("delete", Subject(run_state=state, pinned=False))
+        assert err.message == f"run is {state}; cancel it first"
+
+    def test_nothing_at_all(self) -> None:
+        assert refused("delete", Subject(pinned=False)).message == "no work to delete"
+
+    def test_deleted_work_takes_no_further_command(self) -> None:
+        subject = Subject(run_state="failed", item_state="failed", deleted=True)
+        assert available_actions(subject) == frozenset()
+        for action in ("retry", "resume", "dismiss", "delete"):
+            assert refused(action, subject).message == "work was deleted"
+
+
+def test_a_run_publishing_its_result_is_not_abandoned() -> None:
+    """Its result is being handed to the sinks; the item settles to that."""
+    publishing = Subject(
+        run_kind="workload", run_state="publishing", item_state="running", is_current=True
+    )
+    assert refused("abandon", publishing).message == "run is publishing its result"
+    assert "abandon" not in available_actions(publishing)
+    executing = Subject(
+        run_kind="workload", run_state="executing", item_state="running", is_current=True
+    )
+    assert "abandon" in available_actions(executing)
+
+
 def test_available_actions_is_exactly_what_check_allows() -> None:
     subject = Subject(run_state="building", item_state="running", is_current=True)
     expected = set()

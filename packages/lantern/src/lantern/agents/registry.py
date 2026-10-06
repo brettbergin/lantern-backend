@@ -255,10 +255,10 @@ class ConfigAgentRegistry:
         *,
         manager: bool = False,
     ) -> AgentDefinition:
-        raise AgentRegistryReadOnly(f"agent {slug!r} is defined by lantern or lantern.toml")
+        raise AgentRegistryReadOnly(f"agent {slug!r} is defined by Lantern or lantern.toml")
 
     def archive(self, slug: str, by: str, *, manager: bool = False) -> AgentDefinition:
-        raise AgentRegistryReadOnly(f"agent {slug!r} is defined by lantern or lantern.toml")
+        raise AgentRegistryReadOnly(f"agent {slug!r} is defined by Lantern or lantern.toml")
 
     def validate(self, spec: AgentSpec) -> builtins.list[str]:
         return _problems(spec, self._entries.values(), credentials=self._credentials, mcp=self._mcp)
@@ -406,7 +406,7 @@ class DbAgentRegistry:
     def _refuse_configured(self, slug: str) -> None:
         if self._base.get(slug) is not None:
             raise AgentRegistryReadOnly(
-                f"agent {slug!r} is defined by lantern or lantern.toml and cannot be changed here"
+                f"agent {slug!r} is defined by Lantern or lantern.toml and cannot be changed here"
             )
 
     @staticmethod

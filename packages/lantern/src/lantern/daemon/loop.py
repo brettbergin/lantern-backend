@@ -7,8 +7,10 @@ permanent subscribers to its bus). The engine carries the item all the way
 — task graph, gate, pull request, its own review, fix rounds, CI, merge —
 so the daemon's whole job is to hand it an issue and settle on how the run
 ended: ``merged`` closes the issue, ``failed`` retries or gives up,
-``blocked`` hands the PR to a human. The daemon never files work of its
-own.
+``blocked`` hands the PR to a human. The daemon starts nothing on its own
+account: work reaches it from a person's label or ask, a schedule a person
+created, or a step a grant allows an agent (Lantern's defaults, seeded once
+at start, or an owner's; whatever no grant covers escalates to a person).
 
 Spend guardrails — a calendar-day run cap that counts runs started since
 00:00 in ``daemon.run_cap_timezone`` (default ``UTC``) and resets at the
@@ -32,11 +34,11 @@ import signal
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
-from typing import Any, NamedTuple, Protocol, cast
+from typing import Any, Literal, NamedTuple, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from lantern import __version__, hostgit
@@ -59,6 +61,9 @@ from lantern.config import (
     ScheduleConfig,
     VcsKind,
 )
+from lantern.daemon.controls.delegation import Conditions, Grant, describe as describe_grant
+from lantern.daemon.controls.delegation_defaults import DEFAULT_GRANTS, DefaultGrant
+from lantern.daemon.controls.delegation_store import DelegationStore, GrantGone
 from lantern.daemon.controls.eligibility import Subject, check as check_eligibility
 from lantern.daemon.controls.generation import (
     GENERATION_KEY,
@@ -70,12 +75,16 @@ from lantern.daemon.controls.principal import Principal
 from lantern.daemon.controls.results import (
     CancelOutcome,
     ControlError,
+    DeleteOutcome,
+    DismissOutcome,
     ResumeOutcome,
     SteerOutcome,
 )
 from lantern.daemon.epicruns import EpicRunDriver
 from lantern.daemon.github import DaemonGithub
+from lantern.daemon.goals import GoalStore
 from lantern.daemon.holds import OPERATOR_HOLD, hold_name
+from lantern.daemon.inputs import inputs_note, stage_chat_inputs
 from lantern.daemon.logsink import event_log_subscriber
 from lantern.daemon.model import (
     DaemonNotice,
@@ -88,11 +97,14 @@ from lantern.daemon.model import (
     WorkItem,
     is_planned_assignment,
     requested_roles,
+    requests_memoryless,
 )
+from lantern.daemon.plandriver import PlanDriver
 from lantern.daemon.repositories import RepositoryRegistry
 from lantern.daemon.schedule import Cadence, ScheduleRow, format_due
 from lantern.daemon.sources import HIDDEN_MARKER_RE, IssueContext, WorkSource
 from lantern.daemon.store import DaemonStore, MergeGate, ReviewHold
+from lantern.daemon.triage import Triage
 from lantern.daemon.usagepool import UsagePool, fairness_key
 from lantern.db.event_scope import channel_for_item, channel_for_run
 from lantern.engine.checks import check_policy_reader
@@ -121,7 +133,7 @@ from lantern.engine.model import (
     TaskRecord,
     run_summary,
 )
-from lantern.engine.planning import Clarification, PlanAnswer
+from lantern.engine.planning import Clarification, PlanAnswer, PlanQuestion
 from lantern.engine.reconcile import acknowledge_human_threads
 from lantern.engine.sinks import published_line
 from lantern.engine.store import StateStore
@@ -135,7 +147,14 @@ from lantern.errors import (
     WorkerError,
 )
 from lantern.events import Event, EventBus, HostEventTypes
-from lantern.gc import DAY_S, format_bytes, prune_run_dirs, workspace_pruned
+from lantern.gc import (
+    DAY_S,
+    delivery_failed,
+    format_bytes,
+    prune_run_dirs,
+    remove_run_dir,
+    workspace_pruned,
+)
 from lantern.ghids import (
     is_api_id,
     is_chat_id,
@@ -289,7 +308,7 @@ class PlanAnswered(NamedTuple):
 
 
 class CancelRequest(NamedTuple):
-    """An operator's ``!sbx cancel`` for one specific run. Recorded so the
+    """An operator's ``!lantern cancel`` for one specific run. Recorded so the
     settle step can tell it from a failure: the engine surfaces both as an
     exception at the next boundary (field: a Discord cancel was settled as
     a failed attempt, re-run fresh after the backoff and counted toward the
@@ -451,6 +470,7 @@ class DaemonLoop:
         # Where a run's agents come from: the built-ins, `[[agents]]`, then
         # the agents people saved (built per config, like the API's).
         self._agents: tuple[Config, AgentRegistry] | None = None
+        self._plans_service: PlanService | None = None
         # Where a planned assignment reads each agent's remembered
         # context. None (the default) builds the item's own memory service
         # at dispatch, the same one its run gets; a test may set it.
@@ -557,6 +577,20 @@ class DaemonLoop:
         # Epic runs (#2347): a plan's epic whose ready tasks this loop
         # admits as issue runs, in dependency order, on every tick.
         self.epic_runs = EpicRunDriver(self)
+        # Delegation: the grants an owner wrote and the ledger of what was
+        # decided under them. The API writes grants and reads both; the
+        # plan driver judges a plan's next step against them.
+        self.delegation = DelegationStore(dstore)
+        # Plans whose `advance` is auto, moved forward under the grants on
+        # every tick the daemon is not held (see daemon/plandriver.py).
+        self.plan_driver = PlanDriver(self)
+        # Triage: the operator agent picks failures back up under the
+        # grants (the defaults retry a transient failure once); with no
+        # enabled operator grant it does nothing.
+        self.triage = Triage(self)
+        # Goals: the standing objectives an owner writes for a repository,
+        # and the plans proposed from each (`daemon_plans.goal_id`).
+        self.goals = GoalStore(dstore)
 
     # -- external control ---------------------------------------------------------
 
@@ -1347,6 +1381,7 @@ class DaemonLoop:
         why = reason or "abandoned by operator"
         now = self.clock()
         before = self.dstore.get(item_id)
+        self._refuse_abandon_while_publishing(item_id)
         fresh = self.dstore.abandon(item_id, why, now, queued_only=queued_only)
         if before is not None and before.state == "gated" and before.run_id is not None:
             gate = self.dstore.merge_gate_for(before.run_id)
@@ -1389,6 +1424,24 @@ class DaemonLoop:
             self._close_dead_run(fresh.run_id, "abandoned", now, repo=fresh.repo)
         self._deliver_report(fresh)
         return fresh
+
+    def _refuse_abandon_while_publishing(self, item_id: str) -> None:
+        """A run at its publishing stage is handing its result to the
+        sinks: a cancel cannot take that back, so an abandon then would
+        only leave the item failed beside a delivered result. Refused; the
+        item settles to what the run did."""
+        for handle in self.runs:
+            if handle.item.item_id != item_id:
+                continue
+            try:
+                stage = self.store.get_run(handle.run_id).state
+            except LanternError:
+                continue
+            if stage == "publishing":
+                raise ValueError(
+                    f"{item_id} is publishing its result (run {handle.run_id}); "
+                    "it settles to that outcome when the run ends"
+                )
 
     def _withdraw_questions(self, item: WorkItem, why: str, now: float) -> None:
         """An abandoned plan run was parked on its questions (#2345): take
@@ -1446,6 +1499,210 @@ class DaemonLoop:
         else:
             self._notice("item.requeued", f"requeue: {item_id} re-queued", item=item_id)
         return fresh
+
+    # -- alerts: dismissed, and asked for again -------------------------------------
+
+    def _alert_subject(
+        self, item_id: str | None, run_id: str | None, expected_revision: int | None
+    ) -> tuple[Literal["item", "run"], str, WorkItem | None, RunRecord | None]:
+        """What an alert stands on: the work item when one was named or
+        pins the named run, the run itself when nothing pins it (its item
+        row is gone, or has moved on to a later attempt). One mark per piece
+        of work, whichever route named it. ``expected_revision`` is checked
+        against the row the caller named."""
+        if item_id is not None:
+            item = self.dstore.get(normalize_item_id(item_id))
+            if item is None:
+                raise ControlError("unknown_target", f"unknown item {item_id}")
+            if expected_revision is not None and item.revision != expected_revision:
+                raise ControlError(
+                    "stale_revision",
+                    f"{item.item_id} is at revision {item.revision}, not {expected_revision}",
+                    revision=item.revision,
+                )
+            record: RunRecord | None = None
+            if item.run_id is not None:
+                try:
+                    record = self.store.get_run(item.run_id)
+                except LanternError:
+                    record = None
+            return "item", item.item_id, item, record
+        if run_id is None:
+            raise ControlError("invalid_argument", "name an item or a run")
+        self._check_revision(run_id, expected_revision)
+        try:
+            record = self.store.get_run(run_id)
+        except LanternError as exc:
+            raise ControlError("unknown_target", f"unknown run {run_id}") from exc
+        owner = self.dstore.item_for_run(run_id)
+        item = self.dstore.get(owner) if owner else None
+        if item is not None and item.run_id == run_id:
+            return "item", item.item_id, item, record
+        return "run", run_id, None, record
+
+    def dismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+    ) -> DismissOutcome:
+        """Acknowledge the alert a piece of work raises, for everyone: the
+        work keeps its state and its controls, it only stops asking for
+        attention. The mark goes by itself when the work moves again, so a
+        retry that fails is a new alert. Refused by name for work that
+        raises none (queued, running, done); dismissing twice is not an
+        error — the first acknowledgement stands."""
+        kind, key, item, record = self._alert_subject(item_id, run_id, expected_revision)
+        if self.dstore.work_mark(kind, key, "dismissed") is not None:
+            return DismissOutcome(
+                verb="dismiss", subject_kind=kind, subject_key=key, fresh=False, item=item
+            )
+        check_eligibility(
+            "dismiss",
+            Subject(
+                run_kind=record.kind if record is not None else item.kind if item else "code",
+                run_state=record.state if record is not None else None,
+                item_state=item.state if item is not None else None,
+                is_current=record is not None and self._live_run(record.run_id) is not None,
+                pinned=item is not None and record is not None and item.run_id == record.run_id,
+            ),
+        )
+        fresh = self.dstore.set_work_mark(
+            kind,
+            key,
+            "dismissed",
+            cause="dismissed",
+            at=self.clock(),
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+        log.info("work.dismissed", kind=kind, key=key, by=(actor or {}).get("id"), fresh=fresh)
+        return DismissOutcome(
+            verb="dismiss", subject_kind=kind, subject_key=key, fresh=fresh, item=item
+        )
+
+    def undismiss_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        expected_revision: int | None = None,
+    ) -> DismissOutcome:
+        """Take a dismissal back: the work asks for attention again."""
+        kind, key, item, _record = self._alert_subject(item_id, run_id, expected_revision)
+        fresh = self.dstore.clear_work_mark(kind, key, "dismissed")
+        log.info("work.undismissed", kind=kind, key=key, by=(actor or {}).get("id"), fresh=fresh)
+        return DismissOutcome(
+            verb="undismiss", subject_kind=kind, subject_key=key, fresh=fresh, item=item
+        )
+
+    # -- delete: finished work put away ---------------------------------------------
+
+    def delete_work(
+        self,
+        *,
+        item_id: str | None = None,
+        run_id: str | None = None,
+        actor: Mapping[str, object] | None = None,
+        reason: str | None = None,
+        expected_revision: int | None = None,
+        operation_id: str | None = None,
+        discard_undelivered: bool = False,
+    ) -> DeleteOutcome:
+        """Put finished work away: hide it from every listing and remove
+        the sandboxes and run directories of every run it had. The rows and
+        the event trail stay — they are the audit record — and nothing on
+        the forge is touched: the pull request, the branch and the issue
+        are the target repository's, not this listing's.
+
+        Only work at rest: anything queued, running or parked on a decision
+        is refused by name (abandon or cancel it first), so a delete never
+        doubles as a way to stop something. Refused too, unless
+        ``discard_undelivered``, when a run's workspace is the only copy of
+        work that was never delivered. The marks are written last: a delete
+        interrupted before them leaves the work visible, and sending it
+        again finishes the job. Deleting twice is not an error."""
+        kind, key, item, record = self._alert_subject(item_id, run_id, expected_revision)
+        if self.dstore.work_mark(kind, key, "deleted") is not None:
+            return DeleteOutcome(subject_kind=kind, subject_key=key, fresh=False, item=item)
+        check_eligibility(
+            "delete",
+            Subject(
+                run_kind=record.kind if record is not None else item.kind if item else "code",
+                run_state=record.state if record is not None else None,
+                item_state=item.state if item is not None else None,
+                is_current=record is not None and self._live_run(record.run_id) is not None,
+                pinned=item is not None and record is not None and item.run_id == record.run_id,
+            ),
+        )
+        run_ids = [key]
+        if item is not None:
+            run_ids = list(
+                dict.fromkeys(
+                    [
+                        *self.dstore.runs_for_item(item.item_id),
+                        *([item.run_id] if item.run_id else []),
+                    ]
+                )
+            )
+        records: dict[str, RunRecord] = {}
+        for candidate in run_ids:
+            if self._live_run(candidate) is not None:
+                raise ControlError("not_eligible", f"run {candidate} is in flight")
+            try:
+                records[candidate] = self.store.get_run(candidate)
+            except (LanternError, StateError):
+                continue
+        if not discard_undelivered:
+            for candidate, found in records.items():
+                if found.kept_reason is not None or delivery_failed(self.store, candidate):
+                    raise ControlError(
+                        "not_eligible",
+                        f"run {candidate} holds work that was never delivered — its "
+                        "workspace is the only copy; `discard_undelivered` deletes it anyway",
+                        # What a client keys its "delete anyway" on, rather
+                        # than on the sentence.
+                        undelivered=True,
+                    )
+        now = self.clock()
+        who = str((actor or {}).get("display") or (actor or {}).get("id") or "operator")
+        repo = item.repo if item is not None else None
+        removed: list[str] = []
+        for candidate in run_ids:
+            known = records.get(candidate)
+            if known is not None and known.state not in TERMINAL_RUN_STATES:
+                # A run its item settled without it: never resumed now.
+                self._close_dead_run(candidate, "deleted", now, repo=repo)
+            self._remove_stale_run_sandboxes(candidate, repo=repo, deleting=True)
+            if remove_run_dir(self.store, self.config.paths, candidate, now=now, actor=who) == (
+                "removed"
+            ):
+                removed.append(candidate)
+        fresh = self.dstore.mark_deleted(
+            item.item_id if item is not None else None,
+            run_ids,
+            now,
+            actor=actor,
+            reason=reason,
+            operation_id=operation_id,
+        )
+        log.info(
+            "work.deleted", kind=kind, key=key, by=who, runs=len(run_ids), removed=len(removed)
+        )
+        return DeleteOutcome(
+            subject_kind=kind,
+            subject_key=key,
+            fresh=fresh,
+            item=item,
+            runs=run_ids,
+            removed=removed,
+        )
 
     def _close_dead_run(
         self, run_id: str, result: str, now: float, *, repo: str | None = None
@@ -1965,6 +2222,15 @@ class DaemonLoop:
         # ones they made ready (#2347). Queueing is not starting: the gate
         # below, the holds and the usage pool decide when each one runs.
         self.epic_runs.tick(now)
+        # A plan that advances itself takes its next step under the owner's
+        # grants — never while the daemon is held: a hold stops what is new,
+        # and an agent's step is new. Its breakdowns queue like any work.
+        if not self.paused:
+            self.plan_driver.tick(now)
+        # Triage acts for the operator agent (retry, grant rounds); a
+        # paused daemon takes no new act on its own.
+        if not self.paused:
+            self.triage.tick(now)
         idle = self._dispatch_gate(now, first=True)
         if idle is not None:
             return idle
@@ -2651,6 +2917,145 @@ class DaemonLoop:
         )
         return f"schedule {spec.name} updated: {spec.cadence_text}, profile `{spec.profile}`."
 
+    # -- delegation: the grants an owner writes --------------------------------------
+    #
+    # Nothing here judges anything: these write the standing rules and say
+    # so. No chat tool, `ctl` verb or socket command reaches them — policy
+    # is edited through the API's grant routes, under `policy:manage`.
+
+    def add_grant(
+        self,
+        *,
+        grant_id: str,
+        agent_slug: str,
+        action: str,
+        conditions: Conditions,
+        daily_limit: int | None,
+        enabled: bool,
+        note: str | None,
+        created_by: str | None,
+        by: str | None,
+    ) -> tuple[Grant, str]:
+        """Store a grant the caller validated; the grant and the line to
+        answer with."""
+        grant = self.delegation.create_grant(
+            grant_id=grant_id,
+            agent_slug=agent_slug,
+            action=action,
+            conditions=conditions,
+            daily_limit=daily_limit,
+            enabled=enabled,
+            note=note,
+            created_by=created_by,
+            created_by_display=by,
+            now=self.clock(),
+        )
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_added",
+            f"grant {grant.id} written by {who}: {describe_grant(grant)}",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+        )
+        return grant, f"grant {grant.id} written: {describe_grant(grant)}."
+
+    def update_grant(
+        self,
+        grant_id: str,
+        changes: Mapping[str, Any],
+        *,
+        expected_revision: int,
+        by: str | None,
+    ) -> tuple[Grant, str]:
+        """Edit a grant against the revision the caller read. ``GrantGone``
+        and ``StaleGrant`` are the store's."""
+        grant = self.delegation.update_grant(
+            grant_id, changes, expected_revision=expected_revision, now=self.clock()
+        )
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_updated",
+            f"grant {grant.id} edited by {who}: {describe_grant(grant)}",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+            revision=grant.revision,
+        )
+        return grant, f"grant {grant.id} edited: {describe_grant(grant)}."
+
+    def remove_grant(self, grant_id: str, *, by: str | None) -> tuple[Grant, str]:
+        """Delete a grant; ``GrantGone`` when there is none. The decisions
+        it allowed stay in the ledger."""
+        grant = self.delegation.delete_grant(grant_id)
+        if grant is None:
+            raise GrantGone(grant_id)
+        who = by or "operator"
+        self._notice(
+            "daemon.grant_removed",
+            f"grant {grant.id} removed by {who}: {grant.agent_slug} no longer takes "
+            f"{grant.action} under it",
+            grant=grant.id,
+            agent=grant.agent_slug,
+            action=grant.action,
+            by=by,
+        )
+        return grant, (
+            f"grant {grant.id} removed; {grant.agent_slug} no longer takes {grant.action} under it."
+        )
+
+    def _seedable_defaults(self) -> list[DefaultGrant]:
+        """The defaults whose agent can act: one whose agent an operator
+        disabled or removed waits, unseeded, for a start where it can."""
+        ready: list[DefaultGrant] = []
+        for default in DEFAULT_GRANTS:
+            agent = self.agents.get(default.agent_slug)
+            if agent is not None and agent.slug == default.agent_slug and agent.active:
+                ready.append(default)
+            else:
+                log.info("delegation.default_waits", default=default.key, agent=default.agent_slug)
+        return ready
+
+    def seed_default_grants(self) -> list[Grant]:
+        """Seed each of Lantern's default grants never seeded here before
+        (:mod:`lantern.daemon.controls.delegation_defaults`). A default
+        seeded before is not written again, even when an owner deleted it;
+        an existing grant is never touched. Logged, not narrated: start-up
+        writes no chronology of its own, and the grants say what they are
+        (``source = "default"``) wherever they are listed."""
+        written = self.delegation.seed_defaults(self._seedable_defaults(), now=self.clock())
+        if written:
+            log.info(
+                "delegation.defaults_seeded",
+                grants=[grant.id for grant in written],
+                defaults=[grant.default_key for grant in written],
+            )
+        return written
+
+    def restore_default_grants(self, *, by: str | None) -> tuple[list[Grant], str]:
+        """Write again each default whose grant is gone; an existing one,
+        edited or paused, is left as it is. The grants written and the
+        line to answer with."""
+        written = self.delegation.seed_defaults(
+            self._seedable_defaults(), now=self.clock(), restore=True
+        )
+        if not written:
+            return [], "every default grant is already in place; nothing was restored."
+        who = by or "operator"
+        self._notice(
+            "daemon.grants_restored",
+            f"{len(written)} default grant(s) restored by {who}: "
+            + "; ".join(describe_grant(grant) for grant in written),
+            grants=[grant.id for grant in written],
+            defaults=[grant.default_key for grant in written],
+            by=by,
+        )
+        return written, f"{len(written)} default grant(s) restored: " + "; ".join(
+            f"{grant.id} ({grant.default_key})" for grant in written
+        ) + "."
+
     # -- the registered repositories ------------------------------------------------
 
     def _activate_repositories(self) -> None:
@@ -3120,17 +3525,24 @@ class DaemonLoop:
         assignment is planned from the lead and roles asked for at
         admission (none: the built-in team) and stored on the item. Each
         binding snapshots its agent's memory block here (S-A5), taken in
-        the channel the item names."""
+        the channel the item names — none at all when the admission asked
+        for a run without memories (``binds_without_memories``), which the
+        stored assignment then says, so a restart and a resume keep it."""
         if is_planned_assignment(item.assignment_json):
             return item
         requested = cast("dict[RunRole, str]", requested_roles(item.assignment_json))
+        memoryless = requests_memoryless(item.assignment_json)
+        memory: MemoryBlocks | None = None
+        if not memoryless:
+            memory = self.memory if self.memory is not None else self._memory(item)
         planned = plan_assignment(
             self.agents,
             kind=item.kind,
             lead=item.lead_agent,
             requested=requested,
-            memory=self.memory if self.memory is not None else self._memory(item),
+            memory=memory,
             channel_id=item.channel_id,
+            memoryless=memoryless,
         )
         if item.origin_agent is not None or item.chain_depth:
             planned = AgentAssignment(
@@ -3140,6 +3552,7 @@ class DaemonLoop:
                 channel_id=planned.channel_id,
                 origin_agent=item.origin_agent,
                 chain_depth=item.chain_depth,
+                memoryless=planned.memoryless,
             )
         text = planned.to_json()
         self.dstore.set_item_assignment(item.item_id, text, now)
@@ -3249,7 +3662,7 @@ class DaemonLoop:
             # the plan is reconciled from the forge (reading only).
             plan_desk=(
                 PlanGeneration(
-                    PlanService(PlanStore(self.dstore), lambda: self.config),
+                    self.plans,
                     item,
                     self.clock,
                     forge=self.github,
@@ -3362,7 +3775,7 @@ class DaemonLoop:
             attempt=item.attempts,
         )
         # An item-level operator decision (abandon/requeue, possibly from
-        # another process) outranks a pending `!sbx cancel`: the row already
+        # another process) outranks a pending `!lantern cancel`: the row already
         # says what the item's fate is.
         override = self._operator_override(item.item_id, run_id)
         if override is not None:
@@ -3465,6 +3878,18 @@ class DaemonLoop:
         otherwise take the failure path and re-queue an abandoned item).
         Operator decisions never count toward the circuit breaker."""
         now = self.clock()
+        if fresh.state == "failed" and self._delivered(item, result):
+            # The abandon came after the run had already delivered (its
+            # cancel was never honoured): what happened outranks it, and
+            # the item settles to the run's own outcome, never failed beside
+            # a delivered result.
+            log.info(
+                "item.abandon_too_late",
+                item=item.item_id,
+                run=run_id,
+                state=result.state if result is not None else None,
+            )
+            return self._settle(item, run_id, result, None)
         report = self._report(run_id, result)
         if fresh.state == "failed":
             self._end_run_cancelled(
@@ -3487,6 +3912,15 @@ class DaemonLoop:
             state=report.state,
         )
         return "requeued"
+
+    def _delivered(self, item: WorkItem, result: RunResult | None) -> bool:
+        """Whether the run did the whole job: merged, or ``completed`` where
+        there is no pull request to land — a workload (#760), or a code
+        run with no repository to deliver to."""
+        state = result.state if result is not None else None
+        return state == "merged" or (
+            state == "completed" and (item.kind != "code" or not self.config.vcs.enabled)
+        )
 
     def _run_is_resumable(self, run_id: str) -> bool:
         """Whether the run was left mid-flight (interrupted) rather than
@@ -3562,9 +3996,7 @@ class DaemonLoop:
         # (#760) ends `completed` once its result is published, whatever
         # `[github]` says — there is no pull request to merge.
         workload = item.kind != "code"
-        landed = state == "merged" or (
-            state == "completed" and (workload or not self.config.vcs.enabled)
-        )
+        landed = self._delivered(item, result)
         self._resolve_publish_gate(item, run_id, released=landed, now=now, state=state)
         if landed:
             self.dstore.finish_ledger(run_id, "done", now)
@@ -3611,6 +4043,9 @@ class DaemonLoop:
             self.dstore.mark_blocked(item.item_id, reason, now)
             fresh = self.dstore.get(item.item_id) or item
             self._deliver_report(fresh)
+            # Read before the finish path: a chat bridge clears the run's
+            # watch registry once it has told the watchers how it ended.
+            notify = self._run_notify(item, run_id)
             self._frontend_finished(item, report._replace(reason=reason))
             pr_text = f" · PR {report.pr[1]}" if report.pr and report.pr[1] else ""
             self._notice(
@@ -3625,6 +4060,7 @@ class DaemonLoop:
                 hint="the run stopped at something only a human can settle (a gate, a "
                 "conflict, a decision the agent must not take); the item stays claimed "
                 "until someone acts on it — `lantern daemon ctl status` lists what is held",
+                mention_ids=notify,
             )
             return "blocked"
         reason = str(error) if error is not None else (report.reason or f"run ended {report.state}")
@@ -3668,6 +4104,7 @@ class DaemonLoop:
                 hint="the item spent every attempt `[daemon] max_attempts_per_item` "
                 "allows and was handed back to its source; nothing retries it on its "
                 "own — re-apply the trigger label (or `retry <item>`) to run it again",
+                mention_ids=self._run_notify(item, run_id),
             )
             outcome = "failed"
         self._frontend_finished(item, report)
@@ -3718,7 +4155,7 @@ class DaemonLoop:
         self.dstore.finish_ledger(run_id, "cancelled", now)
         self.dstore.mark_cancelled(item.item_id, reason, now)
         if cancel.retry:
-            # cancelled → queued is the same transition `!sbx retry` makes.
+            # cancelled → queued is the same transition `!lantern retry` makes.
             self.dstore.retry(item.item_id, now, reason)
             # report_cancelled(requeued=True) below is the source-side report.
             self.dstore.take_pending_report(item.item_id)
@@ -3734,7 +4171,7 @@ class DaemonLoop:
             self._notice(
                 "run.cancelled",
                 f"⏹ {item.item_id} {reason} — `lantern resume {run_id}` continues it, "
-                f"`!sbx retry {item.item_id}` reruns it fresh",
+                f"`!lantern retry {item.item_id}` reruns it fresh",
                 item=item.item_id,
                 run=run_id,
                 by=cancel.requester,
@@ -3760,10 +4197,7 @@ class DaemonLoop:
         if self._consecutive_failures:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
+        notify = self._run_notify(item, run_id)
         try:
             record = self.store.get_run(run_id)
         except LanternError:
@@ -3809,7 +4243,7 @@ class DaemonLoop:
         self._notice(
             "run.gated",
             f"⏸ {item.item_id} ready to merge — waiting for approval · PR #{pr_number} — "
-            f"approve in the run's thread or `!sbx merge {item.item_id}` (no deadline)",
+            f"approve in the run's thread or `!lantern merge {item.item_id}` (no deadline)",
             item=item.item_id,
             run=run_id,
             url=pr_url or None,
@@ -3830,10 +4264,7 @@ class DaemonLoop:
         if self._consecutive_failures:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
+        notify = self._run_notify(item, run_id)
         self.dstore.create_merge_gate(
             run_id,
             item.item_id,
@@ -3856,7 +4287,7 @@ class DaemonLoop:
         self._notice(
             "run.held",
             f"⏸ {item.item_id} result held ({report.summary or report.task_summary}) — "
-            f"release in the run's thread or `!sbx release {item.item_id}` (no deadline)",
+            f"release in the run's thread or `!lantern release {item.item_id}` (no deadline)",
             item=item.item_id,
             run=run_id,
             tasks=report.task_summary,
@@ -3877,14 +4308,11 @@ class DaemonLoop:
             log.info("breaker.reset", after_failures=self._consecutive_failures)
         self._set_breaker(None, 0)
         self.dstore.mark_awaiting_answers(item.item_id, now)
+        notify = self._run_notify(item, run_id)
         self._frontend_finished(item, report)
         waiting = self._waiting_questions(item, run_id)
         count = len(waiting.questions) if waiting is not None else 0
         noun = "question" if count == 1 else "questions"
-        notify: list[str] = []
-        for who in [item.requested_by, *self.dstore.run_watchers(run_id)]:
-            if who and who not in notify:
-                notify.append(who)
         self._notice(
             "run.awaiting_answers",
             f"❓ {item.item_id}: the planner asks {count} {noun} before it proposes — "
@@ -3896,8 +4324,20 @@ class DaemonLoop:
         )
         return "awaiting_answers"
 
+    @property
+    def plans(self) -> PlanService:
+        """The one plan service this daemon owns. Every surface in the
+        process — the API, intake, the concierge, a plan run's desk — reads
+        and writes plans through it, because the service's mutual exclusion
+        (a plan being published, reconciled or written to the forge is not
+        touched again until that finishes) lives on the instance: a second
+        instance would be blind to what the first is doing."""
+        if self._plans_service is None:
+            self._plans_service = PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self._plans_service
+
     def _plans(self) -> PlanService:
-        return PlanService(PlanStore(self.dstore), lambda: self.config)
+        return self.plans
 
     def _waiting_questions(self, item: WorkItem, run_id: str) -> Clarification | None:
         """The clarifying questions ``item``'s run ``run_id`` is parked on,
@@ -3924,6 +4364,35 @@ class DaemonLoop:
         if waiting is None or item.plan_id is None or item.plan_node_id is None:
             return None
         return PlanQuestionsWaiting(item.plan_id, item.plan_node_id, run_id, waiting)
+
+    def record_plan_question_posts(self, run_id: str, posts: Mapping[str, str]) -> None:
+        """A chat bridge posted the questions ``run_id`` waits on: remember
+        where (``<backend>:<message id>`` → question id) on the plan record,
+        so a reply or a click still finds its question after a restart."""
+        waiting = self.plan_questions_for_run(run_id)
+        if waiting is None:
+            return
+        self.plans.record_question_posts(
+            waiting.plan_id, waiting.node_id, run_id=run_id, posts=posts, now=self.clock()
+        )
+
+    def plan_question_for_post(self, key: str) -> tuple[PlanQuestionsWaiting, PlanQuestion] | None:
+        """The parked run and the question a chat post (``key``,
+        ``<backend>:<message id>``) carried, from the plan record: what a
+        click on that post answers when the bridge that posted it is gone."""
+        for item in self.dstore.items(["awaiting_answers"]):
+            if item.kind != "plan" or not item.run_id:
+                continue
+            waiting = self._waiting_questions(item, item.run_id)
+            if waiting is None or item.plan_id is None or item.plan_node_id is None:
+                continue
+            question = waiting.posted(key)
+            if question is not None:
+                return (
+                    PlanQuestionsWaiting(item.plan_id, item.plan_node_id, item.run_id, waiting),
+                    question,
+                )
+        return None
 
     def answer_plan_questions(
         self,
@@ -4147,15 +4616,11 @@ class DaemonLoop:
         """Who hears that a PR waits for a review: whoever asked for the
         work, the run's watchers, and ``[landing] review_notify`` for the
         repository (#675)."""
-        notify: list[str] = []
-        for who in [
-            item.requested_by,
-            *self.dstore.run_watchers(run_id),
-            *self.config.review_notify_for(item.repo or self.config.primary_repo or ""),
-        ]:
-            if who and who not in notify:
-                notify.append(who)
-        return notify
+        return self._run_notify(
+            item,
+            run_id,
+            self.config.review_notify_for(item.repo or self.config.primary_repo or ""),
+        )
 
     # -- review holds: the poll and its exits (#675) ---------------------------------
 
@@ -5326,9 +5791,22 @@ class DaemonLoop:
         # pushed branch and PR where they are still usable (#600); the
         # engine confirms that with GitHub and falls back to a fresh start.
         prior = self.dstore.prior_attempt(item.item_id)
+        outcome = self.outcome_text(item)
+        # A workload a chat message asked for reads that message's
+        # attachments from its own data directory; the ask names them.
+        staged = (
+            stage_chat_inputs(self.dstore, item_config, item, run_id)
+            if item.kind == "workload"
+            else ()
+        )
+        if staged:
+            outcome = f"{outcome}\n\n{inputs_note(staged)}"
         return engine.start(
-            self.outcome_text(item),
+            outcome,
             run_id=run_id,
+            # Files were copied in: a run that cannot see its data directory
+            # must fail closed rather than work in an empty one.
+            expects_mount=True if staged else None,
             warm=self._warm_run(run_id),
             repo=self._item_repo(item),
             prior_branch=prior.branch if prior else None,
@@ -5435,6 +5913,7 @@ class DaemonLoop:
             hint="the run used every fix round it was granted and the checks it was "
             "fixing are still not passing; the PR stands and nothing retries on its own "
             "— grant more rounds to continue it, or retry the item for a fresh plan",
+            mention_ids=self._run_notify(item, run_id),
         )
         self._frontend_finished(item, report)
         if self._consecutive_failures >= self.config.daemon.max_consecutive_failures:
@@ -5570,6 +6049,7 @@ class DaemonLoop:
                 "`resume --all` every one",
                 holds=[h.name for h in restored],
             )
+        self.seed_default_grants()
         self._settle_half_claims()
         self._reconcile_gates()
         self._reconcile_review_holds()
@@ -5682,7 +6162,7 @@ class DaemonLoop:
         The run row is only ever written by the in-process run loop, so a
         cancelled item or a dead process left phantom ``running`` /
         ``decomposing`` runs behind: ``list_runs`` disagreed with
-        ``!sbx status`` and anything counting active runs was misled.
+        ``!lantern status`` and anything counting active runs was misled.
 
         Two kinds of run are deliberately left alone: the run genuinely
         executing in this process, and one queued for resume (item
@@ -5808,7 +6288,9 @@ class DaemonLoop:
             # running one was reconciled above.
         self._deliver_pending_reports()
 
-    def _remove_stale_run_sandboxes(self, run_id: str, *, repo: str | None = None) -> None:
+    def _remove_stale_run_sandboxes(
+        self, run_id: str, *, repo: str | None = None, deleting: bool = False
+    ) -> None:
         """A dead process leaves the run's microVMs — and their secret
         registrations — behind. Both must go before resume re-provisions
         under the same names: a lingering secret cannot be replaced, so the
@@ -5834,6 +6316,11 @@ class DaemonLoop:
             ):
                 try:
                     remove_run_sandbox(self.sbx, name, role, self.config)
+                    if deleting:
+                        # A person deleted the work: said in the journal,
+                        # not in the run's thread, which is being put away.
+                        log.info("work.sandbox_removed", run=run_id, sandbox=name, role=role)
+                        continue
                     self._notice(
                         "recovery.stale_sandbox_removed",
                         f"recovery: removed stale sandbox {name} (and its secrets)",
@@ -5872,6 +6359,20 @@ class DaemonLoop:
         )
 
     # -- helpers ------------------------------------------------------------------------
+
+    def _run_notify(self, item: WorkItem, run_id: str, more: Iterable[str] = ()) -> list[str]:
+        """Who a notice about this run addresses: whoever asked for the
+        work, then the run's watchers, then ``more`` — each once, empty ids
+        skipped. The ids are backend-less (a frontend renders only the ones
+        that are its own), and an item nobody asked for in chat has no
+        requester, so the list may well be empty. Read it before
+        ``_frontend_finished``: a chat bridge's finish path clears the
+        run's watch registry."""
+        notify: list[str] = []
+        for who in [item.requested_by, *self.dstore.run_watchers(run_id), *more]:
+            if who and who not in notify:
+                notify.append(who)
+        return notify
 
     def _notice(
         self,

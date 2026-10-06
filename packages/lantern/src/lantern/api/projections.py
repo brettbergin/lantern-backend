@@ -21,6 +21,7 @@ from lantern.api.context import ApiContext
 from lantern.api.errors import Problem
 from lantern.api.models import (
     Actor,
+    Dismissal,
     Gate,
     GateSummary,
     Hold,
@@ -47,7 +48,7 @@ from lantern.api.models import (
     rfc3339,
 )
 from lantern.api.publicids import PublicIds, item_key, parse_run_id, run_public_id, split_item_key
-from lantern.daemon.controls.eligibility import Subject, available_actions
+from lantern.daemon.controls.eligibility import Action, Subject, available_actions
 from lantern.daemon.controls.intake import RECIPE_PARAMETERS
 from lantern.daemon.controls.steering import Steering as SteeringRecord
 from lantern.daemon.model import (
@@ -56,7 +57,7 @@ from lantern.daemon.model import (
     live_run_ids,
     requested_roles,
 )
-from lantern.daemon.store import MergeGate, dispatch_eligible_at
+from lantern.daemon.store import MergeGate, ReviewHold, dispatch_eligible_at
 from lantern.db.collaboration_models import ChannelRow
 from lantern.db.event_scope import channel_for_item
 from lantern.engine.model import RunRecord, TaskRecord
@@ -69,7 +70,14 @@ from lantern.vcs.github.labels import lifecycle_specs
 if TYPE_CHECKING:
     from lantern.api.collaboration import Member
 
-ITEM_ACTIONS: tuple[str, ...] = ("retry", "requeue", "abandon")
+ITEM_ACTIONS: tuple[str, ...] = (
+    "retry",
+    "requeue",
+    "abandon",
+    "dismiss",
+    "undismiss",
+    "delete",
+)
 RUN_ACTIONS: tuple[str, ...] = (
     "cancel",
     "resume",
@@ -78,6 +86,9 @@ RUN_ACTIONS: tuple[str, ...] = (
     "gate_approve",
     "review_wait_resume",
 )
+#: Advertised on a run only when no work item pins it: work an item carries
+#: is dismissed and deleted through the item, so each has one place to call.
+RUN_ALERT_ACTIONS: tuple[str, ...] = ("dismiss", "undismiss", "delete")
 _REVIEW_WAIT_ITEM_STATES = frozenset({"awaiting_review", "paused_review"})
 
 NOT_FOUND = "no such resource"
@@ -99,6 +110,28 @@ def _assignment_fields(item: WorkItem) -> dict[str, Any]:
     return {"lead_agent": lead, "assignment": roles or None}
 
 
+def _mark_actor(actor: dict[str, Any]) -> Actor | None:
+    """Who left a mark, from the audit fields stored with it; ``None`` for
+    a mark written without one."""
+    if not actor.get("id"):
+        return None
+    return Actor(
+        kind=str(actor.get("kind", "operator")),
+        id=str(actor["id"]),
+        display=actor.get("display"),
+        via=str(actor.get("via", "")),
+    )
+
+
+def item_repository(item: WorkItem) -> str | None:
+    """The ``owner/name`` an item belongs to: the one recorded on it, else
+    the one its id names; ``None`` for work no repository asked for."""
+    if item.repo:
+        return item.repo
+    parsed = try_parse_gh_id(item.item_id)
+    return parsed.repo if parsed is not None else None
+
+
 def not_found() -> Problem:
     """One answer for an id of any kind that names nothing: never which
     kind it was not."""
@@ -117,6 +150,10 @@ class Views:
         self.ids: PublicIds = ctx.public_ids
         self.now = ctx.clock()
         self._status: dict[str, Any] | None = None
+        self._dismissals: dict[tuple[str, str], Dismissal | None] = {}
+        self._deleted: dict[tuple[str, str], float | None] = {}
+        self._gate_states: dict[str, str | None] = {}
+        self._hold_states: dict[str, str | None] = {}
 
     # -- live state ----------------------------------------------------------------
 
@@ -168,6 +205,69 @@ class Views:
             raise not_found()
         return entry
 
+    # -- dismissals ----------------------------------------------------------------
+
+    def load_dismissals(self, *, item_ids: Sequence[str] = (), run_ids: Sequence[str] = ()) -> None:
+        """Read a page's marks — dismissed and deleted — in one query, so a
+        listing costs one statement for them however long it is. Ids as
+        stored."""
+        items = [key for key in dict.fromkeys(item_ids) if ("item", key) not in self._dismissals]
+        runs = [key for key in dict.fromkeys(run_ids) if ("run", key) not in self._dismissals]
+        if not items and not runs:
+            return
+        found = self.dstore.work_marks(item_ids=items, run_ids=runs)
+        for kind, keys in (("item", items), ("run", runs)):
+            for key in keys:
+                gone = found.get((kind, key, "deleted"))
+                self._deleted[(kind, key)] = gone.at if gone is not None else None
+                mark = found.get((kind, key, "dismissed"))
+                self._dismissals[(kind, key)] = (
+                    None
+                    if mark is None
+                    else Dismissal(
+                        at=rfc3339(mark.at) or "",
+                        by=_mark_actor(mark.actor),
+                        cause=mark.cause,
+                        reason=mark.reason,
+                        operation_id=mark.operation_id,
+                    )
+                )
+
+    def dismissal(self, item: WorkItem | None, run_id: str | None = None) -> Dismissal | None:
+        """The dismissal standing on a piece of work: the item's when one
+        was named or pins ``run_id``, the run's own otherwise — the same
+        rule the dismiss control writes by."""
+        if item is not None and (run_id is None or item.run_id == run_id):
+            kind, key = "item", item.item_id
+        elif run_id is not None:
+            kind, key = "run", run_id
+        else:
+            return None
+        if (kind, key) not in self._dismissals:
+            if kind == "item":
+                self.load_dismissals(item_ids=[key])
+            else:
+                self.load_dismissals(run_ids=[key])
+        return self._dismissals[(kind, key)]
+
+    def deleted_at(self, item: WorkItem | None, run_id: str | None = None) -> float | None:
+        """When a person deleted this work, or ``None``. The item's mark
+        while the item carries the work — it goes if the item is admitted
+        again — and the run's own otherwise: a deleted attempt stays
+        deleted."""
+        if item is not None and (run_id is None or item.run_id == run_id):
+            kind, key = "item", item.item_id
+        elif run_id is not None:
+            kind, key = "run", run_id
+        else:
+            return None
+        if (kind, key) not in self._deleted:
+            if kind == "item":
+                self.load_dismissals(item_ids=[key])
+            else:
+                self.load_dismissals(run_ids=[key])
+        return self._deleted[(kind, key)]
+
     # -- eligibility ---------------------------------------------------------------
 
     def _subject(self, item: WorkItem | None, run: RunRecord | None) -> Subject:
@@ -175,11 +275,15 @@ class Views:
         gate_state: str | None = None
         hold_state: str | None = None
         if run_id is not None and item is not None and item.state == "gated":
-            gate = self.dstore.merge_gate_for(run_id)
-            gate_state = gate.state if gate is not None else None
+            if run_id not in self._gate_states:
+                gate = self.dstore.merge_gate_for(run_id)
+                self._gate_states[run_id] = gate.state if gate is not None else None
+            gate_state = self._gate_states[run_id]
         if run_id is not None and item is not None and item.state in _REVIEW_WAIT_ITEM_STATES:
-            hold = self.dstore.review_hold_for(run_id)
-            hold_state = hold.state if hold is not None else None
+            if run_id not in self._hold_states:
+                hold = self.dstore.review_hold_for(run_id)
+                self._hold_states[run_id] = hold.state if hold is not None else None
+            hold_state = self._hold_states[run_id]
         return Subject(
             run_kind=(run.kind if run is not None else item.kind if item else "code"),
             run_state=run.state if run is not None else None,
@@ -189,6 +293,43 @@ class Views:
             exhausted=run is not None and run.exhausted is not None,
             gate_state=gate_state,
             review_hold_state=hold_state,
+            dismissed=self.dismissal(item, run_id) is not None,
+            deleted=self.deleted_at(item, run_id) is not None,
+        )
+
+    def note_parked(
+        self, *, gates: Sequence[MergeGate] = (), holds: Sequence[ReviewHold] = ()
+    ) -> None:
+        """Hand over gates and review holds the caller already read, each
+        the one its run has, so judging a page of parked work does not read
+        every one of them again."""
+        for gate in gates:
+            self._gate_states[gate.run_id] = gate.state
+        for hold in holds:
+            self._hold_states[hold.run_id] = hold.state
+
+    def work_actions(self, item: WorkItem, run: RunRecord | None) -> frozenset[Action]:
+        """Every action open on the work ``item`` carries right now — its
+        own and those of ``run``, the run it pins — as eligibility answers
+        for it: what the item and the run advertise, in one set."""
+        return available_actions(self._subject(item, run))
+
+    def gate_actions(
+        self, gate: MergeGate, item: WorkItem | None, run: RunRecord | None
+    ) -> frozenset[Action]:
+        """What eligibility allows on ``gate`` as it stands, judged as the
+        gate listing judges it."""
+        return available_actions(self._gate_subject(gate, item, run))
+
+    def _gate_subject(
+        self, gate: MergeGate, item: WorkItem | None, run: RunRecord | None
+    ) -> Subject:
+        return Subject(
+            run_kind=run.kind if run is not None else "code",
+            run_state=run.state if run is not None else None,
+            item_state=item.state if item is not None else None,
+            pinned=item is not None and item.run_id == gate.run_id,
+            gate_state=gate.state,
         )
 
     # -- items ---------------------------------------------------------------------
@@ -206,7 +347,7 @@ class Views:
             kind = "api"
         else:
             kind = "other"
-        repo = item.repo or (parsed.repo if parsed is not None else None)
+        repo = item_repository(item)
         return Origin(
             kind=kind,
             repository_id=repo_ids.get(repo) if repo else None,
@@ -225,6 +366,7 @@ class Views:
             if r
         }
         repo_ids = self.ids.repository_ids(repos, self.now) if repos else {}
+        self.load_dismissals(item_ids=[item.item_id for item in rows])
         return [self._item(item, public[item_key(item)], repo_ids) for item in rows]
 
     def item(self, item: WorkItem) -> Item:
@@ -273,6 +415,8 @@ class Views:
             updated_at=rfc3339(item.updated_at) or "",
             revision=item.revision,
             available_actions=[a for a in ITEM_ACTIONS if a in actions],
+            dismissal=self.dismissal(item),
+            deleted_at=rfc3339(self.deleted_at(item)),
             **_assignment_fields(item),
         )
 
@@ -338,6 +482,7 @@ class Views:
     # -- runs ----------------------------------------------------------------------
 
     def runs(self, rows: Sequence[RunRecord]) -> list[Run]:
+        self.load_dismissals(run_ids=[record.run_id for record in rows])
         return [self.run(record) for record in rows]
 
     def run(self, record: RunRecord) -> Run:
@@ -353,6 +498,7 @@ class Views:
             if item.state in _REVIEW_WAIT_ITEM_STATES:
                 hold = self.dstore.review_hold_for(record.run_id)
                 review_wait = hold.state if hold is not None else None
+        pinned = item is not None and item.run_id == record.run_id
         actions = available_actions(self._subject(item, record))
         pr = (
             PullRequest(
@@ -389,7 +535,12 @@ class Views:
             gate=gate,
             review_wait=review_wait,
             revision=record.revision,
-            available_actions=[a for a in RUN_ACTIONS if a in actions],
+            available_actions=[
+                *(a for a in RUN_ACTIONS if a in actions),
+                *(a for a in RUN_ALERT_ACTIONS if a in actions and not pinned),
+            ],
+            dismissal=self.dismissal(item, record.run_id),
+            deleted_at=rfc3339(self.deleted_at(item, record.run_id)),
         )
 
     def tasks(self, run_id: str) -> list[Task]:
@@ -435,14 +586,8 @@ class Views:
     def _gate(self, gate: MergeGate, public_id: str) -> Gate:
         run = self.run_record(gate.run_id)
         item = self.dstore.get(gate.item_id)
-        subject = Subject(
-            run_kind=run.kind if run is not None else "code",
-            run_state=run.state if run is not None else None,
-            item_state=item.state if item is not None else None,
-            pinned=item is not None and item.run_id == gate.run_id,
-            gate_state=gate.state,
-        )
-        actions = available_actions(subject)
+        dismissal = self.dismissal(item, gate.run_id) if item is not None else None
+        actions = self.gate_actions(gate, item, run)
         return Gate(
             id=public_id,
             kind=gate.kind,
@@ -462,6 +607,7 @@ class Views:
             detail=gate.detail,
             revision=gate.revision,
             available_actions=["approve"] if "gate_approve" in actions else [],
+            dismissal=dismissal,
         )
 
     def steering(self, record: SteeringRecord) -> Steering:

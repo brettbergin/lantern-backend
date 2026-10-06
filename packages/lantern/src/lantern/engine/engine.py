@@ -59,7 +59,7 @@ from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from lantern import hostgit, repofiles
 from lantern.agentmodels import model_for_phase, refreshed_models, run_model_repo
@@ -132,12 +132,15 @@ from lantern.engine.phases import (
     verify_suspect_feedback,
 )
 from lantern.engine.planning import (
+    PLAN_REVIEW_KEY,
     PLAN_SINK,
     PROPOSE_TASK_ID,
+    REVIEW_UNUSABLE,
     PlanBrief,
     PlanDesk,
     PlanProposal,
     PlanReplan,
+    PlanVerdict,
     plan_task,
 )
 from lantern.engine.reconcile import (
@@ -343,9 +346,11 @@ _PROMPT_BY_RECORDED_PHASE: dict[str, str] = {
     "judge": "operator_judge",
     "review": "review",
     "steer": "steer",
-    # A plan run's turns: its clarifying questions and its proposal.
+    # A plan run's turns: its clarifying questions and its proposal, and the
+    # critic's review of the proposal (it runs as the `review` phase).
     "clarify": "plan",
     "propose": "plan",
+    "plan_review": "review",
 }
 
 
@@ -2180,19 +2185,23 @@ class LoopEngine:
         re-enters, and a proposal already validated and persisted is
         delivered without a second turn.
         """
+        # A resume re-cuts the checkout: a run parked for days on its
+        # questions proposes from the repository as it is now, not as it
+        # was when it asked.
+        fresh = stage is not None
         try:
             if stage != "proposing":
-                parked = self._stage_clarify(p)
+                parked = self._stage_clarify(p, fresh=fresh)
                 if parked is not None:
                     return parked
-            reason = self._stage_propose(p)
+            reason = self._stage_propose(p, fresh=fresh)
         finally:
             self._plan_cut.pop(p.run_id, None)
         if reason is not None:
             return "failed", reason
         return "completed", None
 
-    def _stage_clarify(self, p: Pipeline) -> tuple[RunState, str] | None:
+    def _stage_clarify(self, p: Pipeline, *, fresh: bool = False) -> tuple[RunState, str] | None:
         """Ask the planner whether it knows enough to propose, and park the
         run on its questions when it does not. None to go on and propose;
         otherwise the state the run ends in and why.
@@ -2222,28 +2231,20 @@ class LoopEngine:
             return None
         self._set_run_state(run_id, "clarifying")
         self._check_cancelled_and_clock(run_id, p.deadline)
-        reason, checkouts, home = self._plan_checkouts(p, brief)
+        reason, checkouts, home = self._plan_checkouts(p, brief, fresh=fresh)
         if reason is not None:
             return "failed", reason
         self._process_chat(run_id, p.phases, None, stage="reading the repository")
         self._check_cancelled_and_clock(run_id, p.deadline)
-        started = time.time()
-        try:
-            answer = p.phases.clarify_plan(brief, checkouts=checkouts, home=home)
-        except InvalidOutputTwice as exc:
-            spend = p.phases.drain_spend()
-            self._record_phase(
-                run_id,
-                "clarify",
-                task_id=PROPOSE_TASK_ID,
-                attempt=1,
-                status="failed",
-                output_json=json.dumps({"error": str(exc)}),
-                started_at=started,
-                usage=spend.usage,
-                turns=spend.turns,
-            )
-            why = _invalid_twice_reason(exc, "questions")
+        answer = self._plan_turn(
+            run_id,
+            "clarify",
+            PROPOSE_TASK_ID,
+            p.phases,
+            lambda: p.phases.clarify_plan(brief, checkouts=checkouts, home=home),
+        )
+        if isinstance(answer, InvalidOutputTwice):
+            why = _invalid_twice_reason(answer, "questions")
             self.bus.emit(
                 HostEventTypes.PHASE_END,
                 run_id,
@@ -2253,18 +2254,6 @@ class LoopEngine:
                 message=why,
             )
             return "failed", why
-        spend = p.phases.drain_spend()
-        self._record_phase(
-            run_id,
-            "clarify",
-            task_id=PROPOSE_TASK_ID,
-            attempt=1,
-            status="ok",
-            output_json=answer.model_dump_json(),
-            started_at=started,
-            usage=spend.usage,
-            turns=spend.turns,
-        )
         if answer.ready:
             self.bus.emit(
                 HostEventTypes.PHASE_END,
@@ -2298,7 +2287,7 @@ class LoopEngine:
         log.info("run.awaiting_answers", run=run_id, questions=count)
         return "awaiting_answers", _awaiting_reason(count)
 
-    def _stage_propose(self, p: Pipeline) -> str | None:
+    def _stage_propose(self, p: Pipeline, *, fresh: bool = False) -> str | None:
         """Read the brief, cut the checkouts, ask the planner once (with the
         one validation retry every JSON phase has), persist the answer on
         the run's task, and deliver it. Returns the reason the run failed,
@@ -2332,47 +2321,26 @@ class LoopEngine:
             self.bus.emit(
                 HostEventTypes.TASK_START, run_id, task_id=task.spec.id, title=task.spec.title
             )
-            reason, checkouts, home = self._plan_checkouts(p, brief)
+            reason, checkouts, home = self._plan_checkouts(p, brief, fresh=fresh)
             if reason is not None:
                 return self._propose_failed(run_id, task, reason)
             # A message that arrived while the checkout was cut steers the
             # proposal: a run-level answer becomes guidance the prompt carries.
             self._process_chat(run_id, phases, None, stage="reading the repository")
             self._check_cancelled_and_clock(run_id, p.deadline)
-            started = time.time()
-            try:
+
+            def turn() -> PlanProposal | PlanReplan:
                 if replan:
-                    answer = phases.replan_plan(brief, checkouts=checkouts, home=home)
-                else:
-                    answer = phases.propose_plan(brief, checkouts=checkouts, home=home)
-                    if brief.generate_root:
-                        answer.source_input = dict(brief.input)
-            except InvalidOutputTwice as exc:
-                spend = phases.drain_spend()
-                self._record_phase(
-                    run_id,
-                    "propose",
-                    task_id=task.spec.id,
-                    attempt=1,
-                    status="failed",
-                    output_json=json.dumps({"error": str(exc)}),
-                    started_at=started,
-                    usage=spend.usage,
-                    turns=spend.turns,
-                )
-                return self._propose_failed(run_id, task, _invalid_twice_reason(exc))
-            spend = phases.drain_spend()
-            self._record_phase(
-                run_id,
-                "propose",
-                task_id=task.spec.id,
-                attempt=1,
-                status="ok",
-                output_json=answer.model_dump_json(),
-                started_at=started,
-                usage=spend.usage,
-                turns=spend.turns,
-            )
+                    return phases.replan_plan(brief, checkouts=checkouts, home=home)
+                proposed = phases.propose_plan(brief, checkouts=checkouts, home=home)
+                if brief.generate_root:
+                    proposed.source_input = dict(brief.input)
+                return proposed
+
+            turned = self._plan_turn(run_id, "propose", task.spec.id, phases, turn)
+            if isinstance(turned, InvalidOutputTwice):
+                return self._propose_failed(run_id, task, _invalid_twice_reason(turned))
+            answer = turned
             task.output = TaskOutput(
                 summary=_plan_summary(brief, answer),
                 data={key: answer.model_dump(mode="json")},
@@ -2395,10 +2363,15 @@ class LoopEngine:
                 files=0,
             )
             self._emit_task_end(run_id, task)
+        review: PlanVerdict | None = None
+        if brief.review and isinstance(answer, PlanProposal):
+            review = self._stage_plan_review(p, task, brief, answer)
         self._check_cancelled_and_clock(run_id, p.deadline)
         try:
             if isinstance(answer, PlanReplan):
                 delivered = desk.deliver_replan(run_id, answer)
+            elif review is not None:
+                delivered = desk.deliver(run_id, answer, review=review)
             else:
                 delivered = desk.deliver(run_id, answer)
         except PlanDeliveryError as exc:
@@ -2419,6 +2392,99 @@ class LoopEngine:
         )
         return None
 
+    def _stage_plan_review(
+        self, p: Pipeline, task: TaskRecord, brief: PlanBrief, proposal: PlanProposal
+    ) -> PlanVerdict:
+        """The critic's verdict on the proposal, before it is delivered (a
+        breakdown of a plan that advances itself): one ``plan_review`` turn,
+        recorded and charged as the planner's turns are, its verdict kept on
+        the proposal task beside the proposal so a resume delivers both
+        without asking again. Fails closed: an answer unusable twice stands
+        for ``escalate``, never for an approval, and the run still delivers
+        — the level then waits for a person, which is what ``escalate``
+        means. Emits ``phase.end`` and nothing of a code run's review."""
+        run_id = p.run_id
+        saved = task.output.data.get(PLAN_REVIEW_KEY) if task.output is not None else None
+        if saved is not None:
+            return PlanVerdict.model_validate(saved)
+        self._check_cancelled_and_clock(run_id, p.deadline)
+        turned = self._plan_turn(
+            run_id,
+            "plan_review",
+            task.spec.id,
+            p.phases,
+            lambda: p.phases.review_plan(brief, proposal),
+        )
+        if isinstance(turned, InvalidOutputTwice):
+            verdict = PlanVerdict.unusable()
+            status, message = "failed", f"{REVIEW_UNUSABLE}, so a person decides: {turned}"
+        else:
+            verdict = turned
+            status = "ok"
+            count = len(verdict.reasons)
+            said = f" ({count} reason{'s' if count != 1 else ''})" if count else ""
+            message = (
+                "the reviewer approved the proposal"
+                if verdict.verdict == "approve"
+                else "the reviewer escalated the proposal to a person"
+            ) + said
+        output = task.output or TaskOutput(summary=_plan_summary(brief, proposal))
+        output.data[PLAN_REVIEW_KEY] = verdict.model_dump(mode="json")
+        task.output = output
+        self.store.update_task(run_id, task)
+        self.bus.emit(
+            HostEventTypes.PHASE_END,
+            run_id,
+            task_id=task.spec.id,
+            phase="plan_review",
+            status=status,
+            message=message,
+        )
+        return verdict
+
+    def _plan_turn[A: BaseModel](
+        self,
+        run_id: str,
+        phase: str,
+        task_id: str,
+        phases: PhaseRunner,
+        turn: Callable[[], A],
+    ) -> A | InvalidOutputTwice:
+        """One planner turn recorded as a phase row with its spend: the
+        answer, or — when the planner's answer was invalid twice — the
+        refusal, after a failed row. The stage says what that means for
+        the run (its PHASE_END and its reason differ)."""
+        started = time.time()
+        try:
+            answer = turn()
+        except InvalidOutputTwice as exc:
+            spend = phases.drain_spend()
+            self._record_phase(
+                run_id,
+                phase,
+                task_id=task_id,
+                attempt=1,
+                status="failed",
+                output_json=json.dumps({"error": str(exc)}),
+                started_at=started,
+                usage=spend.usage,
+                turns=spend.turns,
+            )
+            return exc
+        spend = phases.drain_spend()
+        self._record_phase(
+            run_id,
+            phase,
+            task_id=task_id,
+            attempt=1,
+            status="ok",
+            output_json=answer.model_dump_json(),
+            started_at=started,
+            usage=spend.usage,
+            turns=spend.turns,
+        )
+        return answer
+
     def _propose_failed(self, run_id: str, task: TaskRecord, reason: str) -> str:
         task.last_feedback = reason
         self.bus.emit(
@@ -2434,7 +2500,7 @@ class LoopEngine:
         return reason
 
     def _plan_checkouts(
-        self, p: Pipeline, brief: PlanBrief
+        self, p: Pipeline, brief: PlanBrief, *, fresh: bool = False
     ) -> tuple[str | None, list[tuple[str, str]], Path | None]:
         """Cut a checkout of the node's repository into the data directory,
         on the host, under the host's own credential: the agent sandbox is
@@ -2444,7 +2510,8 @@ class LoopEngine:
         named to the planner by the brief, not checked out. Returns the
         reason the run cannot read, the (repository, in-sandbox path)
         pairs, and the host path of the checkout. The clarifying turn and
-        the proposal of one segment read the same cut."""
+        the proposal of one segment read the same cut; ``fresh`` (a resume)
+        cuts it again so the planner reads the repository as it is now."""
         cut = self._plan_cut.get(p.run_id)
         if cut is not None:
             return None, list(cut[0]), cut[1]
@@ -2460,7 +2527,9 @@ class LoopEngine:
         if self.config.find_repo(repo) is None:
             return f"repository `{repo}` is not configured on this server", [], None
         try:
-            path = p.provisioner.clone_repo_into_data_dir(p.run_id, p.pair.workspace, repo)
+            path = p.provisioner.clone_repo_into_data_dir(
+                p.run_id, p.pair.workspace, repo, fresh=fresh
+            )
         except ProvisionError as exc:
             return str(exc), [], None
         where = str(PurePosixPath(p.pair.agent_workdir) / path.relative_to(p.pair.workspace))
@@ -3275,15 +3344,18 @@ class LoopEngine:
             # chat backend attaches them to the result where it can, and
             # names them otherwise. Only the record (``Published``) persists.
             paths: list[str] = []
+            # Declared files that were gone by publishing (#4522): named
+            # on the event, so the reply can say what was not delivered.
+            missing: list[str] = []
             try:
                 if sink == "artifact":
-                    entry, paths = self._publish_artifact(p, run, carried)
+                    entry, paths, missing = self._publish_artifact(p, run, carried)
                 elif sink == "pr":
                     entry = self._publish_pr(p, run, tasks, carried)
                 elif sink == "issue":
                     entry = self._publish_issue(p, run, tasks, carried)
                 else:
-                    entry, paths = self._publish_chat(p, run, carried)
+                    entry, paths, missing = self._publish_chat(p, run, carried)
             except (
                 SbxError,
                 GithubOpsError,
@@ -3302,6 +3374,7 @@ class LoopEngine:
                 tasks=entry.tasks,
                 files=entry.files,
                 paths=paths,
+                missing=missing,
                 message=(
                     sinks.chat_text(tasks, run.pr_title, carried)
                     if sink == "chat"
@@ -3312,43 +3385,77 @@ class LoopEngine:
 
     def _stage_files(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Path, list[str]]:
+    ) -> tuple[Path, list[str], list[str]]:
         """Copy the files the tasks declared — only those — out to
         ``runs/<run>/artifacts``: a host copy from a mounted workspace, a
         tar of the listed paths from an unmounted one. Returns the
-        directory and the files' host paths, in declaration order."""
+        directory, the files' host paths in declaration order, and the
+        declared files that were gone by the time the result was
+        published.
+
+        A task's file list is taken when the task ends; a later task may
+        clean up what an earlier one left (a ``.src/`` of fetched pages,
+        a ``.verify/`` project), so a declared file can be missing here
+        (#4522). That is skipped and named, never the run's failure: the
+        work is judged and on the row, and the result is what is there."""
         target = artifacts_dir(run, self.config.paths)
         assert target is not None
         files = sinks.declared_files(carried)
         target.mkdir(parents=True, exist_ok=True)
+        missing: list[str] = []
         if files:
             if p.pair.mounted:
                 assert p.pair.workspace is not None
                 for rel in files:
-                    dest = target / rel
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with (
-                        repofiles.open_file(p.pair.workspace, rel) as source,
-                        dest.open("wb") as out,
-                    ):
-                        shutil.copyfileobj(source, out)
-                        os.fchmod(out.fileno(), os.fstat(source.fileno()).st_mode & 0o777)
+                    try:
+                        with repofiles.open_file(p.pair.workspace, rel) as source:
+                            dest = target / rel
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            with dest.open("wb") as out:
+                                shutil.copyfileobj(source, out)
+                                os.fchmod(out.fileno(), os.fstat(source.fileno()).st_mode & 0o777)
+                    except (FileNotFoundError, NotADirectoryError):
+                        missing.append(rel)
             else:
-                self._copy_out(p.pair, target, files)
-        return target, [str(target / rel) for rel in files]
+                present = self._present_in_sandbox(p.pair, files)
+                missing = [rel for rel in files if rel not in present]
+                if len(missing) < len(files):
+                    self._copy_out(p.pair, target, [rel for rel in files if rel in present])
+        if missing:
+            log.warning("run.publish_files_missing", run=run.run_id, missing=missing)
+        kept = [rel for rel in files if rel not in missing]
+        return target, [str(target / rel) for rel in kept], missing
+
+    def _present_in_sandbox(self, pair: SandboxPair, files: Sequence[str]) -> set[str]:
+        """Which of ``files`` (relative to the work dir) exist in the agent
+        sandbox right now. Raises ``SbxError`` when the sandbox cannot
+        answer; the callers decide what that costs."""
+        names = " ".join(shlex.quote(name) for name in files)
+        script = (
+            f"cd {shlex.quote(pair.agent_workdir)} && "
+            f'for f in {names}; do [ -e "$f" ] && printf "%s\\n" "$f"; done; true'
+        )
+        result = pair.agent.exec(["sh", "-c", script])
+        if not result.ok:
+            raise SbxError(
+                f"listing the declared files failed (exit {result.returncode})",
+                argv=result.argv,
+                stderr=result.stderr,
+            )
+        return {line for line in result.stdout.splitlines() if line.strip()}
 
     def _publish_artifact(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Published, list[str]]:
+    ) -> tuple[Published, list[str], list[str]]:
         """The artifact sink: the declared files, staged on the host."""
-        target, paths = self._stage_files(p, run, carried)
+        target, paths, missing = self._stage_files(p, run, carried)
         entry = Published(
             sink="artifact",
             location=str(target),
             tasks=[t.spec.id for t in carried],
             files=len(paths),
         )
-        return entry, paths
+        return entry, paths, missing
 
     def _publish_pr(
         self,
@@ -3445,7 +3552,7 @@ class LoopEngine:
 
     def _publish_chat(
         self, p: Pipeline, run: RunRecord, carried: Sequence[TaskRecord]
-    ) -> tuple[Published, list[str]]:
+    ) -> tuple[Published, list[str], list[str]]:
         """The chat sink is the ``run.published`` event itself: its
         ``message`` is the reply, posted where the run was asked for by
         whoever drives the engine (the daemon's thread, the CLI's
@@ -3453,14 +3560,14 @@ class LoopEngine:
         way the artifact sink stages them (#799) — a result that names a
         file nobody can open is not a delivered result — and their paths
         ride the event for the backend to attach or name."""
-        _, paths = self._stage_files(p, run, carried)
+        _, paths, missing = self._stage_files(p, run, carried)
         entry = Published(
             sink="chat",
             location="chat",
             tasks=[t.spec.id for t in carried],
             files=len(paths),
         )
-        return entry, paths
+        return entry, paths, missing
 
     # -- post-build stages -------------------------------------------------
 

@@ -387,6 +387,44 @@ class TestSchedules:
         assert removed.json()["operation"]["action"] == "schedule.remove"
         assert api.client.get("/v1/schedules/nightly", headers=headers).status_code == 404
 
+    def test_a_schedule_the_config_refuses_is_the_standard_problem(self, scheduled: Api) -> None:
+        """A short detail a person can read and the field it is about — never
+        the validator's own text: no model name, config path, input dump or
+        library URL."""
+        api = scheduled
+        headers = api.bearer(MANAGE)
+        cases = [
+            (
+                {"name": "QA Sweep Schedule", "cron": "0 3 1 1 *"},
+                ["body", "name"],
+                "name must be letters, digits, '.', '_' or '-' (max 64), got 'QA Sweep Schedule'",
+            ),
+            (
+                {"name": "bad-cron", "cron": "99 99 * * *"},
+                ["body", "cron"],
+                "cron '99 99 * * *': '99' is outside 0..59",
+            ),
+            (
+                {"name": "bad-every", "every": "banana"},
+                ["body", "every"],
+                "every must be a period like '24h', '90m', '1h30m', '1d' or '2w', got 'banana'",
+            ),
+        ]
+        for fields, loc, message in cases:
+            body = {"profile": "brief", "ask": "x", **fields}
+            for response in (
+                api.client.post("/v1/schedules", json=body, headers=headers),
+                api.client.patch("/v1/schedules/hourly", json=body, headers=headers),
+            ):
+                assert response.status_code == 422, response.text
+                problem = response.json()
+                assert problem["code"] == "invalid_request"
+                assert problem["detail"] == message
+                assert problem["errors"] == [{"loc": loc, "msg": message}]
+                said = problem["detail"] + "".join(e["msg"] for e in problem["errors"])
+                for leak in ("ScheduleConfig", "input_value", "pydantic.dev", "schedules"):
+                    assert leak not in said, leak
+
     def test_a_schedule_is_updated_atomically_without_losing_pause_state(
         self, scheduled: Api
     ) -> None:

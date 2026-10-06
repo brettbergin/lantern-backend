@@ -15,21 +15,28 @@ import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from lantern.api.attention_events import SWEEP_S
 from lantern.api.chronology import DAEMON_ACTOR
 from lantern.api.collaboration import LocalUser, _event
 from lantern.api.publicids import run_public_id
-from lantern.db.api_models import ApiEventRow, OperationRow
+from lantern.api.push.rules import BODY_LIMIT
+from lantern.db.api_models import ApiEventRow, OperationRow, PushNotificationRow
 from lantern.db.daemon_models import WorkItemRow
+from lantern.db.job_models import ExternalJobRow
 from lantern.plans.epicrun import EpicRun, EpicRunStore
 from lantern.plans.model import Plan, PlanNode
 from lantern.plans.store import PlanStore
-from tests.api.conftest import Api
+from tests.api.conftest import Api, build
+from tests.api.test_attention import _blocked
+from tests.api.test_attention_events import _step
 from tests.api.test_push_devices import (
+    RELAY,
     TOKEN_A,
     TOKEN_B,
     device,
@@ -38,6 +45,7 @@ from tests.api.test_push_devices import (
     register_owner,
 )
 from tests.fakes.fake_relay import FakeRelay
+from tests.unit.test_daemon_loop import gh_item
 
 
 @dataclass
@@ -862,3 +870,626 @@ def test_a_paused_epic_run_answers_to_the_failures_switch(room: Room) -> None:
     _paused(room, "task_failed")
     room.step()
     assert room.relay.sent == []
+
+
+# -- reminders --------------------------------------------------------------------------
+
+TOKEN_C = "c3" * 32
+
+
+def _remind(
+    room: Room,
+    *,
+    group: str,
+    entry_id: str,
+    capabilities: list[str],
+    title: str = "Fix the login",
+    run_id: str | None = None,
+    item_id: str | None = None,
+    reminders: int = 1,
+    waiting_s: int = 14400,
+    **data: Any,
+) -> None:
+    """An ``attention.reminder`` as the tracker records one: the opening's
+    data plus how long and how often, scoped to the entry's run and item."""
+    kind, state = {
+        "decision": ("gate", "gated"),
+        "failed": ("item", "blocked"),
+        "paused": ("provider_hold", "provider_held"),
+    }[group]
+    room.api.ctx.chronology.record(
+        "attention.reminder",
+        room.api.clock(),
+        run_id=run_id,
+        item_id=item_id,
+        actor=DAEMON_ACTOR,
+        data={
+            "entry_id": entry_id,
+            "kind": kind,
+            "group": group,
+            "state": state,
+            "title": title,
+            "since": "2026-10-01T12:00:00Z",
+            "repository": "o/r",
+            "repository_id": "repo_1",
+            "item_id": "itm_1" if item_id else None,
+            "run_id": run_public_id(run_id) if run_id else None,
+            "gate_id": None,
+            "plan_id": None,
+            "node_id": None,
+            "epic_run_id": None,
+            "revision": 3,
+            "waiting_s": waiting_s,
+            "reminders": reminders,
+            "capabilities": capabilities,
+            **data,
+        },
+    )
+
+
+def _blocked_in_channel(room: Room, channel_id: str | None) -> str:
+    """A blocked item the channel asked for (none: nobody did); its id as
+    the store keeps it, which is what the tracker scopes an event by."""
+    dstore = room.api.harness.dstore
+    fields = {} if channel_id is None else {"channel_id": channel_id}
+    dstore.upsert_new(gh_item("1", **fields), room.api.clock())
+    dstore.mark_blocked("gh:1", "stuck", room.api.clock())
+    return next(item.item_id for item in dstore.items() if item.source_key == "1")
+
+
+def _admin(room: Room) -> None:
+    """A third person, an admin, with a device: can approve, is not in
+    the room's channel."""
+    headers = register_member(room.api, "ann", "admin")
+    added = room.api.client.post("/v1/users/me/devices", json=device(TOKEN_C), headers=headers)
+    assert added.status_code in (200, 201), added.text
+
+
+def test_a_decision_reminder_goes_to_who_can_approve_and_see_the_channel(room: Room) -> None:
+    _admin(room)
+    item_id = _blocked_in_channel(room, room.channel_id)
+    _remind(
+        room,
+        group="decision",
+        entry_id="gate:gate_1",
+        capabilities=["gates:approve", "runs:control"],
+        item_id=item_id,
+        waiting_s=4 * 3600,
+    )
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert ping["k"] == "gate" and ping["thread"] == room.channel_id
+    notice = room.notification(ping["ref"])
+    assert notice["kind"] == "gate" and notice["channel_id"] == room.channel_id
+    assert notice["title"] == "Still waiting: Fix the login"
+    assert notice["body"] == "A decision has been waiting 4 hours. First reminder."
+    # Bob can see the channel but cannot approve; Ann can approve but
+    # cannot see the channel.
+    assert room.pushes_to(TOKEN_B) == [] and room.pushes_to(TOKEN_C) == []
+
+
+def test_a_failed_item_reminder_goes_to_who_can_act_on_it(room: Room) -> None:
+    _admin(room)
+    item_id = _blocked_in_channel(room, None)
+    _remind(
+        room,
+        group="failed",
+        entry_id="item:itm_1:blocked:run_r1",
+        capabilities=["runs:control"],
+        item_id=item_id,
+        run_id="r1",
+        reminders=2,
+        waiting_s=2 * 86400 + 3600,
+    )
+    room.step()
+    # Work no channel asked for is the owners' and admins'.
+    for token in (TOKEN_A, TOKEN_C):
+        [ping] = room.pushes_to(token)
+        assert ping["k"] == "failure" and ping["thread"] == ""
+    notice = room.notification(room.pushes_to(TOKEN_A)[0]["ref"])
+    assert notice["title"] == "Still waiting: Fix the login"
+    assert notice["body"] == "It ended blocked 2 days ago and still needs someone. Reminder 2."
+    assert room.pushes_to(TOKEN_B) == []
+
+
+def test_a_reminder_nobody_below_owner_can_act_on_goes_to_the_owners(room: Room) -> None:
+    _admin(room)
+    _remind(
+        room,
+        group="paused",
+        entry_id="provider_hold:claude:3",
+        capabilities=[],
+        title="The claude provider is held until someone recovers it",
+        waiting_s=90 * 60,
+    )
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert ping["k"] == "failure"
+    notice = room.notification(ping["ref"])
+    assert notice["title"] == "Still waiting: The claude provider is held until someone recovers it"
+    assert notice["body"] == (
+        "It has been held 1 hour; nothing moves until someone clears it. First reminder."
+    )
+    assert room.pushes_to(TOKEN_B) == [] and room.pushes_to(TOKEN_C) == []
+
+
+def test_a_suspended_repository_reminder_goes_to_who_can_resume_it(room: Room) -> None:
+    _admin(room)
+    _remind(
+        room,
+        group="paused",
+        entry_id="repository:repo_1",
+        capabilities=["daemon:manage"],
+        title="o/r is no longer polled for work",
+        kind="repository",
+        state="suspended",
+    )
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == ["failure"]
+    assert [p["k"] for p in room.pushes_to(TOKEN_C)] == ["failure"]
+    assert room.pushes_to(TOKEN_B) == []
+
+
+@pytest.mark.parametrize(
+    ("group", "prefs", "expected"),
+    [
+        ("decision", {"gates": False}, []),
+        ("decision", {"failures": False}, ["gate"]),
+        ("failed", {"failures": False}, []),
+        ("failed", {"gates": False}, ["failure"]),
+        ("paused", {"failures": False}, []),
+    ],
+)
+def test_a_reminder_answers_to_the_switch_of_its_kind(
+    room: Room, group: str, prefs: dict[str, Any], expected: list[str]
+) -> None:
+    room.prefs("owner", **prefs)
+    _remind(room, group=group, entry_id=f"{group}:x", capabilities=["gates:approve"])
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == expected
+
+
+def test_a_reminder_in_a_muted_channel_is_not_sent(room: Room) -> None:
+    room.prefs("owner", per_channel={room.channel_id: "none"})
+    item_id = _blocked_in_channel(room, room.channel_id)
+    _remind(
+        room,
+        group="decision",
+        entry_id="gate:gate_1",
+        capabilities=["gates:approve"],
+        item_id=item_id,
+    )
+    room.step()
+    assert room.pushes_to(TOKEN_A) == []
+
+
+def test_two_successive_reminders_are_both_delivered_and_the_same_one_never_twice(
+    room: Room,
+) -> None:
+    _remind(room, group="decision", entry_id="gate:gate_1", capabilities=["gates:approve"])
+    room.step()
+    # The same reminder read again (a replayed row) is one ping.
+    _remind(room, group="decision", entry_id="gate:gate_1", capabilities=["gates:approve"])
+    room.step()
+    assert len(room.pushes_to(TOKEN_A)) == 1
+    # The next reminder, within the dispatcher's dedupe hour, is news.
+    room.api.clock.t += 60
+    _remind(
+        room, group="decision", entry_id="gate:gate_1", capabilities=["gates:approve"], reminders=2
+    )
+    room.step()
+    pings = room.pushes_to(TOKEN_A)
+    assert len(pings) == 2
+    first, second = (room.notification(p["ref"]) for p in pings)
+    assert first["body"].endswith("First reminder.") and second["body"].endswith("Reminder 2.")
+
+
+def test_a_reminder_without_an_entry_or_a_title_is_quiet(room: Room) -> None:
+    _remind(room, group="decision", entry_id="", capabilities=["gates:approve"])
+    _remind(room, group="decision", entry_id="gate:g", capabilities=["gates:approve"], title="")
+    room.step()
+    assert room.relay.sent == []
+
+
+def test_a_reminder_the_tracker_records_reaches_a_device(tmp_path: Path, relay: FakeRelay) -> None:
+    """End to end: the tracker's own event, as it writes it, is what the
+    rule reads."""
+    api = build(
+        tmp_path,
+        config={
+            "push": {"enabled": True, "relay_url": RELAY},
+            "attention": {"remind_after_s": 300, "remind_every_s": 300},
+        },
+    )
+    api.ctx.relay_transport = relay.transport
+    with api.client:
+        owner_headers = register_owner(api)
+        api.client.post("/v1/users/me/devices", json=device(TOKEN_A), headers=owner_headers)
+        api.ctx.push.dispatcher.prime()
+        assert _step(api) == 0
+        _blocked(api)
+        assert _step(api) == 1
+        api.ctx.push.dispatcher.step()
+        # The opening itself is not a push.
+        assert relay.sent == []
+        api.clock.t += 300
+        assert _step(api) == 1
+        api.ctx.push.dispatcher.step()
+        [ping] = [sent.payload for sent in relay.sent if sent.token == TOKEN_A]
+        assert ping["k"] == "failure"
+        notice = api.client.get(
+            f"/v1/users/me/notifications/{ping['ref']}", headers=owner_headers
+        ).json()
+        assert notice["title"] == "Still waiting: Do 1"
+        assert notice["body"] == (
+            "It ended blocked 5 minutes ago and still needs someone. First reminder."
+        )
+        api.clock.t += SWEEP_S
+        assert _step(api) == 0
+        api.ctx.push.dispatcher.step()
+        assert len(relay.sent) == 1
+    api.ctx.close()
+
+
+# -- what a device can do about it --------------------------------------------------------
+
+WIRE_KEYS = {"srv", "k", "ref", "thread"}
+
+
+def _fields(notice: dict[str, Any]) -> tuple[Any, Any, Any]:
+    return notice["entry_id"], notice["actions"], notice["level"]
+
+
+def _job(room: Room, item_id: str) -> None:
+    """The conversation's job ``wrk_1``, for the item ``item_id``."""
+    now = room.api.clock()
+    with room.api.harness.dstore.transaction() as session:
+        session.add(
+            ExternalJobRow(
+                work_id="wrk_1",
+                job_key="job_1",
+                workspace_id="default",
+                channel_id=room.channel_id,
+                item_id=item_id,
+                title="Nightly report",
+                state="blocked",
+                source_json="{}",
+                system_created=0,
+                historical=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+
+def _listed(room: Room) -> dict[str, Any]:
+    """The one entry the attention list shows its owner."""
+    listed = room.api.client.get("/v1/attention", headers=room.owner_headers)
+    assert listed.status_code == 200, listed.text
+    [entry] = listed.json()["data"]
+    return dict(entry)
+
+
+def test_an_opened_gate_names_its_entry_and_offers_approval_to_who_may_approve(
+    room: Room,
+) -> None:
+    _admin(room)
+    room.api.ctx.chronology.record(
+        "gate.opened",
+        room.api.clock(),
+        run_id="r_gate",
+        actor=DAEMON_ACTOR,
+        data={"kind": "merge", "state": "open", "pr_number": 7, "pr_url": None, "revision": 1},
+    )
+    room.step()
+    gate_id = room.api.ctx.public_ids.gate_id("r_gate", room.api.clock())
+    for token in (TOKEN_A, TOKEN_C):
+        [ping] = room.pushes_to(token)
+        # The relay's payload is what it always was.
+        assert set(ping) == WIRE_KEYS and ping["k"] == "gate"
+    notice = room.notification(room.pushes_to(TOKEN_A)[0]["ref"])
+    assert _fields(notice) == (f"gate:{gate_id}", ["gate_approve"], "time_sensitive")
+    # A member may not approve: no notice, so no approval offered.
+    assert room.pushes_to(TOKEN_B) == []
+
+
+def test_a_jobs_attention_names_the_entry_and_only_the_actions_each_person_may_take(
+    room: Room,
+) -> None:
+    item_id = _blocked_in_channel(room, room.channel_id)
+    _job(room, item_id)
+    entry = _listed(room)
+    offered = [a["action"] for a in entry["actions"]]
+    assert offered == ["retry", "abandon", "dismiss", "delete"]
+
+    room.attention("failure")
+    room.step()
+    [owner_ping] = room.pushes_to(TOKEN_A)
+    [bob_ping] = room.pushes_to(TOKEN_B)
+    assert set(owner_ping) == WIRE_KEYS and set(bob_ping) == WIRE_KEYS
+    assert _fields(room.notification(owner_ping["ref"])) == (entry["id"], offered, "active")
+    # Bob is in the conversation but holds none of their capabilities.
+    assert _fields(room.notification(bob_ping["ref"], "bob")) == (entry["id"], [], "active")
+
+
+def test_a_jobs_action_required_is_time_sensitive_for_who_can_decide(room: Room) -> None:
+    item_id = _blocked_in_channel(room, room.channel_id)
+    _job(room, item_id)
+    entry = _listed(room)
+    room.attention("action_required")
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == (
+        entry["id"],
+        ["retry", "abandon", "dismiss", "delete"],
+        "time_sensitive",
+    )
+    assert room.pushes_to(TOKEN_B) == []
+
+
+def test_a_jobs_attention_about_nothing_waiting_names_no_entry(room: Room) -> None:
+    room.attention("action_required", run_id=run_public_id("r_gone"))
+    room.attention("work")
+    room.step()
+    gate, work = (room.notification(p["ref"]) for p in room.pushes_to(TOKEN_A))
+    assert _fields(gate) == (None, [], "time_sensitive")
+    assert _fields(work) == (None, [], "passive")
+
+
+def test_a_reminder_offers_each_person_only_the_actions_they_may_take(room: Room) -> None:
+    item_id = _blocked_in_channel(room, room.channel_id)
+    _remind(
+        room,
+        group="decision",
+        entry_id="gate:gate_1",
+        capabilities=["gates:approve", "runs:steer"],
+        actions=["gate_approve", "steer", "not_an_action"],
+        item_id=item_id,
+    )
+    room.step()
+    [owner_ping] = room.pushes_to(TOKEN_A)
+    [bob_ping] = room.pushes_to(TOKEN_B)
+    assert set(owner_ping) == WIRE_KEYS
+    assert _fields(room.notification(owner_ping["ref"])) == (
+        "gate:gate_1",
+        ["gate_approve", "steer"],
+        "time_sensitive",
+    )
+    # A member may steer but not approve: no approval is offered to him.
+    assert _fields(room.notification(bob_ping["ref"], "bob")) == (
+        "gate:gate_1",
+        ["steer"],
+        "time_sensitive",
+    )
+
+
+@pytest.mark.parametrize("group", ["failed", "paused"])
+def test_a_reminder_about_a_failure_or_a_hold_is_active(room: Room, group: str) -> None:
+    _remind(
+        room,
+        group=group,
+        entry_id=f"{group}:x",
+        capabilities=["runs:control"],
+        actions=["retry", "dismiss"],
+    )
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == (f"{group}:x", ["retry", "dismiss"], "active")
+
+
+def test_an_escalation_reminder_reaches_who_holds_the_escalated_acts_capability(
+    room: Room,
+) -> None:
+    """Approving an escalated plan approval needs ``plans:create``, which
+    a member holds: the member is reminded and offered both actions — the
+    names alone (``approve``) say nothing of what they need."""
+    _admin(room)
+    _remind(
+        room,
+        group="decision",
+        entry_id="escalation:dec_1",
+        capabilities=["plans:create"],
+        actions=["approve", "decline"],
+        action_capabilities={"approve": "plans:create", "decline": "plans:create"},
+        title="planner asks to approve the level proposed under “An epic”",
+        kind="escalation",
+        state="escalated",
+    )
+    room.step()
+    assert [p["k"] for p in room.pushes_to(TOKEN_C)] == ["gate"]
+    for token, user in ((TOKEN_A, "owner"), (TOKEN_B, "bob")):
+        [ping] = room.pushes_to(token)
+        assert ping["k"] == "gate"
+        assert _fields(room.notification(ping["ref"], user)) == (
+            "escalation:dec_1",
+            ["approve", "decline"],
+            "time_sensitive",
+        )
+
+
+def test_an_escalated_proposal_of_work_is_the_owners_alone(room: Room) -> None:
+    _admin(room)
+    _remind(
+        room,
+        group="decision",
+        entry_id="escalation:dec_2",
+        capabilities=["policy:manage"],
+        actions=["decline"],
+        action_capabilities={"decline": "policy:manage"},
+        title="planner asks to propose a plan for o/r",
+        kind="escalation",
+        state="escalated",
+    )
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == (
+        "escalation:dec_2",
+        ["decline"],
+        "time_sensitive",
+    )
+    assert room.pushes_to(TOKEN_B) == [] and room.pushes_to(TOKEN_C) == []
+
+
+def test_a_reminder_recorded_before_actions_were_offers_none(room: Room) -> None:
+    _remind(room, group="decision", entry_id="gate:gate_1", capabilities=["gates:approve"])
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == ("gate:gate_1", [], "time_sensitive")
+
+
+def test_plan_notices_name_no_entry_and_are_active(room: Room) -> None:
+    _plan_node(room)
+    item_id = _plan_item(room, admitted_by=room.owner)
+    _questions(room, item_id)
+    _proposed(room, item_id)
+    _epic_run(room, started_by=room.owner)
+    _paused(room, "task_failed")
+    room.step()
+    pings = room.pushes_to(TOKEN_A)
+    assert [p["k"] for p in pings] == ["gate", "work", "failure"]
+    for ping in pings:
+        assert set(ping) == WIRE_KEYS
+        assert _fields(room.notification(ping["ref"])) == (None, [], "active")
+
+
+def test_news_that_asks_nothing_is_passive_and_a_mention_active(room: Room) -> None:
+    turn = room.say(room.owner, "please fix the login", ("planner",))
+    _deliver(room, turn.id, "merged", "Fix the login", "planner")
+    store = room.api.ctx.collaboration
+    store.start_turn(turn.id, room.api.clock())
+    store.finish_turn(turn.id, error=None, now=room.api.clock())
+    room.say(room.bob, "@owner have a look")
+    room.step()
+    pings = room.pushes_to(TOKEN_A)
+    assert [p["k"] for p in pings] == ["work", "work", "mention"]
+    assert [_fields(room.notification(p["ref"])) for p in pings] == [
+        (None, [], "passive"),
+        (None, [], "passive"),
+        (None, [], "active"),
+    ]
+
+
+def test_work_that_could_not_finish_is_active(room: Room) -> None:
+    turn = room.say(room.owner, "please fix the login", ("planner",))
+    _deliver(room, turn.id, "failed", "Fix the login", "planner")
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    assert _fields(room.notification(ping["ref"])) == (None, [], "active")
+
+
+def test_a_notification_recorded_before_the_fields_reads_about_nothing_and_active(
+    room: Room,
+) -> None:
+    room.attention("action_required", run_id=run_public_id("r_gone"))
+    room.step()
+    [ping] = room.pushes_to(TOKEN_A)
+    with room.api.harness.dstore.transaction() as session:
+        row = session.get(PushNotificationRow, ping["ref"])
+        assert row is not None
+        row.entry_id = None
+        row.actions_json = None
+        row.level = None
+    assert _fields(room.notification(ping["ref"])) == (None, [], "active")
+
+
+# -- the daily digest ---------------------------------------------------------------
+
+
+def _digest(room: Room, day: str = "2026-10-02", **numbers: Any) -> None:
+    """A ``briefing.digest`` as the tracker records one: for everyone, no
+    run, item or channel."""
+    room.api.ctx.chronology.record(
+        "briefing.digest",
+        room.api.clock(),
+        actor=DAEMON_ACTOR,
+        data={
+            "day": day,
+            "since": "2026-10-01T07:00:00Z",
+            "until": "2026-10-02T07:00:00Z",
+            "landed": 11,
+            "failed": 1,
+            "waiting": 2,
+            "decided_allow": 9,
+            "decided_escalate": 0,
+            "runway_days": 2.5,
+            "timezone": "UTC",
+            **numbers,
+        },
+    )
+
+
+def test_the_digest_is_one_work_push_to_every_member(room: Room) -> None:
+    _admin(room)
+    _digest(room)
+    room.step()
+    for token in (TOKEN_A, TOKEN_B, TOKEN_C):
+        [ping] = room.pushes_to(token)
+        assert ping["k"] == "work" and ping["thread"] == ""
+    notice = room.notification(room.pushes_to(TOKEN_B)[0]["ref"], "bob")
+    assert notice["kind"] == "work" and notice["channel_id"] is None
+    assert notice["title"] == "Your Lantern briefing"
+    assert (notice["entry_id"], notice["actions"], notice["level"]) == (None, [], "passive")
+    assert notice["body"] == (
+        "Since yesterday 07:00: 11 landed, 1 failed; 2 waiting on a person; "
+        "9 decided under grants; runway 2.5 days."
+    )
+    assert len(notice["body"]) <= BODY_LIMIT
+
+
+def test_the_same_digest_is_never_pushed_twice(room: Room) -> None:
+    _digest(room)
+    room.step()
+    _digest(room)
+    room.step()
+    assert len(room.pushes_to(TOKEN_A)) == 1
+    # The next day's is its own.
+    room.api.clock.t += 60
+    _digest(room, day="2026-10-03")
+    room.step()
+    assert len(room.pushes_to(TOKEN_A)) == 2
+
+
+def test_the_digest_answers_to_the_work_switch(room: Room) -> None:
+    room.prefs("bob", work=False)
+    room.prefs("owner", failures=False, gates=False)
+    _digest(room)
+    room.step()
+    assert room.pushes_to(TOKEN_B) == []
+    assert [p["k"] for p in room.pushes_to(TOKEN_A)] == ["work"]
+
+
+def test_a_digest_without_its_day_is_quiet(room: Room) -> None:
+    _digest(room, day="")
+    room.step()
+    assert room.relay.sent == []
+
+
+def test_a_digest_the_tracker_records_reaches_a_device(tmp_path: Path, relay: FakeRelay) -> None:
+    """End to end: the tracker's own event, as it writes it, is what the
+    rule reads; a plain API client is no member and is never a recipient."""
+    api = build(
+        tmp_path,
+        config={
+            "push": {"enabled": True, "relay_url": RELAY},
+            "attention": {"digest_at": "07:00"},
+        },
+    )
+    api.ctx.relay_transport = relay.transport
+    midnight = datetime(2026, 10, 2, tzinfo=UTC).timestamp()
+    api.clock.t = midnight + 6 * 3600
+    with api.client:
+        owner_headers = register_owner(api)
+        api.client.post("/v1/users/me/devices", json=device(TOKEN_A), headers=owner_headers)
+        api.ctx.push.dispatcher.prime()
+        assert _step(api) == 0
+        api.clock.t = midnight + 7 * 3600
+        assert _step(api) == 1
+        api.ctx.push.dispatcher.step()
+        [ping] = [sent.payload for sent in relay.sent if sent.token == TOKEN_A]
+        assert ping["k"] == "work"
+        assert len(relay.sent) == 1
+        api.clock.t += SWEEP_S
+        assert _step(api) == 0
+        api.ctx.push.dispatcher.step()
+        assert len(relay.sent) == 1
+    api.ctx.close()

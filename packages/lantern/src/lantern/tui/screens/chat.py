@@ -1,4 +1,4 @@
-"""Chat: the control channel — the concierge, `!sbx` verbs and daemon
+"""Chat: the control channel — the concierge, `!lantern` verbs and daemon
 notices — as the local bridge's rows."""
 
 from __future__ import annotations
