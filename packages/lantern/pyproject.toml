@@ -64,7 +64,7 @@ dependencies = [
 [project.optional-dependencies]
 # Host-side SDK access for `lantern list-models` (agent sessions get the SDK
 # inside the sandbox via lantern-worker[copilot]; runs never need this extra).
-copilot = ["github-copilot-sdk>=1.0.13"]
+copilot = ["github-copilot-sdk>=1.0.15"]
 # Host-side model listing; agent sessions install the worker's matching extra.
 codex = ["openai-codex==0.147.0"]
 # `lantern daemon`'s chat bridge (chronology + steering), one extra per
