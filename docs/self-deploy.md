@@ -156,6 +156,120 @@ so the daemon neither asks GitHub Releases nor advises a hand upgrade the next d
 stale host shows up as a failed or skipped **Deploy the daemon** run — check that, not the
 concierge.
 
+## Running the deploy from another runner
+
+`deploy.yml` needs GitHub Actions: its steps carry `if:` conditions, `always()` and step
+outputs. `scripts/deploy_daemon.py` is the same pipeline for a runner that has none of
+them: one that runs a list of steps in order, stops at the first failure, and then runs a
+second list whatever happened. `deploy.yml` is unchanged and stays the deploy until a
+cutover; on one host use one or the other, never both.
+
+The script has three entry points, called as three steps of one job: two in order, and
+one that always runs.
+
+```bash
+python3 scripts/deploy_daemon.py prepare --wait-cooldown
+python3 scripts/deploy_daemon.py deploy
+# always, whatever the two above did; the status is the job's:
+# success, failure, timed_out or cancelled
+python3 scripts/deploy_daemon.py finish --status "$STATUS"
+```
+
+| Entry point | The steps of `deploy.yml` it performs                                                                                             | Exit code                                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `prepare`   | "Resolve host paths" through "Wait for the daemon to go idle"                                                                     | 0 with the daemon held and idle, or with the host untouched when there is nothing to deploy; non-zero on any failure       |
+| `deploy`    | "Refresh the target after draining" through "Refresh the baked template", and "Roll back" when anything from the upgrade on fails | non-zero when the deploy failed, whether or not the rollback restored the previous version; 0 when there was nothing to do |
+| `finish`    | the `always()` steps: record the outcome in `state/deploy.json`, release the hold, remove the downloads, report                   | 0, unless the outcome could not be recorded or the job's own state could not be trusted                                    |
+
+Each step does what its workflow step does, under the same condition and in the same
+order, and the notices are the same texts. `finish` needs nothing from the steps before
+it. When `prepare` never ran it does nothing; after a step that was cut short it releases
+the hold only if this job had asked for one, and records an outcome only if the upgrade
+had started. A job that is cancelled or runs out of time is not rolled back, as under
+Actions: if the upgrade had started, `state/deploy.json` keeps `in_progress` and
+automatic deploys stop until a manual one clears it.
+
+The three steps share one directory, `deploy-daemon-<run id>` under `RUNNER_TEMP` (mode
+0700, removed by `finish`). It holds what the workflow kept in `steps.*`, and the
+downloaded wheels. `GITHUB_ENV` and `GITHUB_OUTPUT` are neither read nor written. There is
+no `github.workflow_sha` to fetch the helper at: the runner supplies
+`scripts/deploy_daemon.py` and `scripts/release_pipeline.py` side by side from a trusted
+revision of `main`, never from a pull request head or a release asset. The script is
+stdlib-only and runs under Python 3.10 or newer; the helper still runs under the home's
+own interpreter.
+
+### What the job's environment carries
+
+What `deploy.yml` took from the `github` context, repository variables and secrets
+arrives as environment variables, under the names its `env:` blocks use.
+
+| Variable                                | Meaning                                                                                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GITHUB_REPOSITORY`                     | Required. The repository whose releases deploy.                                                                                                   |
+| `GITHUB_RUN_ID`                         | Required. Names the hold, the job's directory and the `run=` of the history line.                                                                 |
+| `GITHUB_EVENT_NAME`                     | `workflow_dispatch` is a manual run; anything else (`release`, `schedule`) is automatic.                                                          |
+| `INPUT_VERSION`                         | The version to deploy; empty for the latest complete release.                                                                                     |
+| `RUNNER_TEMP`                           | Required. The job's temporary directory, an absolute path.                                                                                        |
+| `GITHUB_STEP_SUMMARY`                   | Optional. The helper appends its decision line to it.                                                                                             |
+| `LANTERN_HOME_VAR`, `LANTERN_HOME`      | The home, resolved as the workflow's first step does: `LANTERN_HOME_VAR` (the repository variable there), else `LANTERN_HOME`, else `~/.lantern`. |
+| `HOST`                                  | Required. The host, as the notices name it.                                                                                                       |
+| `DEPLOY_CHANNEL`                        | Required. The channel the deploy notices go to.                                                                                                   |
+| `UNIT`                                  | The user unit to restart; `lantern-daemon` when unset.                                                                                            |
+| `RUN_URL`                               | The link the notices give for the run. When unset it is composed as Actions does, from `GITHUB_SERVER_URL`; one of the two is required.           |
+| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | The PDF analyzer's sign-in. Needed once there is a release to deploy, and handed to the analyzer's `sbx` commands only.                           |
+| `DEPLOY_GITHUB_TOKEN`                   | The job's GitHub token (`contents: read`). `--token-env NAME` or `DEPLOY_TOKEN_ENV` names another variable; `GH_TOKEN` is the fallback.           |
+| `DEPLOY_HOLD_PREFIX`                    | Optional, as is `prepare --hold-prefix`: a prefix for the hold's name.                                                                            |
+| `DEPLOY_JOB_STATUS`                     | The job's status for `finish`, when `--status` is not given.                                                                                      |
+
+### Where it departs from `deploy.yml`
+
+- **No receipt.** There is no `workflow_run` event and no `release-result` artifact, so
+  `prepare` goes straight to the version check, as the schedule and dispatch events do.
+- **Cooldown.** With no fifteen-minute schedule, nothing would pick up a release deferred
+  by the cooldown. `prepare --wait-cooldown` sleeps until the cooldown has passed, decides
+  again, and goes on with what it finds then: a newer release, or nothing to do. It waits
+  before doctor and before any hold. A manual run never waits, because the cooldown does
+  not apply to it. Without the flag a cooldown ends the job successfully, as it always did.
+- **The token never reaches lantern.** Actions scoped its token to the steps that call
+  GitHub; a runner that puts one token in every step's environment cannot. The script
+  passes the token as `GH_TOKEN` to the release helper's GitHub subcommands and to nothing
+  else, and removes `GH_TOKEN`, `GITHUB_TOKEN`, `DEPLOY_GITHUB_TOKEN` and any variable
+  named in its place from the environment of every `lantern`, `systemctl`, `uv` and `sbx`
+  command it runs, so those keep the host's own credentials. A runner that keeps its token
+  under a name of its own sets `DEPLOY_TOKEN_ENV` to that name, or passes `--token-env`.
+  The notifier and `deploy-finish` get no token either, as in the workflow. One call is
+  the helper's own, not the script's: `deploy-check` runs `lantern --version` itself, and
+  that call sees the helper's `GH_TOKEN`, as it does under Actions.
+- **The hold's name** is `deploy-<run id>`, with the prefix in front when one is set, so
+  two runners whose run ids overlap cannot take or release each other's hold. `finish`
+  releases the name `prepare` recorded.
+- **The job's status** is the runner's word. `success`, `failure` and `cancelled` mean what
+  `job.status` meant; `timed_out` is reported as `cancelled`; anything else, or nothing, is
+  reported as a failure.
+- **What the job definition did is the runner's to provide:** one deploy at a time on the
+  host, with pending manual requests kept; a timeout that bounds the idle wait (480
+  minutes there); manual runs only from `main`; and the security invariant at the top of
+  `deploy.yml`, that no job on this host is reachable from a fork-triggerable event.
+- **A host that still has the pre-rename home** gets no dedicated message from this entry
+  point: with no Lantern home to deploy to, `prepare` fails at its first helper call
+  instead, before anything is touched.
+
+### What it does not cover
+
+`finish` runs only if the runner runs it. If the runner's own process is killed outright,
+or the host goes down mid-job, nothing after that point happens: the hold stays, and the
+daemon stays paused, until someone releases it by hand.
+
+```bash
+lantern daemon ctl status                          # the standing holds, and whose
+lantern daemon ctl resume --hold deploy-<run id>   # with the prefix, if one was set
+```
+
+If the upgrade had already started, `state/deploy.json` still says `in_progress` as well:
+check the host, then run a manual deploy to verify health and clear it, as after any
+interrupted deployment. The `deploy-daemon-<run id>` directory left under `RUNNER_TEMP`
+holds only wheels and the job's own notes, and can be removed.
+
 ## Cutovers
 
 Because this pipeline deploys unattended, a change to what the deploy job needs from the
