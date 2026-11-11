@@ -532,7 +532,10 @@ def test_deploy_refreshes_after_drain_before_fetch_and_mutation():
     assert positions == sorted(positions)
     assert "github.workflow_sha" in text
     assert "queue: max" in text
-    assert "schedule:" in text  # deferred work is retried even without another merge
+    # No reconcile schedule: the deploy that meets a cooldown waits it out
+    # itself, so deferred work still needs no further merge.
+    assert "\n  schedule:" not in text
+    assert "--wait-cooldown" in (ROOT / "scripts/deploy_daemon.py").read_text()
 
 
 def test_deploy_notice_overrides_the_channel_through_the_old_notifier_signature(tmp_path):

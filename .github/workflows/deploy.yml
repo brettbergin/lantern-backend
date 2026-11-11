@@ -6,12 +6,24 @@ name: Deploy the daemon
 # contrib/workflows/deploy-daemon.yml.example (docs/deploy.md); what is
 # specific to this host is docs/self-deploy.md.
 #
-# Deploys completed release batches to the daemon host, a self-hosted runner.
-# Merge to main -> three quiet minutes (at most thirty) -> test + publish
-# -> this takes a named pause hold on the daemon, waits — without a cap — for
-# the run in flight to finish, refreshes to the latest complete release, restarts the
-# service, health-checks it, and restores every other hold. Any failed check
-# rolls back to the version that was running before.
+# MANUAL BREAK-GLASS: this workflow no longer starts by itself. The automatic
+# deploy (merge to main -> three quiet minutes, at most thirty -> test +
+# publish -> deploy) is started by another runner when a release is
+# published, through scripts/deploy_daemon.py (docs/self-deploy.md, "Running
+# the deploy from another runner"). What stays here is the same pipeline for
+# a person to dispatch when that runner cannot deploy: it takes a named pause
+# hold on the daemon, waits, without a cap, for the run in flight to finish,
+# refreshes to the latest complete release, restarts the service,
+# health-checks it, and releases its own hold. Any failed check rolls back to
+# the version that was running before.
+#
+# BEFORE DISPATCHING BY HAND: the concurrency group below serializes runs of
+# this workflow only and knows nothing of the other runner. First make sure
+# the other runner's deploy is not running and cannot start (pause it there),
+# and resume it afterwards: the two must never run together. A hold is
+# released by the side that took it. This workflow releases only its own
+# deploy-<run id>; one the other runner's job left standing is released
+# there, or by hand (docs/self-deploy.md).
 #
 # NEVER RESTART UNDER A LIVE RUN (#534): since 1.0 the loop merges its own
 # PRs, every merge deploys, and the next queued item is usually already
@@ -35,18 +47,15 @@ name: Deploy the daemon
 #   fork-triggerable event (pull_request, pull_request_target, issue_comment).
 #   This repo is PUBLIC and the runner's user has passwordless root on the
 #   host, so a fork-triggered job on this runner would be a full host
-#   compromise. The triggers below are safe: `workflow_run` fires only
-#   from Release in base-repository context; schedule runs main; manual
-#   dispatch needs write access and is restricted to main.
+#   compromise. The one trigger below is safe, and the invariant still
+#   holds: manual dispatch needs write access and is restricted to main.
 
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
-    branches: [main]
-  # Reconcile a cooldown deferral or a missed completion event. No release is created.
-  schedule:
-    - cron: '7,22,37,52 * * * *'
+  # Manual only. This used to start on every completed Release, and every
+  # fifteen minutes to pick up a release the cooldown had deferred. Both are
+  # gone: the other runner starts the automatic deploy, and waits out the
+  # cooldown itself (`prepare --wait-cooldown`), so there is nothing left
+  # for a timer to reconcile here.
   workflow_dispatch:
     inputs:
       version:
@@ -54,7 +63,8 @@ on:
         required: false
         default: ""
 
-# Serialize host mutations; never replace a pending manual operation.
+# Serialize this workflow's runs; never replace a pending manual operation.
+# The other runner's deploy is NOT in this group: see the header.
 concurrency:
   group: deploy-daemon
   cancel-in-progress: false
@@ -66,13 +76,8 @@ permissions:
 
 jobs:
   deploy:
-    # A failed/cancelled Release has nothing to deploy.
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      github.event_name == 'schedule' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_branch == 'main')
+    # A dispatch from main and nothing else.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]
     # Bounds the idle wait. 1.0 runs take 14–180 min (#512 ran 182); the
     # engine's own wall clock ([budgets] max_wall_clock_s, 2 h by default)
