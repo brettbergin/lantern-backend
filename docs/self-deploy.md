@@ -19,22 +19,30 @@ merge to main → coalesced request → Release (verify + tag + GitHub Release) 
 ```
 
 Merges share a release after three quiet minutes, with a maximum thirty-minute batch
-wait ([RELEASING.md](../RELEASING.md)). `.github/workflows/deploy.yml` carries completed
-releases onto the daemon host. A task may already be in flight when a release arrives,
-which is why draining has no cap apart from the job timeout (#534): restarting anyway
-killed tasks and spent their resume budgets.
+wait ([RELEASING.md](../RELEASING.md)). A job on another runner carries each published
+release onto the daemon host by running `scripts/deploy_daemon.py`
+([Running the deploy from another runner](#running-the-deploy-from-another-runner)).
+`.github/workflows/deploy.yml` is the same pipeline, kept as a manual break-glass that
+never starts by itself. A task may already be in flight when a release arrives, which is
+why draining has no cap apart from the job timeout (#534): restarting anyway killed tasks
+and spent their resume budgets.
 
 Release reuses successful CI for its frozen commit, or runs the same CI workflow
 when that evidence is unavailable. Its automatic intake coalesces pending requests;
 manual release requests retain their place in the publication queue. The final
 wheels pass a clean installation and CLI smoke test before publication. Deployment
-still starts from the completed `Release` workflow and its publication receipt.
+starts from the published GitHub Release itself: the other runner's job runs when one is
+published and compares it with what is installed. The `Release` workflow's publication
+receipt is no longer read.
 
 Automatic deployments have a thirty-minute cooldown after a deployment finishes,
-including a verified rollback. No hold is taken during that cooldown. A reconciliation
-schedule at minutes 7, 22, 37 and 52 retries deferred releases even if no further merge
-arrives. It creates no tags or packages and does nothing when the host is current.
-GitHub can delay scheduled jobs; this is eventual reconciliation, not a deadline.
+including a verified rollback. No hold is taken during that cooldown. Nothing retries on
+a schedule any more: the job that meets the cooldown waits it out itself
+(`prepare --wait-cooldown`), decides again, and deploys the newest release it finds then,
+even if no further merge arrives. A job that finds the host current does nothing. The
+old schedule also retried a release whose start had been missed; that is now the other
+runner's to cover, and the next published release, or a manual run, deploys the newest
+release either way.
 
 At idle, automatic and manual "latest" deployments select the newest complete stable
 release again. If B and C published while A waited, the host installs C directly.
@@ -46,18 +54,19 @@ health; reports and history use that final version.
 
 `deploy.yml` is `contrib/workflows/deploy-daemon.yml.example` with these differences:
 
-- **Trigger.** Successful `workflow_run` on `Release`, reconciliation `schedule`, and
-  `workflow_dispatch` restricted to `main`. The completion's `release-result` artifact
-  explicitly distinguishes a publication from a no-op. A missing/malformed artifact
-  fails the event-triggered attempt; reconciliation can still find a completed release.
+- **Trigger.** `workflow_dispatch` only, restricted to `main`: the workflow is the manual
+  break-glass and never starts by itself. The example's `schedule` has no counterpart
+  here, because the automatic start is another runner's (below). The step that read the
+  `release-result` artifact of a completed `Release` is still in the file, but a dispatch
+  never takes that branch.
 - **Version.** The greatest stable numeric version with a published GitHub Release and
   both wheels and source distributions uploaded. Drafts are ignored; an incomplete
   published release fails closed. The tag must resolve to a commit on `main`.
 - **Workflow helper.** No checkout runs on the host. The job downloads
   `scripts/release_pipeline.py` at its own `github.workflow_sha`, with the workflow's
   token. Only this trusted workflow revision supplies executable helper code. The
-  release result and manifest are parsed as data. The token needs `contents: read`
-  and `actions: read` to read releases and the completion artifact.
+  manifest is parsed as data. The token has `contents: read` to read releases;
+  `actions: read` was for the completion artifact, which a dispatch does not read.
 - **Wheels from the release, never an index.** Releases are GitHub Releases only (v2.1.36
   was the last on PyPI), and the names a rename moves to are not ours on any index, so
   neither package is ever installed by name. The helper downloads the release's exact
@@ -111,9 +120,23 @@ Confirm with `gh api repos/brettbergin/lantern-backend/actions/runners --jq '.ru
 `runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]` and calls the host by
 the same name in its notices. To move the daemon: set the repository variable
 `LANTERN_DEPLOY_HOST` to the new host's runner label and register a runner there with that
-label. `deploy.yml` does not change, and neither does anything `make check` runs.
+label. `deploy.yml` does not change, and neither does anything `make check` runs. The
+other runner's deploy job names the host in its own settings (`HOST`, and the home), so
+those move with the daemon too.
 
 ## Operating it
+
+Day to day nothing is operated here: the other runner deploys each published release. To
+deploy a chosen version, or to roll back, start a manual run of its deploy job with the
+version (`INPUT_VERSION`); the same manual rules apply as to a dispatch here.
+
+`deploy.yml` is the break-glass, for when that runner cannot deploy. Its concurrency
+group serializes runs of the workflow only and knows nothing of the other runner. So
+before dispatching by hand, make sure the other runner's deploy is not running and cannot
+start (pause it there), and resume it afterwards: the two must never run together. A hold
+is released by the side that took it. The workflow releases only its own
+`deploy-<run id>`; a hold the other runner's job left standing is released there, or by
+hand ([What it does not cover](#what-it-does-not-cover)).
 
 ```bash
 # deploy a specific version (also the rollback path)
@@ -134,26 +157,28 @@ by hand with the commands in the generic guide, from any directory. Every deploy
 snapshot under `~/.lantern/backups/` and a line in `~/.lantern/logs/deploy/history.log`.
 
 Manual deploys bypass the cooldown and failed-version suppression, but wait for the
-shared deployment slot and for the current daemon task to drain. Pending manual requests
-are retained (`queue: max`, at most 100 pending runs). An explicit manual recovery can
+current daemon task to drain. Dispatches of `deploy.yml` also wait for the workflow's own
+deployment slot, and pending ones are retained (`queue: max`, at most 100 pending runs);
+that slot does not include the other runner. An explicit manual recovery can
 reinstall the same version after an interrupted deployment; it still must pass preflight.
 
 A failed upgrade followed by rollback suppresses that target and older versions from
 automatic retries. A manual rollback suppresses automatic releases through the latest
-published version observed when that rollback starts, so the next schedule cannot undo
-it. A newer version or an explicit manual retry can proceed. If rollback cannot restore
-health, repair the host manually; after repair, use a manual deployment to verify health
-and clear the interrupted state. To stay pinned across future releases, disable the
-workflow and use the by-hand procedure until automatic deployment is wanted again.
+published version observed when that rollback starts, so the next automatic deploy cannot
+undo it. A newer version or an explicit manual retry can proceed. If rollback cannot
+restore health, repair the host manually; after repair, use a manual deployment to verify
+health and clear the interrupted state. To stay pinned across future releases, pause the
+other runner's deploy job and use the by-hand procedure until automatic deployment is
+wanted again.
 
-Cooldown/current/blocked decisions appear in the Actions summary without chat notices.
+Cooldown/current/blocked decisions appear in the job's step summary, without chat notices.
 The control channel sees actual draining, a changed target after draining, and the final
 deployment or rollback outcome. Normal successful upgrades are spaced apart; manual
 operations and necessary rollback recovery can restart sooner.
 
 Set `[daemon] version_check = false` in this host's `lantern.toml` (#641): the pipeline keeps it current,
 so the daemon neither asks GitHub Releases nor advises a hand upgrade the next deploy would undo. A
-stale host shows up as a failed or skipped **Deploy the daemon** run — check that, not the
+stale host shows up as a failed deploy job on the other runner: check that, not the
 concierge.
 
 ## Running the deploy from another runner
@@ -161,8 +186,9 @@ concierge.
 `deploy.yml` needs GitHub Actions: its steps carry `if:` conditions, `always()` and step
 outputs. `scripts/deploy_daemon.py` is the same pipeline for a runner that has none of
 them: one that runs a list of steps in order, stops at the first failure, and then runs a
-second list whatever happened. `deploy.yml` is unchanged and stays the deploy until a
-cutover; on one host use one or the other, never both.
+second list whatever happened. The cutover has happened: a job on another runner, started
+by each published release, is the deploy now, and `deploy.yml` stays as the manual
+break-glass. The two must never run together ([Operating it](#operating-it)).
 
 The script has three entry points, called as three steps of one job: two in order, and
 one that always runs.
@@ -224,9 +250,10 @@ arrives as environment variables, under the names its `env:` blocks use.
 ### Where it departs from `deploy.yml`
 
 - **No receipt.** There is no `workflow_run` event and no `release-result` artifact, so
-  `prepare` goes straight to the version check, as the schedule and dispatch events do.
-- **Cooldown.** With no fifteen-minute schedule, nothing would pick up a release deferred
-  by the cooldown. `prepare --wait-cooldown` sleeps until the cooldown has passed, decides
+  `prepare` goes straight to the version check, as a dispatch of `deploy.yml` does.
+- **Cooldown.** `deploy.yml` used to run every fifteen minutes to pick up a release the
+  cooldown had deferred. That schedule is gone, so the job waits instead:
+  `prepare --wait-cooldown` sleeps until the cooldown has passed, decides
   again, and goes on with what it finds then: a newer release, or nothing to do. It waits
   before doctor and before any hold. A manual run never waits, because the cooldown does
   not apply to it. Without the flag a cooldown ends the job successfully, as it always did.
@@ -303,3 +330,10 @@ running daemon can strand it. Each one is recorded here with its manual step.
   `-f purge=true` removes it. Configuration management that writes into the home (Ansible
   roles for OIDC or push) must target `~/.lantern/config/lantern.toml` and
   `LANTERN_OIDC_CLIENT_SECRET` from then on.
+- **The deploy moved to another runner.** `deploy.yml` lost its `workflow_run` and
+  `schedule` triggers and became the manual break-glass; a job on another runner starts
+  the deploy when a release is published
+  ([Running the deploy from another runner](#running-the-deploy-from-another-runner)).
+  The one manual step is the order: have that job ready before this change merges,
+  because from the merge on nothing in this repository starts a deploy. A release
+  published in between is not lost: every deploy selects the newest complete release.

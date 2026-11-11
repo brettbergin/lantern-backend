@@ -59,9 +59,10 @@ still resolve from PyPI.
    draft become a published GitHub Release. Nothing is uploaded to a
    package index.
 7. Every successful workflow uploads a `release-result` artifact containing
-   the version, commit, and whether publication occurred. Deployment reads
-   that exact run's result; it never infers the release from the triggering
-   event's SHA. An explicit no-op causes no upgrade.
+   the version, commit, and whether publication occurred. Nothing deploys
+   from it any more: the deploy starts from the published release itself and
+   compares it with what is installed, so a run that published nothing still
+   causes no upgrade.
 
 A concurrency group with `cancel-in-progress: false` serializes the whole
 release, including batching and validation. `queue: max` preserves manual
@@ -93,18 +94,22 @@ gh workflow run release.yml --ref main
 ```
 
 This still waits for the serialized release slot and checks. Manual runs
-must target `main`. Deploying an already published version is a separate
-operation that creates no packages:
+must target `main`. Deploying a published version is a separate operation
+that creates no packages. A job on another runner does it for each published
+release, and a manual run of that job deploys a chosen version. The deploy
+workflow here no longer starts by itself: it is the break-glass for when that
+runner cannot deploy, and the two must never run together, so read
+[self-deploy.md](docs/self-deploy.md#operating-it) before dispatching it:
 
 ```bash
 gh workflow run deploy.yml --ref main -f version=X.Y.Z
 ```
 
-The deploy workflow waits for the daemon's task to finish, then refreshes
+Either way the deploy waits for the daemon's task to finish, then refreshes
 the selected release unless an explicit version was requested. Automatic
-upgrades have a thirty-minute cooldown; manual deployment bypasses it.
-A periodic reconciliation retries deferred deployments even without another
-merge. See [self-deploy.md](docs/self-deploy.md) for recovery and notices.
+upgrades have a thirty-minute cooldown, which the deploy job waits out itself
+rather than leaving to a schedule; manual deployment bypasses it. See
+[self-deploy.md](docs/self-deploy.md) for recovery and notices.
 
 ## Retrying a failed publication
 

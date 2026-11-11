@@ -288,10 +288,16 @@ class TestNamedHolds:
         assert "survive the restart" in release
 
 
+def _triggers(text: str) -> dict[str, dict]:
+    """A workflow's `on:` mapping. YAML 1.1 reads a bare `on` key as true."""
+    workflow = yaml.safe_load(text)
+    return workflow.get("on", workflow.get(True))
+
+
 class TestSecurityInvariant:
     def test_no_fork_triggerable_event(self, deploy: str) -> None:
         on = deploy[deploy.index("\non:\n") : deploy.index("\nconcurrency:")]
-        assert "workflow_run:" in on and "workflow_dispatch:" in on
+        assert "workflow_dispatch:" in on
         for event in ("pull_request", "pull_request_target", "issue_comment", "push"):
             assert f"\n  {event}:" not in on
         assert "runs-on: [self-hosted, " in deploy
@@ -303,6 +309,52 @@ class TestSecurityInvariant:
         for event in ("pull_request", "pull_request_target", "issue_comment", "push"):
             assert f"\n  {event}:" not in on
         assert "uses: actions/checkout" not in example
+
+
+class TestManualBreakGlass:
+    """The automatic deploy is another runner's (docs/self-deploy.md,
+    "Running the deploy from another runner"). This workflow no longer
+    starts by itself: it stays as the break-glass a person dispatches."""
+
+    def test_it_never_starts_by_itself(self, deploy: str) -> None:
+        triggers = _triggers(deploy)
+        assert set(triggers) == {"workflow_dispatch"}
+        # A manual run still names the version to deploy, or none for the latest.
+        assert set(triggers["workflow_dispatch"]["inputs"]) == {"version"}
+        on = deploy[deploy.index("\non:\n") : deploy.index("\nconcurrency:")]
+        for event in ("workflow_run", "schedule"):
+            assert f"\n  {event}:" not in on
+
+    def test_the_job_admits_a_dispatch_from_main_and_nothing_else(self, deploy: str) -> None:
+        condition = " ".join(yaml.safe_load(deploy)["jobs"]["deploy"]["if"].split())
+        assert condition == (
+            "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
+        )
+
+    def test_the_example_keeps_its_schedule_while_this_deploy_is_manual(
+        self, deploy: str, example: str
+    ) -> None:
+        """The reusable pattern checks for a release on a schedule. This
+        repository's own workflow may differ from it there, and now does."""
+        assert set(_triggers(example)) == {"schedule", "workflow_dispatch"}
+        assert set(_triggers(deploy)) == {"workflow_dispatch"}
+        # What a person dispatches is the same in both: a version, or none.
+        for text in (deploy, example):
+            assert set(_triggers(text)["workflow_dispatch"]["inputs"]) == {"version"}
+
+    def test_the_rule_for_dispatching_by_hand_is_where_it_is_dispatched_from(
+        self, deploy: str
+    ) -> None:
+        """The concurrency group serializes Actions runs only: it knows
+        nothing of the other runner. So the workflow's header and the
+        reference both say what to do before dispatching, and whose a hold is."""
+        header = deploy[: deploy.index("\non:\n")]
+        reference = (ROOT / "docs" / "self-deploy.md").read_text()
+        for text in (header, reference):
+            said = " ".join(text.replace("#", " ").split()).lower()
+            assert "break-glass" in said
+            assert "is not running and cannot start" in said
+            assert "released by the side that took it" in said
 
 
 class TestRollbackExtrasParity:
