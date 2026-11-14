@@ -1,13 +1,17 @@
-"""`.github/workflows/deploy.yml` pins (#534, #530, #619, #639, #640) and
-the generic copy in `contrib/workflows/deploy-daemon.yml.example`.
+"""The generic deploy workflow, `contrib/workflows/deploy-daemon.yml.example`,
+and the deploy guides (#534, #619, #639, #640, #642, #895).
 
 The pipeline runs unattended on a root-equivalent host and cannot be
-exercised here, so its load-bearing lines are pinned as text: it must never
-restart the daemon under a live run, its hold must never outlive the job,
-no job on the self-hosted runner may be reachable from a fork, its rollback
-must install the same extras as its upgrade, it must read the daemon
-through `ctl status --json` / `daemon notify` rather than prose, secrets
-and config files, and nothing in it may name a host or a user.
+exercised here, so its load-bearing lines are pinned as text: no job on the
+self-hosted runner may be reachable from a fork, its rollback must install
+the same extras as its upgrade, it must read the daemon through
+`ctl status --json` / `daemon notify` rather than prose, secrets and config
+files, and nothing in it may name a host or a user.
+
+This repository's own copy, `.github/workflows/deploy.yml`, is gone: no
+Actions runner was left to run it. Lantern's own deploy is
+`scripts/deploy_daemon.py` on another runner (docs/self-deploy.md), and
+`tests/unit/test_deploy_daemon.py` runs that script against a synthetic host.
 """
 
 from __future__ import annotations
@@ -21,18 +25,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from lantern.sbx.provision import gh_credential_status
-
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 EXAMPLE = ROOT / "contrib" / "workflows" / "deploy-daemon.yml.example"
 
 _EXTRAS_RE = re.compile(r"lantern[-_]backend(?:-\S*?\.whl)?\[([\w,]+)\]")
-
-
-@pytest.fixture(scope="module")
-def deploy() -> str:
-    return WORKFLOW.read_text()
 
 
 @pytest.fixture(scope="module")
@@ -40,85 +36,12 @@ def example() -> str:
     return EXAMPLE.read_text()
 
 
-def _step(deploy: str, name: str) -> str:
+def _step(text: str, name: str) -> str:
     """The text of one step, from its `- name:` to the next step's."""
     pattern = rf"      - name: {re.escape(name)}\n(.*?)(?=\n      - name: |\Z)"
-    match = re.search(pattern, deploy, re.S)
+    match = re.search(pattern, text, re.S)
     assert match, f"step {name!r} missing"
     return match.group(1)
-
-
-class TestWorkflowCredentials:
-    @pytest.mark.parametrize("mode", ["app", "pat"])
-    def test_host_commands_keep_the_hosts_credentials(self, deploy: str, mode: str) -> None:
-        workflow = yaml.safe_load(deploy)
-        job = workflow["jobs"]["deploy"]
-        host_env = (
-            {
-                "GITHUB_APP_ID": "123",
-                "GITHUB_APP_INSTALLATION_ID": "456",
-                "GITHUB_APP_PRIVATE_KEY": "-----BEGIN PRIVATE KEY-----\ntest-only",
-            }
-            if mode == "app"
-            else {"GH_TOKEN": "host-pat"}
-        )
-        host_steps = [step for step in job["steps"] if '"${LANTERN}"' in step.get("run", "")]
-        assert host_steps
-        for step in host_steps:
-            # Actions overlays workflow, job and step env on the host's env.
-            env = host_env | workflow.get("env", {}) | job.get("env", {}) | step.get("env", {})
-            status = gh_credential_status(env)
-            assert status.ok, f"{step['name']}: {status.detail}"
-            assert status.mode == mode, step["name"]
-            assert env.get("GH_TOKEN") == host_env.get("GH_TOKEN"), step["name"]
-
-    def test_github_steps_still_receive_the_actions_token(self, deploy: str) -> None:
-        workflow = yaml.safe_load(deploy)
-        job = workflow["jobs"]["deploy"]
-        steps = {step["name"]: step for step in job["steps"]}
-        for name in (
-            "Load the trusted workflow helper",
-            "Read the release result",
-            "Compare against what is installed",
-            "Refresh the target after draining",
-            "Fetch the release wheels",
-            "Record the deployment attempt",
-        ):
-            env = workflow.get("env", {}) | job.get("env", {}) | steps[name].get("env", {})
-            assert env["GH_TOKEN"] == "${{ github.token }}", name
-
-
-def test_pdf_analyzer_identity_is_provisioned_before_deploy_hold(deploy: str) -> None:
-    step = _step(deploy, "Prepare isolated PDF analyzer")
-    assert 'ANALYSIS_SBX="${LANTERN_HOME}/bin/sbx"' in step
-    assert "--app-name lantern-analysis login" in step
-    assert "--password-stdin" in step
-    assert "--app-name lantern-analysis policy init deny-all" in step
-    assert "--app-name lantern-analysis policy deny network '**'" in step
-    assert deploy.index("name: Prepare isolated PDF analyzer") < deploy.index(
-        "name: Take the deploy hold"
-    )
-
-
-def test_release_wheels_use_the_digest_checked_asset_endpoint(deploy: str) -> None:
-    fetch = _step(deploy, "Fetch the release wheels")
-    assert '"${PIPELINE}" download-wheels' in fetch
-    assert '"${PIPELINE}" verify-download' in fetch
-    assert "gh release download" not in fetch
-
-
-def test_rollback_fetches_the_previous_release_wheels(deploy: str) -> None:
-    """The previous version comes from its own GitHub Release, through the
-    same digest- and manifest-checked helper as the upgrade."""
-    rollback = _step(deploy, "Roll back")
-    assert rollback.count('GH_TOKEN="${ACTIONS_TOKEN}" VERSION="${PREV}" DIST="${prev_dist}"') == 2
-    assert '"${PIPELINE}" download-wheels' in rollback
-    assert '"${PIPELINE}" verify-download' in rollback
-    assert "${prev_dist}/lantern_worker-${PREV}-py3-none-any.whl" in rollback
-    steps = {s["name"]: s for s in yaml.safe_load(deploy)["jobs"]["deploy"]["steps"]}
-    # The Actions token reaches the helper only; host commands keep their own.
-    assert steps["Roll back"]["env"]["ACTIONS_TOKEN"] == "${{ github.token }}"
-    assert "GH_TOKEN" not in steps["Roll back"]["env"]
 
 
 def test_the_example_fetches_both_releases_before_the_hold(example: str) -> None:
@@ -131,7 +54,7 @@ def test_the_example_fetches_both_releases_before_the_hold(example: str) -> None
     assert "${DIST}/${PREV}/lantern_worker-${PREV}-py3-none-any.whl" in _step(example, "Roll back")
 
 
-@pytest.mark.parametrize("fixture", ["deploy", "example"])
+@pytest.mark.parametrize("fixture", ["example"])
 def test_our_packages_are_never_installed_by_name(
     fixture: str, request: pytest.FixtureRequest
 ) -> None:
@@ -142,7 +65,7 @@ def test_our_packages_are_never_installed_by_name(
     assert "pypi.org" not in text
 
 
-@pytest.mark.parametrize("fixture", ["deploy", "example"])
+@pytest.mark.parametrize("fixture", ["example"])
 class TestAuthenticationOutage:
     def test_preflight_precedes_any_hold_or_upgrade(
         self, fixture: str, request: pytest.FixtureRequest
@@ -214,42 +137,7 @@ class TestAuthenticationOutage:
 
 
 class TestNeverRestartUnderARun:
-    def test_the_drain_has_no_cap_and_no_restart_anyway_branch(self, deploy: str) -> None:
-        assert "restarting anyway" not in deploy
-        assert "seq 1 80" not in deploy
-        wait = _step(deploy, "Wait for the daemon to go idle")
-        assert "while :; do" in wait and 'if [ "${current}" = "idle" ]' in wait
-        # Only a daemon that answers nothing at all lets the restart proceed.
-        assert "misses" in wait and 'echo "waited_s=${waited}"' in wait
-        # #309: status() mutates the breaker; never poll faster than 15s.
-        assert "sleep 15" in wait
-
-    def test_an_answer_without_json_fails_before_anything_is_installed(self, deploy: str) -> None:
-        # Exit 1 = the daemon answered, but with prose (pre-#639) or late.
-        # Guessing "idle" there is the restart-under-a-run this file exists
-        # to prevent; it fails the job instead, with nothing installed yet.
-        wait = _step(deploy, "Wait for the daemon to go idle")
-        assert 'elif [ "${rc}" -eq 1 ]; then' in wait
-        assert "exit 1" in wait.split('elif [ "${rc}" -eq 1 ]; then')[1].split("else")[0]
-
-    def test_the_job_timeout_covers_a_long_run(self, deploy: str) -> None:
-        match = re.search(r"timeout-minutes: (\d+)", deploy)
-        assert match and int(match.group(1)) >= 240
-
-    def test_the_wait_precedes_the_upgrade_and_the_restart(self, deploy: str) -> None:
-        order = [
-            "Take the deploy hold",
-            "Wait for the daemon to go idle",
-            "Upgrade",
-            "Restart the daemon",
-            "Health check",
-            "Roll back",
-            "Release the deploy hold",
-        ]
-        positions = [deploy.index(f"      - name: {name}\n") for name in order]
-        assert positions == sorted(positions)
-
-    @pytest.mark.parametrize("fixture", ["deploy", "example"])
+    @pytest.mark.parametrize("fixture", ["example"])
     def test_the_backup_label_carries_no_dots(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:
@@ -261,32 +149,6 @@ class TestNeverRestartUnderARun:
         assert 'backup --label "deploy-${VERSION//./-}"' in upgrade
         assert 'backup --label "deploy-${VERSION}"' not in upgrade
 
-    def test_rollback_only_after_the_upgrade_ran(self, deploy: str) -> None:
-        rollback = _step(deploy, "Roll back")
-        assert "steps.upgrade.outcome != 'skipped'" in rollback
-        assert "id: upgrade" in _step(deploy, "Upgrade")
-
-
-class TestNamedHolds:
-    def test_the_deploy_takes_and_releases_its_own_named_hold(self, deploy: str) -> None:
-        assert "HOLD: deploy-${{ github.run_id }}" in deploy
-        assert 'ctl pause --hold "${HOLD}"' in _step(deploy, "Take the deploy hold")
-        release = _step(deploy, "Release the deploy hold")
-        assert "if: always() && steps.hold.outcome == 'success'" in release
-        assert 'ctl resume --hold "${HOLD}"' in release
-        # Never a bare pause/resume: that is the operator's hold.
-        assert not re.search(r"ctl pause( --timeout|\s*\|\|)", deploy)
-        assert not re.search(r"ctl resume( --timeout|\s*\|\|)", deploy)
-
-    def test_holds_are_not_snapshotted_since_they_survive_the_restart(self, deploy: str) -> None:
-        """Holds are persisted: an operator's pause survives the restart on
-        its own, so the pipeline neither reads nor re-takes them — and its
-        own hold must be released whatever happened, or it outlives the job."""
-        assert "Snapshot the holds" not in deploy and "Restore the other holds" not in deploy
-        assert "jq -r '.holds" not in deploy
-        release = _step(deploy, "Release the deploy hold")
-        assert "survive the restart" in release
-
 
 def _triggers(text: str) -> dict[str, dict]:
     """A workflow's `on:` mapping. YAML 1.1 reads a bare `on` key as true."""
@@ -295,14 +157,6 @@ def _triggers(text: str) -> dict[str, dict]:
 
 
 class TestSecurityInvariant:
-    def test_no_fork_triggerable_event(self, deploy: str) -> None:
-        on = deploy[deploy.index("\non:\n") : deploy.index("\nconcurrency:")]
-        assert "workflow_dispatch:" in on
-        for event in ("pull_request", "pull_request_target", "issue_comment", "push"):
-            assert f"\n  {event}:" not in on
-        assert "runs-on: [self-hosted, " in deploy
-        assert "uses: actions/checkout" not in deploy
-
     def test_the_example_has_no_fork_triggerable_event(self, example: str) -> None:
         on = example[example.index("\non:\n") : example.index("\nconcurrency:")]
         assert "schedule:" in on and "workflow_dispatch:" in on
@@ -311,57 +165,20 @@ class TestSecurityInvariant:
         assert "uses: actions/checkout" not in example
 
 
-class TestManualBreakGlass:
-    """The automatic deploy is another runner's (docs/self-deploy.md,
-    "Running the deploy from another runner"). This workflow no longer
-    starts by itself: it stays as the break-glass a person dispatches."""
+class TestExampleTriggers:
+    """The reusable pattern checks for a release on a schedule, and a person
+    dispatches a version, or none for the latest."""
 
-    def test_it_never_starts_by_itself(self, deploy: str) -> None:
-        triggers = _triggers(deploy)
-        assert set(triggers) == {"workflow_dispatch"}
-        # A manual run still names the version to deploy, or none for the latest.
-        assert set(triggers["workflow_dispatch"]["inputs"]) == {"version"}
-        on = deploy[deploy.index("\non:\n") : deploy.index("\nconcurrency:")]
-        for event in ("workflow_run", "schedule"):
-            assert f"\n  {event}:" not in on
-
-    def test_the_job_admits_a_dispatch_from_main_and_nothing_else(self, deploy: str) -> None:
-        condition = " ".join(yaml.safe_load(deploy)["jobs"]["deploy"]["if"].split())
-        assert condition == (
-            "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'"
-        )
-
-    def test_the_example_keeps_its_schedule_while_this_deploy_is_manual(
-        self, deploy: str, example: str
-    ) -> None:
-        """The reusable pattern checks for a release on a schedule. This
-        repository's own workflow may differ from it there, and now does."""
+    def test_the_example_keeps_its_schedule(self, example: str) -> None:
         assert set(_triggers(example)) == {"schedule", "workflow_dispatch"}
-        assert set(_triggers(deploy)) == {"workflow_dispatch"}
-        # What a person dispatches is the same in both: a version, or none.
-        for text in (deploy, example):
-            assert set(_triggers(text)["workflow_dispatch"]["inputs"]) == {"version"}
-
-    def test_the_rule_for_dispatching_by_hand_is_where_it_is_dispatched_from(
-        self, deploy: str
-    ) -> None:
-        """The concurrency group serializes Actions runs only: it knows
-        nothing of the other runner. So the workflow's header and the
-        reference both say what to do before dispatching, and whose a hold is."""
-        header = deploy[: deploy.index("\non:\n")]
-        reference = (ROOT / "docs" / "self-deploy.md").read_text()
-        for text in (header, reference):
-            said = " ".join(text.replace("#", " ").split()).lower()
-            assert "break-glass" in said
-            assert "is not running and cannot start" in said
-            assert "released by the side that took it" in said
+        assert set(_triggers(example)["workflow_dispatch"]["inputs"]) == {"version"}
 
 
 class TestRollbackExtrasParity:
     """#619: a rollback that drops a chat extra rolls a host on that backend
     back to a build that cannot start."""
 
-    @pytest.mark.parametrize("fixture", ["deploy", "example"])
+    @pytest.mark.parametrize("fixture", ["example"])
     def test_rollback_installs_the_same_extras_as_the_upgrade(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:
@@ -372,7 +189,7 @@ class TestRollbackExtrasParity:
         assert set(upgrade[0].split(",")) == set(rollback[0].split(",")) == {"discord", "slack"}
 
 
-@pytest.mark.parametrize("fixture", ["deploy", "example"])
+@pytest.mark.parametrize("fixture", ["example"])
 @pytest.mark.parametrize("step", ["Upgrade", "Roll back"])
 def test_deploy_preserves_the_operator_installed_sbx(
     fixture: str, step: str, request: pytest.FixtureRequest
@@ -391,7 +208,7 @@ class TestStructuredControl:
     speaks through Lantern's notifier — never prose, the secrets file or
     the daemon's config."""
 
-    @pytest.mark.parametrize("fixture", ["deploy", "example"])
+    @pytest.mark.parametrize("fixture", ["example"])
     def test_no_step_reads_secrets_or_config(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:
@@ -409,7 +226,7 @@ class TestStructuredControl:
         ):
             assert forbidden not in text, forbidden
 
-    @pytest.mark.parametrize("fixture", ["deploy", "example"])
+    @pytest.mark.parametrize("fixture", ["example"])
     def test_status_is_read_as_json_and_notices_go_through_notify(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:
@@ -419,26 +236,9 @@ class TestStructuredControl:
         assert 'jq -r "${CURRENT_JQ}"' in _step(text, "Wait for the daemon to go idle")
         for name in ("Announce", "Report"):
             step = _step(text, name)
-            command = (
-                'DEPLOY_NOTICE="${MSG}" "${VENV_PYTHON}" "${PIPELINE}" deploy-notify'
-                if fixture == "deploy"
-                else 'daemon notify "${MSG}"'
-            )
-            assert command in step, name
+            assert 'daemon notify "${MSG}"' in step, name
             # A chat outage must not fail (or roll back) a deploy.
             assert "continue-on-error: true" in step, name
-
-    def test_self_deploy_notices_use_the_deploy_channel(self, deploy: str) -> None:
-        channel_id = "4shafe93rpnkzqcdqnso7cmbzc"
-        assert f"DEPLOY_CHANNEL: {channel_id}" in deploy
-        assert "8f4oqymuufrb8pzpwyuqjz718r" not in deploy
-        notices = [line for line in deploy.splitlines() if '"${PIPELINE}" deploy-notify' in line]
-        assert len(notices) == 3
-        assert all("DEPLOY_NOTICE=" in notice for notice in notices)
-        assert deploy.index("name: Load the trusted workflow helper") < deploy.index(
-            "name: Announce"
-        )
-        assert deploy.index("name: Report") < deploy.index("name: Clean up the workflow helper")
 
     def test_generic_deploy_notices_keep_using_the_control_channel(self, example: str) -> None:
         assert "DEPLOY_CHANNEL" not in example
@@ -499,7 +299,7 @@ _DERIVED = {
 }
 
 
-@pytest.mark.parametrize("fixture", ["deploy", "example"])
+@pytest.mark.parametrize("fixture", ["example"])
 class TestHomeOverride:
     """#895: an operator may install under a custom `LANTERN_HOME`. The job
     resolves that root once and derives every path from it, so the version
@@ -595,13 +395,7 @@ class TestHostAgnostic:
     """#640: the host is one repository variable; nothing names a machine,
     a user or a home directory."""
 
-    def test_the_host_is_one_variable(self, deploy: str) -> None:
-        assert "runs-on: [self-hosted, \"${{ vars.LANTERN_DEPLOY_HOST || 'db' }}\"]" in deploy
-        assert "HOST: ${{ vars.LANTERN_DEPLOY_HOST || 'db' }}" in deploy
-        # The default is the only place the dogfood host's name appears.
-        assert len(re.findall(r"\bdb\b", deploy)) == 3  # the two above + the comment
-
-    @pytest.mark.parametrize("fixture", ["deploy", "example"])
+    @pytest.mark.parametrize("fixture", ["example"])
     def test_no_usernames_home_directories_or_hostnames(
         self, fixture: str, request: pytest.FixtureRequest
     ) -> None:

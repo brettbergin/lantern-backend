@@ -6,7 +6,7 @@ workflow — is [docs/deploy.md](deploy.md). This page records where lantern's o
 departs from that pattern and the facts about the host that operating it needs.
 
 ```
-merge to main → coalesced request → Release (verify + tag + GitHub Release) → Deploy the daemon
+merge to main → coalesced request → Release (verify + tag + GitHub Release) → deploy-lantern-daemon (berg-runner)
                                                  ├─ check version, cooldown, and blocked releases
                                                  ├─ check the existing host with doctor
                                                  ├─ take a named pause hold (deploy-<run id>)
@@ -19,11 +19,14 @@ merge to main → coalesced request → Release (verify + tag + GitHub Release) 
 ```
 
 Merges share a release after three quiet minutes, with a maximum thirty-minute batch
-wait ([RELEASING.md](../RELEASING.md)). A job on another runner carries each published
-release onto the daemon host by running `scripts/deploy_daemon.py`
-([Running the deploy from another runner](#running-the-deploy-from-another-runner)).
-`.github/workflows/deploy.yml` is the same pipeline, kept as a manual break-glass that
-never starts by itself. A task may already be in flight when a release arrives, which is
+wait ([RELEASING.md](../RELEASING.md)). The homelab's berg-runner pipeline
+`deploy-lantern-daemon` (`brettbergin/berg-net-pi-suite`,
+`berg-runner/pipelines/deploy-lantern-daemon.yaml`) carries each published release onto
+the daemon host by running `scripts/deploy_daemon.py`
+([Running the deploy from another runner](#running-the-deploy-from-another-runner)). No
+workflow in this repository deploys: `.github/workflows/deploy.yml`, the same pipeline as
+one GitHub Actions job and last a manual break-glass, was removed when no Actions runner
+was left to run it. A task may already be in flight when a release arrives, which is
 why draining has no cap apart from the job timeout (#534): restarting anyway killed tasks
 and spent their resume budgets.
 
@@ -52,21 +55,19 @@ health; reports and history use that final version.
 
 ## Where it departs from the example
 
-`deploy.yml` is `contrib/workflows/deploy-daemon.yml.example` with these differences:
+The pipeline `scripts/deploy_daemon.py` runs is
+`contrib/workflows/deploy-daemon.yml.example` with these differences:
 
-- **Trigger.** `workflow_dispatch` only, restricted to `main`: the workflow is the manual
-  break-glass and never starts by itself. The example's `schedule` has no counterpart
-  here, because the automatic start is another runner's (below). The step that read the
-  `release-result` artifact of a completed `Release` is still in the file, but a dispatch
-  never takes that branch.
+- **Trigger.** None in this repository. The example's `schedule` and `workflow_dispatch`
+  are the other runner's here: a published release (`v*`) starts a run, one scheduled run
+  a day covers a start that was missed, and a manual run there names a version (below).
 - **Version.** The greatest stable numeric version with a published GitHub Release and
   both wheels and source distributions uploaded. Drafts are ignored; an incomplete
   published release fails closed. The tag must resolve to a commit on `main`.
-- **Workflow helper.** No checkout runs on the host. The job downloads
-  `scripts/release_pipeline.py` at its own `github.workflow_sha`, with the workflow's
-  token. Only this trusted workflow revision supplies executable helper code. The
-  manifest is parsed as data. The token has `contents: read` to read releases;
-  `actions: read` was for the completion artifact, which a dispatch does not read.
+- **Helper.** No checkout runs on the host. The job downloads `scripts/deploy_daemon.py`
+  and `scripts/release_pipeline.py` from `main` when a run starts, with its own token.
+  Only that trusted revision supplies executable code. The manifest is parsed as data.
+  The token has `contents: read` to read releases.
 - **Wheels from the release, never an index.** Releases are GitHub Releases only (v2.1.36
   was the last on PyPI), and the names a rename moves to are not ours on any index, so
   neither package is ever installed by name. The helper downloads the release's exact
@@ -82,84 +83,73 @@ health; reports and history use that final version.
   last completion time, versions suppressed after attempts/rollbacks, and whether an
   upgrade was interrupted. Writes replace the file atomically. Malformed state and an
   interrupted or unhealthy deployment block automatic work and name the recovery need.
-- **`GH_TOKEN` is set explicitly** on every step calling `gh`. The host's `secrets.env`
-  exports its own `GH_TOKEN`, and the `lantern` wrapper sources it with `set -a`; without
-  the override, a host PAT would be the identity for Actions API calls.
+- **`GH_TOKEN` is set explicitly** on every helper call that reads GitHub. The host's
+  `secrets.env` exports its own `GH_TOKEN`, and the `lantern` wrapper sources it with
+  `set -a`; without the override, a host PAT would be the identity for those calls. The
+  job's token goes nowhere else
+  ([Where it departs from the removed workflow](#where-it-departs-from-the-removed-workflow)).
 - **The home.** Everything is under `~/.lantern`, exactly the layout the generic guide
   describes; the tokens live in `~/.lantern/config/secrets.env` (mode 0600; shape: the
   repo-root [`.env.example`](../.env.example)), read by Lantern itself. The job never
   reads that file (#639): `ctl status --json`, `backup` and `daemon notify` go through the
   launcher, from whatever directory the runner happens to be in. Deploy notices land in
-  `#lantern-deploys`; the trusted workflow helper selects that channel through the installed
+  `#lantern-deploys`; the release helper selects that channel through the installed
   notifier's original API, so routing also works before an upgrade or after a rollback. The
   daemon's normal control traffic remains in `#lantern`.
 - **PDF analyzer identity.** Before a changed release takes the deploy hold, the job
-  signs in to Docker under the separate `lantern-analysis` app with repository
-  Docker Hub secrets and initializes a deny-all policy once. The PDF worker runs with no
-  agent skills, credentials or network access. A missing Docker Hub secret fails
-  the deployment before the installed daemon is changed.
+  signs in to Docker under the separate `lantern-analysis` app with the Docker Hub
+  credentials the runner supplies and initializes a deny-all policy once. The PDF worker
+  runs with no agent skills, credentials or network access. A missing Docker Hub secret
+  fails the deployment before the installed daemon is changed.
 
 ## The host
 
-`db`, one user, three user units alongside each other: `lantern-daemon`, `sbx-sandboxd`
-(the sandbox backend, which the daemon unit `Requires=`), and `github-runner` (the Actions
-runner, as the same user so the workflow can `systemctl --user restart`). Deploying by hand
-and the layout table are in the generic guide; the paths above are the only deltas.
+`db`, one user, two user units alongside each other: `lantern-daemon` and `sbx-sandboxd`
+(the sandbox backend, which the daemon unit `Requires=`). The other runner's agent on the
+host runs the deploy job as the same user, so it can `systemctl --user restart`. Deploying
+by hand and the layout table are in the generic guide; the paths above are the only deltas.
 
-The runner is registered with the label `db`:
+No GitHub Actions runner is registered on this repository any more, so nothing here can
+run a job on the host:
 
 ```bash
-./config.sh --url https://github.com/brettbergin/lantern-backend \
-  --token "$(gh api -X POST repos/brettbergin/lantern-backend/actions/runners/registration-token --jq .token)" \
-  --name db --labels db --work _work --unattended --replace
+gh api repos/brettbergin/lantern-backend/actions/runners --jq .total_count   # 0
 ```
 
-Confirm with `gh api repos/brettbergin/lantern-backend/actions/runners --jq '.runners[].status'`.
-
-**The host is one variable** (#640). The workflow targets
-`runs-on: [self-hosted, "${{ vars.LANTERN_DEPLOY_HOST || 'db' }}"]` and calls the host by
-the same name in its notices. To move the daemon: set the repository variable
-`LANTERN_DEPLOY_HOST` to the new host's runner label and register a runner there with that
-label. `deploy.yml` does not change, and neither does anything `make check` runs. The
-other runner's deploy job names the host in its own settings (`HOST`, and the home), so
-those move with the daemon too.
+**The host is the deploy job's setting** (#640). Nothing outside this page names the
+machine. The other runner's deploy job names the host in its own settings (`HOST`, where
+it runs, and the home), so moving the daemon is a change there, and nothing `make check`
+runs changes. The repository variable `LANTERN_DEPLOY_HOST`, the runner label the removed
+workflows targeted, is read by nothing here any more.
 
 ## Operating it
 
 Day to day nothing is operated here: the other runner deploys each published release. To
 deploy a chosen version, or to roll back, start a manual run of its deploy job with the
-version (`INPUT_VERSION`); the same manual rules apply as to a dispatch here.
+version (`INPUT_VERSION`); a blank version deploys the latest release.
 
-`deploy.yml` is the break-glass, for when that runner cannot deploy. Its concurrency
-group serializes runs of the workflow only and knows nothing of the other runner. So
-before dispatching by hand, make sure the other runner's deploy is not running and cannot
-start (pause it there), and resume it afterwards: the two must never run together. A hold
-is released by the side that took it. The workflow releases only its own
-`deploy-<run id>`; a hold the other runner's job left standing is released there, or by
-hand ([What it does not cover](#what-it-does-not-cover)).
+There is no second way to start the pipeline: the break-glass workflow that used to be
+dispatched from this repository is gone. When that runner cannot deploy, upgrade by hand
+with the commands in the generic guide ([Upgrading by hand](deploy.md#upgrading-by-hand)).
+First make sure the other runner's deploy is not running and cannot start (pause it
+there), and resume it afterwards: a hand upgrade and a deploy job must never run together.
+A hold is released by the side that took it: one the other runner's job left standing is
+released there, or by hand ([What it does not cover](#what-it-does-not-cover)).
 
 ```bash
-# deploy a specific version (also the rollback path)
-gh workflow run deploy.yml --ref main -f version=X.Y.Z
-
-# deploy whatever the latest release is
-gh workflow run deploy.yml --ref main
-
-gh run watch                                            # from the repo
 ssh db 'journalctl --user -u lantern-daemon -f'         # from the host
-ssh db 'systemctl --user status github-runner sbx-sandboxd lantern-daemon'
+ssh db 'systemctl --user status sbx-sandboxd lantern-daemon'
 ```
 
-Rolling back is just deploying the older version — the workflow pins exactly. A rollback
+Rolling back is just deploying the older version — a manual run pins exactly. A rollback
 passes only after its version, service, doctor and control checks pass. If a deploy
 fails *and* its rollback fails, the job says `ROLLBACK ALSO FAILED — db needs a human`; fix
 by hand with the commands in the generic guide, from any directory. Every deploy leaves a
 snapshot under `~/.lantern/backups/` and a line in `~/.lantern/logs/deploy/history.log`.
 
 Manual deploys bypass the cooldown and failed-version suppression, but wait for the
-current daemon task to drain. Dispatches of `deploy.yml` also wait for the workflow's own
-deployment slot, and pending ones are retained (`queue: max`, at most 100 pending runs);
-that slot does not include the other runner. An explicit manual recovery can
+current daemon task to drain. They also wait for the deploy job's one slot on the other
+runner, where pending runs queue. An explicit manual recovery can
 reinstall the same version after an interrupted deployment; it still must pass preflight.
 
 A failed upgrade followed by rollback suppresses that target and older versions from
@@ -183,12 +173,14 @@ concierge.
 
 ## Running the deploy from another runner
 
-`deploy.yml` needs GitHub Actions: its steps carry `if:` conditions, `always()` and step
-outputs. `scripts/deploy_daemon.py` is the same pipeline for a runner that has none of
-them: one that runs a list of steps in order, stops at the first failure, and then runs a
-second list whatever happened. The cutover has happened: a job on another runner, started
-by each published release, is the deploy now, and `deploy.yml` stays as the manual
-break-glass. The two must never run together ([Operating it](#operating-it)).
+The deploy was one GitHub Actions job, `.github/workflows/deploy.yml`: its steps carried
+`if:` conditions, `always()` and step outputs. `scripts/deploy_daemon.py` is the same
+pipeline for a runner that has none of them: one that runs a list of steps in order, stops
+at the first failure, and then runs a second list whatever happened. The cutover has
+happened: the berg-runner pipeline `deploy-lantern-daemon`, started by each published
+release, is the deploy now, and `deploy.yml` has been removed (it was last in the tree at
+`cbab119c`). Where this page says "the workflow", it means that removed job, whose steps
+the script performs.
 
 The script has three entry points, called as three steps of one job: two in order, and
 one that always runs.
@@ -201,7 +193,7 @@ python3 scripts/deploy_daemon.py deploy
 python3 scripts/deploy_daemon.py finish --status "$STATUS"
 ```
 
-| Entry point | The steps of `deploy.yml` it performs                                                                                             | Exit code                                                                                                                  |
+| Entry point | The steps of the removed workflow it performs                                                                                     | Exit code                                                                                                                  |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `prepare`   | "Resolve host paths" through "Wait for the daemon to go idle"                                                                     | 0 with the daemon held and idle, or with the host untouched when there is nothing to deploy; non-zero on any failure       |
 | `deploy`    | "Refresh the target after draining" through "Refresh the baked template", and "Roll back" when anything from the upgrade on fails | non-zero when the deploy failed, whether or not the rollback restored the previous version; 0 when there was nothing to do |
@@ -226,32 +218,32 @@ own interpreter.
 
 ### What the job's environment carries
 
-What `deploy.yml` took from the `github` context, repository variables and secrets
-arrives as environment variables, under the names its `env:` blocks use.
+What the workflow took from the `github` context, repository variables and secrets
+arrives as environment variables, under the names its `env:` blocks used.
 
-| Variable                                | Meaning                                                                                                                                           |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GITHUB_REPOSITORY`                     | Required. The repository whose releases deploy.                                                                                                   |
-| `GITHUB_RUN_ID`                         | Required. Names the hold, the job's directory and the `run=` of the history line.                                                                 |
-| `GITHUB_EVENT_NAME`                     | `workflow_dispatch` is a manual run; anything else (`release`, `schedule`) is automatic.                                                          |
-| `INPUT_VERSION`                         | The version to deploy; empty for the latest complete release.                                                                                     |
-| `RUNNER_TEMP`                           | Required. The job's temporary directory, an absolute path.                                                                                        |
-| `GITHUB_STEP_SUMMARY`                   | Optional. The helper appends its decision line to it.                                                                                             |
-| `LANTERN_HOME_VAR`, `LANTERN_HOME`      | The home, resolved as the workflow's first step does: `LANTERN_HOME_VAR` (the repository variable there), else `LANTERN_HOME`, else `~/.lantern`. |
-| `HOST`                                  | Required. The host, as the notices name it.                                                                                                       |
-| `DEPLOY_CHANNEL`                        | Required. The channel the deploy notices go to.                                                                                                   |
-| `UNIT`                                  | The user unit to restart; `lantern-daemon` when unset.                                                                                            |
-| `RUN_URL`                               | The link the notices give for the run. When unset it is composed as Actions does, from `GITHUB_SERVER_URL`; one of the two is required.           |
-| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | The PDF analyzer's sign-in. Needed once there is a release to deploy, and handed to the analyzer's `sbx` commands only.                           |
-| `DEPLOY_GITHUB_TOKEN`                   | The job's GitHub token (`contents: read`). `--token-env NAME` or `DEPLOY_TOKEN_ENV` names another variable; `GH_TOKEN` is the fallback.           |
-| `DEPLOY_HOLD_PREFIX`                    | Optional, as is `prepare --hold-prefix`: a prefix for the hold's name.                                                                            |
-| `DEPLOY_JOB_STATUS`                     | The job's status for `finish`, when `--status` is not given.                                                                                      |
+| Variable                                | Meaning                                                                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GITHUB_REPOSITORY`                     | Required. The repository whose releases deploy.                                                                                                  |
+| `GITHUB_RUN_ID`                         | Required. Names the hold, the job's directory and the `run=` of the history line.                                                                |
+| `GITHUB_EVENT_NAME`                     | `workflow_dispatch` is a manual run; anything else (`release`, `schedule`) is automatic.                                                         |
+| `INPUT_VERSION`                         | The version to deploy; empty for the latest complete release.                                                                                    |
+| `RUNNER_TEMP`                           | Required. The job's temporary directory, an absolute path.                                                                                       |
+| `GITHUB_STEP_SUMMARY`                   | Optional. The helper appends its decision line to it.                                                                                            |
+| `LANTERN_HOME_VAR`, `LANTERN_HOME`      | The home, resolved as the workflow's first step did: `LANTERN_HOME_VAR` (the repository variable there), else `LANTERN_HOME`, else `~/.lantern`. |
+| `HOST`                                  | Required. The host, as the notices name it.                                                                                                      |
+| `DEPLOY_CHANNEL`                        | Required. The channel the deploy notices go to.                                                                                                  |
+| `UNIT`                                  | The user unit to restart; `lantern-daemon` when unset.                                                                                           |
+| `RUN_URL`                               | The link the notices give for the run. When unset it is composed as Actions does, from `GITHUB_SERVER_URL`; one of the two is required.          |
+| `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | The PDF analyzer's sign-in. Needed once there is a release to deploy, and handed to the analyzer's `sbx` commands only.                          |
+| `DEPLOY_GITHUB_TOKEN`                   | The job's GitHub token (`contents: read`). `--token-env NAME` or `DEPLOY_TOKEN_ENV` names another variable; `GH_TOKEN` is the fallback.          |
+| `DEPLOY_HOLD_PREFIX`                    | Optional, as is `prepare --hold-prefix`: a prefix for the hold's name.                                                                           |
+| `DEPLOY_JOB_STATUS`                     | The job's status for `finish`, when `--status` is not given.                                                                                     |
 
-### Where it departs from `deploy.yml`
+### Where it departs from the removed workflow
 
 - **No receipt.** There is no `workflow_run` event and no `release-result` artifact, so
-  `prepare` goes straight to the version check, as a dispatch of `deploy.yml` does.
-- **Cooldown.** `deploy.yml` used to run every fifteen minutes to pick up a release the
+  `prepare` goes straight to the version check, as a dispatch of the workflow did.
+- **Cooldown.** The workflow used to run every fifteen minutes to pick up a release the
   cooldown had deferred. That schedule is gone, so the job waits instead:
   `prepare --wait-cooldown` sleeps until the cooldown has passed, decides
   again, and goes on with what it finds then: a newer release, or nothing to do. It waits
@@ -275,8 +267,8 @@ arrives as environment variables, under the names its `env:` blocks use.
   reported as a failure.
 - **What the job definition did is the runner's to provide:** one deploy at a time on the
   host, with pending manual requests kept; a timeout that bounds the idle wait (480
-  minutes there); manual runs only from `main`; and the security invariant at the top of
-  `deploy.yml`, that no job on this host is reachable from a fork-triggerable event.
+  minutes there); manual runs only from `main`; and the workflow's security invariant,
+  that no job on this host is reachable from a fork-triggerable event.
 - **A host that still has the pre-rename home** gets no dedicated message from this entry
   point: with no Lantern home to deploy to, `prepare` fails at its first helper call
   instead, before anything is touched.
@@ -320,16 +312,16 @@ running daemon can strand it. Each one is recorded here with its manual step.
   first.
 - **sbxloop became Lantern.** The package, CLI, environment prefix, config file, unit
   and home were all renamed (`lantern`, `LANTERN_*`, `lantern.toml`, `lantern-daemon`,
-  `~/.lantern`) with no aliases, so "Deploy the daemon" stops at "Resolve host paths" on a
-  host that still has `~/.sbxloop`. Run **Cut over from sbxloop** once
-  (`gh workflow run cutover-from-sbxloop.yml --ref main -f version=X.Y.Z`): it drains and
-  stops `sbxloop-daemon`, installs the release into a fresh home with
-  `lantern init --from-sbxloop ~/.sbxloop` (config, secrets, App key and workspaces carried
-  and renamed; state starts fresh), starts `lantern-daemon` and health-checks it, and puts
-  sbxloop back if anything fails. `~/.sbxloop` is left untouched as the rollback until
-  `-f purge=true` removes it. Configuration management that writes into the home (Ansible
-  roles for OIDC or push) must target `~/.lantern/config/lantern.toml` and
-  `LANTERN_OIDC_CLIENT_SECRET` from then on.
+  `~/.lantern`) with no aliases, so a deploy stops before touching anything on a host
+  that still has `~/.sbxloop`. This host was moved at the start of October 2026 by a
+  one-time workflow, **Cut over from sbxloop** (`cutover-from-sbxloop.yml`, removed
+  together with `deploy.yml`): it drained and stopped `sbxloop-daemon`, installed the
+  release into a
+  fresh home with `lantern init --from-sbxloop ~/.sbxloop` (config, secrets, App key and
+  workspaces carried and renamed; state starts fresh), started `lantern-daemon` and
+  health-checked it, and would have put sbxloop back if anything had failed. Configuration
+  management that writes into the home (Ansible roles for OIDC or push) must target
+  `~/.lantern/config/lantern.toml` and `LANTERN_OIDC_CLIENT_SECRET` from then on.
 - **The deploy moved to another runner.** `deploy.yml` lost its `workflow_run` and
   `schedule` triggers and became the manual break-glass; a job on another runner starts
   the deploy when a release is published
@@ -337,3 +329,8 @@ running daemon can strand it. Each one is recorded here with its manual step.
   The one manual step is the order: have that job ready before this change merges,
   because from the merge on nothing in this repository starts a deploy. A release
   published in between is not lost: every deploy selects the newest complete release.
+- **The deploy workflows were removed.** `deploy.yml` and `cutover-from-sbxloop.yml` ran on
+  a self-hosted Actions runner on the host. None is registered any more, so a dispatch of
+  either would have queued without ever starting. No manual step: the other runner's job
+  fetches `scripts/deploy_daemon.py` and `scripts/release_pipeline.py`, which stay, and
+  never read either workflow.

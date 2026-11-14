@@ -520,24 +520,6 @@ def test_release_workflow_has_quiet_batch_and_noop_receipt():
     assert "branches: [main]" in intake  # isolated pushes do not wait for the schedule
 
 
-def test_deploy_refreshes_after_drain_before_fetch_and_mutation():
-    text = (ROOT / ".github/workflows/deploy.yml").read_text()
-    names = [
-        "Wait for the daemon to go idle",
-        "Refresh the target after draining",
-        "Fetch the release wheels",
-        "Upgrade",
-    ]
-    positions = [text.index(f"- name: {name}\n") for name in names]
-    assert positions == sorted(positions)
-    assert "github.workflow_sha" in text
-    assert "queue: max" in text
-    # No reconcile schedule: the deploy that meets a cooldown waits it out
-    # itself, so deferred work still needs no further merge.
-    assert "\n  schedule:" not in text
-    assert "--wait-cooldown" in (ROOT / "scripts/deploy_daemon.py").read_text()
-
-
 def test_deploy_notice_overrides_the_channel_through_the_old_notifier_signature(tmp_path):
     config = Config.model_validate(
         {
@@ -667,27 +649,6 @@ def test_deploy_cli_manual_pin_survives_new_release_and_rollback_is_not_undone(c
     run("deploy-finish", HEALTH="success")
     assert pipeline.read_state(home / "state/deploy.json")["blocked_through"] == "1.0.3"
     assert run("deploy-check", MANUAL="false", INPUT_VERSION="")["reason"] == "blocked"
-
-
-def test_workflow_receipts_and_mutations_use_the_frozen_result():
-    import yaml
-
-    workflow = yaml.safe_load((ROOT / ".github/workflows/deploy.yml").read_text())
-    steps = {step["name"]: step for step in workflow["jobs"]["deploy"]["steps"]}
-    for name in ("Fetch the release wheels", "Upgrade", "Health check"):
-        assert steps[name]["env"]["VERSION"] == "${{ steps.final.outputs.version }}"
-    assert (
-        steps["Compare against what is installed"]["if"]
-        == "steps.receipt.outputs.eligible == 'true'"
-    )
-    assert "steps.installed.outputs.changed" in steps["Report"]["if"]
-    assert (
-        "steps.final.outputs.version || steps.installed.outputs.version"
-        in steps["Report"]["env"]["VERSION"]
-    )
-    helper = steps["Load the trusted workflow helper"]
-    assert helper["env"]["WORKFLOW_SHA"] == "${{ github.workflow_sha }}"
-    assert "head_sha" not in helper["run"]
 
 
 def test_releases_before_the_rename_keep_their_file_names() -> None:

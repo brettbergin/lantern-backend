@@ -17,8 +17,6 @@ ROOT = Path(__file__).resolve().parents[2]
 OLD = re.compile(rb"sbxloop|angie", re.IGNORECASE)
 ALLOWED = {
     "CHANGELOG.md",
-    ".github/workflows/cutover-from-sbxloop.yml",
-    ".github/workflows/deploy.yml",
     "docs/self-deploy.md",
     "packages/lantern/src/lantern/cli/app.py",
     "packages/lantern/src/lantern/fromsbxloop.py",
