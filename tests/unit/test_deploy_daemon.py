@@ -1,10 +1,11 @@
 """`scripts/deploy_daemon.py`: lantern's own deploy as three entry points.
 
-The contract is `.github/workflows/deploy.yml` and `docs/self-deploy.md`:
-for every step of that workflow the script does the same thing under the
-same condition, in the same order, with the same failure semantics, split
-over `prepare`, `deploy` and `finish` for a runner that has no step
-conditions. The wanted differences are the cooldown wait, no release
+The contract is `docs/self-deploy.md` and the GitHub Actions workflow the
+script replaced (`.github/workflows/deploy.yml`, since removed; "the
+workflow" below): for every step of that workflow the script does the same
+thing under the same condition, in the same order, with the same failure
+semantics, split over `prepare`, `deploy` and `finish` for a runner that has
+no step conditions. The wanted differences are the cooldown wait, no release
 receipt, the token rule, the hold prefix and where the job's settings come
 from.
 
@@ -49,7 +50,6 @@ from tests.fakes.fake_github import FakeGithub
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "deploy_daemon.py"
 HELPER = ROOT / "scripts" / "release_pipeline.py"
-WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="the deploy drives a POSIX host: systemd, sh launchers"
@@ -78,7 +78,7 @@ TOKEN_MODES = {"deploy-check", "download-wheels", "verify-download", "deploy-sta
 BUSY = {"current": {"item_id": "o/r#7", "run_id": "run-7", "title": "Fix the thing"}}
 CLAIMING = {"current": None, "claiming": "o/r#12"}
 
-#: The notices, as the workflow words them (see the cross-check below).
+#: The notices, as the workflow worded them.
 NOTICES = {
     "deploying": (
         "\U0001f680 deploying lantern `{FROM}` \u2192 `{VERSION}` on `{HOST}`"
@@ -1946,13 +1946,6 @@ class TestEvents:
 
 
 # -- the contract's own wording ----------------------------------------------
-
-
-@pytest.mark.parametrize("kind", NOTICES)
-def test_the_notices_are_the_workflow_s_word_for_word(kind: str) -> None:
-    """The expectations above are the workflow's templates, not a paraphrase."""
-    as_bash = re.sub(r"\{(\w+)\}", r"${\1}", NOTICES[kind]).replace("`", "\\`")
-    assert as_bash in WORKFLOW.read_text(encoding="utf-8")
 
 
 def test_the_script_is_plain_ascii_and_stdlib_only() -> None:

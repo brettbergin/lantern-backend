@@ -96,14 +96,10 @@ gh workflow run release.yml --ref main
 This still waits for the serialized release slot and checks. Manual runs
 must target `main`. Deploying a published version is a separate operation
 that creates no packages. A job on another runner does it for each published
-release, and a manual run of that job deploys a chosen version. The deploy
-workflow here no longer starts by itself: it is the break-glass for when that
-runner cannot deploy, and the two must never run together, so read
-[self-deploy.md](docs/self-deploy.md#operating-it) before dispatching it:
-
-```bash
-gh workflow run deploy.yml --ref main -f version=X.Y.Z
-```
+release, and a manual run of that job deploys a chosen version. No workflow
+in this repository deploys any more: the former `deploy.yml` was removed, so
+when that runner cannot deploy, the host is upgraded by hand
+([self-deploy.md](docs/self-deploy.md#operating-it)).
 
 Either way the deploy waits for the daemon's task to finish, then refreshes
 the selected release unless an explicit version was requested. Automatic

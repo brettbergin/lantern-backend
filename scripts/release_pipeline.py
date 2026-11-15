@@ -1,7 +1,7 @@
 """Repository release/deploy automation; stdlib-only for older installed hosts.
 
-This is workflow tooling, not part of the daemon. The deploy workflow fetches
-this file at its own trusted workflow SHA, never from a PR or a release asset.
+This is workflow tooling, not part of the daemon. The deploy job fetches this
+file from a trusted revision of main, never from a PR or a release asset.
 """
 
 from __future__ import annotations
@@ -495,7 +495,7 @@ def deploy_notice(
 ) -> Any:
     """Route a notice without requiring the installed CLI's newest options.
 
-    The workflow helper comes from its trusted workflow SHA, while ``post``
+    This helper comes from a trusted revision of main, while ``post``
     comes from the installed lantern. Copying the selected backend's config
     lets even the older two-argument ``post_notice(config, text)`` target the
     deploy channel before an upgrade and after a rollback.

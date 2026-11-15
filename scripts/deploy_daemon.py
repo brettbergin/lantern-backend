@@ -1,10 +1,11 @@
 """lantern's own deploy, as three entry points for a runner without step conditions.
 
-`.github/workflows/deploy.yml` is this pipeline as one GitHub Actions job: its
-`if:` conditions, its `always()` steps and its step outputs carry the logic. A
-runner that only runs a list of steps in order, stops at the first failure and
-then runs a list of "finally" steps cannot express any of that, so the same
-steps live here, under the same conditions and in the same order:
+This pipeline was one GitHub Actions job, `.github/workflows/deploy.yml` (since
+removed; "the workflow" throughout this file): its `if:` conditions, its
+`always()` steps and its step outputs carried the logic. A runner that only
+runs a list of steps in order, stops at the first failure and then runs a list
+of "finally" steps cannot express any of that, so the same steps live here,
+under the same conditions and in the same order:
 
     prepare   "Resolve host paths" through "Wait for the daemon to go idle".
               Ends successfully, having changed nothing, when there is nothing

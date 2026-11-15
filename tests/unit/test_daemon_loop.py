@@ -2677,7 +2677,7 @@ class TestPauseHolds:
 
 
 class TestDeployChoreography:
-    """The deploy pipeline's steps (`.github/workflows/deploy.yml`), played
+    """The deploy pipeline's steps (`scripts/deploy_daemon.py`), played
     against the loop: take a hold, wait for idle, restart, release the
     deploy's own hold. Holds are persisted (#1034), so the restart keeps
     every hold standing and the pipeline no longer snapshots and re-takes
