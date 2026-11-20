@@ -1,7 +1,9 @@
 # Lantern
 
 Read this first. It says what Lantern is for, what it optimises for, and how
-work lands here. `CLAUDE.md` is a symlink to this file.
+work lands here. `CLAUDE.md` is a symlink to this file. **Homelab** (the
+maintainer's deployment, not the product): Tier D host service `lantern-backend`, exception
+EX-3, gaps LB-1, LB-2, P-05; standard and skill in [`docs/homelab.md`](docs/homelab.md).
 
 ## What this is
 

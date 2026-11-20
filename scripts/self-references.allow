@@ -9,3 +9,8 @@
 packages/lantern/src/lantern/engine/prompts/concierge.md #12
 packages/lantern/src/lantern/engine/prompts/concierge.md #7
 packages/lantern/src/lantern/engine/prompts/concierge.md #41
+#
+# The homelab loader skill is a verbatim copy of the maintainer's homelab kit
+# (docs/homelab.md); it names the private repository it loads the standard from.
+.claude/skills/homelab-app-standard/SKILL.md brettbergin
+.claude/skills/homelab-app-standard/references/quick-map.md brettbergin

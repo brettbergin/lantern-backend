@@ -12,4 +12,7 @@ exclude = [
     ".ruff_cache/**",
     "dist/**",
     "**/node_modules/**",
+    # A verbatim copy of the homelab kit's loader skill (berg-net-pi-suite
+    # docs/standard/agent-kit); it must stay byte-identical to the kit.
+    ".claude/skills/homelab-app-standard/**",
 ]
