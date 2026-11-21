@@ -1,0 +1,345 @@
+# CI configuration: the checks of .github/workflows/ci.yml, each job in a container, one
+# commit status per job. Keep the steps in step with that workflow and the Makefile.
+#
+# What differs from the workflow:
+#   - Images are public, pinned by digest, and have an arm64 build. They carry Python and uv;
+#     each job installs git first (the tooling and the test suite use it). A job has no
+#     capabilities, so apt keeps its lists and archives in /tmp and stays root.
+#   - The checkout is shallow and has no tags, so hatch-vcs gives a development version.
+#   - The pytest shards are one job each, as in the workflow (`--shard N/5`). Their coverage
+#     cannot be combined across jobs here, so the 85% coverage gate (`make test-cov`) stays
+#     in the workflow's `test` job for now.
+#   - Not here, and kept in the workflow: windows-host (a Windows runner), playwright-preset
+#     (downloads a browser), and the workflows that need a real sandbox or secrets
+#     (channel-analysis-isolation, e2e, sbx-conformance).
+#   - No job gets a secret or a token beyond the read-only checkout.
+
+on:
+  pull_request: {}
+  push: {branches: [main]}
+
+jobs:
+  lint:
+    name: Lint (ruff, mdformat, self references, bandit)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 20m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git ca-certificates
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Format, run: uv run --no-sync ruff format --check .}
+      - {name: Lint, run: uv run --no-sync ruff check .}
+      - {name: Markdown, run: uv run --no-sync mdformat --check .}
+      - {name: Self references, run: uv run --no-sync python scripts/check_self_references.py}
+      - {name: Security, run: uv run --no-sync bandit -c pyproject.toml -r packages/lantern/src packages/lantern-worker/src}
+
+  typecheck:
+    name: Types (mypy)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 20m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git ca-certificates
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Types, run: uv run --no-sync mypy}
+
+  build:
+    name: Build (both wheels, worker vendored)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 20m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git ca-certificates
+          git --version
+      - {name: Worker wheel, run: uv build --package lantern-worker -o dist}
+      - {name: Host wheel, run: uv build --package lantern-backend -o dist}
+      - name: Worker wheel is vendored inside the host wheel
+        run: |
+          python3 - <<'EOF'
+          import glob, sys, zipfile
+          [wheel] = glob.glob("dist/lantern_backend-*.whl")
+          vendored = [n for n in zipfile.ZipFile(wheel).namelist()
+                      if n.startswith("lantern/_vendor/lantern_worker-") and n.endswith(".whl")]
+          print(wheel, vendored)
+          sys.exit(0 if vendored else "the worker wheel is not vendored in " + wheel)
+          EOF
+      - {name: List artifacts, run: ls -l dist}
+
+  # The optional SDKs against fakes, as the workflow's codex-sdk and openai-sdk jobs: no
+  # credentials, no model calls.
+  sdk-py313:
+    name: SDK contracts (Python 3.13)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 15m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git ca-certificates
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages --extra codex --extra openai}
+      - {name: Codex SDK contract, run: uv run --no-sync pytest -n0 tests/unit/test_codex_sdk_contract.py}
+      - {name: OpenAI SDK contract, run: uv run --no-sync pytest -n0 tests/unit/test_openai_sdk_contract.py}
+
+  sdk-py314:
+    name: SDK contracts (Python 3.14)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 15m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git ca-certificates
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages --extra codex --extra openai}
+      - {name: Codex SDK contract, run: uv run --no-sync pytest -n0 tests/unit/test_codex_sdk_contract.py}
+      - {name: OpenAI SDK contract, run: uv run --no-sync pytest -n0 tests/unit/test_openai_sdk_contract.py}
+
+  # The test suite in five shards per interpreter, as in the workflow's pytest matrix.
+  # -n 2: a job has 2 CPUs and 2g of memory, and -n auto would count the host's CPUs.
+  # e2fsprogs and procps: the suite calls mkfs.ext4 and pgrep, which the image lacks.
+  # Deselected: tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed: with Debian 13's git-lfs
+  # (3.6.1) the wrong-token fetch does not fail but retries until the test's 300s timeout;
+  # the workflow's runner has a newer git-lfs and still runs it.
+  pytest-py313-1:
+    name: Tests (Python 3.13, shard 1/5)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py313-2:
+    name: Tests (Python 3.13, shard 2/5)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py313-3:
+    name: Tests (Python 3.13, shard 3/5)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py313-4:
+    name: Tests (Python 3.13, shard 4/5)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py313-5:
+    name: Tests (Python 3.13, shard 5/5)
+    image: ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:803d2b80b6913e562837d69f037f39bfea80f51ef3f0dd0d8fdffbd95688fd6d
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py314-1:
+    name: Tests (Python 3.14, shard 1/5)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py314-2:
+    name: Tests (Python 3.14, shard 2/5)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py314-3:
+    name: Tests (Python 3.14, shard 3/5)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py314-4:
+    name: Tests (Python 3.14, shard 4/5)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+
+  pytest-py314-5:
+    name: Tests (Python 3.14, shard 5/5)
+    image: ghcr.io/astral-sh/uv:python3.14-trixie-slim@sha256:da0f1f04404173d7d2fa158112e09624d5a80262efa86c89882b68389dfd44eb
+    env: {UV_LINK_MODE: copy}
+    cache: [/root/.cache/uv]
+    timeout: 45m
+    steps:
+      - name: Packages
+        run: |
+          apt_get() {
+            DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root \
+              -o Dir::State::lists=/tmp/apt/lists -o Dir::Cache::archives=/tmp/apt/archives "$@"
+          }
+          mkdir -p /tmp/apt/lists/partial /tmp/apt/archives/partial
+          apt_get update -qq
+          apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
+          git --version
+      - {name: Install, run: uv sync --locked --all-packages}
+      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
