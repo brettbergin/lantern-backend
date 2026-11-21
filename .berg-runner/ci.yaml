@@ -141,6 +141,10 @@ jobs:
   # The test suite in five shards per interpreter, as in the workflow's pytest matrix.
   # -n 2: a job has 2 CPUs and 2g of memory, and -n auto would count the host's CPUs.
   # e2fsprogs and procps: the suite calls mkfs.ext4 and pgrep, which the image lacks.
+  # /tmp/checkout: the job's checkout is at /workspace, a path the suite's fake sandbox
+  # (tests/fakes/fake_sbx.py) reads as the sandbox's own workspace mount and rewrites into
+  # its fake file system, the host interpreter's .venv/bin/python included. The suite runs
+  # from a copy of the checkout outside it, as on the workflow's runner.
   # Deselected: tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed: with Debian 13's git-lfs
   # (3.6.1) the wrong-token fetch does not fail but retries until the test's 300s timeout;
   # the workflow's runner has a newer git-lfs and still runs it.
@@ -161,8 +165,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py313-2:
     name: Tests (Python 3.13, shard 2/5)
@@ -181,8 +185,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py313-3:
     name: Tests (Python 3.13, shard 3/5)
@@ -201,8 +205,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py313-4:
     name: Tests (Python 3.13, shard 4/5)
@@ -221,8 +225,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py313-5:
     name: Tests (Python 3.13, shard 5/5)
@@ -241,8 +245,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py314-1:
     name: Tests (Python 3.14, shard 1/5)
@@ -261,8 +265,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 1/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py314-2:
     name: Tests (Python 3.14, shard 2/5)
@@ -281,8 +285,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 2/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py314-3:
     name: Tests (Python 3.14, shard 3/5)
@@ -301,8 +305,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 3/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py314-4:
     name: Tests (Python 3.14, shard 4/5)
@@ -321,8 +325,8 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 4/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
 
   pytest-py314-5:
     name: Tests (Python 3.14, shard 5/5)
@@ -341,5 +345,5 @@ jobs:
           apt_get update -qq
           apt_get install -y -qq --no-install-recommends git git-lfs openssl ca-certificates e2fsprogs procps
           git --version
-      - {name: Install, run: uv sync --locked --all-packages}
-      - {name: Tests, run: uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed}
+      - {name: Install, run: 'cp -a . /tmp/checkout && cd /tmp/checkout && uv sync --locked --all-packages'}
+      - {name: Tests, run: 'cd /tmp/checkout && uv run --no-sync pytest -n 2 --shard 5/5 --durations=25 --deselect tests/unit/test_hostgit.py::TestLfs::test_a_wrong_token_fails_closed'}
