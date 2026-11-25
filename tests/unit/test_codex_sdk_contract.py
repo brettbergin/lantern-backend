@@ -22,6 +22,15 @@ from lantern_worker.protocol import EventTypes, JobRequest
 pytestmark = pytest.mark.slow
 FAKE_SERVER = Path(__file__).resolve().parents[1] / "fakes" / "fake_codex_stdio.py"
 TEST_KEY = "sk-test-stdio-contract-key"
+# The session budget of a job that is expected to complete. It is the
+# backend's own watchdog, so it covers starting a fresh Python interpreter
+# for the fake peer and waiting for its first reply (most of the measured
+# time), not only the scripted exchange. That takes well under a second on
+# an idle machine but has exceeded 10 s on a loaded CI runner. A hung peer
+# still fails the test as subprocess.TimeoutExpired once this budget is
+# spent, well inside the suite's per-test timeout; the hang scenarios below
+# keep their own short budget and still assert that waits are bounded.
+SESSION_TIMEOUT_S = 60.0
 
 
 @dataclass
@@ -82,7 +91,7 @@ def make_job(tmp_path: Path, **overrides: Any) -> JobRequest:
         cwd=str(tmp_path),
         permission_mode="read_only",
         expect="json",
-        **{"timeout_s": 10.0, **overrides},
+        **{"timeout_s": SESSION_TIMEOUT_S, **overrides},
     )
 
 
