@@ -16,7 +16,7 @@ from lantern.tui.screens.config import ConfigScreen
 from lantern.tui.screens.configvalue import ValueEdit, ValueScreen
 from lantern.tui.screens.modelvalue import ModelScreen
 from tests.unit.test_modelcatalog import row
-from tests.unit.tui.conftest import drive, make_app
+from tests.unit.tui.conftest import drive, make_app, until
 
 
 def picker(home: LanternHome, path="agent.models.build", value=None) -> ModelScreen:
@@ -152,6 +152,12 @@ def test_provider_disabled_model_cannot_be_selected(seeded):
     drive(scenario)
 
 
+def picker_ready(app) -> bool:
+    """The model picker is the active screen and has rendered its choices."""
+    screen = app.screen
+    return isinstance(screen, ModelScreen) and screen.is_mounted and bool(screen.choices)
+
+
 def test_reopening_after_backend_switch_reads_that_backends_catalog(seeded):
     seeded.config_toml.parent.mkdir(parents=True, exist_ok=True)
     seeded.config_toml.write_text('[agent]\nbackend = "claude"\n')
@@ -161,19 +167,28 @@ def test_reopening_after_backend_switch_reads_that_backends_catalog(seeded):
     async def scenario():
         app = make_app(seeded)
         async with app.run_test(size=(120, 40)) as pilot:
+            # Each step waits for the state it needs (bounded by `until`'s
+            # timeout) rather than a fixed pause: on a loaded CI runner the
+            # config worker and the screen push can outlast a guessed delay.
             await pilot.press("7")
-            await pilot.pause(0.5)
+            await until(
+                pilot,
+                lambda: isinstance(app.screen, ConfigScreen) and app.screen.config is not None,
+            )
             config = app.screen
             assert isinstance(config, ConfigScreen)
             config.edit_key("agent.models.build")
-            await pilot.pause(0.1)
+            await until(pilot, lambda: picker_ready(app))
             assert isinstance(app.screen, ModelScreen) and app.screen.backend.name == "claude"
             await pilot.press("escape")
+            await until(pilot, lambda: app.screen is config)
             seeded.config_toml.write_text('[agent]\nbackend = "codex"\n')
             config.load()
-            await pilot.pause(0.5)
+            await until(
+                pilot, lambda: config.config is not None and config.config.agent.backend == "codex"
+            )
             config.edit_key("agent.models.build")
-            await pilot.pause(0.1)
+            await until(pilot, lambda: picker_ready(app))
             assert isinstance(app.screen, ModelScreen) and app.screen.backend.name == "codex"
             assert any(choice.value == "codex-model" for choice in app.screen.choices)
             assert not any(choice.value == "claude-model" for choice in app.screen.choices)
